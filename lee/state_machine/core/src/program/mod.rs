@@ -13,8 +13,6 @@ use crate::{
     encryption::ViewingPublicKey,
 };
 
-pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
-
 /// TODO: Placeholder `program_owner` for uninitialized `Account`.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
@@ -29,14 +27,17 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
 pub type ProgramId = [u32; 8];
 
-/// Derives the `AccountId` under which a program's data is stored, directly from its
-/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
-///
-/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
-/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
-/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
-impl From<ProgramId> for AccountId {
-    fn from(program_id: ProgramId) -> Self {
+impl AccountId {
+    /// The default `AccountId` a builtin program is deployed at: a genesis-seeded program lives
+    /// here until (if ever) redeployed elsewhere via `program_loader`, at which point resolution
+    /// goes through the real segment chain instead — never trust this as a live address for a
+    /// program that could have moved.
+    ///
+    /// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
+    /// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
+    /// separation is needed just to reinterpret its 8 little-endian `u32` words as 32 raw bytes.
+    #[must_use]
+    pub fn builtin_default_address(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
             .iter()
             .flat_map(|word| word.to_le_bytes())
@@ -567,7 +568,6 @@ impl ProgramOutput {
         self.timestamp_validity_window = window.into();
         self
     }
-
 }
 
 /// A struct holding an event-output of a program.

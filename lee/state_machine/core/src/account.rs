@@ -286,7 +286,10 @@ mod tests {
     #[test]
     fn account_with_metadata_constructor() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            program_owner: AccountId::new([
+                1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0,
+                8, 0, 0, 0,
+            ]),
             balance: 1337,
             data: b"testing_account_with_metadata_constructor"
                 .to_vec()

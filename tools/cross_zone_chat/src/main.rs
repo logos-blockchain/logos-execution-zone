@@ -293,7 +293,7 @@ async fn main() -> Result<()> {
     let channel_b = bedrock_channel_id_b();
     let zone_a: ZoneId = *channel_a.as_ref();
     let zone_b: ZoneId = *channel_b.as_ref();
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
 
     // Each zone watches the other and may deliver only to ping_receiver.
     let cross_zone_a = watch_peer(zone_b, receiver_id);
@@ -370,7 +370,7 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: peer,
             allowed_routes: vec![CrossZoneRoute {
-                src_account_id: programs::ping_sender().id().into(),
+                src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
@@ -408,8 +408,8 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
 /// slot taken after this returns still collides, at a probability of the
 /// occupied count over 2^32.
 async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Result<u32> {
-    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
-    let emitter: AccountId = programs::ping_sender().id().into();
+    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let emitter = AccountId::builtin_default_address(programs::ping_sender().id());
     let start: u32 = rand::random();
 
     for offset in 0..ORDINAL_PROBE_LIMIT {
@@ -443,8 +443,8 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
 /// block (its outbound leg); an inbox dispatch marks delivery on this zone.
 /// Runs forever; transient RPC errors are logged and retried.
 async fn scan_zone(state: Arc<AppState>, label: &'static str) {
-    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
-    let sender_id: AccountId = programs::ping_sender().id().into();
+    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
+    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
     let client = &state.zone(label).expect("zone runtime exists").client;
 
     // Start from the current tip so genesis/boot blocks are skipped.
@@ -547,8 +547,8 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
 /// Builds the unsigned `ping_sender::Send` that carries `text` to `other_zone`,
 /// mirroring `integration_tests/tests/cross_zone_ping.rs`.
 fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction {
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
-    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: text.as_bytes().to_vec(),
@@ -566,7 +566,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         ordinal,
     };
 
-    let sender_id: AccountId = programs::ping_sender().id().into();
+    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
     let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
     let message = Message::try_new(
         sender_id,

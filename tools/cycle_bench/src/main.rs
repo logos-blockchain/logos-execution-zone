@@ -203,7 +203,7 @@ impl Case {
             pre_states,
             instruction_data,
         } = self;
-        let self_account_id: AccountId = program.id().into();
+        let self_account_id = AccountId::builtin_default_address(program.id());
         let caller_account_id: Option<AccountId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
@@ -311,7 +311,7 @@ fn token_holding(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::token().id()),
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id,
@@ -331,7 +331,7 @@ fn token_definition(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::token().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::token().id()),
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -369,7 +369,7 @@ fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::clock().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::clock().id()),
             balance: 0,
             data: ClockAccountData {
                 block_id,
@@ -401,27 +401,30 @@ fn amm_token_b_def_id() -> AccountId {
 }
 fn amm_pool_id() -> AccountId {
     compute_pool_pda(
-        programs::amm().id().into(),
+        AccountId::builtin_default_address(programs::amm().id()),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_vault_a_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::builtin_default_address(programs::amm().id()),
         amm_pool_id(),
         amm_token_a_def_id(),
     )
 }
 fn amm_vault_b_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::builtin_default_address(programs::amm().id()),
         amm_pool_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
+    compute_liquidity_token_pda(
+        AccountId::builtin_default_address(programs::amm().id()),
+        amm_pool_id(),
+    )
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -431,7 +434,7 @@ fn amm_pool_account() -> AccountWithMetadata {
     let lp_supply = (reserve_a * reserve_b).isqrt();
     AccountWithMetadata {
         account: Account {
-            program_owner: programs::amm().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::amm().id()),
             balance: 0,
             data: Data::from(&PoolDefinition {
                 definition_token_a_id: amm_token_a_def_id(),
@@ -483,7 +486,10 @@ fn ata_create_pre_states() -> Vec<AccountWithMetadata> {
     };
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
+    let ata_id = get_associated_token_account_id(
+        &AccountId::builtin_default_address(programs::ata().id()),
+        &seed,
+    );
     let ata_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: false,
@@ -570,7 +576,7 @@ fn main() -> Result<()> {
             programs::ata(),
             ata_create_pre_states(),
             &associated_token_account_core::Instruction::Create {
-                ata_program_id: programs::ata().id().into(),
+                ata_program_id: AccountId::builtin_default_address(programs::ata().id()),
             },
         )?,
     ];

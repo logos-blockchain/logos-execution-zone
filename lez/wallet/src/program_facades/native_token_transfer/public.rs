@@ -1,4 +1,5 @@
 use common::HashType;
+use lee::AccountId;
 
 use super::NativeTokenTransfer;
 use crate::{
@@ -19,7 +20,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx_with_pre_check(
                 vec![from, to],
                 instruction_data,
-                program.id().into(),
+                AccountId::builtin_default_address(program.id()),
                 None,
                 tx_pre_check,
             )

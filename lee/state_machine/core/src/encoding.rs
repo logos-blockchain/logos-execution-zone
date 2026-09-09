@@ -183,7 +183,10 @@ mod tests {
     #[test]
     fn enconding() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            program_owner: AccountId::new([
+                1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0,
+                8, 0, 0, 0,
+            ]),
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
             nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),
@@ -244,7 +247,10 @@ mod tests {
     #[test]
     fn account_to_bytes_roundtrip() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
+            program_owner: AccountId::new([
+                1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0,
+                8, 0, 0, 0,
+            ]),
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
             nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),

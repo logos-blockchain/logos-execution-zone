@@ -98,7 +98,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::builtin_default_address(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -117,7 +119,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id().into(),
+            AccountId::builtin_default_address(programs::sequencer_stake().id()),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -125,7 +127,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     info!("Waiting for the Stake transaction's block to land");
     poll_until("stake to take ownership", 30, || async {
         Ok(get_account(&ctx, ownership_id).await?.program_owner
-            == programs::sequencer_stake().id().into())
+            == AccountId::builtin_default_address(programs::sequencer_stake().id()))
     })
     .await?;
 
@@ -134,7 +136,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to read the stake ownership account")?;
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         "ownership account should now be owned by sequencer_stake"
     );
     let staked_balance = account_balance(&ctx, funds_id).await?;
@@ -262,7 +264,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 AccountIdentity::PublicNoSign(config_id),
             ],
             unstake_request_data,
-            programs::sequencer_stake().id().into(),
+            AccountId::builtin_default_address(programs::sequencer_stake().id()),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

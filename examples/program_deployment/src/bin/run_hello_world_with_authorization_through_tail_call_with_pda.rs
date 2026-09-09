@@ -20,7 +20,8 @@ use wallet::WalletCore;
 //
 // Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binaries are stored in
-// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/{tail_call_with_pda,hello_world_with_authorization}.bin
+// methods/guest/target/riscv32im-risc0-zkvm-elf/docker/{tail_call_with_pda,
+// hello_world_with_authorization}.bin
 //
 //
 // Usage:

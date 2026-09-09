@@ -64,7 +64,7 @@ fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
     let program_id = program_to_insert.id();
-    let account_id = lee_core::account::AccountId::from(program_id);
+    let account_id = lee_core::account::AccountId::builtin_default_address(program_id);
     assert!(!state.public_state.contains_key(&account_id));
 
     state.insert_program(&program_to_insert);
@@ -79,7 +79,9 @@ fn get_account_by_account_id_non_default_account() {
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+            program_owner: AccountId::builtin_default_address(
+                crate::test_methods::simple_balance_transfer().id(),
+            ),
             balance: 100,
             ..Account::default()
         },

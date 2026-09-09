@@ -1,5 +1,5 @@
 use lee_core::{
-    account::BalanceDiff,
+    account::{AccountId, BalanceDiff},
     program::{
         AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
         ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -31,7 +31,7 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_account_id: callee.into(),
+        program_account_id: AccountId::builtin_default_address(callee),
         instruction_data: callee_instruction,
         pre_state_ids: vec![target.account_id],
         pda_seeds: vec![],

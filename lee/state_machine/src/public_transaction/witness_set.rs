@@ -70,7 +70,10 @@ mod tests {
         let nonces = vec![1_u128.into(), 2_u128.into()];
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new(
-            AccountId::from([0; 8]),
+            AccountId::new([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ]),
             vec![addr1, addr2],
             nonces,
             instruction,

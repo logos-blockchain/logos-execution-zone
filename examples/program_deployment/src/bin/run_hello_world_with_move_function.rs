@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, PublicTransaction,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-    public_transaction,
+    AccountId, PublicTransaction, privacy_preserving_transaction::circuit::ProgramWithDependencies,
+    program::Program, public_transaction,
 };
 use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;

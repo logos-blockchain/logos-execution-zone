@@ -25,7 +25,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, PublicKey};
+use lee::{AccountId, GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -835,7 +835,9 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_account_id != programs::cross_zone_inbox().id().into() {
+        if public_tx.message().program_account_id
+            != AccountId::builtin_default_address(programs::cross_zone_inbox().id())
+        {
             return None;
         }
         match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
@@ -1474,7 +1476,11 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
     fn emission(payload: &[u8]) -> LeeTransaction {
-        ping_emission(SELF_ZONE, programs::ping_receiver().id().into(), payload)
+        ping_emission(
+            SELF_ZONE,
+            AccountId::builtin_default_address(programs::ping_receiver().id()),
+            payload,
+        )
     }
 
     /// A peer-stream item inscribing `data` at `slot`.
@@ -1543,14 +1549,14 @@ mod tests {
     }
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
-        let receiver_id: AccountId = programs::ping_receiver().id().into();
+        let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_account_id: programs::ping_sender().id().into(),
+                src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
             },
             receiver_id,
             &[

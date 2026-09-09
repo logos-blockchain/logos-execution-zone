@@ -6,7 +6,7 @@ use super::*;
 fn public_echo_of_a_default_account_leaves_it_unowned() {
     let mut state = V03State::new().with_test_programs();
     let account_id = AccountId::new([1; 32]);
-    let program_id: AccountId = crate::test_methods::noop().id().into();
+    let program_id = AccountId::builtin_default_address(crate::test_methods::noop().id());
 
     let message =
         public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
@@ -24,7 +24,7 @@ fn public_echo_of_a_default_account_leaves_it_unowned() {
 fn public_data_write_to_a_default_account_claims_it() {
     let mut state = V03State::new().with_test_programs();
     let account_id = AccountId::new([1; 32]);
-    let program_id: AccountId = crate::test_methods::data_changer().id().into();
+    let program_id = AccountId::builtin_default_address(crate::test_methods::data_changer().id());
     let new_data: Vec<u8> = vec![1, 2, 3, 4, 5];
 
     let message = public_transaction::Message::try_new(
@@ -122,7 +122,7 @@ fn a_squatter_acquires_a_funded_account_but_still_cannot_spend_it() {
     let mut state = V03State::new().with_test_programs();
     let target_id = AccountId::new([1; 32]);
     let pocket_id = AccountId::new([2; 32]);
-    let program_id: AccountId = crate::test_methods::squatter().id().into();
+    let program_id = AccountId::builtin_default_address(crate::test_methods::squatter().id());
     let data: Vec<u8> = vec![7; 8];
 
     // A funded address nobody has written to yet.
@@ -181,7 +181,8 @@ fn a_credited_account_stays_unowned_and_its_key_can_spend_it() {
     let recipient_key = PrivateKey::try_new([4; 32]).unwrap();
     let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
     let onward_id = AccountId::new([5; 32]);
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
@@ -236,7 +237,8 @@ fn an_unowned_signer_account_survives_its_nonce_advancing() {
     let sender_key = PrivateKey::try_new([6; 32]).unwrap();
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
     let recipient_id = AccountId::new([7; 32]);
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
@@ -274,7 +276,7 @@ fn an_unowned_signer_account_survives_its_nonce_advancing() {
 #[test]
 fn an_unauthorized_private_data_write_acquires_the_account() {
     let program = crate::test_methods::data_changer();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::builtin_default_address(program.id());
     let recipient_keys = test_private_account_keys_1();
     let account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
@@ -314,7 +316,7 @@ fn an_unauthorized_private_data_write_acquires_the_account() {
 #[test]
 fn a_private_write_to_a_foreign_owned_account_is_rejected() {
     let program = crate::test_methods::data_changer();
-    let owner_id: AccountId = crate::test_methods::noop().id().into();
+    let owner_id = AccountId::builtin_default_address(crate::test_methods::noop().id());
     let sender_keys = test_private_account_keys_1();
     let owned = Account {
         program_owner: owner_id,
@@ -356,7 +358,7 @@ fn a_private_write_to_a_foreign_owned_account_is_rejected() {
 #[test]
 fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
     let program = crate::test_methods::simple_balance_transfer();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::builtin_default_address(program.id());
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
         program_owner: program_id,
@@ -432,8 +434,9 @@ fn private_credit_to_a_public_unowned_recipient_leaves_it_unowned() {
 #[test]
 fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction() {
     let mut state = V03State::new().with_test_programs();
-    let caller_id: AccountId = crate::test_methods::acquire_and_forward().id().into();
-    let callee_id: AccountId = crate::test_methods::data_changer().id().into();
+    let caller_id =
+        AccountId::builtin_default_address(crate::test_methods::acquire_and_forward().id());
+    let callee_id = AccountId::builtin_default_address(crate::test_methods::data_changer().id());
     let account_id = AccountId::new([1; 32]);
     let message = public_transaction::Message::try_new(
         caller_id,
@@ -463,8 +466,9 @@ fn a_callee_cannot_write_an_account_the_caller_acquired_in_the_same_transaction(
 #[test]
 fn a_callee_acquires_an_account_the_caller_merely_echoed() {
     let mut state = V03State::new().with_test_programs();
-    let caller_id: AccountId = crate::test_methods::acquire_and_forward().id().into();
-    let callee_id: AccountId = crate::test_methods::data_changer().id().into();
+    let caller_id =
+        AccountId::builtin_default_address(crate::test_methods::acquire_and_forward().id());
+    let callee_id = AccountId::builtin_default_address(crate::test_methods::data_changer().id());
     let account_id = AccountId::new([1; 32]);
     let message = public_transaction::Message::try_new(
         caller_id,
@@ -496,9 +500,9 @@ fn a_callee_acquires_an_account_the_caller_merely_echoed() {
 fn acquire_then_fund_chain_calls_allow_unauthorized_private_recipient() {
     let program = crate::test_methods::acquire_then_fund();
     let acquirer = crate::test_methods::data_changer();
-    let acquirer_id: AccountId = acquirer.id().into();
+    let acquirer_id = AccountId::builtin_default_address(acquirer.id());
     let transfer = crate::test_methods::simple_balance_transfer();
-    let transfer_id: AccountId = transfer.id().into();
+    let transfer_id = AccountId::builtin_default_address(transfer.id());
 
     let sender_keys = test_public_account_keys_1();
     let sender_id = sender_keys.account_id();
@@ -518,7 +522,7 @@ fn acquire_then_fund_chain_calls_allow_unauthorized_private_recipient() {
 
     let program_with_deps = ProgramWithDependencies::new(
         program.clone(),
-        program.id().into(),
+        AccountId::builtin_default_address(program.id()),
         [(acquirer_id, acquirer), (transfer_id, transfer)].into(),
     );
     let instruction: (u128, AccountId, AccountId, Vec<u8>) =
@@ -576,8 +580,9 @@ fn acquire_then_fund_chain_calls_allow_unauthorized_private_recipient() {
 #[test]
 fn acquire_then_fund_chain_calls_succeed_publicly_for_public_recipient() {
     let program = crate::test_methods::acquire_then_fund();
-    let acquirer_id: AccountId = crate::test_methods::data_changer().id().into();
-    let transfer_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let acquirer_id = AccountId::builtin_default_address(crate::test_methods::data_changer().id());
+    let transfer_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
 
     let sender_key = PrivateKey::try_new([1; 32]).unwrap();
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
@@ -595,7 +600,7 @@ fn acquire_then_fund_chain_calls_succeed_publicly_for_public_recipient() {
     let instruction: (u128, AccountId, AccountId, Vec<u8>) =
         (amount, acquirer_id, transfer_id, data.clone());
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::builtin_default_address(program.id()),
         vec![recipient_id, sender_id],
         vec![Nonce(0), Nonce(0)],
         instruction,
@@ -626,9 +631,9 @@ fn acquire_then_fund_chain_calls_succeed_publicly_for_public_recipient() {
 fn acquire_then_fund_chain_calls_for_public_recipient_privately() {
     let program = crate::test_methods::acquire_then_fund();
     let acquirer = crate::test_methods::data_changer();
-    let acquirer_id: AccountId = acquirer.id().into();
+    let acquirer_id = AccountId::builtin_default_address(acquirer.id());
     let transfer = crate::test_methods::simple_balance_transfer();
-    let transfer_id: AccountId = transfer.id().into();
+    let transfer_id = AccountId::builtin_default_address(transfer.id());
 
     let sender_keys = test_public_account_keys_1();
     let sender_id = sender_keys.account_id();
@@ -653,7 +658,7 @@ fn acquire_then_fund_chain_calls_for_public_recipient_privately() {
 
     let program_with_deps = ProgramWithDependencies::new(
         program.clone(),
-        program.id().into(),
+        AccountId::builtin_default_address(program.id()),
         [(acquirer_id, acquirer), (transfer_id, transfer)].into(),
     );
     let instruction: (u128, AccountId, AccountId, Vec<u8>) =
