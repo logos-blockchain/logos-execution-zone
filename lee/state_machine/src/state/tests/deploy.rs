@@ -309,3 +309,71 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         "noop changes nothing"
     );
 }
+
+#[test]
+fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call() {
+    let mut state = V03State::new().with_test_programs();
+    let program = crate::test_methods::noop();
+    let emitter_id: AccountId = crate::test_methods::event_emitter().id().into();
+
+    let segment_key = PrivateKey::try_new([1; 32]).unwrap();
+    let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let write_segment_message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![ProgramShardSelector::new(
+            segment_account_id,
+            PROGRAM_LOADER_ACCOUNT_ID,
+        )],
+        vec![Nonce(0)],
+        Instruction::WriteSegment {
+            bytecode: program.elf().to_vec(),
+            next_segment: None,
+        },
+    )
+    .unwrap();
+    let write_segment_witness =
+        public_transaction::WitnessSet::for_message(&write_segment_message, &[&segment_key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(write_segment_message, write_segment_witness),
+            1,
+            0,
+        )
+        .unwrap();
+
+    let header_account_id = AccountId::new([0xAA; 32]);
+    let message = public_transaction::Message::try_new(
+        emitter_id,
+        vec![
+            ProgramShardSelector::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(segment_account_id, PROGRAM_LOADER_ACCOUNT_ID),
+        ],
+        vec![],
+        EmitterInstruction {
+            events: vec![],
+            chain: vec![
+                (
+                    PROGRAM_LOADER_ACCOUNT_ID,
+                    Program::serialize_instruction(Instruction::CreateHeader {
+                        first_segment: segment_account_id,
+                        immutable: true,
+                    })
+                    .unwrap(),
+                ),
+                (
+                    header_account_id,
+                    Program::serialize_instruction(()).unwrap(),
+                ),
+            ],
+        },
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
+        .expect("the header written by the first chained call must dispatch the second");
+
+    let (image_id, _) = state.get_program(header_account_id.into()).unwrap();
+    assert_eq!(image_id, program.id());
+}

@@ -434,3 +434,95 @@ fn reordered_state_diffs_are_rejected() {
     assert_eq!(state.get_account_by_id(from).data.balance, initial_balance);
     assert_eq!(state.get_account_by_id(to).data.balance, 0);
 }
+
+fn forwarding_transaction(
+    root_shard_selector: ProgramShardSelector,
+    callee_shard_selector: ProgramShardSelector,
+    write: &[u8],
+) -> PublicTransaction {
+    let forwarder_id: AccountId = crate::test_methods::shard_forwarder().id().into();
+    let callee_id: AccountId = crate::test_methods::data_changer().id().into();
+    let message = public_transaction::Message::try_new(
+        forwarder_id,
+        vec![root_shard_selector],
+        vec![],
+        vec![(
+            callee_id,
+            callee_shard_selector,
+            Program::serialize_instruction(write.to_vec()).unwrap(),
+        )],
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    PublicTransaction::new(message, witness_set)
+}
+
+#[test]
+fn a_chained_call_reads_another_shard_of_a_root_account_from_chain_state() {
+    let account_id = AccountId::new([1; 32]);
+    let forwarder_id: AccountId = crate::test_methods::shard_forwarder().id().into();
+    let callee_id: AccountId = crate::test_methods::data_changer().id().into();
+    let stranger = AccountId::new([9; 32]);
+    let on_chain: Data = b"on-chain".to_vec().try_into().unwrap();
+    let stranger_data: Data = b"stranger".to_vec().try_into().unwrap();
+    let written = vec![7; 4];
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            account_id,
+            Account {
+                nonce: Nonce(3),
+                ..Account::funded(5)
+                    .with_shard(callee_id, on_chain)
+                    .with_shard(stranger, stranger_data.clone())
+            },
+        )])
+        .with_test_programs();
+
+    for root in [
+        ProgramShardSelector::new(account_id, forwarder_id),
+        ProgramShardSelector::balance_only(account_id),
+    ] {
+        let tx = forwarding_transaction(
+            root,
+            ProgramShardSelector::new(account_id, callee_id),
+            &written,
+        );
+
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+        assert_eq!(
+            state.get_account_by_id(account_id),
+            Account {
+                nonce: Nonce(3),
+                ..Account::funded(5)
+                    .with_shard(callee_id, written.clone().try_into().unwrap())
+                    .with_shard(stranger, stranger_data.clone())
+            }
+        );
+    }
+}
+
+#[test]
+fn a_chained_call_on_an_account_the_root_never_named_is_rejected_publicly() {
+    let account_id = AccountId::new([1; 32]);
+    let other_id = AccountId::new([2; 32]);
+    let forwarder_id: AccountId = crate::test_methods::shard_forwarder().id().into();
+    let callee_id: AccountId = crate::test_methods::data_changer().id().into();
+    let mut state = V03State::new()
+        .with_public_account_balances([(account_id, 0), (other_id, 0)])
+        .with_test_programs();
+    let tx = forwarding_transaction(
+        ProgramShardSelector::new(account_id, forwarder_id),
+        ProgramShardSelector::new(other_id, callee_id),
+        &[7; 4],
+    );
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+            ExecutionError::UnknownAccount { account_id }
+        ))) if account_id == other_id
+    ));
+}

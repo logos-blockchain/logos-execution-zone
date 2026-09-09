@@ -1256,3 +1256,34 @@ fn a_failed_completion_aborts_the_execution() {
     ));
     assert!(matches!(state.finish(), Err(ExecutionError::Aborted)));
 }
+
+#[test]
+fn a_pending_shard_is_known_only_once_observed_and_a_cleared_one_stays_known() {
+    let mut facts = facts([(
+        ALICE,
+        false,
+        funded(1)
+            .with_shard(PROGRAM, data(b"a"))
+            .with_shard(OTHER_PROGRAM, data(b"b")),
+    )]);
+    let mut state = start(
+        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
+        &[],
+        &mut facts,
+    );
+    assert_eq!(state.pending_shard(ALICE, PROGRAM), None);
+    assert_eq!(state.pending_shard(BOB, PROGRAM), None);
+
+    step(&mut state, &mut facts, |_| {
+        effects(
+            vec![AccountChange {
+                balance_diff: BalanceDiff::Add(0),
+                data: Some(Data::empty()),
+            }],
+            Vec::new(),
+        )
+    });
+
+    assert_eq!(state.pending_shard(ALICE, PROGRAM), Some(&Data::empty()));
+    assert_eq!(state.pending_shard(ALICE, OTHER_PROGRAM), None);
+}
