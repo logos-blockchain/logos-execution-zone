@@ -1,7 +1,8 @@
 use std::{ffi::c_char, path::PathBuf};
 
-use anyhow::Context;
-use kameo::actor::{ActorRef, Spawn};
+use anyhow::Context as _;
+use kameo::actor::{ActorRef, Spawn as _};
+use kameo_actors::scheduler::{Scheduler, SetInterval};
 use sequencer_core::{
     block_publisher::ZoneSdkPublisher, config::SequencerConfig, gossip::GossipNetwork,
     load_or_create_signing_key,
@@ -50,9 +51,11 @@ async fn make_sequencer_compoments(
         ActorRef<StorageActor>,
         ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>,
         Option<GossipNetwork>,
+        ActorRef<Scheduler>,
     ),
     OperationStatus,
 > {
+    let block_timeout = config.block_create_timeout;
     let gossip_config = config.gossip.clone();
     let bedrock_config = config.bedrock_config.clone();
     let sequencer_home = config.home.clone();
@@ -120,7 +123,25 @@ async fn make_sequencer_compoments(
         }
     };
 
-    Ok((storage_ref, executor_ref, gossip_network))
+    let scheduler_ref = Scheduler::spawn(Scheduler::new());
+    scheduler_ref
+        .tell(
+            SetInterval::new(
+                executor_ref.downgrade(),
+                block_timeout,
+                sequencer_executor_actor::protocol::ProduceBlock,
+            )
+            .start_delay(block_timeout)
+            .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+        )
+        .await
+        .map_err(|e| {
+            log::error!("Could not start sheduler actor: {e}");
+            OperationStatus::InitializationError
+        })?;
+    log::info!("Block production scheduler started");
+
+    Ok((storage_ref, executor_ref, gossip_network, scheduler_ref))
 }
 
 /// Initializes and starts an sequencer based on the provided
@@ -171,13 +192,14 @@ unsafe fn setup_sequencer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let (storage_ref, executor_ref, gossip_network) =
+    let (storage_ref, executor_ref, gossip_network, scheduler_ref) =
         runtime.block_on(make_sequencer_compoments(config))?;
 
     Ok(SequencerServiceFFI::new(
         storage_ref,
         executor_ref,
         gossip_network,
+        scheduler_ref,
         runtime,
     ))
 }

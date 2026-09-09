@@ -85,7 +85,7 @@ impl From<Nonce> for FfiU128 {
 
 impl From<FfiU128> for Nonce {
     fn from(value: FfiU128) -> Self {
-        Nonce(value.into())
+        Self(value.into())
     }
 }
 
@@ -120,7 +120,7 @@ impl From<FfiBytes32> for HashType {
 
 impl From<FfiBytes32> for AccountId {
     fn from(value: FfiBytes32) -> Self {
-        AccountId::new(value.data)
+        Self::new(value.data)
     }
 }
 
@@ -129,12 +129,6 @@ impl From<Signature> for FfiSignature {
         Self { data: value.value }
     }
 }
-
-// impl From<Selector> for FfiSelector {
-//     fn from(value: Selector) -> Self {
-//         Self { data: value.0 }
-//     }
-// }
 
 impl From<PublicKey> for FfiPublicKey {
     fn from(value: PublicKey) -> Self {

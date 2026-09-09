@@ -122,6 +122,18 @@ impl SequencerSetup {
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
+        sequencer_service::run(
+            self.prepare_sequencers_config(home)?,
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+        )
+        .await
+        .context("Failed to run Sequencer Service")
+    }
+
+    /// Prepare just config for sequencer, without running the service.
+    ///
+    /// Useful for cases, where you want to run service manually.
+    pub fn prepare_sequencers_config(self, home: PathBuf) -> Result<SequencerConfig> {
         let Self {
             partial,
             bedrock_addr,
@@ -168,7 +180,7 @@ impl SequencerSetup {
 
         let config = config::sequencer_config(
             partial,
-            home.clone(),
+            home,
             bedrock_addr,
             channel_id,
             config::bedrock_funding_key(),
@@ -176,69 +188,6 @@ impl SequencerSetup {
             cross_zone,
             bedrock_signing_key,
             gossip,
-        )
-        .context("Failed to create Sequencer config")?;
-
-        sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .context("Failed to run Sequencer Service")
-    }
-
-    pub fn prepare_sequencers_config(&self, home: PathBuf) -> Result<SequencerConfig> {
-        let Self {
-            partial,
-            bedrock_addr,
-            channel_id,
-            genesis_transactions,
-            cross_zone,
-            bedrock_signing_key,
-            gossip,
-        } = self;
-
-        debug!("Using sequencer home at {}", home.display());
-
-        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
-            genesis_transactions
-                .is_none()
-                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
-        });
-        if let Some(key_bytes) = bedrock_signing_key {
-            std::fs::write(home.join("bedrock_signing_key"), key_bytes)
-                .context("Failed to write pre-generated bedrock signing key")?;
-        }
-        // Pinned like the bedrock key: the prebuilt dump stakes this account.
-        std::fs::write(
-            home.join("sequencer_stake_signing_key"),
-            config::SEQUENCER_STAKE_KEY,
-        )
-        .context("Failed to write pre-generated stake signing key")?;
-
-        let genesis_transactions = if let Some(genesis) = genesis_transactions.clone() {
-            genesis
-        } else {
-            let dump = load_prebuilt_dump()?;
-            // The sequencer looks for the channel-suffixed db under its home,
-            // so the restore has to land on the same name.
-            let dst = home.join(format!("rocksdb-{channel_id}"));
-            // Dropped right away: this only writes the database, which the
-            // sequencer opens for itself below.
-            let _storage = StorageActor::restore_from_dump(&dst, &dump)
-                .context("Failed to restore prebuilt sequencer database from dump")?;
-            // TODO: Technically not correct, we should reconstruct the genesis transactions
-            // from the dump, but this crutch doesn't affect anything for now
-            Vec::new()
-        };
-
-        let config = config::sequencer_config(
-            partial.clone(),
-            home.clone(),
-            bedrock_addr.clone(),
-            channel_id.clone(),
-            config::bedrock_funding_key(),
-            genesis_transactions,
-            cross_zone.clone(),
-            bedrock_signing_key,
-            gossip.clone(),
         )
         .context("Failed to create Sequencer config")?;
 

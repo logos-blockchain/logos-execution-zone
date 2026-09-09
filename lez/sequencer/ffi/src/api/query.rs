@@ -78,14 +78,14 @@ pub unsafe extern "C" fn query_last_block(
 
     let last_block_id_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_actor().ask(GetLastBlockId).send());
+        .block_on(sequencer.executor_ref().ask(GetLastBlockId).send());
 
     last_block_id_resp.map_or_else(
         |e| {
             log::error!("Failed to query last block id: {e:#}");
             LastBlockIdResult::error(OperationStatus::ClientError)
         },
-        |val| LastBlockIdResult::some(val),
+        LastBlockIdResult::some,
     )
 }
 
@@ -168,7 +168,7 @@ pub unsafe extern "C" fn query_block(
 
     let block_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_actor().ask(GetBlock { block_id }).send());
+        .block_on(sequencer.executor_ref().ask(GetBlock { block_id }).send());
 
     block_resp.map_or_else(
         |e| {
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn query_account(
 
     let acc_resp = sequencer.runtime().block_on(
         sequencer
-            .executor_actor()
+            .executor_ref()
             .ask(GetAccount {
                 account_id: account_id.into(),
             })
@@ -288,11 +288,15 @@ pub unsafe extern "C" fn send_transaction(
 
     let sequencer = unsafe { &*sequencer };
 
-    let lee_tx = transaction.into();
+    let lee_tx_res = transaction.try_into();
+    if lee_tx_res.is_err() {
+        return PointerResult::from_error(lee_tx_res.err().unwrap());
+    }
+    let lee_tx = lee_tx_res.unwrap();
 
     let tx_resp = sequencer.runtime().block_on(
         sequencer
-            .executor_actor()
+            .executor_ref()
             .ask(Transaction {
                 transaction: lee_tx,
                 origin: TransactionOrigin::User,
@@ -305,7 +309,14 @@ pub unsafe extern "C" fn send_transaction(
             log::error!("Failed to query transaction: {e:#}");
             PointerResult::from_error(OperationStatus::ClientError)
         },
-        |_| PointerResult::from_value(0u8),
+        // Not really the most intuitive example of an FFI.
+        // Written this way to satisfy `PointerResult` semantics,
+        // it is assumed, that `PointerResult::from_value` must produce a valid pointer to
+        // somewhere. The issue is that there is no natural representation for ZSTs(in this
+        // case `()`) in C. Any FFI type will take as much place as u8, so there is no
+        // point in hiding anything here. ToDo: Update, if `Transaction` message for
+        // `ExecutorActor` will get non-`()` response.
+        |()| PointerResult::from_value(0_u8),
     )
 }
 
@@ -338,7 +349,7 @@ pub unsafe extern "C" fn query_transaction(
 
     let tx_resp = sequencer.runtime().block_on(
         sequencer
-            .executor_actor()
+            .executor_ref()
             .ask(GetTransaction {
                 tx_hash: hash.into(),
             })
@@ -391,9 +402,10 @@ pub unsafe extern "C" fn query_block_vec(
 
     let block_range_resp = sequencer.runtime().block_on(
         sequencer
-            .executor_actor()
+            .executor_ref()
             .ask(GetBlockRange {
-                range: BoundedRangeInclusive::try_from(before..=(before + limit)).unwrap(),
+                range: BoundedRangeInclusive::try_from(before..=(before.saturating_add(limit)))
+                    .unwrap(),
             })
             .send(),
     );
@@ -407,7 +419,7 @@ pub unsafe extern "C" fn query_block_vec(
             PointerResult::from_value(
                 block_vec
                     .into_iter()
-                    .map(|block| block.into())
+                    .map(Into::into)
                     .collect::<Vec<FfiBlock>>()
                     .into(),
             )

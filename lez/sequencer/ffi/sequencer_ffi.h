@@ -10,6 +10,7 @@ typedef enum OperationStatus {
   NullPointer = 1,
   InitializationError = 2,
   ClientError = 3,
+  CastError = 4,
 } OperationStatus;
 
 typedef enum FfiTransactionKind {
@@ -55,16 +56,18 @@ typedef struct Runtime {
 /**
  * FFI-owned sequencer.
  *
- * - A [`StorageActor`] used to get acess to db.
- * - An [`ExecutorActor`] used to query the node.
- * - A [`GossipNetwork`] right now is unused and exists only to pin gossip.
+ * - A [`ActorRef<StorageActor>`] used to get acess to db.
+ * - An [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query the node.
+ * - A [`Option<GossipNetwork>`] right now is unused and exists only to pin gossip.
+ * - A [`ActorRef<Scheduler>`] right now is unused and exists only for gracial shutdown.
  * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
  *   already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
-  void *storage_actor;
-  void *executor_actor;
+  void *storage_ref;
+  void *executor_ref;
   void *gossip;
+  void *scheduler_ref;
   struct Runtime runtime;
 } SequencerServiceFFI;
 

@@ -13,12 +13,16 @@ use lee_core::{
 };
 use sequencer_executor_actor::protocol::Transaction;
 
-use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
-    account::FfiAccount,
-    vectors::{
-        FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+use crate::{
+    OperationStatus,
+    api::types::{
+        FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
+        FfiVec,
+        account::FfiAccount,
+        vectors::{
+            FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
+            FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+        },
     },
 };
 
@@ -227,19 +231,25 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
     }
 }
 
-impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
-    fn from(value: Box<FfiPrivateTransactionBody>) -> Self {
-        Self {
+impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
+    type Error = OperationStatus;
+
+    fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
+        Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
                 public_actions: {
                     let std_vec: Vec<_> = value.message.public_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PublicActionWithID {
+
+                    let mut cast_vec = vec![];
+
+                    for ffi_val in std_vec {
+                        cast_vec.push(PublicActionWithID {
                             account_id: AccountId::new(ffi_val.account_id.data),
-                            post_state: ffi_val.post_state.into(),
-                        })
-                        .collect()
+                            post_state: ffi_val.post_state.try_into()?,
+                        });
+                    }
+
+                    cast_vec
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
@@ -291,7 +301,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 },
                 Proof::from_inner(value.proof.into()),
             ),
-        }
+        })
     }
 }
 
@@ -303,13 +313,9 @@ pub struct FfiPublicAction {
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post_state: lee::Account = value
-            .post_state
-            .try_into()
-            .expect("Source is in blocks, must fit");
         Self {
             account_id: value.account_id.into(),
-            post_state: post_state.into(),
+            post_state: value.post_state.into(),
         }
     }
 }
@@ -462,18 +468,20 @@ impl From<Transaction> for FfiTransaction {
     }
 }
 
-impl From<FfiTransaction> for LeeTransaction {
-    fn from(value: FfiTransaction) -> Self {
+impl TryFrom<FfiTransaction> for LeeTransaction {
+    type Error = OperationStatus;
+
+    fn try_from(value: FfiTransaction) -> Result<Self, Self::Error> {
         match value.kind {
             FfiTransactionKind::Public => {
                 let body = unsafe { Box::from_raw(value.body.public_body) };
                 let std_body: PublicTransaction = body.into();
-                LeeTransaction::Public(std_body)
+                Ok(Self::Public(std_body))
             }
             FfiTransactionKind::Private => {
                 let body = unsafe { Box::from_raw(value.body.private_body) };
-                let std_body: PrivacyPreservingTransaction = body.into();
-                LeeTransaction::PrivacyPreserving(std_body)
+                let std_body: PrivacyPreservingTransaction = body.try_into()?;
+                Ok(Self::PrivacyPreserving(std_body))
             }
         }
     }
@@ -509,8 +517,12 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
         }
         FfiTransactionKind::Private => {
             let body = unsafe { Box::from_raw(val.body.private_body) };
-            let std_body: PrivacyPreservingTransaction = body.into();
-            drop(std_body);
+            let std_body_res: Result<PrivacyPreservingTransaction, OperationStatus> = body.try_into()
+            .inspect_err(|_| log::error!("Failed to cast `Box<FfiPrivateTransactionBody>` into `PrivacyPreservingTransaction`"));
+
+            if let Ok(std_body) = std_body_res {
+                drop(std_body);
+            }
         }
     }
 }

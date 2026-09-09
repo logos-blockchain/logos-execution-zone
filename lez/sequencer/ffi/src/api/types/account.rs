@@ -1,6 +1,9 @@
 use lee::{Account, AccountId, Data};
 
-use crate::api::types::{FfiBytes32, FfiU128};
+use crate::{
+    OperationStatus,
+    api::types::{FfiBytes32, FfiU128},
+};
 
 /// Account data structure - C-compatible version of lee Account.
 ///
@@ -51,8 +54,11 @@ impl From<lee::Account> for FfiAccount {
     }
 }
 
-impl From<FfiAccount> for Account {
-    fn from(value: FfiAccount) -> Self {
+// Also can be used to free `FfiAccount`
+impl TryFrom<FfiAccount> for Account {
+    type Error = OperationStatus;
+
+    fn try_from(value: FfiAccount) -> Result<Self, Self::Error> {
         let FfiAccount {
             program_owner,
             balance,
@@ -62,32 +68,16 @@ impl From<FfiAccount> for Account {
             nonce,
         } = value;
 
-        Self {
+        Ok(Self {
             program_owner: AccountId::new(program_owner.data),
             balance: balance.into(),
-            data: Data::try_from(unsafe { Vec::from_raw_parts(data, data_len, data_cap) }).unwrap(),
+            data: Data::try_from(unsafe { Vec::from_raw_parts(data, data_len, data_cap) })
+                .map_err(|e| {
+                    log::error!("Failed to cast `Vec<u8>` into Data, err: {e}");
+                    OperationStatus::CastError
+                })?,
             nonce: Into::<u128>::into(nonce).into(),
-        }
-    }
-}
-
-impl From<&FfiAccount> for Account {
-    fn from(value: &FfiAccount) -> Self {
-        let &FfiAccount {
-            program_owner,
-            balance,
-            data,
-            data_cap,
-            data_len,
-            nonce,
-        } = value;
-
-        Self {
-            program_owner: AccountId::new(program_owner.data),
-            balance: balance.into(),
-            data: Data::try_from(unsafe { Vec::from_raw_parts(data, data_len, data_cap) }).unwrap(),
-            nonce: Into::<u128>::into(nonce).into(),
-        }
+        })
     }
 }
 
@@ -118,6 +108,12 @@ pub unsafe extern "C" fn free_ffi_account(val: *mut FfiAccount) {
     }
     // Reclaim the outer box, then convert to drop the inner data buffer.
     let boxed = unsafe { Box::from_raw(val) };
-    let orig_val: Account = (*boxed).into();
-    drop(orig_val);
+
+    let orig_val_res: Result<Account, OperationStatus> = (*boxed)
+        .try_into()
+        .inspect_err(|_| log::error!("Failed to cast `FfiAccount` into `Account`"));
+
+    if let Ok(orig_val) = orig_val_res {
+        drop(orig_val);
+    }
 }
