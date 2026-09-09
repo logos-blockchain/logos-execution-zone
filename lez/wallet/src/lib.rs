@@ -761,8 +761,7 @@ impl WalletCore {
         let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
         if std::env::var_os(SUPPRESS_VERBOSE_PRINTS).is_none() {
-            // println!("Transaction data is {tx:?}");
-            println!("Transaction data is a lot of numbers");
+            println!("Transaction data is {tx:?}");
         }
         if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
             self.decode_insert_privacy_preserving_transaction_results(

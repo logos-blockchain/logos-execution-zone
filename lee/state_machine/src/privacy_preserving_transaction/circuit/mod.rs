@@ -21,8 +21,14 @@ use crate::{
 };
 
 /// Proof of the privacy preserving execution circuit.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Proof(pub(crate) Vec<u8>);
+
+impl std::fmt::Debug for Proof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Too long, cut for readability (altogether {} bytes)", self.0.len())
+    }
+}
 
 impl Proof {
     #[must_use]

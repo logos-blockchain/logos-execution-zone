@@ -549,6 +549,10 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct Seque
 
 /**
  * Query the block by hash from sequencer.
+ *  
+ * Not supporded yet.
+ * 
+ * ToDo: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -588,12 +592,12 @@ struct PointerResult_FfiAccount__OperationStatus query_account(const struct Sequ
                                                                FfiAccountId account_id);
 
 /**
- * Query the transaction by hash from sequencer.
+ * Send transaction into sequencer.
  *
  * # Arguments
  *
  * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
- * - `hash`: `FfiHashType` - hash of transaction
+ * - `tx`: `FfiTransaction` object
  *
  * # Returns
  *
@@ -603,18 +607,17 @@ struct PointerResult_FfiAccount__OperationStatus query_account(const struct Sequ
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
- * - `transaction` is a valid object of `FfiTransaction` type.
  */
 struct PointerResult_u8__OperationStatus send_transaction(const struct SequencerServiceFFI *sequencer,
                                                           struct FfiTransaction transaction);
 
 /**
- * Send transaction into sequencer.
+ * Query the transaction by hash from sequencer.
  *
  * # Arguments
  *
  * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
- * - `tx`: `FfiTransaction` object
+ * - `hash`: `FfiHashType` - hash of transaction
  *
  * # Returns
  *
@@ -629,7 +632,11 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
                                                                                     FfiHashType hash);
 
 /**
- * Query the blocks by block range from sequencer.
+ * Query the blocks by block range from sequencer. 
+ * 
+ * Not supporded yet.
+ * 
+ * ToDo: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -652,6 +659,10 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const s
 
 /**
  * Query the transactions range by account id from sequencer.
+ *  
+ * Not supporded yet.
+ * 
+ * ToDo: Add support. Needs database modifications.
  *
  * # Arguments
  *

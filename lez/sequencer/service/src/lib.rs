@@ -167,7 +167,7 @@ pub fn run(
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
-        // TODO: Should be a separate actorr
+        // TODO: Should be a separate actor
         let gossip_network = match gossip_config {
             None => None,
             Some(gossip_config) => {

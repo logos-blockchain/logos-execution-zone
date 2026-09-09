@@ -186,6 +186,10 @@ pub unsafe extern "C" fn query_block(
 }
 
 /// Query the block by hash from sequencer.
+///  
+/// Not supporded yet.
+/// 
+/// ToDo: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -260,12 +264,12 @@ pub unsafe extern "C" fn query_account(
     )
 }
 
-/// Query the transaction by hash from sequencer.
+/// Send transaction into sequencer.
 ///
 /// # Arguments
 ///
 /// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
-/// - `hash`: `FfiHashType` - hash of transaction
+/// - `tx`: `FfiTransaction` object
 ///
 /// # Returns
 ///
@@ -275,7 +279,6 @@ pub unsafe extern "C" fn query_account(
 ///
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
-/// - `transaction` is a valid object of `FfiTransaction` type.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn send_transaction(
     sequencer: *const SequencerServiceFFI,
@@ -320,12 +323,12 @@ pub unsafe extern "C" fn send_transaction(
     )
 }
 
-/// Send transaction into sequencer.
+/// Query the transaction by hash from sequencer.
 ///
 /// # Arguments
 ///
 /// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
-/// - `tx`: `FfiTransaction` object
+/// - `hash`: `FfiHashType` - hash of transaction
 ///
 /// # Returns
 ///
@@ -371,7 +374,11 @@ pub unsafe extern "C" fn query_transaction(
     )
 }
 
-/// Query the blocks by block range from sequencer.
+/// Query the blocks by block range from sequencer. 
+/// 
+/// Not supporded yet.
+/// 
+/// ToDo: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -428,6 +435,10 @@ pub unsafe extern "C" fn query_block_vec(
 }
 
 /// Query the transactions range by account id from sequencer.
+///  
+/// Not supporded yet.
+/// 
+/// ToDo: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -461,7 +472,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
     PointerResult::from_value(FfiVec::from(vec![]))
 }
 
-// ToDo: Current sequenсer does not know about events yet
+// ToDo: Current sequenсer does not know about events yet. Also needs database updates.
 
 // #[unsafe(no_mangle)]
 // pub unsafe extern "C" fn query_events(
