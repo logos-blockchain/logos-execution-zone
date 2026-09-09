@@ -46,7 +46,7 @@ pub unsafe extern "C" fn start_sequencer(
 
 /// Creates all components of sequencer service except RPC.
 ///
-/// ToDo: Make RPC construction optional. Probably needs modification of configs to be alighned with
+/// `ToDo`: Make RPC construction optional. Probably needs modification of configs to be alighned with
 /// mainline sequencer.
 async fn make_sequencer_compoments(
     config: SequencerConfig,
@@ -78,7 +78,7 @@ async fn make_sequencer_compoments(
     let executor_ref = ExecutorActor::spawn(executor);
     log::info!("Executor Actor spawned");
 
-    // ToDo: Replace with actor after gossip actor is merged 
+    // ToDo: Replace with actor after gossip actor is merged
     let gossip_network = match gossip_config {
         None => None,
         Some(gossip_config) => {

@@ -188,8 +188,8 @@ pub unsafe extern "C" fn query_block(
 /// Query the block by hash from sequencer.
 ///  
 /// Not supporded yet.
-/// 
-/// ToDo: Add support. Needs database modifications.
+///
+/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -374,11 +374,11 @@ pub unsafe extern "C" fn query_transaction(
     )
 }
 
-/// Query the blocks by block range from sequencer. 
-/// 
+/// Query the blocks by block range from sequencer.
+///
 /// Not supporded yet.
-/// 
-/// ToDo: Add support. Needs database modifications.
+///
+/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -437,8 +437,8 @@ pub unsafe extern "C" fn query_block_vec(
 /// Query the transactions range by account id from sequencer.
 ///  
 /// Not supporded yet.
-/// 
-/// ToDo: Add support. Needs database modifications.
+///
+/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///

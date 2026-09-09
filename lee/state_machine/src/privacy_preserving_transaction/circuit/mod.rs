@@ -26,7 +26,11 @@ pub struct Proof(pub(crate) Vec<u8>);
 
 impl std::fmt::Debug for Proof {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Too long, cut for readability (altogether {} bytes)", self.0.len())
+        write!(
+            f,
+            "Too long, cut for readability (altogether {} bytes)",
+            self.0.len()
+        )
     }
 }
 

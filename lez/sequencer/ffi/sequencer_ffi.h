@@ -551,8 +551,8 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct Seque
  * Query the block by hash from sequencer.
  *  
  * Not supporded yet.
- * 
- * ToDo: Add support. Needs database modifications.
+ *
+ * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -632,11 +632,11 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
                                                                                     FfiHashType hash);
 
 /**
- * Query the blocks by block range from sequencer. 
- * 
+ * Query the blocks by block range from sequencer.
+ *
  * Not supporded yet.
- * 
- * ToDo: Add support. Needs database modifications.
+ *
+ * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -661,8 +661,8 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const s
  * Query the transactions range by account id from sequencer.
  *  
  * Not supporded yet.
- * 
- * ToDo: Add support. Needs database modifications.
+ *
+ * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
