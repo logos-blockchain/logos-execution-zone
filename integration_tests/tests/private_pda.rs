@@ -181,10 +181,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     // Segments only ever hold `user_elf`.
-    let user_elf = risc0_binfmt::ProgramBinary::decode(proxy.elf())
-        .expect("pda_spend_proxy must be a valid ProgramBinary")
-        .user_elf
-        .to_vec();
+    let user_elf = proxy.user_elf().expect("valid ProgramBinary");
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],
