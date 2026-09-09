@@ -154,30 +154,13 @@ pub enum InvalidProgramBehaviorError {
     UndeclaredProgramDependency { program_account_id: AccountId },
 
     #[error(
-        "Account {account_id} was declared in the transaction but is missing from the program output"
-    )]
-    DeclaredAccountMissingFromOutput { account_id: AccountId },
-
-    #[error(
         "Chained call named account {account_id}, but it isn't resolvable from the top-level \
          pre_states or any earlier call's materialized diff in this transaction"
     )]
     UnknownChainedCallAccount { account_id: AccountId },
 
-    #[error(
-        "Program {program_account_id} ran on accounts its caller either did not name or did not \
-         name in appropriate order."
-    )]
-    ChainedCallAccountsMismatch { program_account_id: AccountId },
-
-    #[error(
-        "Program {program_account_id}'s own output reports account {account_id}, which the \
-         chained call that invoked it never named"
-    )]
-    UndeclaredAccountInProgramOutput {
-        program_account_id: AccountId,
-        account_id: AccountId,
-    },
+    #[error("Program {program_account_id} did not return exactly its input rows in order")]
+    InputRowsMismatch { program_account_id: AccountId },
 
     #[error("Invalid native transfer: {0}")]
     NativeTransferFailed(#[from] TransferError),

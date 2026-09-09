@@ -270,8 +270,6 @@ impl ValidatedStateDiff {
             .iter()
             .map(|shard_selector| shard_selector.account_id)
             .collect();
-        // Shard selectors seen in program outputs.
-        let mut shard_selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
         let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
@@ -393,24 +391,15 @@ impl ValidatedStateDiff {
                 chained_call.program_account_id, program_output
             );
 
-            // A chained callee must account for exactly the shard selectors its caller named, in
-            // order. The top-level call has no caller, so it's exempt here.
             ensure!(
-                caller_data.account_id.is_none()
-                    || pre_states_match_shard_selectors(
-                        &chained_call.shard_selectors,
-                        &program_output.state_diffs
-                    ),
-                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
+                pre_states_match_shard_selectors(
+                    &chained_call.shard_selectors,
+                    &program_output.state_diffs
+                ),
+                InvalidProgramBehaviorError::InputRowsMismatch {
                     program_account_id: chained_call.program_account_id
                 }
             );
-
-            let named_accounts: HashSet<AccountId> = chained_call
-                .shard_selectors
-                .iter()
-                .map(|shard_selector| shard_selector.account_id)
-                .collect();
 
             for pre in program_output
                 .state_diffs
@@ -418,13 +407,6 @@ impl ValidatedStateDiff {
                 .map(|diff| &diff.pre_state)
             {
                 let account_id = pre.account_id;
-                ensure!(
-                    named_accounts.contains(&account_id),
-                    InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
-                        program_account_id: chained_call.program_account_id,
-                        account_id
-                    }
-                );
 
                 // Check that the program output pre_states coincide with the values in the public
                 // state or with any modifications to those values during the chain of calls.
@@ -461,8 +443,6 @@ impl ValidatedStateDiff {
                         account_id
                     }
                 );
-
-                shard_selectors_seen.insert(shard_selector);
             }
 
             // Verify that the program output's self_account_id matches the expected address.
@@ -560,16 +540,6 @@ impl ValidatedStateDiff {
             chain_calls_counter = chain_calls_counter
                 .checked_add(1)
                 .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Every initial shard selector must appear in a program output.
-        for shard_selector in shard_selectors {
-            ensure!(
-                shard_selectors_seen.contains(shard_selector),
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: shard_selector.account_id
-                }
-            );
         }
 
         Ok(Self(StateDiff {
