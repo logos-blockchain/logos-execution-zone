@@ -26,3 +26,5 @@ arc-swap = "1.8.1"
 [features]
 # Return mock responses with generated data for testing purposes
 mock-responses = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["indexer_core/prove"]

@@ -44,6 +44,8 @@ required-features = ["submit_stake"]
 
 [features]
 default = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["sequencer_core/prove"]
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
 # Enable mDNS-based local peer discovery for gossip.

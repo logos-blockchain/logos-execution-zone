@@ -54,7 +54,7 @@ jobs:
           - name: sequencer_service-mdns
             dockerfile: ./lez/sequencer/service/Dockerfile
             build_args: |
-              FEATURES=mdns
+              FEATURES=prove,mdns
           - name: indexer_service
             dockerfile: ./lez/indexer/service/Dockerfile
             build_args: ""
