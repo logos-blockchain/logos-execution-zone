@@ -2,6 +2,7 @@ use std::io;
 
 use lee_core::{
     account::{AccountId, Cycles},
+    execution_state::ExecutionError,
     native_token::TransferError,
     program::AccountInput,
 };
@@ -164,6 +165,15 @@ pub enum InvalidProgramBehaviorError {
 
     #[error("Invalid native transfer: {0}")]
     NativeTransferFailed(#[from] TransferError),
+
+    #[error(transparent)]
+    Execution(#[from] ExecutionError),
+}
+
+impl From<ExecutionError> for LeeError {
+    fn from(error: ExecutionError) -> Self {
+        Self::InvalidProgramBehavior(error.into())
+    }
 }
 
 #[cfg(test)]

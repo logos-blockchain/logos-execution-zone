@@ -464,6 +464,18 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
     pub const fn end(&self) -> Option<T> {
         self.to
     }
+
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow> {
+        let later = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b > a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        let earlier = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b < a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        (later(self.from, other.from), earlier(self.to, other.to)).try_into()
+    }
 }
 
 impl<T: Copy + PartialOrd> TryFrom<(Option<T>, Option<T>)> for ValidityWindow<T> {
