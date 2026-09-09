@@ -1,0 +1,54 @@
+# Real proving, without RISC0_DEV_MODE, of one private transfer end to end.
+#
+# Nightly rather than per-merge: the single proof takes ~60m on a standard
+# runner and was the whole critical path of a push run. The `auth_transfer`
+# integration shard already covers this test's logic under dev mode, so what is
+# left here is only "real proving still works", which a daily signal answers.
+name: Valid proof
+
+on:
+  schedule:
+    # 03:17 UTC. Off-peak, and off the hour so it does not pile onto the
+    # top-of-hour scheduling surge.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  valid-proof-test:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-host
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+
+      - name: Test valid proof
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          env: RUST_LOG=info,kameo=warn
+          run: |
+              source .github/scripts/with_retry.sh
+              with_retry 'cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account' 1

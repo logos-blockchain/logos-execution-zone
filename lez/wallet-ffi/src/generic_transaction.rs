@@ -11,7 +11,7 @@ use lee::{
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
-    map_execution_error,
+    map_execution_error, read_optional_account_id,
     wallet::get_wallet,
     FfiAccountIdentity, FfiBytes32, FfiProgramId, WalletHandle,
 };
@@ -136,6 +136,10 @@ impl Default for FfiTransactionResult {
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
 /// - `instruction_data`: Valid pointer to instruction data bytes
+/// - `payer`: Fee payer, or null to self-pay from the first funded signing account in
+///   `account_identities` (the first signing account if none is funded). May be one of those
+///   signing accounts, or any other public account whose signing key the wallet holds (it co-signs
+///   without joining the account list).
 /// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
 /// # Returns
@@ -146,6 +150,7 @@ impl Default for FfiTransactionResult {
 /// - `handle` must be a valid pointer
 /// - `account_identities` must be a valid pointer
 /// - `instruction_data` must be a valid pointer
+/// - `payer` must be null or a valid pointer to a `FfiBytes32`
 /// - `out_result` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
@@ -155,6 +160,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     instruction_data: *const u8,
     instruction_data_size: usize,
     program_id: FfiProgramId,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -200,10 +206,13 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     }
 
-    match block_on(wallet.send_pub_tx(
+    let payer = unsafe { read_optional_account_id(payer) };
+
+    match block_on(wallet.send_pub_tx_paid_by(
         accounts,
         instruction_data.to_vec(),
         ProgramId::from(program_id).into(),
+        payer,
     )) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())

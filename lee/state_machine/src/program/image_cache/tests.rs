@@ -64,6 +64,7 @@ fn baseline(env: ExecutorEnv<'_>, elf: &[u8]) -> anyhow::Result<SessionOutcome> 
     Ok(SessionOutcome {
         journal: info.journal.bytes.clone(),
         cycles: info.cycles(),
+        exit_code: info.exit_code,
     })
 }
 

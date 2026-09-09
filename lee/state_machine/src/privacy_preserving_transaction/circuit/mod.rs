@@ -16,7 +16,7 @@ use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover}
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::Program,
+    program::{Program, check_exit_code},
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
@@ -373,10 +373,25 @@ fn execute_and_prove_program(
 
     // Prove the program
     let prover = default_prover();
-    Ok(prover
+    let prove_info = prover
         .prove(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+
+    // The local prover proves any exit code, and the circuit's `env::verify` only resolves a
+    // `Halted(0)` claim, so gate here for a typed error before the expensive circuit proof.
+    let exit_code = prove_info
+        .receipt
+        .claim()
         .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .receipt)
+        .as_value()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .exit_code;
+    check_exit_code(
+        exit_code,
+        prove_info.stats.user_cycles,
+        LeeError::ProgramProveFailed,
+    )?;
+    Ok(prove_info.receipt)
 }
 
 #[cfg(test)]

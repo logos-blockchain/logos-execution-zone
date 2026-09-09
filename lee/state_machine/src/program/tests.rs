@@ -213,3 +213,23 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
     assert_eq!(decoded.raw_discriminant, 77);
 }
+
+/// A guest that halts with a non-zero code is rejected, but unlike a panic the session survives:
+/// the error carries the metered cycles so the caller can charge them.
+#[test]
+fn nonzero_exit_is_rejected_with_its_cycles() {
+    let program = crate::test_methods::exits_nonzero();
+    let err = program
+        .execute(
+            AccountId::from(program.id()),
+            None,
+            &[],
+            &Vec::new(),
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, LeeError::ProgramExitedWithCode { code: 3, cycles } if cycles > 0),
+        "expected ProgramExitedWithCode {{ code: 3, cycles > 0 }}, got: {err:?}"
+    );
+}
