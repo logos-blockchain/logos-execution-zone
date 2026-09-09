@@ -96,9 +96,6 @@ fn immutable_mirror_account_id(header_account_id: AccountId) -> AccountId {
 /// No proof, nullifier, or ciphertext needed: `ProgramHeader` isn't confidential (it mirrors data
 /// that was already public), so every validating node can recompute it independently from the
 /// same public transaction.
-///
-/// Called at the exact moment `immutable` becomes `true`, and again to verify a `Private` claim
-/// against it — both call sites must stay in lockstep.
 #[must_use]
 pub fn immutable_mirror_commitment(
     header_account_id: AccountId,
@@ -193,26 +190,7 @@ pub fn create_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let header_account_id = pre_states[0].account_id;
-    let image_id = compute_image_id(pre_states);
-    let header = ProgramHeader {
-        image_id,
-        program_first_segment: first_segment,
-        immutable,
-    };
-    let new_commitment = immutable.then(|| immutable_mirror_commitment(header_account_id, &header));
-
-    let mut diffs = vec![AccountStateDiff::new(
-        pre_states[0].clone(),
-        BalanceDiff::Add(0),
-        Data::try_from(header.to_bytes()).expect("program header must fit under DATA_MAX_LENGTH"),
-    )];
-    diffs.extend(
-        pre_states[1..]
-            .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
-    );
-    (diffs, new_commitment)
+    finalize_header(pre_states, first_segment, immutable)
 }
 
 /// Executes `UpdateHeader`.
@@ -247,6 +225,18 @@ pub fn update_header(
         "first_segment must match the first supplied segment account"
     );
 
+    finalize_header(pre_states, first_segment, immutable)
+}
+
+/// Shared tail of `create_header`/`update_header`, once each has run its own distinct validation:
+/// recomputes the real `image_id` from the segment chain, builds the finalized `ProgramHeader`,
+/// emits its mirror commitment if `immutable` is set, and diffs the header account (every segment
+/// behind it is left unchanged).
+fn finalize_header(
+    pre_states: &[AccountWithMetadata],
+    first_segment: AccountId,
+    immutable: bool,
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
     let header_account_id = pre_states[0].account_id;
     let image_id = compute_image_id(pre_states);
     let header = ProgramHeader {

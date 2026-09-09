@@ -53,10 +53,11 @@ impl ProgramImageClaim {
 }
 
 /// A shadow program's identity, established fresh in this one proof from a real ELF supplied as a
-/// private witness. Never echoed into the circuit's output or anchored against chain state — a
-/// shadow program has never been deployed anywhere. The circuit proves
-/// `account_id == AccountId::for_shadow_program(image_id)`, with `image_id` computed by hashing
-/// `full_binary` right here every time, since nothing attested to this ELF before now.
+/// private witness.
+///
+/// Never echoed into the output or anchored against chain state, since a shadow program was never
+/// deployed. `image_id` is hashed from `full_binary` here every time — nothing attested to it
+/// before now.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct ShadowProgramWitness {
     pub account_id: AccountId,
