@@ -460,10 +460,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     // Segments only ever hold `user_elf`.
-    let user_elf = risc0_binfmt::ProgramBinary::decode(faucet_chain_caller.elf())
-        .expect("faucet_chain_caller must be a valid ProgramBinary")
-        .user_elf
-        .to_vec();
+    let user_elf = faucet_chain_caller.user_elf().expect("valid ProgramBinary");
     let segment_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],

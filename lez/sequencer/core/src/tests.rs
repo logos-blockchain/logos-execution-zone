@@ -1981,12 +1981,14 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
     let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
 
+    // Segments only ever hold `user_elf`.
+    let user_elf = clock_chain_caller.user_elf().expect("valid ProgramBinary");
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],
         vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
         program_loader_core::Instruction::WriteSegment {
-            bytecode: clock_chain_caller.elf().to_vec(),
+            bytecode: user_elf,
             next_segment: None,
         },
         common::test_utils::test_fee_declaration(payer.account_id),

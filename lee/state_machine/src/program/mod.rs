@@ -65,6 +65,13 @@ impl Program {
         &self.elf
     }
 
+    pub fn user_elf(&self) -> Result<Vec<u8>, LeeError> {
+        Ok(risc0_binfmt::ProgramBinary::decode(&self.elf)
+            .map_err(LeeError::InvalidProgramBytecode)?
+            .user_elf
+            .to_vec())
+    }
+
     pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {

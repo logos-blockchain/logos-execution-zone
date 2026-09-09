@@ -40,7 +40,6 @@ programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
-risc0-binfmt = "3.0.2"
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
