@@ -51,7 +51,7 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     // data, so it acquires no owner.
     let sender = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: AccountId::builtin_default_address(auth_transfer_id),
             balance: 1_000_000,
             ..Account::default()
         },
@@ -110,13 +110,20 @@ fn prove_chain_caller(
     let auth_transfer = programs::authenticated_transfer();
     let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id().into(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
+    deps.insert(
+        AccountId::builtin_default_address(auth_transfer.id()),
+        auth_transfer,
+    );
+    let pwd = ProgramWithDependencies::new(
+        chain_caller,
+        AccountId::builtin_default_address(chain_caller_id),
+        deps,
+    );
 
     // Both accounts are seeded owned by auth_transfer.
     let recipient_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: AccountId::builtin_default_address(auth_transfer_id),
             ..Account::default()
         },
         is_authorized: true,
@@ -124,7 +131,7 @@ fn prove_chain_caller(
     };
     let sender_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id.into(),
+            program_owner: AccountId::builtin_default_address(auth_transfer_id),
             balance: 1_000_000,
             ..Account::default()
         },

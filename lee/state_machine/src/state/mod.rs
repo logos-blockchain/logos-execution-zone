@@ -195,34 +195,44 @@ impl V03State {
         self
     }
 
-    /// Seeds a builtin as a loader-owned header pointing at one segment holding its whole ELF —
-    /// the same shape a live `program_loader` deploy produces, just written directly rather than
-    /// through a transaction. The header keeps living at the bijection address
-    /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
-    /// keep working; the segment's address is this function's own internal convention, never
-    /// independently recomputed elsewhere.
+    /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its whole
+    /// ELF, chunked the same way a live `program_loader` deploy would — just written directly
+    /// rather than through a transaction. The header keeps living at its builtin default address
+    /// (`AccountId::builtin_default_address(program.id())`) so existing call sites addressing
+    /// builtins by `ProgramId` keep working; each segment's address is this function's own
+    /// internal convention, never independently recomputed elsewhere.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let header_account_id = AccountId::from(program.id());
-        let segment_account_id = genesis_segment_account_id(header_account_id);
+        let header_account_id = AccountId::builtin_default_address(program.id());
+        let elf = program.elf();
+        let chunks: Vec<&[u8]> = elf
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        let segment_account_ids: Vec<AccountId> = (0..chunks.len())
+            .map(|i| genesis_segment_account_id(header_account_id, i))
+            .collect();
 
-        let segment = Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
-                ProgramSegment {
-                    bytecode: program.elf().to_vec(),
-                    next_segment: None,
-                }
-                .to_bytes(),
-            )
-            .expect("elf must fit under DATA_MAX_LENGTH"),
-            ..Account::default()
-        };
+        for (i, chunk) in chunks.iter().enumerate() {
+            let segment = Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::try_from(
+                    ProgramSegment {
+                        bytecode: chunk.to_vec(),
+                        next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+                    }
+                    .to_bytes(),
+                )
+                .expect("segment fits under DATA_MAX_LENGTH"),
+                ..Account::default()
+            };
+            self.public_state.insert(segment_account_ids[i], segment);
+        }
+
         let header = Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
             data: Data::try_from(
                 ProgramHeader {
                     image_id: program.id(),
-                    program_first_segment: segment_account_id,
+                    program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
                 .to_bytes(),
@@ -230,7 +240,6 @@ impl V03State {
             .expect("program header fits under DATA_MAX_LENGTH"),
             ..Account::default()
         };
-        self.public_state.insert(segment_account_id, segment);
         self.public_state.insert(header_account_id, header);
     }
 
@@ -397,18 +406,23 @@ impl V03State {
     }
 }
 
-/// The deterministic `AccountId` a genesis-seeded builtin's single segment lives at, derived
-/// from the header's own bijection address.
+/// The deterministic `AccountId` a genesis-seeded builtin's `index`-th segment lives at, derived
+/// from the header's own bijection address and its position in the chain.
 ///
 /// Only `insert_program` needs this — a live `program_loader` deploy has a real signer and picks
 /// its own segment addresses instead, since genesis has no signer to ask.
-fn genesis_segment_account_id(header_account_id: AccountId) -> AccountId {
+fn genesis_segment_account_id(header_account_id: AccountId, index: usize) -> AccountId {
     use sha2::{Digest as _, Sha256};
     const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
 
     let mut hasher = Sha256::new();
     hasher.update(GENESIS_SEGMENT_ID_PREFIX);
     hasher.update(header_account_id.as_ref());
+    hasher.update(
+        u32::try_from(index)
+            .expect("segment count fits in u32")
+            .to_le_bytes(),
+    );
     AccountId::new(hasher.finalize().into())
 }
 

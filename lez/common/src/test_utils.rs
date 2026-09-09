@@ -34,7 +34,7 @@ pub fn producer_account_for_testing() -> AccountId {
 #[must_use]
 pub fn claimed_producer_seed() -> (AccountId, lee::Account) {
     let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: AccountId::builtin_default_address(programs::authenticated_transfer().id()),
         ..lee::Account::default()
     };
     (producer_account_for_testing(), account)
@@ -108,7 +108,7 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = programs::authenticated_transfer().id().into();
+    let program_id = AccountId::builtin_default_address(programs::authenticated_transfer().id());
     let account_ids = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
@@ -162,7 +162,7 @@ pub fn create_transaction_native_token_transfer_with_fees(
 ) -> LeeTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
-    let program_id = programs::authenticated_transfer().id().into();
+    let program_id = AccountId::builtin_default_address(programs::authenticated_transfer().id());
     let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
         account_ids,
@@ -193,7 +193,7 @@ pub fn create_transaction_native_token_transfer_without_fee(
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        AccountId::builtin_default_address(programs::authenticated_transfer().id()),
         vec![from, to],
         vec![nonce.into()],
         authenticated_transfer_core::Instruction::Transfer {

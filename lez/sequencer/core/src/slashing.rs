@@ -161,7 +161,7 @@ pub(crate) fn build_slash_tx(
     inscription: [u8; 32],
     approvals: Vec<SlashApproval>,
 ) -> Result<LeeTransaction> {
-    let program_id: AccountId = programs::sequencer_stake().id().into();
+    let program_id = AccountId::builtin_default_address(programs::sequencer_stake().id());
     let message = Message::try_new(
         program_id,
         vec![
@@ -233,7 +233,7 @@ mod tests {
     /// State whose config account accredits `key` with a stake to burn.
     fn state_staking(key: SequencerKey, ownership_id: AccountId) -> lee::V03State {
         let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::sequencer_stake().id()),
             data: SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: 1,

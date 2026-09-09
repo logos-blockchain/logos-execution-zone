@@ -17,7 +17,9 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
+                    program_owner: AccountId::builtin_default_address(
+                        crate::test_methods::simple_balance_transfer().id(),
+                    ),
                     balance,
                     ..Account::default()
                 },
@@ -41,7 +43,8 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
     let message =
         Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -132,7 +135,8 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
     let message =
         Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -190,7 +194,7 @@ fn chained_calls_share_one_budget() {
     );
     // The chain_caller program permutes the account order in the chain call.
     let message = Message::try_new(
-        chain_caller.id().into(),
+        AccountId::builtin_default_address(chain_caller.id()),
         vec![to, from],
         vec![Nonce(0)],
         instruction,
@@ -245,7 +249,8 @@ fn metered_guest_panic_is_charged_the_full_budget() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
     let message = Message::try_new(
         program_id,
         vec![from, to],
@@ -275,7 +280,7 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
     let state = V03State::new()
         .with_public_accounts(public_state_from_balances(&[(from, 100)]))
         .with_programs(std::iter::once(crate::test_methods::exits_nonzero()));
-    let program_id: AccountId = crate::test_methods::exits_nonzero().id().into();
+    let program_id = AccountId::builtin_default_address(crate::test_methods::exits_nonzero().id());
     let message = Message::try_new(program_id, vec![from], vec![Nonce(0)], ()).unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
@@ -320,7 +325,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
             None,
         );
         let message = Message::try_new(
-            chain_caller.id().into(),
+            AccountId::builtin_default_address(chain_caller.id()),
             vec![to, from],
             vec![Nonce(0)],
             instruction,
@@ -337,7 +342,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     // The callee alone, so the assertion below fails if its cycles are never folded in: a
     // caller with one chained call burns only marginally more than with none.
     let callee_message = Message::try_new(
-        crate::test_methods::exits_nonzero().id().into(),
+        AccountId::builtin_default_address(crate::test_methods::exits_nonzero().id()),
         vec![from],
         vec![Nonce(0)],
         (),

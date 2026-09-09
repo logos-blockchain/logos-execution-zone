@@ -158,19 +158,23 @@ fn setup_sequencer_config() -> SequencerConfig {
 #[test]
 fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
     assert!(is_sequencer_only_program(
-        programs::cross_zone_inbox().id().into()
+        AccountId::builtin_default_address(programs::cross_zone_inbox().id())
     ));
-    assert!(is_sequencer_only_program(programs::fee().id().into()));
-    assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox().id().into()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::wrapped_token().id().into()
+    assert!(is_sequencer_only_program(
+        AccountId::builtin_default_address(programs::fee().id())
     ));
     assert!(!is_sequencer_only_program(
-        programs::ping_sender().id().into()
+        AccountId::builtin_default_address(programs::cross_zone_outbox().id())
     ));
-    assert!(!is_sequencer_only_program(programs::clock().id().into()));
+    assert!(!is_sequencer_only_program(
+        AccountId::builtin_default_address(programs::wrapped_token().id())
+    ));
+    assert!(!is_sequencer_only_program(
+        AccountId::builtin_default_address(programs::ping_sender().id())
+    ));
+    assert!(!is_sequencer_only_program(
+        AccountId::builtin_default_address(programs::clock().id())
+    ));
 }
 
 #[test]
@@ -227,7 +231,7 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     };
     assert_eq!(
         fee_tx.message().program_account_id,
-        programs::fee().id().into()
+        AccountId::builtin_default_address(programs::fee().id())
     );
     assert_eq!(
         *clock_tx,
@@ -279,7 +283,9 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_account_id != programs::bridge().id().into() {
+    if public_tx.message.program_account_id
+        != AccountId::builtin_default_address(programs::bridge().id())
+    {
         return false;
     }
 
@@ -311,7 +317,7 @@ fn create_charged_bridge_deposit(
     payer_nonce: u128,
     payer_key: &PrivateKey,
 ) -> LeeTransaction {
-    let bridge_program_id: AccountId = programs::bridge().id().into();
+    let bridge_program_id = AccountId::builtin_default_address(programs::bridge().id());
     let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
     let message = lee::public_transaction::Message::try_new_with_fees(
         bridge_program_id,
@@ -441,8 +447,12 @@ fn cross_zone_test_config() -> SequencerConfig {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: programs::ping_sender().id().into(),
-                    target_account_id: programs::ping_receiver().id().into(),
+                    src_account_id: AccountId::builtin_default_address(
+                        programs::ping_sender().id(),
+                    ),
+                    target_account_id: AccountId::builtin_default_address(
+                        programs::ping_receiver().id(),
+                    ),
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -468,14 +478,14 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// `src_block_id`. Built through the same builder the watcher uses, so a change
 /// to the encoding shows up here rather than passing silently.
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
         &cross_zone::EmissionSource {
             src_zone: PEER_ZONE,
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
             src_tx_index: 0,
-            src_account_id: programs::ping_sender().id().into(),
+            src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
         },
         receiver_id,
         &[
@@ -919,7 +929,9 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
         "the drained delivery should be included in the produced block"
     );
 
-    let record_id = ping_record_pda(programs::ping_receiver().id().into());
+    let record_id = ping_record_pda(AccountId::builtin_default_address(
+        programs::ping_receiver().id(),
+    ));
     assert_eq!(
         sequencer
             .with_state(|state| state.get_account_by_id(record_id).data.into_inner())
@@ -1932,7 +1944,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::clock().id().into(),
+            AccountId::builtin_default_address(programs::clock().id()),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -1972,7 +1984,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     let clock_chain_caller = test_programs::clock_chain_caller();
-    let clock_chain_caller_id: AccountId = clock_chain_caller.id().into();
+    let clock_chain_caller_id = AccountId::builtin_default_address(clock_chain_caller.id());
 
     // Deploy the clock_chain_caller test program through `program_loader`, at its bijection
     // address: a `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
@@ -1981,38 +1993,61 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // and pays the fee for both, since neither freshly-claimed account holds anything to self-pay
     // with.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
-    let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
+    let elf = clock_chain_caller.elf();
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_keys: Vec<lee::PrivateKey> = (0..chunks.len())
+        .map(|i| lee::PrivateKey::try_new([u8::try_from(210 + i).unwrap(); 32]).unwrap())
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&lee::PublicKey::new_from_private_key(key)))
+        .collect();
 
-    let segment_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
-        vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
-        program_loader_core::Instruction::WriteSegment {
-            bytecode: clock_chain_caller.elf().to_vec(),
-            next_segment: None,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
-    let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        segment_message,
-        segment_witness_set,
-    ));
-    mempool_handle
-        .push((TransactionOrigin::User, segment_tx))
-        .await
-        .unwrap();
-    sequencer.run_production_turn().await.unwrap();
+    // Linked tail-to-head, one `WriteSegment` transaction per chunk: the payer's nonce
+    // advances with each transaction it pays fees for.
+    let mut payer_nonce: u128 = 0;
+    for i in (0..chunks.len()).rev() {
+        let mut segment_account_ids = vec![segment_ids[i]];
+        segment_account_ids.extend(segment_ids.get(i + 1).copied());
+        let segment_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            segment_account_ids,
+            vec![
+                lee_core::account::Nonce(0),
+                lee_core::account::Nonce(payer_nonce),
+            ],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_ids.get(i + 1).copied(),
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_keys[i], &payer.pub_sign_key],
+        );
+        let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            segment_message,
+            segment_witness_set,
+        ));
+        mempool_handle
+            .push((TransactionOrigin::User, segment_tx))
+            .await
+            .unwrap();
+        sequencer.run_production_turn().await.unwrap();
+        payer_nonce += 1;
+    }
+    let segment_id = segment_ids[0];
 
+    let mut header_account_ids = vec![clock_chain_caller_id];
+    header_account_ids.extend(&segment_ids);
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![clock_chain_caller_id, segment_id],
-        vec![lee_core::account::Nonce(1)],
+        header_account_ids,
+        vec![lee_core::account::Nonce(payer_nonce)],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,
@@ -2108,9 +2143,9 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 //         0,
 //     );
 //     let sender_private_account = Account {
-//         program_owner: programs::authenticated_transfer().id().into(),
-//         balance: 100,
-//         nonce: Nonce(0xdead_beef),
+//         program_owner:
+// AccountId::builtin_default_address(programs::authenticated_transfer().id()),         balance:
+// 100,         nonce: Nonce(0xdead_beef),
 //         data: Data::default(),
 //     };
 //     let bridge_account_id = system_accounts::bridge_account_id();
@@ -2148,7 +2183,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 //     let program_with_deps = ProgramWithDependencies::new(
 //         programs::bridge(),
 //         [(
-//             programs::authenticated_transfer().id().into(),
+//             AccountId::builtin_default_address(programs::authenticated_transfer().id()),
 //             programs::authenticated_transfer(),
 //         )]
 //         .into(),
@@ -2211,7 +2246,7 @@ fn time_locked_transfer_transaction(
     amount: u128,
     deadline: u64,
 ) -> PublicTransaction {
-    let program_id: AccountId = test_programs::time_locked_transfer().id().into();
+    let program_id = AccountId::builtin_default_address(test_programs::time_locked_transfer().id());
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![from, to, clock_account_id],
@@ -2235,7 +2270,9 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: AccountId::builtin_default_address(
+                programs::authenticated_transfer().id(),
+            ),
             ..Account::default()
         },
     );
@@ -2245,7 +2282,9 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id().into(),
+            program_owner: AccountId::builtin_default_address(
+                test_programs::time_locked_transfer().id(),
+            ),
             balance: 100,
             ..Account::default()
         },
@@ -2284,7 +2323,9 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id().into(),
+            program_owner: AccountId::builtin_default_address(
+                programs::authenticated_transfer().id(),
+            ),
             ..Account::default()
         },
     );
@@ -2294,7 +2335,9 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id().into(),
+            program_owner: AccountId::builtin_default_address(
+                test_programs::time_locked_transfer().id(),
+            ),
             balance: 100,
             ..Account::default()
         },
@@ -2333,7 +2376,7 @@ fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
 }
 
 fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> PublicTransaction {
-    let program_id: AccountId = test_programs::cooldown().id().into();
+    let program_id = AccountId::builtin_default_address(test_programs::cooldown().id());
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![state_id, clock_account_id],
@@ -2361,7 +2404,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
     state.force_insert_account(
         state_id,
         Account {
-            program_owner: test_programs::cooldown().id().into(),
+            program_owner: AccountId::builtin_default_address(test_programs::cooldown().id()),
             data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
@@ -2396,7 +2439,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
     state.force_insert_account(
         state_id,
         Account {
-            program_owner: test_programs::cooldown().id().into(),
+            program_owner: AccountId::builtin_default_address(test_programs::cooldown().id()),
             data: cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
@@ -2433,7 +2476,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge().id().into(),
+            AccountId::builtin_default_address(programs::bridge().id()),
             vec![system_accounts::bridge_account_id()],
             vec![],
             bridge_core::Instruction::Withdraw {
@@ -3906,7 +3949,9 @@ fn diag_sequencer_stake_claims_ownership_account() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: AccountId::builtin_default_address(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: amount,
                     ..Account::default()
                 },
@@ -3932,7 +3977,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![
             funding_id,
             ownership_id,
@@ -3943,7 +3988,9 @@ fn diag_sequencer_stake_claims_ownership_account() {
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::builtin_default_address(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -3959,7 +4006,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let ownership_account = state.get_account_by_id(ownership_id);
     assert_eq!(
         ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         "ownership account should be claimed by sequencer_stake"
     );
     assert_eq!(
@@ -3996,7 +4043,7 @@ fn stake_transaction(
         .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![
             funding_id,
             ownership_id,
@@ -4010,7 +4057,9 @@ fn stake_transaction(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::builtin_default_address(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -4048,7 +4097,9 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: AccountId::builtin_default_address(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: funding_balance,
                     ..Account::default()
                 },
@@ -4073,7 +4124,7 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![ownership_id, config_slot],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -4115,7 +4166,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     // sits: a balance increase needs no ownership of the target.
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        AccountId::builtin_default_address(programs::authenticated_transfer().id()),
         vec![funding_id, funds_id],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
@@ -4247,7 +4298,7 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
 
     assert_eq!(
         state.get_account_by_id(other_ownership_id).program_owner,
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
     );
 
@@ -4284,7 +4335,9 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             (
                 funding_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: AccountId::builtin_default_address(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: amount,
                     ..Account::default()
                 },
@@ -4314,7 +4367,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     // Full exit, releasing back to the (now drained) funding account.
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -4361,7 +4414,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
     assert_eq!(
         state.get_account_by_id(ownership_id).program_owner,
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         "the ownership account stays claimed after a full exit"
     );
 
@@ -4397,7 +4450,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
         stake_account.program_owner,
-        programs::sequencer_stake().id().into()
+        AccountId::builtin_default_address(programs::sequencer_stake().id())
     );
     assert_eq!(
         state
@@ -4437,7 +4490,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     ));
 
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),
@@ -4495,7 +4548,7 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     // handed, into the staker's own funding account.
     let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
     let message = lee::public_transaction::Message::try_new(
-        programs::sequencer_stake().id().into(),
+        AccountId::builtin_default_address(programs::sequencer_stake().id()),
         vec![
             funding_id,
             ownership_id,
@@ -4509,7 +4562,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
         sequencer_stake_core::Instruction::Stake {
             sequencer_key: test_sequencer_key(0x64),
             amount,
-            mover_account_id: test_programs::reverse_transfer().id().into(),
+            mover_account_id: AccountId::builtin_default_address(
+                test_programs::reverse_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -4530,7 +4585,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
 
 /// The sink burned stakes land in.
 fn slash_sink_id() -> AccountId {
-    sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id().into())
+    sequencer_stake_core::slash_sink_account_id(AccountId::builtin_default_address(
+        programs::sequencer_stake().id(),
+    ))
 }
 
 /// Stakes `amount` for a fresh key and returns everything a slash test needs.
@@ -4809,12 +4866,12 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
 #[test]
 fn genesis_cross_zone_transactions_follow_the_declaration() {
     let cross_zone_ids: [AccountId; 6] = [
-        programs::cross_zone_inbox().id().into(),
-        programs::cross_zone_outbox().id().into(),
-        programs::ping_sender().id().into(),
-        programs::ping_receiver().id().into(),
-        programs::bridge_lock().id().into(),
-        programs::wrapped_token().id().into(),
+        AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
+        AccountId::builtin_default_address(programs::cross_zone_outbox().id()),
+        AccountId::builtin_default_address(programs::ping_sender().id()),
+        AccountId::builtin_default_address(programs::ping_receiver().id()),
+        AccountId::builtin_default_address(programs::bridge_lock().id()),
+        AccountId::builtin_default_address(programs::wrapped_token().id()),
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
         LeeTransaction::Public(public) => public.message().program_account_id,
@@ -4857,11 +4914,11 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     assert_eq!(
         cross_zone_txs,
         vec![
-            programs::wrapped_token().id().into(),
-            programs::ping_sender().id().into(),
-            programs::ping_receiver().id().into(),
-            programs::bridge_lock().id().into(),
-            programs::cross_zone_inbox().id().into(),
+            AccountId::builtin_default_address(programs::wrapped_token().id()),
+            AccountId::builtin_default_address(programs::ping_sender().id()),
+            AccountId::builtin_default_address(programs::ping_receiver().id()),
+            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
         ],
         "the four InitConfigs then the inbox config, in the fixed order"
     );

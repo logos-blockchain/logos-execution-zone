@@ -90,7 +90,9 @@ async fn main() -> Result<()> {
                 Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
                     sequencer_key,
                     amount,
-                    mover_account_id: programs::authenticated_transfer().id().into(),
+                    mover_account_id: AccountId::builtin_default_address(
+                        programs::authenticated_transfer().id(),
+                    ),
                     mover_instruction_data,
                 })
                 .context("Failed to serialize Stake instruction")?;
@@ -106,7 +108,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id().into(),
+                    AccountId::builtin_default_address(programs::sequencer_stake().id()),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -130,7 +132,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    programs::sequencer_stake().id().into(),
+                    AccountId::builtin_default_address(programs::sequencer_stake().id()),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

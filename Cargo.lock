@@ -4708,6 +4708,7 @@ dependencies = [
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",
+ "lee_core",
  "log",
  "serde_json",
  "tokio",

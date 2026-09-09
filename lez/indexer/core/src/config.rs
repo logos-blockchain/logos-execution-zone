@@ -109,7 +109,7 @@ pub struct ProgramId(pub lee_core::program::ProgramId);
 
 impl Display for ProgramId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        AccountId::from(self.0).fmt(f)
+        AccountId::builtin_default_address(self.0).fmt(f)
     }
 }
 
@@ -161,7 +161,10 @@ impl EventFilterConfig {
             };
             ensure!(
                 sources
-                    .insert(AccountId::from(source.program_id.0), selectors)
+                    .insert(
+                        AccountId::builtin_default_address(source.program_id.0),
+                        selectors,
+                    )
                     .is_none(),
                 "event_filter declares program {} twice",
                 source.program_id
@@ -222,9 +225,12 @@ mod tests {
         ));
 
         let expected = EventFilter::Sources(HashMap::from([
-            (AccountId::from([1_u32; 8]), SelectorFilter::All),
             (
-                AccountId::from([2_u32; 8]),
+                AccountId::builtin_default_address([1_u32; 8]),
+                SelectorFilter::All,
+            ),
+            (
+                AccountId::builtin_default_address([2_u32; 8]),
                 SelectorFilter::Only(HashSet::from([[3; 8]])),
             ),
         ]));

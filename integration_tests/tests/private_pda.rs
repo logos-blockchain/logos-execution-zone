@@ -163,11 +163,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id: AccountId = proxy.id().into();
+    let proxy_id = AccountId::builtin_default_address(proxy.id());
     // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
     // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
     let auth_transfer_id: ProgramId = auth_transfer.id();
-    let auth_transfer_account_id: AccountId = auth_transfer_id.into();
+    let auth_transfer_account_id = AccountId::builtin_default_address(auth_transfer_id);
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -176,37 +176,56 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     // locally — a `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
     // `proxy_id` itself as the header.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = PrivateKey::try_new([230; 32]).unwrap();
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
+    let mut payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
-    let segment_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
-        vec![lee_core::account::Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
-            bytecode: proxy.elf().to_vec(),
-            next_segment: None,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )?;
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
-    ctx.sequencer_client()
-        .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
-            segment_message,
-            segment_witness_set,
-        )))
-        .await?;
+    let elf = proxy.elf();
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([u8::try_from(230 + i).unwrap(); 32]).unwrap())
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
 
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    // Linked tail-to-head, one `WriteSegment` transaction per chunk.
+    for i in (0..chunks.len()).rev() {
+        let mut segment_account_ids = vec![segment_ids[i]];
+        segment_account_ids.extend(segment_ids.get(i + 1).copied());
+        let segment_message = lee::public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            segment_account_ids,
+            vec![lee_core::account::Nonce(0), payer_nonce],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_ids.get(i + 1).copied(),
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )?;
+        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_keys[i], &payer.pub_sign_key],
+        );
+        ctx.sequencer_client()
+            .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
+                segment_message,
+                segment_witness_set,
+            )))
+            .await?;
 
+        tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+        payer_nonce = lee_core::account::Nonce(payer_nonce.0 + 1);
+    }
+    let segment_id = segment_ids[0];
+
+    let mut header_account_ids = vec![proxy_id];
+    header_account_ids.extend(&segment_ids);
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![proxy_id, segment_id],
-        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
+        header_account_ids,
+        vec![payer_nonce],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,

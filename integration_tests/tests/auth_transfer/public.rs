@@ -370,7 +370,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        AccountId::builtin_default_address(programs::authenticated_transfer().id()),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -412,7 +412,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::faucet().id().into(),
+        AccountId::builtin_default_address(programs::faucet().id()),
         vec![faucet_account_id, recipient],
         vec![],
         faucet_core::Instruction::GenesisTransfer { amount },
@@ -446,7 +446,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let faucet_chain_caller_id: AccountId = faucet_chain_caller.id().into();
+    let faucet_chain_caller_id = AccountId::builtin_default_address(faucet_chain_caller.id());
 
     // Deploy through `program_loader`, at `faucet_chain_caller`'s own bijection address: a
     // `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
@@ -455,38 +455,57 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     // signs and pays the fee for both, since neither freshly-claimed account holds anything to
     // self-pay with.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = PrivateKey::try_new([210; 32]).unwrap();
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
+    let mut payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
-    let segment_message = public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_id],
-        vec![lee_core::account::Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
-            bytecode: faucet_chain_caller.elf().to_vec(),
-            next_segment: None,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let segment_witness_set = public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
-    let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        segment_message,
-        segment_witness_set,
-    ));
-    ctx.sequencer_client().send_transaction(segment_tx).await?;
+    let elf = faucet_chain_caller.elf();
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([u8::try_from(210 + i).unwrap(); 32]).unwrap())
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
 
-    log::info!("Waiting for segment block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    // Linked tail-to-head, one `WriteSegment` transaction per chunk.
+    for i in (0..chunks.len()).rev() {
+        let mut segment_account_ids = vec![segment_ids[i]];
+        segment_account_ids.extend(segment_ids.get(i + 1).copied());
+        let segment_message = public_transaction::Message::try_new_with_fees(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            segment_account_ids,
+            vec![lee_core::account::Nonce(0), payer_nonce],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_ids.get(i + 1).copied(),
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let segment_witness_set = public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_keys[i], &payer.pub_sign_key],
+        );
+        let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            segment_message,
+            segment_witness_set,
+        ));
+        ctx.sequencer_client().send_transaction(segment_tx).await?;
 
+        log::info!("Waiting for segment block creation");
+        tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+        payer_nonce = lee_core::account::Nonce(payer_nonce.0 + 1);
+    }
+    let segment_id = segment_ids[0];
+
+    let mut header_account_ids = vec![faucet_chain_caller_id];
+    header_account_ids.extend(&segment_ids);
     let header_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![faucet_chain_caller_id, segment_id],
-        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
+        header_account_ids,
+        vec![payer_nonce],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_id,
             immutable: true,
@@ -507,7 +526,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
-    let faucet_program_id: AccountId = programs::faucet().id().into();
+    let faucet_program_id = AccountId::builtin_default_address(programs::faucet().id());
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(

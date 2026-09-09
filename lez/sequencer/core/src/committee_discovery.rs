@@ -139,7 +139,7 @@ pub fn config_is_readable(state: &lee::V03State) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::Account;
+    use lee_core::account::{Account, AccountId};
     use sequencer_stake_core::SequencerEntry;
 
     use super::*;
@@ -192,7 +192,9 @@ mod tests {
             (
                 staked.account_id,
                 Account {
-                    program_owner: programs::sequencer_stake().id().into(),
+                    program_owner: AccountId::builtin_default_address(
+                        programs::sequencer_stake().id(),
+                    ),
                     balance: staked.balance,
                     data: StakeRecord {
                         sequencer_key: staked.key,
@@ -207,7 +209,7 @@ mod tests {
         });
 
         let config = Account {
-            program_owner: programs::sequencer_stake().id().into(),
+            program_owner: AccountId::builtin_default_address(programs::sequencer_stake().id()),
             data: SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: MINIMUM,

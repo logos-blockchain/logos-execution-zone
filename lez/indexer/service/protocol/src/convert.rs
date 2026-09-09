@@ -300,7 +300,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             fee,
         } = value;
         Self::new_preserialized(
-            lee::AccountId::from(program_id.0),
+            lee::AccountId::builtin_default_address(program_id.0),
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
@@ -954,7 +954,7 @@ mod tests {
     #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
-            account_id: lee_core::account::AccountId::from([7_u32; 8]),
+            account_id: lee_core::account::AccountId::builtin_default_address([7_u32; 8]),
             event: lee_core::program::ProgramEvent {
                 selector: [selector; 8],
                 data: vec![selector; 2],
@@ -989,7 +989,10 @@ mod tests {
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            [7_u32; 8].into(),
+            lee::AccountId::new([
+                7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0,
+                7, 0, 0, 0,
+            ]),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,
@@ -1023,7 +1026,10 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let message = lee::public_transaction::Message::try_new(
-            [7_u32; 8].into(),
+            lee::AccountId::new([
+                7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0,
+                7, 0, 0, 0,
+            ]),
             vec![signer_id],
             vec![0_u128.into()],
             0_u32,

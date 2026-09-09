@@ -5,7 +5,8 @@ use std::{
 
 use common::HashType;
 use lee::{
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, ProgramId,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, AccountId,
+    ProgramId,
 };
 
 use crate::{
@@ -66,7 +67,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
         let mut program_map = HashMap::new();
 
         let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = orig_program.id().into();
+        let self_account_id = AccountId::builtin_default_address(orig_program.id());
 
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.deps_size {
@@ -74,7 +75,10 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
                 .ok_or(WalletFfiError::NullPointer)?
                 .try_into()?;
 
-            program_map.insert(program_dep.id().into(), program_dep);
+            program_map.insert(
+                AccountId::builtin_default_address(program_dep.id()),
+                program_dep,
+            );
         }
 
         Ok(Self {
@@ -211,7 +215,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     match block_on(wallet.send_pub_tx_paid_by(
         accounts,
         instruction_data.to_vec(),
-        ProgramId::from(program_id).into(),
+        AccountId::builtin_default_address(ProgramId::from(program_id)),
         payer,
     )) {
         Ok(tx_hash) => {

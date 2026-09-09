@@ -57,7 +57,7 @@ pub struct EmissionSource {
 /// block.
 #[must_use]
 pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
-    account_id == programs::cross_zone_inbox().id().into()
+    account_id == AccountId::builtin_default_address(programs::cross_zone_inbox().id())
 }
 
 /// Extracts the cross-zone emission from a source transaction.
@@ -67,7 +67,7 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
 /// emits.
 #[must_use]
 pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Option<Emission> {
-    if account_id == programs::ping_sender().id().into() {
+    if account_id == AccountId::builtin_default_address(programs::ping_sender().id()) {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
         let Ok(ping_core::SenderInstruction::Send {
@@ -86,7 +86,7 @@ pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Optio
             target_accounts,
             payload,
         })
-    } else if account_id == programs::bridge_lock().id().into() {
+    } else if account_id == AccountId::builtin_default_address(programs::bridge_lock().id()) {
         let Ok(bridge_lock_core::Instruction::Lock {
             target_zone,
             target_account_id,
@@ -173,7 +173,11 @@ pub fn build_dispatch_from_emission(
         .copied()
         .map(AccountId::new)
         .collect();
-    build_inbox_dispatch_tx(programs::cross_zone_inbox().id().into(), &msg, target_ids)
+    build_inbox_dispatch_tx(
+        AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
+        &msg,
+        target_ids,
+    )
 }
 
 /// The genesis transaction that initializes this zone's inbox config PDA.
@@ -183,7 +187,7 @@ pub fn build_dispatch_from_emission(
 /// Replaying this seeds the same account on every node.
 #[must_use]
 pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
-    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
     genesis_public_tx(
         inbox_id,
         vec![inbox_config_account_id(inbox_id)],
@@ -216,7 +220,8 @@ fn sources_for_target(
             );
             assert!(
                 route.mint_cap.is_none()
-                    || route.target_account_id == programs::wrapped_token().id().into(),
+                    || route.target_account_id
+                        == AccountId::builtin_default_address(programs::wrapped_token().id()),
                 "cross-zone route sets a mint cap, but its target {:?} does not mint",
                 route.target_account_id
             );
@@ -248,8 +253,8 @@ fn sources_for_target(
 /// The programs a cross-zone route may name as a target on this zone.
 fn cross_zone_targets() -> [AccountId; 2] {
     [
-        programs::wrapped_token().id().into(),
-        programs::ping_receiver().id().into(),
+        AccountId::builtin_default_address(programs::wrapped_token().id()),
+        AccountId::builtin_default_address(programs::ping_receiver().id()),
     ]
 }
 
@@ -264,7 +269,7 @@ fn cross_zone_targets() -> [AccountId; 2] {
 /// claimed by a first initializer.
 #[must_use]
 pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
-    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
     let sources = sources_for_target(cross_zone, wrapped_token_id)
         .into_iter()
         .map(
@@ -282,7 +287,7 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
         wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
-            minter: programs::cross_zone_inbox().id().into(),
+            minter: AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
             governance: cross_zone.source_governance,
             authority: cross_zone.source_authority,
             sources,
@@ -294,12 +299,14 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
 /// without importing the outbox id into the guest.
 #[must_use]
 pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
-    let ping_sender_id: AccountId = programs::ping_sender().id().into();
+    let ping_sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
     genesis_public_tx(
         ping_sender_id,
         vec![ping_core::sender_config_account_id(ping_sender_id)],
         ping_core::SenderInstruction::InitConfig {
-            outbox_account_id: programs::cross_zone_outbox().id().into(),
+            outbox_account_id: AccountId::builtin_default_address(
+                programs::cross_zone_outbox().id(),
+            ),
         },
     )
 }
@@ -308,13 +315,15 @@ pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
 /// wrapped token it mints, without importing either id into the guest.
 #[must_use]
 pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
-    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
     genesis_public_tx(
         bridge_lock_id,
         vec![bridge_lock_core::config_account_id(bridge_lock_id)],
         bridge_lock_core::Instruction::InitConfig {
-            outbox_account_id: programs::cross_zone_outbox().id().into(),
-            target_account_id: programs::wrapped_token().id().into(),
+            outbox_account_id: AccountId::builtin_default_address(
+                programs::cross_zone_outbox().id(),
+            ),
+            target_account_id: AccountId::builtin_default_address(programs::wrapped_token().id()),
         },
     )
 }
@@ -322,7 +331,10 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
 /// The holding PDA a holder's bridgeable balance lives in.
 #[must_use]
 pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
-    bridge_lock_core::holding_account_id(programs::bridge_lock().id().into(), &holder.into_value())
+    bridge_lock_core::holding_account_id(
+        AccountId::builtin_default_address(programs::bridge_lock().id()),
+        &holder.into_value(),
+    )
 }
 
 /// The genesis transaction naming the peer sources `ping_receiver` accepts a
@@ -330,7 +342,7 @@ pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
 /// token's is.
 #[must_use]
 pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
     // Caps are refused on non-minting targets above, so the cap is always
     // absent here and the receiver's pair list keeps its shape.
     let sources = sources_for_target(cross_zone, receiver_id)
@@ -341,7 +353,7 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
         receiver_id,
         vec![ping_core::receiver_config_account_id(receiver_id)],
         ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
-            deliverer: programs::cross_zone_inbox().id().into(),
+            deliverer: AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
             governance: cross_zone.source_governance,
             authority: cross_zone.source_authority,
             sources,
@@ -380,8 +392,10 @@ mod tests {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_account_id: programs::bridge_lock().id().into(),
-                    target_account_id: programs::amm().id().into(),
+                    src_account_id: AccountId::builtin_default_address(
+                        programs::bridge_lock().id(),
+                    ),
+                    target_account_id: AccountId::builtin_default_address(programs::amm().id()),
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -403,8 +417,12 @@ mod tests {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],
                 allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_account_id: programs::bridge_lock().id().into(),
-                    target_account_id: programs::wrapped_token().id().into(),
+                    src_account_id: AccountId::builtin_default_address(
+                        programs::bridge_lock().id(),
+                    ),
+                    target_account_id: AccountId::builtin_default_address(
+                        programs::wrapped_token().id(),
+                    ),
                     mint_cap: Some(1_000),
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -422,8 +440,8 @@ mod tests {
     #[should_panic(expected = "same source twice")]
     fn a_duplicated_route_for_one_target_is_refused() {
         let route = cross_zone_inbox_core::CrossZoneRoute {
-            src_account_id: programs::bridge_lock().id().into(),
-            target_account_id: programs::wrapped_token().id().into(),
+            src_account_id: AccountId::builtin_default_address(programs::bridge_lock().id()),
+            target_account_id: AccountId::builtin_default_address(programs::wrapped_token().id()),
             mint_cap: None,
         };
         let cross_zone = CrossZoneConfig {

@@ -1578,7 +1578,7 @@ mod accept_tests {
         // longer works here: it reverts-with-fee inside a valid block.
         let bogus_deposit = {
             let message = lee::public_transaction::Message::try_new(
-                programs::bridge().id().into(),
+                AccountId::builtin_default_address(programs::bridge().id()),
                 vec![
                     lee::AccountId::new([1_u8; 32]),
                     lee::AccountId::new([2_u8; 32]),
