@@ -46,8 +46,8 @@ pub unsafe extern "C" fn start_sequencer(
 
 /// Creates all components of sequencer service except RPC.
 ///
-/// `ToDo`: Make RPC construction optional. Probably needs modification of configs to be alighned with
-/// mainline sequencer.
+/// `ToDo`: Make RPC construction optional. Probably needs modification of configs to be alighned
+/// with mainline sequencer.
 async fn make_sequencer_compoments(
     config: SequencerConfig,
 ) -> Result<
