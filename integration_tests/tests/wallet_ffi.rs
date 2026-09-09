@@ -204,6 +204,7 @@ unsafe extern "C" {
         instruction_data: *const u8,
         instruction_data_size: usize,
         program_id: FfiProgramId,
+        payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -1570,6 +1571,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             instruction_data_ptr,
             instruction_data_size,
             program_id.into(),
+            std::ptr::null(),
             &raw mut transaction_result,
         )
         .unwrap();

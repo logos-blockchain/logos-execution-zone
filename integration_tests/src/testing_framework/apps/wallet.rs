@@ -64,6 +64,12 @@ enum WalletRequest {
         amount: u128,
         response: oneshot::Sender<Result<HashType, String>>,
     },
+    PublicTransferWithFailureKind {
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+        response: oneshot::Sender<Result<HashType, wallet::ExecutionFailureKind>>,
+    },
     PrivateTransfer {
         from: AccountId,
         to: AccountId,
@@ -220,6 +226,21 @@ impl WalletActor {
                                     }
                                 })
                                 .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::PublicTransferWithFailureKind {
+                                from,
+                                to,
+                                amount,
+                                response,
+                            } => {
+                                let result = NativeTokenTransfer(&components.wallet)
+                                    .send_public_transfer(
+                                        AccountIdentity::Public(from),
+                                        AccountIdentity::Public(to),
+                                        amount,
+                                    )
+                                    .await;
                                 let _unused = response.send(result);
                             }
                             WalletRequest::PrivateTransfer {
@@ -502,6 +523,36 @@ impl LezRuntime {
             response,
         })
         .await
+    }
+
+    /// Executes a public transfer while preserving the wallet's structured
+    /// failure kind for Cucumber rejection assertions.
+    pub async fn public_transfer_with_failure_kind(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, wallet::ExecutionFailureKind> {
+        let (response, receiver) = oneshot::channel();
+        self.actor
+            .requests
+            .send(WalletRequest::PublicTransferWithFailureKind {
+                from,
+                to,
+                amount,
+                response,
+            })
+            .await
+            .map_err(|error| {
+                wallet::ExecutionFailureKind::SequencerError(anyhow!(
+                    "LEZ wallet actor is no longer running: {error}"
+                ))
+            })?;
+        receiver.await.map_err(|error| {
+            wallet::ExecutionFailureKind::SequencerError(anyhow!(
+                "LEZ wallet actor dropped its response: {error}"
+            ))
+        })?
     }
 
     /// Executes an authenticated transfer between two owned private accounts.

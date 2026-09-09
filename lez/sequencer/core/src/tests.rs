@@ -1,4 +1,8 @@
-#![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::arbitrary_source_item_ordering,
+    reason = "We don't care about it in tests"
+)]
 
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
@@ -4864,5 +4868,66 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     );
     for id in cross_zone_ids {
         assert!(state.get_program(ProgramId::from(id)).is_some());
+    }
+}
+
+mod channel_update_extraction {
+    use logos_blockchain_core::mantle::{
+        ops::{
+            Op,
+            channel::inscribe::{Inscription, InscriptionOp},
+        },
+        transactions::{MantleTxBuilder, OpsProofs, SignedMantleTx, states::Unverified},
+    };
+    use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
+
+    use super::{sequencer_sign_key_for_testing, *};
+    use crate::block_publisher::channel_blocks;
+
+    /// A tx wrapping `block` in one inscribe op on `channel`.
+    fn inscribing_tx(
+        channel: ChannelId,
+        block: &common::block::Block,
+    ) -> SignedMantleTx<Unverified> {
+        let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+        let op = Op::ChannelInscribe(InscriptionOp {
+            channel_id: channel,
+            inscription,
+            parent: MsgId::root(),
+            signer: Ed25519Key::generate(&mut rand::rngs::OsRng).public_key(),
+        });
+        let raw = MantleTxBuilder::new()
+            .extend_ops([op])
+            .expect("ops fit")
+            .build()
+            .expect("tx builds");
+        SignedMantleTx::new(raw, OpsProofs::empty())
+    }
+
+    #[test]
+    fn a_custom_tx_yields_its_block() {
+        let channel = ChannelId::from([1; 32]);
+        let block = HashableBlockData {
+            block_id: 7,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 700,
+            transactions: Vec::new(),
+        }
+        .into_pending_block(&sequencer_sign_key_for_testing());
+
+        let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
+        let blocks = channel_blocks(&custom, channel);
+
+        assert_eq!(blocks.len(), 1, "the Custom tx carries one block");
+        assert_eq!(blocks[0].header.block_id, 7);
+        assert_eq!(blocks[0].header.hash, block.header.hash);
+    }
+
+    #[test]
+    fn a_config_tx_yields_nothing() {
+        let channel = ChannelId::from([1; 32]);
+        let raw = MantleTxBuilder::new().build().expect("tx builds");
+        let config = ChannelUpdateTx::Config(SignedMantleTx::new(raw, OpsProofs::empty()));
+        assert!(channel_blocks(&config, channel).is_empty());
     }
 }

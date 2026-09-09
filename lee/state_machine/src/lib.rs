@@ -82,6 +82,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn exits_nonzero() -> Program {
+        Program::new_unchecked(
+            test_methods::EXITS_NONZERO_ID,
+            Cow::Borrowed(test_methods::EXITS_NONZERO_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn dropped_account() -> Program {
         Program::new_unchecked(
             test_methods::DROPPED_ACCOUNT_ID,

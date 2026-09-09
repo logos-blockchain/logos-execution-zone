@@ -1,0 +1,13 @@
+# Timing visibility for CI. There is deliberately no `terminate-after`: some
+# tests legitimately run for many minutes, and the point here is to see which
+# ones, not to kill them.
+[profile.ci]
+# Print a SLOW line every period a test is still running, so the log shows the
+# expensive tests without needing the JUnit file.
+slow-timeout = { period = "120s" }
+# One failing test should not hide the timings of the rest.
+fail-fast = false
+status-level = "slow"
+
+[profile.ci.junit]
+path = "junit.xml"

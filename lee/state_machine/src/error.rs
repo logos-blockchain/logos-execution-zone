@@ -44,6 +44,9 @@ pub enum LeeError {
     #[error("Failed to execute program: {0}")]
     ProgramExecutionFailed(String),
 
+    #[error("Program exited with non-zero code {code} after {cycles} cycles")]
+    ProgramExitedWithCode { code: u32, cycles: Cycles },
+
     #[error("Failed to prove program: {0}")]
     ProgramProveFailed(String),
 

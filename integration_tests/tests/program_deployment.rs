@@ -20,48 +20,60 @@ use wallet::{
 };
 
 #[test]
-#[ignore = "blocked on fee support for claiming a fresh account under self-pay: the account being \
-            claimed holds nothing to fund the reserve, third-party sponsorship was dropped, and \
-            funding it first auto-claims it through the transfer guest, leaving the claimer nothing \
-            to claim (fee subsystem interim policy)"]
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let deployed = test_programs::data_writer();
+    // Every account a deploy touches is freshly claimed and unfunded, so a genesis-funded wallet
+    // account covers the fees instead (see `ProgramLoader::send`).
+    let payer_id = ctx.existing_public_accounts()[0];
 
-    // Deploy through `program_loader`: one segment holds the whole (small, test-sized) ELF, then
-    // a header claims it. Both accounts are freshly claimed, permissionless writes.
+    // Deploy through `program_loader`: one segment per ELF chunk, then a header claims the chain.
+    // Every account is freshly claimed, a permissionless write.
     let header_id = new_account(&mut ctx, false, None).await?;
-    let segment_id = new_account(&mut ctx, false, None).await?;
+    let mut segment_ids = Vec::new();
+    for _ in deployed
+        .elf()
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+    {
+        segment_ids.push(new_account(&mut ctx, false, None).await?);
+    }
     let account_id = wallet::program_facades::program_loader::ProgramLoader(ctx.wallet())
         .deploy(
             header_id,
-            &[segment_id],
+            &segment_ids,
             deployed.elf().to_vec(),
             true,
-            None,
+            Some(payer_id),
         )
         .await?;
 
     let target_id = new_account(&mut ctx, false, None).await?;
 
-    let nonces = ctx.wallet_mut().get_accounts_nonces(&[target_id]).await?;
+    // The claimed account holds nothing to fund the reserve with, so `payer_id` co-signs: its
+    // nonce and signature go last, after the account list's own.
+    let nonces = ctx
+        .wallet_mut()
+        .get_accounts_nonces(&[target_id, payer_id])
+        .await?;
     let written: Vec<u8> = vec![9; 4];
-    // Self-pay: the account being claimed is its own fee payer, authorizing with
-    // its own signature. See the `#[ignore]` above — a fresh account holds
-    // nothing to fund the reserve with.
     let message = lee::public_transaction::Message::try_new_with_fees(
         account_id,
         vec![target_id],
         nonces,
         written.clone(),
-        lee::FeeDeclaration::new(target_id, 2_000_000, 0, 100_000_000),
+        common::test_utils::test_fee_declaration(payer_id),
     )?;
-    let private_key = ctx
+    let target_key = ctx
         .wallet()
         .get_account_public_signing_key(target_id)
         .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
+    let payer_key = ctx
+        .wallet()
+        .get_account_public_signing_key(payer_id)
+        .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[target_key, payer_key]);
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx
         .sequencer_client()

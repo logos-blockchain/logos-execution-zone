@@ -47,6 +47,7 @@ use tokio_retry::{Retry, strategy::FixedInterval};
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
+    logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
 
@@ -57,6 +58,7 @@ pub mod config;
 pub mod cross_zone_watcher;
 pub mod fees;
 pub mod gossip;
+pub mod logging;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod slashing;
@@ -125,8 +127,8 @@ impl DeclaredGasBudget {
     }
 
     /// Snaps the budget to the gas the block's settled transactions were
-    /// actually charged. Failed-but-charged actions pay their full declared
-    /// budget, so the summary never undercounts what replay will enforce.
+    /// actually charged: the metered count for successes and non-zero exits,
+    /// the full declared budget for panics and out-of-gas.
     const fn sync(&mut self, summary: &fee_core::BlockFeeSummary) {
         self.exec = summary.gas_used_exec;
         self.stor = summary.gas_used_stor;
@@ -801,6 +803,15 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .build_block_from_mempool(live_committee.as_ref())
             .await
             .context("Failed to build block from mempool transactions")?;
+
+        // Height and pin together: the height comes from the head and the pin
+        // from the cursor, and only this line records what they were as a pair.
+        // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
+        info!(
+            "Publishing block {} on pin {}",
+            block.header.block_id,
+            pin_str(parent.filter(|_| withdrawals.is_empty())),
+        );
 
         let block_publisher::PublishOutcome {
             this_msg,
@@ -1894,23 +1905,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
     let (resubmit_txs, outcome, head_height) = {
         let mut chain = chain.lock().await;
 
-        // An orphan report rewinds the head to the earliest orphaned block and
-        // prunes the store above it, which is how a run of our own inscriptions
-        // can silently stop being ours. Loud on the way in: it is the only
-        // trace, and the rewind it causes is the expensive one.
-        // Debug, not warn: the sdk orphans our blocks routinely once LIB pruning
-        // drops them from the lineage, and most of those no longer sit in the
-        // head. The rewind below is the part that costs something.
         let head_before = chain.head_tip().map(|tip| tip.block_id);
-        if !orphaned.is_empty() {
-            let ids: Vec<u64> = orphaned.iter().map(|block| block.header.block_id).collect();
-            debug!(
-                "Channel orphaned {} block(s) {:?}..={:?}, head tip is {head_before:?}",
-                ids.len(),
-                ids.iter().min(),
-                ids.iter().max(),
-            );
-        }
+        log_update(&orphaned, &adopted, &finalized, head_before);
 
         // A pin that stops moving while the channel keeps going is a wedge, so
         // log each move.
@@ -1931,23 +1927,9 @@ async fn apply_follow_update<S: StorageActorTrait>(
             );
         }
 
-        // An adoption that does not apply freezes the head where it is, and
-        // every later one then fails the same way. Nothing else reports it.
-        for (block, outcome) in adopted.iter().zip(&outcomes) {
-            if let AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) = outcome {
-                warn!(
-                    "Adopted block {} did not apply, head stays at {:?}: {err}",
-                    block.header.block_id,
-                    chain.head_tip().map(|tip| tip.block_id),
-                );
-            }
-        }
-
-        if let (Some(before), Some(after)) = (head_before, chain.head_tip().map(|tip| tip.block_id))
-            && after < before
-        {
-            warn!("Head rewound from {before} to {after}");
-        }
+        let head_after = chain.head_tip().map(|tip| tip.block_id);
+        log_parked(&adopted, &outcomes, head_after, chain.channel_cursor());
+        log_rewind(head_before, head_after, chain.channel_cursor());
 
         let mut to_persist: Vec<&Block> = adopted
             .iter()
@@ -2039,6 +2021,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
             (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)
                 .then_some(head_height)
                 .flatten();
+
+        log_high_water_lowered(lower_published_high_water, &orphans_above_head);
 
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
