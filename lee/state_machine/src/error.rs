@@ -117,54 +117,8 @@ impl LeeError {
 
 #[derive(Error, Debug)]
 pub enum InvalidProgramBehaviorError {
-    #[error(
-        "Inconsistent pre-state for account {account_id} : expected {expected:?}, actual {actual:?}"
-    )]
-    InconsistentAccountPreState {
-        account_id: AccountId,
-        // Boxed to reduce the size of the error type
-        expected: Box<AccountInput>,
-        actual: Box<AccountInput>,
-    },
-
-    #[error("Unauthorized account marked as authorized")]
-    InvalidAccountAuthorization { account_id: AccountId },
-
-    #[error("Authorized account marked as not authorized")]
-    AuthorizedAccountMarkedAsNotAuthorized { account_id: AccountId },
-
-    #[error("Program account ID mismatch: expected {expected}, actual {actual}")]
-    MismatchedProgramId {
-        expected: AccountId,
-        actual: AccountId,
-    },
-
-    #[error("Caller program account ID mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedCallerProgramId {
-        expected: Option<AccountId>,
-        actual: Option<AccountId>,
-    },
-
-    #[error("Chained call to {program_account_id} did not execute")]
-    ChainedCallDidNotExecute { program_account_id: AccountId },
-
-    #[error(transparent)]
-    ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
-
     #[error("Called program {program_account_id} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_account_id: AccountId },
-
-    #[error(
-        "Chained call named account {account_id}, but it isn't resolvable from the top-level \
-         pre_states or any earlier call's materialized diff in this transaction"
-    )]
-    UnknownChainedCallAccount { account_id: AccountId },
-
-    #[error("Program {program_account_id} did not return exactly its input rows in order")]
-    InputRowsMismatch { program_account_id: AccountId },
-
-    #[error("Invalid native transfer: {0}")]
-    NativeTransferFailed(#[from] TransferError),
 
     #[error(transparent)]
     Execution(#[from] ExecutionError),
@@ -172,7 +126,26 @@ pub enum InvalidProgramBehaviorError {
 
 impl From<ExecutionError> for LeeError {
     fn from(error: ExecutionError) -> Self {
-        Self::InvalidProgramBehavior(error.into())
+        match error {
+            ExecutionError::MaxChainedCallsExceeded => Self::MaxChainedCallsDepthExceeded,
+            ExecutionError::EmptyBlockWindowIntersection
+            | ExecutionError::EmptyTimestampWindowIntersection => Self::OutOfValidityWindow,
+            ExecutionError::MissingPublicFact { .. }
+            | ExecutionError::DuplicateWitness { .. }
+            | ExecutionError::WitnessNotInRoot { .. }
+            | ExecutionError::InvalidAuthorizationKey { .. }
+            | ExecutionError::FamilyBindingConflict { .. }
+            | ExecutionError::UnknownAccount { .. }
+            | ExecutionError::RowCountMismatch { .. }
+            | ExecutionError::PreStateMismatch { .. }
+            | ExecutionError::MismatchedProgramId { .. }
+            | ExecutionError::MismatchedCallerProgramId { .. }
+            | ExecutionError::MismatchedInstruction { .. }
+            | ExecutionError::ChainedCallDidNotExecute { .. }
+            | ExecutionError::ExecutionValidation { .. }
+            | ExecutionError::IncompleteExecution
+            | ExecutionError::Aborted => Self::InvalidProgramBehavior(error.into()),
+        }
     }
 }
 

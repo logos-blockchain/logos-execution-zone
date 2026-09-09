@@ -29,11 +29,15 @@ fn program_should_fail_if_it_drops_a_declared_account() {
     assert!(
         matches!(
             result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id: err_program_id }
-            )) if err_program_id == program_id
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::RowCountMismatch {
+                    program_account_id: err_program_id,
+                    expected: 2,
+                    actual: 1
+                }
+            ))) if err_program_id == program_id
         ),
-        "expected InputRowsMismatch for the dropped account, got {result:?}"
+        "expected RowCountMismatch for the dropped account, got {result:?}"
     );
 }
 
@@ -62,11 +66,10 @@ fn program_should_fail_if_it_debits_an_unauthorized_account() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::NativeTransferFailed(
-                TransferError::UnauthorizedSender { account_id: err_account_id }
-            )
-        )) if err_account_id == sender_account_id
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id },
+            ..
+        }))) if err_account_id == sender_account_id
     ));
 }
 
@@ -128,9 +131,10 @@ fn a_data_write_on_a_foreign_shard_is_rejected_publicly() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ForeignShardWrite { account_id, executing_account_id }
-        ))) if account_id == target_id && executing_account_id == program_id
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::ForeignShardWrite { account_id, executing_account_id },
+            ..
+        }))) if account_id == target_id && executing_account_id == program_id
     ));
 }
 
@@ -162,6 +166,33 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
         Account::default().with_shard(program_id, written.try_into().unwrap())
     );
     assert_eq!(state.get_account_by_id(other_id), Account::default());
+}
+
+#[test]
+fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
+    let mut state = V03State::new().with_test_programs();
+    let account_id = AccountId::new([1; 32]);
+    let program_id: AccountId = crate::test_methods::minter().id().into();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![],
+        (),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 2, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed },
+            ..
+        }))) if total_added == 1.into() && total_subbed == 0.into()
+    ));
 }
 
 /// A chained call may only name an account the transaction declared or an earlier call already
@@ -197,11 +228,13 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
     assert!(
         matches!(
             result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id: err_account_id }
-            )) if err_account_id == undeclared_account_id
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::UnknownAccount {
+                    account_id: err_account_id
+                }
+            ))) if err_account_id == undeclared_account_id
         ),
-        "expected UnknownChainedCallAccount for the undeclared account, got {result:?}"
+        "expected UnknownAccount for the undeclared account, got {result:?}"
     );
 }
 
@@ -230,12 +263,47 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
     assert!(
         matches!(
             result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id: err_program_id }
-            )) if err_program_id == program_id
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::RowCountMismatch {
+                    program_account_id: err_program_id,
+                    expected: 1,
+                    actual: 2
+                }
+            ))) if err_program_id == program_id
         ),
-        "expected InputRowsMismatch for the fabricated account, got {result:?}"
+        "expected RowCountMismatch for the fabricated account, got {result:?}"
     );
+}
+
+#[test]
+fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
+    let program_id: AccountId = crate::test_methods::burner().id().into();
+    let key = PrivateKey::try_new([7; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = V03State::new()
+        .with_public_account_balances([(account_id, 100)])
+        .with_test_programs();
+    let balance_to_burn: u128 = 1;
+    assert!(state.get_account_by_id(account_id).data.balance > balance_to_burn);
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![Nonce(0)],
+        balance_to_burn,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
+    let tx = PublicTransaction::new(message, witness_set);
+    let result = state.transition_from_public_transaction(&tx, 2, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed },
+            ..
+        }))) if total_added == 0.into() && total_subbed == 1.into()
+    ));
 }
 
 /// Rejects a chained call that omits a requested shard selector from its output.
@@ -268,11 +336,15 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
     assert!(
         matches!(
             result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
-            )) if program_account_id == AccountId::from(owner)
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::RowCountMismatch {
+                    program_account_id,
+                    expected: 2,
+                    actual: 1
+                }
+            ))) if program_account_id == AccountId::from(owner)
         ),
-        "expected InputRowsMismatch for the callee, got {result:?}"
+        "expected RowCountMismatch for the callee, got {result:?}"
     );
 }
 
@@ -308,9 +380,10 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::NativeTransferFailed(
-                TransferError::InsufficientBalance { account_id }
-            )
+            InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+            source: ExecutionValidationError::InvalidBalanceDiff { account_id, .. },
+            ..
+        })
         )) if account_id == from
     ));
 
@@ -349,12 +422,14 @@ fn reordered_state_diffs_are_rejected() {
 
     assert!(
         matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
-            )) if program_account_id == AccountId::from(program.id())
+            &result,
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::PreStateMismatch {
+                    program_account_id, expected, ..
+                }
+            ))) if *program_account_id == AccountId::from(program.id()) && expected.account_id == from
         ),
-        "expected InputRowsMismatch for the reordered rows, got {result:?}"
+        "expected PreStateMismatch for the reordered rows, got {result:?}"
     );
     assert_eq!(state.get_account_by_id(from).data.balance, initial_balance);
     assert_eq!(state.get_account_by_id(to).data.balance, 0);

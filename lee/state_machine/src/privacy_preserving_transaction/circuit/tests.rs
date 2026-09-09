@@ -347,10 +347,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
         &program_with_deps,
     );
 
-    assert!(matches!(
-        execution_error(result),
-        ExecutionError::EmptyBlockWindowIntersection
-    ));
+    assert!(matches!(result, Err(LeeError::OutOfValidityWindow)));
 }
 
 /// A private PDA bound with a non-default identifier produces a ciphertext that decrypts

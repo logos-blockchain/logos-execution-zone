@@ -603,8 +603,40 @@ impl<'witnesses> ExecutionState<'witnesses> {
     }
 
     #[must_use]
+    pub const fn prepared_call(&self) -> &ProgramInput<InstructionData> {
+        &self.active.as_ref().expect("no call is prepared").input
+    }
+
+    #[must_use]
     pub const fn root_call_kind(&self) -> CallKind {
         self.root_call_kind
+    }
+
+    #[must_use]
+    pub const fn block_validity_window(&self) -> BlockValidityWindow {
+        self.block_validity_window
+    }
+
+    #[must_use]
+    pub const fn timestamp_validity_window(&self) -> TimestampValidityWindow {
+        self.timestamp_validity_window
+    }
+
+    #[must_use]
+    pub fn pending_shard(
+        &self,
+        account_id: AccountId,
+        program_account_id: AccountId,
+    ) -> Option<&Data> {
+        let entry = self.accounts.get(&account_id)?;
+        match &entry.origin {
+            Origin::Public { initial, .. } if !initial.shards.contains_key(&program_account_id) => {
+                None
+            }
+            Origin::Public { .. } | Origin::Private(_) => {
+                Some(entry.data.shard(program_account_id))
+            }
+        }
     }
 
     pub fn finish(self) -> Result<FinalState, ExecutionError> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::account::Account;
 
 #[test]
 fn unsupported_call_kind_selector_matches_its_derivation() {
@@ -237,35 +238,7 @@ fn two_shard_selectors_of_one_account_in_a_call_are_accepted() {
 }
 
 #[test]
-fn pre_states_match_shard_selectors_compares_program_account_ids() {
-    let account_id = AccountId::new([7; 32]);
-    let program = AccountId::new([2; 32]);
-    let diffs = [ShardStateDiff::unchanged(AccountInput::with_shard(
-        account_id,
-        true,
-        program,
-        ShardData::empty(),
-    ))];
-
-    assert!(pre_states_match_shard_selectors(
-        &[ProgramShardSelector::new(account_id, program)],
-        &diffs
-    ));
-    assert!(!pre_states_match_shard_selectors(
-        &[ProgramShardSelector::new(
-            account_id,
-            AccountId::new([3; 32])
-        )],
-        &diffs
-    ));
-    assert!(!pre_states_match_shard_selectors(
-        &[ProgramShardSelector::balance(account_id)],
-        &diffs
-    ));
-}
-
-#[test]
-fn apply_diff_leaves_the_shard_untouched_when_nothing_is_written() {
+fn apply_diff_keeps_the_pre_shard_when_nothing_is_written() {
     let program = AccountId::new([2; 32]);
     let data: ShardData = b"record".to_vec().try_into().unwrap();
     let pre = AccountInput::with_shard(AccountId::new([7; 32]), true, program, data);
@@ -308,12 +281,8 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let shard = |id: AccountId, bytes: Vec<u8>| {
-        Account::default().with_shard(id, bytes.try_into().unwrap())
-    };
-
-    let program_shard = shard(PROGRAM_LOADER_ACCOUNT_ID, header.to_bytes());
-    let segment_shard = shard(PROGRAM_LOADER_ACCOUNT_ID, segment.to_bytes());
+    let program_shard: Data = header.to_bytes().try_into().unwrap();
+    let segment_shard: Data = segment.to_bytes().try_into().unwrap();
     let lookup = |id| {
         if id == program_account {
             Some(&program_shard)
@@ -328,9 +297,9 @@ fn get_program_via_reads_the_loader_shard() {
         Some(([7; 8], vec![1, 2, 3]))
     );
 
-    let elsewhere = shard(AccountId::new([3; 32]), header.to_bytes());
-    let foreign_shard = |id| (id == program_account).then_some(&elsewhere);
-    assert_eq!(get_program_via(program_account, foreign_shard), None);
+    let deleted = Data::empty();
+    let deleted_header = |id| (id == program_account).then_some(&deleted);
+    assert_eq!(get_program_via(program_account, deleted_header), None);
 }
 
 // ---- AccountId::for_private_pda tests ----
@@ -479,24 +448,6 @@ fn for_private_account_dispatches_correctly() {
         ),
         AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
     );
-}
-
-#[test]
-fn compute_public_authorized_pdas_with_seeds() {
-    let caller: AccountId = AccountId::from([1; 8]);
-    let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
-    let expected = AccountId::for_public_pda(&caller, &seed);
-    assert!(result.contains(&expected));
-    assert_eq!(result.len(), 1);
-}
-
-/// With no caller (top-level call), the result is always empty.
-#[test]
-fn compute_public_authorized_pdas_no_caller_returns_empty() {
-    let seed = PdaSeed::new([2; 32]);
-    let result = compute_public_authorized_pdas(None, &[seed]);
-    assert!(result.is_empty());
 }
 
 #[test]

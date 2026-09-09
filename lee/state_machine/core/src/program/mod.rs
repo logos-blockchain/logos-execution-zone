@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountData, AccountId, Balance, ProgramShardSelector, ShardData},
+    account::{
+        AccountId, AccountInput, BalanceDiff, BalanceDiffError, Data, ProgramShardSelector,
+        apply_balance_diff,
+    },
     encryption::ViewingPublicKey,
     native_token::encode_balance,
 };
@@ -296,12 +299,6 @@ impl AccountId {
             } => Self::for_private_pda(account_id, seed, npk, vpk, *identifier),
         }
     }
-}
-
-#[derive(Debug)]
-pub struct CallerData {
-    pub account_id: Option<AccountId>,
-    pub authorized_accounts: HashSet<AccountId>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -744,26 +741,6 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
-///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
-#[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_account_id: Option<AccountId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_account_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
-}
-
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
 /// Afterwards, reads exactly that many payload bytes.
 #[must_use]
@@ -838,25 +815,11 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
     env::exit(0)
 }
 
-/// Checks that the pre-states match the call's shard selectors in order.
-#[must_use]
-pub fn pre_states_match_shard_selectors(
-    shard_selectors: &[ProgramShardSelector],
-    diffs: &[ShardStateDiff],
-) -> bool {
-    shard_selectors.iter().copied().eq(diffs
-        .iter()
-        .map(|diff| ProgramShardSelector::from(&diff.pre_state)))
-}
-
-/// Reads a deployed program's image ID and bytecode from loader shards using `lookup`.
-/// Returns `None` if a header or segment is missing or malformed, or the chain is too long.
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    lookup: impl Fn(AccountId) -> Option<&'state Account>,
+    loader_shard: impl Fn(AccountId) -> Option<&'state Data>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let loader_shard = |id| lookup(id).map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID));
     let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();
