@@ -12,8 +12,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
-    program::{AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
+    Commitment, NullifierPublicKey,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data, Nonce},
+    encryption::ViewingPublicKey,
+    program::{AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramId},
 };
 
 /// Recommended max bytes of bytecode per segment.
@@ -22,6 +24,12 @@ use lee_core::{
 /// the account's own `DATA_MAX_LENGTH` cap regardless — this just keeps a live deploy's segments
 /// comfortably under it.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
+
+/// Sentinel nullifier public key for the immutable-mirror commitment. Not a real key — nobody
+/// can authorize a write against this commitment (the header can never change again) and nobody
+/// needs to discover it by scanning (its content was already public). Exists only to satisfy
+/// `AccountId::for_private_pda`'s signature.
+const IMMUTABLE_MIRROR_NPK: NullifierPublicKey = NullifierPublicKey([0; 32]);
 
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
 /// ahead of `WriteSegment` shifts every existing encoding.
@@ -62,6 +70,49 @@ pub enum Instruction {
         first_segment: AccountId,
         immutable: bool,
     },
+}
+
+fn immutable_mirror_vpk() -> ViewingPublicKey {
+    ViewingPublicKey::from_seed(&[0; 32], &[0; 32])
+}
+
+/// Derives the `AccountId` of the private commitment mirroring an immutable header's
+/// `ProgramHeader`. Seeded by the header's own `account_id`, not by content inside the header —
+/// headers live at arbitrary, caller-claimed addresses here, so `account_id` is what ties a given
+/// `ProgramHeader` to this specific deployment rather than another one with the same content.
+fn immutable_mirror_account_id(header_account_id: AccountId) -> AccountId {
+    AccountId::for_private_pda(
+        &PROGRAM_LOADER_ACCOUNT_ID,
+        &PdaSeed::new(*header_account_id.value()),
+        &IMMUTABLE_MIRROR_NPK,
+        &immutable_mirror_vpk(),
+        0,
+    )
+}
+
+/// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
+/// state.
+///
+/// No proof, nullifier, or ciphertext needed: `ProgramHeader` isn't confidential (it mirrors data
+/// that was already public), so every validating node can recompute it independently from the
+/// same public transaction.
+///
+/// Called at the exact moment `immutable` becomes `true`, and again to verify a `Private` claim
+/// against it — both call sites must stay in lockstep.
+#[must_use]
+pub fn immutable_mirror_commitment(
+    header_account_id: AccountId,
+    program_header: &ProgramHeader,
+) -> Commitment {
+    let mirror_account_id = immutable_mirror_account_id(header_account_id);
+    let mirrored_account = Account {
+        program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+        balance: 0,
+        data: Data::try_from(program_header.to_bytes())
+            .expect("program header must fit under DATA_MAX_LENGTH"),
+        nonce: Nonce(0),
+    };
+    Commitment::new(&mirror_account_id, &mirrored_account)
 }
 
 /// Executes `WriteSegment`.
@@ -119,12 +170,14 @@ pub fn write_segment(
 }
 
 /// Executes `CreateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when `immutable` is set from birth.
 #[must_use]
 pub fn create_header(
     pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
@@ -140,36 +193,39 @@ pub fn create_header(
         "first_segment must match the first supplied segment account"
     );
 
+    let header_account_id = pre_states[0].account_id;
     let image_id = compute_image_id(pre_states);
+    let header = ProgramHeader {
+        image_id,
+        program_first_segment: first_segment,
+        immutable,
+    };
+    let new_commitment = immutable.then(|| immutable_mirror_commitment(header_account_id, &header));
 
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
+        Data::try_from(header.to_bytes()).expect("program header must fit under DATA_MAX_LENGTH"),
     )];
     diffs.extend(
         pre_states[1..]
             .iter()
             .map(|pre| AccountStateDiff::unchanged(pre.clone())),
     );
-    diffs
+    (diffs, new_commitment)
 }
 
 /// Executes `UpdateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when this call is what flips `immutable`
+/// to `true` — the only transition possible, since a target that's already `immutable` is
+/// rejected outright.
 #[must_use]
 pub fn update_header(
     pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
@@ -191,27 +247,26 @@ pub fn update_header(
         "first_segment must match the first supplied segment account"
     );
 
+    let header_account_id = pre_states[0].account_id;
     let image_id = compute_image_id(pre_states);
+    let header = ProgramHeader {
+        image_id,
+        program_first_segment: first_segment,
+        immutable,
+    };
+    let new_commitment = immutable.then(|| immutable_mirror_commitment(header_account_id, &header));
 
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
+        Data::try_from(header.to_bytes()).expect("program header must fit under DATA_MAX_LENGTH"),
     )];
     diffs.extend(
         pre_states[1..]
             .iter()
             .map(|pre| AccountStateDiff::unchanged(pre.clone())),
     );
-    diffs
+    (diffs, new_commitment)
 }
 
 /// `segments_with_header[0]` is the header account, not part of the chain. Walks

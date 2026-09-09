@@ -183,6 +183,25 @@ impl AccountId {
         )
     }
 
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone. Identical
+    /// bytecode from different provers intentionally collides on the same address — fine,
+    /// since ownership is still gated by account authorization.
+    #[must_use]
+    pub fn for_shadow_program(image_id: &ProgramId) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const SHADOW_PROGRAM_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        bytes[32..64].copy_from_slice(Self::from(*image_id).value());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
     /// Derives an [`AccountId`] for a private PDA from the owning program's account ID, seed,
     /// nullifier public key, and identifier.
     ///
@@ -286,7 +305,7 @@ impl ChainedCall {
 /// Lives at whatever account address the deployer chose — never a fixed bijection of the
 /// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
 /// distinct instance for dispatch, PDA-derivation, and ownership purposes.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     /// The bytecode's real `image_id`, always recomputed from the segment chain at
     /// deploy/update time — never trusted from a caller-supplied value.

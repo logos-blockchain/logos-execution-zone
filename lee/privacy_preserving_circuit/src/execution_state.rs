@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageClaim,
-    WitnessKind,
+    ShadowProgramWitness, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
@@ -66,6 +66,7 @@ impl ExecutionState {
         program_outputs: Vec<ProgramOutput>,
         initial_pre_states: &[AccountId],
         program_image_claims: &[ProgramImageClaim],
+        shadow_program_witnesses: &[ShadowProgramWitness],
     ) -> Self {
         // Untrusted claims supplied by the prover: `env::verify` needs a real image id, not an
         // arbitrary dispatch address. The circuit does not check these against real chain state —
@@ -74,7 +75,7 @@ impl ExecutionState {
         // committed bytes won't match the reconstructed output). See `ProgramImageClaim`.
         let image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_claims
             .iter()
-            .map(|claim| (claim.account_id, claim.image_id))
+            .map(|claim| (claim.account_id(), claim.image_id()))
             .collect();
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
@@ -191,10 +192,17 @@ impl ExecutionState {
             // Check that `program_output` is consistent with the execution of the corresponding
             // program. `env::verify` needs the invoked program's real image id, not its dispatch
             // address — resolved from the prover-supplied (and independently, externally
-            // verified) claims. See `ProgramImageClaim`.
+            // verified) claims, or, for a shadow program, decoded and hashed fresh right here from
+            // its witness elf.
             let image_id = image_id_by_account_id
                 .get(&chained_call.program_account_id)
                 .copied()
+                .or_else(|| {
+                    shadow_program_witnesses
+                        .iter()
+                        .find(|witness| witness.account_id == chained_call.program_account_id)
+                        .map(resolve_shadow_witness)
+                })
                 .expect("no image_id claim supplied for invoked program account");
             let program_output_frame = lee_core::to_borsh_frame(&program_output);
             env::verify(image_id, &program_output_frame).unwrap_or_else(|_: Infallible| {
@@ -683,4 +691,21 @@ fn assert_authorization_and_record_bindings(
         pre_is_authorized, is_authorized,
         "Inconsistent authorization for account {pre_account_id}",
     );
+}
+
+/// Decodes and hashes a shadow program's witness elf, asserting it genuinely hashes to its own
+/// declared `account_id`, and returns the resulting `image_id`. Real, unamortized cost every
+/// call — no cheaper path is possible without disclosing the elf.
+fn resolve_shadow_witness(witness: &ShadowProgramWitness) -> ProgramId {
+    let image_id: ProgramId = risc0_binfmt::ProgramBinary::decode(&witness.full_binary)
+        .expect("shadow program witness must be a well-formed ProgramBinary")
+        .compute_image_id()
+        .expect("shadow program witness must be a valid RISC0 program binary")
+        .into();
+    assert_eq!(
+        witness.account_id,
+        AccountId::for_shadow_program(&image_id),
+        "shadow program witness's elf does not hash to its own declared account_id"
+    );
+    image_id
 }
