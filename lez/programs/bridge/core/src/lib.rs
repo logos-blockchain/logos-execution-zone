@@ -15,8 +15,8 @@ pub enum Instruction {
     /// Required accounts (3):
     /// - Bridge PDA account
     /// - Recipient account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard.
-    ///   A nonempty shard marks the deposit as already processed; repeats transfer nothing.
+    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard. A
+    ///   nonempty shard marks the deposit as already processed; repeats transfer nothing.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
