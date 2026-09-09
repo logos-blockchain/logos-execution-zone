@@ -6,18 +6,21 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
+    execution_state::FinalState,
 };
 
-use crate::execution_state::ExecutionState;
-
 pub fn compute_circuit_output(
-    execution_state: ExecutionState,
+    final_state: FinalState,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, public_actions, mut private_final) =
-        execution_state.into_parts();
+    let FinalState {
+        block_validity_window,
+        timestamp_validity_window,
+        public_actions,
+        mut private_accounts,
+    } = final_state;
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions,
         private_actions: Vec::new(),
@@ -37,7 +40,7 @@ pub fn compute_circuit_output(
             nullifier,
         } = witness;
         let account_id = witness.account_id();
-        let post_data = private_final.remove(&account_id).unwrap_or_else(|| {
+        let post_data = private_accounts.remove(&account_id).unwrap_or_else(|| {
             panic!("Every witness's account must be touched by the execution: {account_id}")
         });
 
@@ -199,54 +202,88 @@ mod tests {
     use std::collections::HashMap;
 
     use lee_core::{
-        DUMMY_COMMITMENT_HASH, EphemeralPublicKey, PublicAction,
-        account::{AccountData, ShardData},
+        AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, NullifierPublicKey,
+        PublicAction,
+        account::{AccountData, Data},
+        program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
     use super::*;
 
     const SHARD_A: AccountId = AccountId::new([10; 32]);
-    const SHARD_C: AccountId = AccountId::new([12; 32]);
+    const SHARD_B: AccountId = AccountId::new([11; 32]);
 
     fn data(bytes: &[u8]) -> ShardData {
         bytes.to_vec().try_into().expect("test data is small")
     }
 
     fn emit(
-        public: Vec<(AccountId, bool, AccountData, AccountData)>,
+        public_actions: Vec<PublicAction>,
+        private: Vec<(AccountId, AccountData)>,
+        witnesses: &[PrivateWitness],
     ) -> PrivacyPreservingCircuitOutput {
         compute_circuit_output(
-            ExecutionState::from_post_states(public),
-            &[],
+            FinalState {
+                block_validity_window: BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+                public_actions,
+                private_accounts: private.into_iter().collect(),
+            },
+            witnesses,
             Vec::new(),
             Vec::new(),
         )
     }
 
     #[test]
-    fn public_action_post_is_projected_onto_the_touched_shards() {
-        let account_id = AccountId::new([9; 32]);
-        let pre = AccountData {
-            shards: [(SHARD_A, data(b"a"))].into(),
+    fn one_note_per_private_account_carries_its_touched_shards() {
+        let owner = Owner::new(3);
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(100)
+                .with_shard(SHARD_A, data(b"a"))
+                .with_shard(SHARD_B, data(b"b"))
         };
-        let post_state = Account::funded(7)
-            .with_shard(SHARD_A, data(b"a-rewritten"))
-            .with_shard(SHARD_C, data(b"c"))
-            .data;
+        let rewritten = AccountData {
+            balance: 60,
+            ..account.data.clone()
+        }
+        .with_shard(SHARD_B, data(b"b-rewritten"));
 
-        let output = emit(vec![(account_id, true, pre.clone(), post_state)]);
-
-        assert_eq!(
-            output.public_actions,
-            vec![PublicAction {
-                account_id,
-                is_authorized: true,
-                pre,
-                post: AccountData {
-                    shards: [(SHARD_A, data(b"a-rewritten"))].into(),
-                },
-            }]
+        let output = emit(
+            Vec::new(),
+            vec![(owner.account_id(), rewritten.clone())],
+            &[owner.update_witness(account.clone())],
         );
+
+        assert_eq!(output.private_actions.len(), 1, "one account, one note");
+        let expected = Account {
+            nonce: account.nonce.private_account_nonce_increment(&owner.nsk()),
+            data: rewritten,
+        };
+        let action = &output.private_actions[0];
+        assert_eq!(
+            owner.decrypt(action),
+            (PrivateAccountKind::Regular(0), expected.clone())
+        );
+        assert_eq!(
+            action.commitment,
+            Commitment::new(&owner.account_id(), &expected)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Every witness's account must be touched by the execution")]
+    fn an_untouched_witness_is_rejected() {
+        let owner = Owner::new(4);
+
+        let output = emit(
+            Vec::new(),
+            Vec::new(),
+            &[owner.update_witness(Account::default())],
+        );
+
+        unreachable!("an untouched witness must panic, got {output:?}");
     }
 
     fn note(tag: u8) -> PrivateAction {

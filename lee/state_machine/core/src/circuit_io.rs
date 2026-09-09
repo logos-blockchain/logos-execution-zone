@@ -3,9 +3,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountData, AccountId, ProgramShardSelector},
+    account::{Account, AccountData, AccountId},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    execution_state::{CallEffects, PublicFacts, RootCall},
+    program::{BlockValidityWindow, CallKind, PdaSeed, ProgramId, TimestampValidityWindow},
 };
 
 /// A claim that `account_id`'s program account currently has `image_id`.
@@ -26,18 +27,16 @@ pub struct ProgramImageClaim {
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
-    /// Outputs of the program execution.
-    pub program_outputs: Vec<ProgramOutput>,
+    pub root: RootCall,
+    pub root_call_kind: CallKind,
+    pub public_facts: PublicFacts,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
-    /// The top-level call's own dispatch address.
-    pub program_account_id: AccountId,
     pub dummy_inputs: Vec<DummyInput>,
-    /// Shard selectors passed to the initial call.
-    pub initial_shard_selectors: Vec<ProgramShardSelector>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id. See [`ProgramImageClaim`].
     pub program_image_claims: Vec<ProgramImageClaim>,
+    pub effects: Vec<CallEffects>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
