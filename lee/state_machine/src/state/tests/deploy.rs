@@ -3,7 +3,7 @@
 //! that a live deploy (or a hand-assembled one, here) must decode back out of.
 
 use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment,
+    MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramInput, ProgramSegment,
 };
 use program_loader_core::Instruction;
 
@@ -91,26 +91,18 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "the reconstructed binary must recompute to the same image_id"
     );
 
-    let pre_states = vec![AccountInput::balance(AccountId::new([21; 32]), true, 0)];
-    let instruction_data = Program::serialize_instruction(()).unwrap();
+    let input = ProgramInput {
+        self_account_id: header_account_id,
+        caller_account_id: None,
+        pre_states: vec![AccountInput::balance(AccountId::new([21; 32]), true, 0)],
+        instruction: Program::serialize_instruction(()).unwrap(),
+    };
 
     let direct_output = program
-        .execute(
-            header_account_id,
-            None,
-            &pre_states,
-            &instruction_data,
-            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-        )
+        .execute(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
         .expect("direct execution against the original binary should succeed");
     let reconstructed_output = reconstructed_program
-        .execute(
-            header_account_id,
-            None,
-            &pre_states,
-            &instruction_data,
-            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-        )
+        .execute(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
         .expect("execution against the manually-reconstructed binary should succeed");
 
     assert_eq!(direct_output, reconstructed_output);

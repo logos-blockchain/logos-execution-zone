@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Cycles},
+    account::Cycles,
     from_frame,
     program::{AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
@@ -74,22 +74,13 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
-        self_account_id: AccountId,
-        caller_account_id: Option<AccountId>,
-        pre_states: &[AccountInput],
-        instruction_data: &InstructionData,
+        input: &ProgramInput<InstructionData>,
         cycle_budget: Cycles,
     ) -> Result<(ProgramOutput, Cycles), LeeError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(cycle_budget));
-        self.write_inputs(
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction_data,
-            &mut env_builder,
-        )?;
+        Self::write_inputs(input, &mut env_builder)?;
         let env = env_builder.build().unwrap();
 
         // Execute the program (without proving)
@@ -145,23 +136,13 @@ impl Program {
     /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
     /// length-prefixed borsh frame, the form `read_lee_call` expects.
     pub fn write_inputs(
-        &self,
-        self_account_id: AccountId,
-        caller_account_id: Option<AccountId>,
-        pre_states: &[AccountInput],
-        instruction_data: &[u8],
+        input: &ProgramInput<InstructionData>,
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
         env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
 
-        let input = ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states: pre_states.to_vec(),
-            instruction: instruction_data.to_vec(),
-        };
         let payload =
-            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+            borsh::to_vec(input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }

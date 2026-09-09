@@ -8,7 +8,8 @@ use lee_core::{
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountInput, ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas,
+        AccountInput, ChainedCall, InstructionData, ProgramInput, ProgramOutput,
+        compute_public_authorized_pdas,
     },
     to_frame,
 };
@@ -290,10 +291,12 @@ pub fn execute_and_prove_with(
             )?;
             let inner_receipt = execute_and_prove_program(
                 program,
-                chained_call.program_account_id,
-                caller_account_id,
-                &real_pre_states,
-                &chained_call.instruction_data,
+                &ProgramInput {
+                    self_account_id: chained_call.program_account_id,
+                    caller_account_id,
+                    pre_states: real_pre_states,
+                    instruction: chained_call.instruction_data.clone(),
+                },
             )?;
             let output =
                 borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
@@ -399,20 +402,11 @@ pub fn execute_and_prove_with(
 
 fn execute_and_prove_program(
     program: &Program,
-    self_account_id: AccountId,
-    caller_account_id: Option<AccountId>,
-    pre_states: &[AccountInput],
-    instruction_data: &InstructionData,
+    input: &ProgramInput<InstructionData>,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    program.write_inputs(
-        self_account_id,
-        caller_account_id,
-        pre_states,
-        instruction_data,
-        &mut env_builder,
-    )?;
+    Program::write_inputs(input, &mut env_builder)?;
     let env = env_builder.build().unwrap();
 
     // Prove the program

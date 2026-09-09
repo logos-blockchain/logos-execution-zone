@@ -52,15 +52,16 @@ fn env_for(
 ) -> ExecutorEnv<'static> {
     let mut builder = ExecutorEnv::builder();
     builder.session_limit(Some(budget));
-    program
-        .write_inputs(
-            AccountId::from(program.id()),
-            None,
-            pre_states,
-            instruction,
-            &mut builder,
-        )
-        .expect("inputs write");
+    Program::write_inputs(
+        &ProgramInput {
+            self_account_id: AccountId::from(program.id()),
+            caller_account_id: None,
+            pre_states: pre_states.to_vec(),
+            instruction: instruction.to_vec(),
+        },
+        &mut builder,
+    )
+    .expect("inputs write");
     builder.build().expect("env builds")
 }
 

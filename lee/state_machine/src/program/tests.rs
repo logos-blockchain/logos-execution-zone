@@ -1,7 +1,7 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, CallKind, ProgramInput, UnsupportedCallKind},
+    program::{AccountInput, CallKind, InstructionData, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
@@ -24,16 +24,26 @@ fn write_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, Vec<u8>) {
     (program, vec![target], instruction_data, written)
 }
 
+fn top_level_input(
+    program: &Program,
+    pre_states: Vec<AccountInput>,
+    instruction: InstructionData,
+) -> ProgramInput<InstructionData> {
+    ProgramInput {
+        self_account_id: AccountId::from(program.id()),
+        caller_account_id: None,
+        pre_states,
+        instruction,
+    }
+}
+
 #[test]
 fn program_execution() {
     let (program, pre_states, instruction_data, written) = write_fixture();
 
     let (program_output, _cycles) = program
         .execute(
-            AccountId::from(program.id()),
-            None,
-            &pre_states,
-            &instruction_data,
+            &top_level_input(&program, pre_states, instruction_data),
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         )
         .unwrap();
@@ -48,15 +58,11 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let (program, pre_states, instruction_data, _) = write_fixture();
 
     let mut env_builder = ExecutorEnv::builder();
-    program
-        .write_inputs(
-            AccountId::from(program.id()),
-            None,
-            &pre_states,
-            &instruction_data,
-            &mut env_builder,
-        )
-        .unwrap();
+    Program::write_inputs(
+        &top_level_input(&program, pre_states.to_vec(), instruction_data.clone()),
+        &mut env_builder,
+    )
+    .unwrap();
     let session_info = default_executor()
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
@@ -79,10 +85,7 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
         .execute(
-            AccountId::from(program.id()),
-            None,
-            &[],
-            &Vec::new(),
+            &top_level_input(&program, Vec::new(), Vec::new()),
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         )
         .unwrap_err();
@@ -101,10 +104,7 @@ fn execute_reports_cycles_within_budget() {
     let (program, pre_states, instruction_data, _) = write_fixture();
     let (_, cycles) = program
         .execute(
-            AccountId::from(program.id()),
-            None,
-            &pre_states,
-            &instruction_data,
+            &top_level_input(&program, pre_states, instruction_data),
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         )
         .expect("executes");
@@ -118,10 +118,7 @@ fn execute_reports_cycles_within_budget() {
 fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = write_fixture();
     let result = program.execute(
-        AccountId::from(program.id()),
-        None,
-        &pre_states,
-        &instruction_data,
+        &top_level_input(&program, pre_states, instruction_data),
         1_024,
     );
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));

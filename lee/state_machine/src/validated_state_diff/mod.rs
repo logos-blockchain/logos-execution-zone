@@ -11,7 +11,8 @@ use lee_core::{
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
+        AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramInput,
+        ProgramOutput,
         TransactionEvent, compute_public_authorized_pdas, get_program_via,
         pre_states_match_shard_selectors, validate_execution,
     },
@@ -375,10 +376,12 @@ impl ValidatedStateDiff {
                 };
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
                 let (program_output, call_cycles) = program.execute(
-                    chained_call.program_account_id,
-                    caller_data.account_id,
-                    &real_pre_states,
-                    &chained_call.instruction_data,
+                    &ProgramInput {
+                        self_account_id: chained_call.program_account_id,
+                        caller_account_id: caller_data.account_id,
+                        pre_states: real_pre_states,
+                        instruction: chained_call.instruction_data.clone(),
+                    },
                     cycle_budget.saturating_sub(*cycles_used),
                 )?;
                 *cycles_used = cycles_used
