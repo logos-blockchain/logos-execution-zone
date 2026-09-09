@@ -1,8 +1,7 @@
 use std::collections::VecDeque;
 
 /// A FIFO queue with a fixed capacity: pushing onto a full queue evicts and
-/// returns the oldest element, so the bound is an invariant rather than a
-/// check every caller must remember.
+/// returns the oldest element.
 #[derive(Debug)]
 pub struct BoundedVecDeque<T> {
     items: VecDeque<T>,

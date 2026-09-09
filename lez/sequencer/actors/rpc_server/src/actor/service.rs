@@ -10,7 +10,7 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use log::{debug, error, warn};
+use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
@@ -122,7 +122,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         if let Some(gossip) = &self.gossip
             && let Err(err) = gossip.tell(PublishTransaction(authenticated_tx)).try_send()
         {
-            debug!("Dropping local tx publish: gossip mailbox full or closed: {err}");
+            log::warn!("Dropping local tx publish: gossip mailbox full or closed: {err}");
         }
 
         Ok(tx_hash)
