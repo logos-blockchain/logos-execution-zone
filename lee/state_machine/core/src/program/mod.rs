@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -695,17 +695,27 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
+    /// A call whose diffs the calling program has asserted are safe to apply against any
+    /// current `pre_state`, not just the one they were computed against — opted into by the
+    /// program itself, via this `CallKind`, rather than negotiated per account.
+    Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
 }
 
+impl CallKind {
+    const fn discriminant(self) -> u8 {
+        match self {
+            Self::Execute => 0,
+            Self::Incremental => 1,
+            Self::Unknown(byte) => byte,
+        }
+    }
+}
+
 impl BorshSerialize for CallKind {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let discriminant: u8 = match *self {
-            Self::Execute => 0,
-            Self::Unknown(byte) => byte,
-        };
-        BorshSerialize::serialize(&discriminant, writer)
+        BorshSerialize::serialize(&self.discriminant(), writer)
     }
 }
 
@@ -714,6 +724,7 @@ impl BorshDeserialize for CallKind {
         let discriminant = u8::deserialize_reader(reader)?;
         Ok(match discriminant {
             0 => Self::Execute,
+            1 => Self::Incremental,
             other => Self::Unknown(other),
         })
     }
@@ -726,6 +737,15 @@ impl BorshDeserialize for CallKind {
 #[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
+    /// Applies a previously-computed diff (this call's `instruction`) against `pre_states` as
+    /// they stand right now — not necessarily the `pre_state` the diff was originally computed
+    /// against. Its instruction shape is program-defined and generally *not* the same type as
+    /// `Execute`'s (e.g. `Execute`'s instruction might be a user-facing enum, while
+    /// `Incremental`'s is whatever diff type that enum's handlers emit), so unlike `Execute` it
+    /// arrives undecoded — the program decodes it itself, once it knows what to expect. A
+    /// program that doesn't implement this arm falls through to [`respond_unsupported_call`]
+    /// exactly like a genuinely unrecognized `CallKind`.
+    Incremental(ProgramInput<InstructionData>),
     /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
     /// discriminant and the envelope common to every call kind.
     Unsupported(ProgramInput<InstructionData>, u8),
@@ -747,6 +767,36 @@ impl UnsupportedCallKind {
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("UnsupportedCallKind serializes")
     }
+}
+
+/// Whether a privacy-preserving execution's diff for an account is bound to the `pre_state` it
+/// was computed against, or deferred.
+///
+/// `Bound` means verified immediately, exactly like a public transaction. `Deferred` means
+/// carried through as an unresolved diff for the sequencer to apply later, against whatever the
+/// account's real state is by settlement time.
+///
+/// Distinct from [`CallKind`]: a `CallKind::Incremental` call can be used in *either* mode — the
+/// caller decides whether to resolve its result locally (`Bound`) or carry it through unresolved
+/// (`Deferred`); `CallKind::Execute` is always `Bound`. Public transactions never have a
+/// `Deferred` side at all — see [`validate_execution_mode_consistency`]'s doc for why this
+/// distinction only matters for privacy-preserving execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Bound,
+    Deferred,
+}
+
+/// An account was touched in both [`ExecutionMode`]s within one privacy-preserving execution.
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
+#[error(
+    "account {account_id} was touched in both {first:?} and {second:?} mode within the same \
+     privacy-preserving execution"
+)]
+pub struct ExecutionModeConflict {
+    pub account_id: AccountId,
+    pub first: ExecutionMode,
+    pub second: ExecutionMode,
 }
 
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
@@ -812,16 +862,40 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
                 instruction_data,
             )
         }
+        // Undecoded on purpose: this call kind's instruction shape is program-defined and
+        // generally not `T` (`Execute`'s type), so only the program itself knows how to decode
+        // it, once it's confirmed this arm is the one that matched.
+        CallKind::Incremental => ProgramCall::Incremental(envelope),
         CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }
 
-/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip,
-/// not a failure.
+/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip.
+///
+/// Generic over every `ProgramCall` variant on purpose: which kind a given program treats as
+/// "the one it implements" is the program's own choice (`simple_balance_transfer` opts into
+/// `Execute`, `incremental_balance_transfer` opts into `Incremental`), so this can't assume any
+/// particular variant was already ruled out by the caller before reaching here.
 pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
-    let ProgramCall::Unsupported(envelope, raw_discriminant) = call else {
-        unreachable!("only reached after Execute was already ruled out by the caller");
-    };
+    let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
+        match call {
+            ProgramCall::Execute(input, instruction_data) => (
+                ProgramInput {
+                    self_account_id: input.self_account_id,
+                    caller_account_id: input.caller_account_id,
+                    pre_states: input.pre_states,
+                    instruction: instruction_data,
+                },
+                CallKind::Execute,
+                CallKind::Execute.discriminant(),
+            ),
+            ProgramCall::Incremental(envelope) => (
+                envelope,
+                CallKind::Incremental,
+                CallKind::Incremental.discriminant(),
+            ),
+            ProgramCall::Unsupported(envelope, raw) => (envelope, CallKind::Unknown(raw), raw),
+        };
     let state_diffs = envelope
         .pre_states
         .iter()
@@ -834,7 +908,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         envelope.instruction,
         state_diffs,
     )
-    .with_call_kind(CallKind::Unknown(raw_discriminant))
+    .with_call_kind(call_kind)
     .with_events(vec![ProgramEvent {
         selector: UnsupportedCallKind::SELECTOR,
         data: UnsupportedCallKind { raw_discriminant }.to_bytes(),
@@ -896,6 +970,44 @@ pub fn get_program_via(
     }
 
     Some((header.image_id, elf))
+}
+
+/// Checks that every account touched across a privacy-preserving execution's chain of calls
+/// agrees on [`ExecutionMode`].
+///
+/// Mixing modes on the same account within one execution is unsound in both directions: a
+/// `Deferred` touch's real value only exists once the sequencer resolves it against real state
+/// after settlement, so a `Bound` touch elsewhere in the same execution has nothing well-defined
+/// to commit to yet; conversely a `Bound` touch commits to a specific value now, which a later
+/// `Deferred` touch's eventual resolution has no sound way to reconcile with. Order-independent:
+/// whichever mode is seen first for an account is not given priority, a conflict is a conflict
+/// either way round.
+///
+/// Only relevant to privacy-preserving execution. Public transactions settle synchronously — the
+/// public dispatch path (`resolve_diff`) always tries `Incremental` immediately after `Execute`
+/// and falls back to copy/replace on the spot, so there's no proof committing in advance to a
+/// mode that could later turn out to conflict.
+pub fn validate_execution_mode_consistency(
+    touches: impl IntoIterator<Item = (AccountId, ExecutionMode)>,
+) -> Result<(), ExecutionModeConflict> {
+    let mut modes: HashMap<AccountId, ExecutionMode> = HashMap::new();
+    for (account_id, mode) in touches {
+        match modes.entry(account_id) {
+            std::collections::hash_map::Entry::Occupied(existing) => {
+                if *existing.get() != mode {
+                    return Err(ExecutionModeConflict {
+                        account_id,
+                        first: *existing.get(),
+                        second: mode,
+                    });
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(mode);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validates well-behaved program execution.

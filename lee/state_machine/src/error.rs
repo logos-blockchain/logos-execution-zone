@@ -180,6 +180,16 @@ pub enum InvalidProgramBehaviorError {
 
     #[error(transparent)]
     BalanceDiffFailed(#[from] BalanceDiffError),
+
+    #[error(
+        "Program {program_account_id}'s Incremental response for account {account_id} was \
+         malformed: {reason}"
+    )]
+    MalformedIncrementalResponse {
+        program_account_id: AccountId,
+        account_id: AccountId,
+        reason: String,
+    },
 }
 
 #[cfg(test)]

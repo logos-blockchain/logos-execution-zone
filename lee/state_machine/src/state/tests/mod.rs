@@ -40,6 +40,7 @@ mod events;
 mod flash_swap;
 mod genesis;
 mod implicit_claiming;
+mod incremental_diff;
 mod privacy_preserving;
 mod public_program_rules;
 mod validity_window;
@@ -74,6 +75,8 @@ impl V03State {
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self.insert_program(&crate::test_methods::reordering_transfer());
+        self.insert_program(&crate::test_methods::stripped_token());
+        self.insert_program(&crate::test_methods::stripped_token_robinhood());
         self
     }
 

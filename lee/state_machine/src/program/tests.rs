@@ -214,6 +214,219 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     assert_eq!(decoded.raw_discriminant, 77);
 }
 
+/// `simple_balance_transfer` predates `CallKind::Incremental` and never added a match arm for
+/// it, so it must fall through to the same no-op path as a genuinely unrecognized discriminant
+/// — proving that adding this `CallKind`/`ProgramCall` variant doesn't break a program that
+/// hasn't opted into it.
+#[test]
+fn simple_balance_transfer_survives_the_incremental_call_kind_it_has_not_opted_into() {
+    let program = crate::test_methods::simple_balance_transfer();
+    let instruction_data = Program::serialize_instruction(7_u128).unwrap();
+    let pre_states = vec![
+        AccountWithMetadata::new(
+            Account {
+                balance: 10,
+                ..Account::default()
+            },
+            true,
+            AccountId::new([0; 32]),
+        ),
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+    ];
+
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+    let input = ProgramInput {
+        self_account_id: program.id().into(),
+        caller_account_id: None,
+        pre_states: pre_states.clone(),
+        instruction: instruction_data.clone(),
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
+
+    let session_info = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .expect("an opted-out program must not fail on CallKind::Incremental");
+
+    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
+    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+
+    assert_eq!(output.call_kind, CallKind::Incremental);
+
+    // A no-op, not the program's own transfer logic: every account comes back unchanged.
+    assert_eq!(output.state_diffs.len(), pre_states.len());
+    for diff in &output.state_diffs {
+        assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
+        assert_eq!(diff.post_data, None);
+    }
+    assert!(output.chained_calls.is_empty());
+    assert_eq!(output.instruction_data, instruction_data);
+
+    // The skip is recorded, not silent, and carries Incremental's real discriminant (1), not a
+    // fabricated one.
+    let event = output
+        .events
+        .iter()
+        .find(|event| event.selector == UnsupportedCallKind::SELECTOR)
+        .expect("an UnsupportedCallKind event must be emitted");
+    let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
+    assert_eq!(decoded.raw_discriminant, 1);
+}
+
+/// `incremental_balance_transfer` opted into `CallKind::Incremental`, so a call carrying that
+/// kind runs its real transfer logic — unlike `simple_balance_transfer`, which no-ops on it.
+#[test]
+fn incremental_balance_transfer_executes_on_the_incremental_call_kind() {
+    let program = crate::test_methods::incremental_balance_transfer();
+    let balance_to_move: u128 = 42;
+    let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
+    let pre_states = vec![
+        AccountWithMetadata::new(
+            Account {
+                balance: 100,
+                ..Account::default()
+            },
+            true,
+            AccountId::new([0; 32]),
+        ),
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+    ];
+
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+    let input = ProgramInput {
+        self_account_id: program.id().into(),
+        caller_account_id: None,
+        pre_states,
+        instruction: instruction_data,
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
+
+    let session_info = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .expect("an opted-in program must execute on CallKind::Incremental");
+
+    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
+    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+
+    assert_eq!(output.call_kind, CallKind::Incremental);
+
+    let [sender_post, recipient_post] = output.state_diffs.try_into().unwrap();
+    assert_eq!(
+        sender_post.post_balance_diff,
+        BalanceDiff::Sub(balance_to_move)
+    );
+    assert_eq!(sender_post.post_data, None);
+    assert_eq!(
+        recipient_post.post_balance_diff,
+        BalanceDiff::Add(balance_to_move)
+    );
+    assert_eq!(recipient_post.post_data, None);
+
+    // No diagnostic event this time: the call kind was actually handled, not skipped.
+    assert!(
+        output
+            .events
+            .iter()
+            .all(|event| event.selector != UnsupportedCallKind::SELECTOR)
+    );
+}
+
+/// The same program only opted into `Incremental`, not `Execute` — an ordinary `Execute` call
+/// (what every non-incremental caller sends today) must no-op on it, symmetric to how
+/// `simple_balance_transfer` no-ops on `Incremental`.
+#[test]
+fn incremental_balance_transfer_no_ops_on_the_execute_call_kind_it_has_not_opted_into() {
+    let program = crate::test_methods::incremental_balance_transfer();
+    let balance_to_move: u128 = 42;
+    let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
+    let pre_states = vec![
+        AccountWithMetadata::new(
+            Account {
+                balance: 100,
+                ..Account::default()
+            },
+            true,
+            AccountId::new([0; 32]),
+        ),
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+    ];
+
+    let (output, _cycles) = program
+        .execute(
+            program.id().into(),
+            None,
+            &pre_states,
+            &instruction_data,
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("Program::execute always sends CallKind::Execute");
+
+    assert_eq!(output.call_kind, CallKind::Execute);
+    for diff in &output.state_diffs {
+        assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
+        assert_eq!(diff.post_data, None);
+    }
+    let event = output
+        .events
+        .iter()
+        .find(|event| event.selector == UnsupportedCallKind::SELECTOR)
+        .expect("an UnsupportedCallKind event must be emitted");
+    let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
+    assert_eq!(decoded.raw_discriminant, 0);
+}
+
+/// `stripped_token_robinhood` doesn't implement `Incremental` at all — it's the concrete case
+/// for the privacy-execution "mismatch" scenario: if a wallet requested `Incremental` for this
+/// program (e.g. mistakenly believing it deferrable, when its routing decision actually requires
+/// live reads), this `UnsupportedCallKind` no-op is exactly the signal a circuit-side mismatch
+/// check would abort on, rather than silently falling back the way the public-tx dispatch does.
+/// That abort logic isn't wired into anything yet — this only proves the signal it would rely on
+/// is real and correctly raised for this specific program.
+#[test]
+fn stripped_token_robinhood_signals_unsupported_on_the_incremental_call_kind() {
+    let program = crate::test_methods::stripped_token_robinhood();
+    let target_program_id = crate::test_methods::stripped_token().id();
+    let instruction_data = Program::serialize_instruction(target_program_id).unwrap();
+    let pre_states = vec![
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([0; 32])),
+        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+    ];
+
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+    let input = ProgramInput {
+        self_account_id: program.id().into(),
+        caller_account_id: None,
+        pre_states: pre_states.clone(),
+        instruction: instruction_data,
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
+
+    let session_info = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .expect("an opted-out program must not fail on CallKind::Incremental");
+
+    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
+    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
+
+    assert_eq!(output.call_kind, CallKind::Incremental);
+    assert_eq!(output.state_diffs.len(), pre_states.len());
+    for diff in &output.state_diffs {
+        assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
+        assert_eq!(diff.post_data, None);
+    }
+    assert!(output.chained_calls.is_empty());
+
+    let event = output
+        .events
+        .iter()
+        .find(|event| event.selector == UnsupportedCallKind::SELECTOR)
+        .expect("an UnsupportedCallKind event must be emitted");
+    let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
+    assert_eq!(decoded.raw_discriminant, 1);
+}
+
 /// A guest that halts with a non-zero code is rejected, but unlike a panic the session survives:
 /// the error carries the metered cycles so the caller can charge them.
 #[test]

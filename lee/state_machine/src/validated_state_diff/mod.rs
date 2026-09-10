@@ -10,9 +10,10 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID,
-        ProgramOutput, TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        is_ownership_settled, post_state, pre_states_match_accounts, validate_execution,
+        AccountStateDiff, CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER,
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput, TransactionEvent, UnsupportedCallKind,
+        compute_public_authorized_pdas, get_program_via, is_ownership_settled, post_state,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -472,9 +473,29 @@ impl ValidatedStateDiff {
                 );
             }
 
+            // Resolve each diff to what should actually be applied before validating anything:
+            // via `Incremental` against the real current account if the program supports it, or
+            // verbatim (copy/replace) if it doesn't. `validate_execution` below must see what's
+            // really being committed, not an intermediate delta a diff-carrying program emitted.
+            let resolved_diffs = program_output
+                .state_diffs
+                .iter()
+                .map(|diff| {
+                    resolve_diff(
+                        diff,
+                        chained_call.program_account_id,
+                        caller_data.account_id,
+                        state,
+                        &state_diff,
+                        cycle_budget,
+                        cycles_used,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(&program_output.state_diffs, chained_call.program_account_id)
+            validate_execution(&resolved_diffs, chained_call.program_account_id)
                 .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
@@ -488,7 +509,7 @@ impl ValidatedStateDiff {
 
             // Update the state diff, acquiring ownership of every unowned account this call
             // wrote data to.
-            for diff in &program_output.state_diffs {
+            for diff in &resolved_diffs {
                 let post = post_state(diff, chained_call.program_account_id)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
                 state_diff.insert(diff.pre_state.account_id, post);
@@ -748,6 +769,102 @@ fn execute_program_loader(
         instruction_data.to_vec(),
         state_diffs,
     ))
+}
+
+/// Resolves one `Execute`-produced diff to what should actually be applied.
+///
+/// A diff that never touched `post_data` has nothing to resolve — used as-is. Otherwise, probes
+/// the same program with `CallKind::Incremental`, feeding it the diff against the *real* current
+/// account (not necessarily the one `Execute` used, which may have gone stale by now). A program
+/// that never implemented `Incremental` responds with a no-op plus an `UnsupportedCallKind`
+/// event; that event is the signal to fall back to copy/replace — use `diff` verbatim, exactly
+/// as if `Incremental` didn't exist.
+///
+/// `program_loader` is exempt: it's a native pseudo-program with no guest ELF at all (dispatched
+/// via `execute_program_loader`, never `get_program_via`), so there's nothing to probe — it
+/// always goes through copy/replace, the same outcome a real program that skipped `Incremental`
+/// would reach, just without the wasted round trip.
+fn resolve_diff(
+    diff: &AccountStateDiff,
+    executing_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    state: &V03State,
+    state_diff: &HashMap<AccountId, Account>,
+    cycle_budget: u64,
+    cycles_used: &mut u64,
+) -> Result<AccountStateDiff, LeeError> {
+    if executing_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+        return Ok(diff.clone());
+    }
+    let Some(diff_data) = diff.post_data.as_ref() else {
+        return Ok(diff.clone());
+    };
+
+    let account_id = diff.pre_state.account_id;
+    let real_pre_state = AccountWithMetadata::new(
+        state_diff
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(account_id)),
+        diff.pre_state.is_authorized,
+        account_id,
+    );
+
+    let Some((program_id, elf)) = get_program_via(executing_account_id, |id| {
+        state_diff
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(id))
+    }) else {
+        return Err(LeeError::UnknownProgram {
+            chained: caller_account_id.is_some(),
+        });
+    };
+    let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+
+    let (incremental_output, incremental_cycles) = program.execute_incremental(
+        executing_account_id,
+        caller_account_id,
+        &real_pre_state,
+        diff_data.as_ref(),
+        cycle_budget.saturating_sub(*cycles_used),
+    )?;
+    *cycles_used = cycles_used
+        .checked_add(incremental_cycles)
+        .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+
+    let supported = !incremental_output
+        .events
+        .iter()
+        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
+    if !supported {
+        return Ok(diff.clone());
+    }
+
+    let [resolved]: [AccountStateDiff; 1] =
+        incremental_output
+            .state_diffs
+            .try_into()
+            .map_err(|diffs: Vec<AccountStateDiff>| {
+                InvalidProgramBehaviorError::MalformedIncrementalResponse {
+                    program_account_id: executing_account_id,
+                    account_id,
+                    reason: format!("expected exactly 1 diff, got {}", diffs.len()),
+                }
+            })?;
+    ensure!(
+        resolved.pre_state.account_id == account_id,
+        InvalidProgramBehaviorError::MalformedIncrementalResponse {
+            program_account_id: executing_account_id,
+            account_id,
+            reason: format!(
+                "returned a diff for {} instead",
+                resolved.pre_state.account_id
+            ),
+        }
+    );
+
+    Ok(resolved)
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
