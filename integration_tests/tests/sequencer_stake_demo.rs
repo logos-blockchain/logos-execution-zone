@@ -60,7 +60,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
                     account_id: funding_id,
-                    balance: FUNDING_BALANCE,
+                    balance: u64::try_from(FUNDING_BALANCE).expect("funding balance fits u64"),
                 }]),
         )
         .build()

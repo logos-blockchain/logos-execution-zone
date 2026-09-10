@@ -83,13 +83,14 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
-/// Fixed, public key behind a genesis-only funding account: the faucet can
+/// Fixed, public key behind a genesis-only funding account: the bridge can
 /// only be called top-level, not as `Stake`'s mover, so this account is a
-/// pass-through that receives faucet funds and then moves them into the real
-/// stake account. Not a secret: every node derives the same account, and it
-/// holds nothing once genesis has run.
-// TODO: replace the faucet pass-through with a real deposit from Bedrock,
-// once that path exists, instead of a fixed genesis-only key.
+/// pass-through that receives the genesis deposit and then moves it into the
+/// real stake account. Not a secret: every node derives the same account, and
+/// it holds nothing once genesis has run.
+// TODO: replace the pass-through with a real Bedrock deposit, once that path
+// exists. The genesis deposit funding it is synthetic, so this stays a fixed
+// genesis-only key rather than a founding sequencer staking bridged funds.
 const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
@@ -2269,28 +2270,29 @@ fn build_genesis_state(
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
-    let supply_txs = config.genesis.iter().filter_map(|action| match action {
-        GenesisAction::SupplyAccount {
-            account_id,
-            balance,
-        } => Some(build_supply_account_genesis_transaction(
-            account_id, *balance,
-        )),
-        GenesisAction::SupplyBridgeAccount { balance } => {
-            Some(build_supply_account_genesis_transaction(
-                &system_accounts::bridge_account_id(),
+    let supply_txs = config
+        .genesis
+        .iter()
+        .enumerate()
+        .filter_map(|(index, action)| match action {
+            GenesisAction::SupplyAccount {
+                account_id,
+                balance,
+            } => Some(build_supply_account_genesis_transaction(
+                account_id,
                 *balance,
-            ))
-        }
-        GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
-            Some(build_supply_account_genesis_transaction(
-                &cross_zone::bridge_lock_holding_account_id(*holder),
-                *amount,
-            ))
-        }
-        // Stakes are built below.
-        GenesisAction::StakeSequencer { .. } => None,
-    });
+                genesis_deposit_op_id(index),
+            )),
+            GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
+                Some(build_supply_account_genesis_transaction(
+                    &cross_zone::bridge_lock_holding_account_id(*holder),
+                    u64::try_from(*amount).expect("bridge-lock holding exceeds u64"),
+                    genesis_deposit_op_id(index),
+                ))
+            }
+            // Stakes are built below.
+            GenesisAction::StakeSequencer { .. } => None,
+        });
 
     // The creator falls back to staking itself, signing with the key it owns.
     let mut staked = founding_stakes(config);
@@ -2372,9 +2374,9 @@ fn founding_stakes(config: &SequencerConfig) -> Vec<FoundingStake> {
                 ownership_public_key.clone(),
                 stake_signature.clone(),
             )),
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyBridgeAccount { .. }
-            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeLockHolding { .. } => {
+                None
+            }
         })
         .collect()
 }
@@ -2426,12 +2428,9 @@ fn genesis_stake_message(
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
     .expect("Failed to serialize genesis mover instruction");
-    // A nonce counts how many times an account has signed. The funding account
-    // signed the faucet tx already, so its count starts at 1 here.
-    let funding_nonce = u128::try_from(index)
-        .expect("founding sequencer count fits in u128")
-        .checked_add(1)
-        .expect("genesis funding nonce overflow");
+    // A nonce counts how many times an account has signed. The deposit that
+    // funds this account needs no signature from it, so its count starts at 0.
+    let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
 
     Message::try_new(
         programs::sequencer_stake().id().into(),
@@ -2492,8 +2491,8 @@ fn build_init_channel_params_transaction(
     )
 }
 
-/// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
-/// not raw state, so followers replay them instead of missing them.
+/// The founding sequencers' `Stake`s, funded by a genesis deposit. Real
+/// transactions, not raw state, so followers replay them instead of missing them.
 fn build_stake_genesis_transactions(
     staked: &[FoundingStake],
     minimum_stake: u128,
@@ -2510,22 +2509,11 @@ fn build_stake_genesis_transactions(
         .and_then(|count| amount.checked_mul(count))
         .expect("genesis stake total overflow");
 
-    let fund_message = Message::try_new(
-        programs::faucet().id().into(),
-        vec![
-            system_accounts::faucet_account_id(),
-            genesis_stake_funding_account(),
-        ],
-        vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransfer { amount: total },
-    )
-    .expect("Failed to build genesis funding message");
-    // The funding account signs even though it is only receiving: the stake
-    // transactions below count their nonces from 1 on the strength of it.
-    let fund_witness_set =
-        lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
-
-    let mut txs = vec![PublicTransaction::new(fund_message, fund_witness_set)];
+    let mut txs = vec![build_supply_account_genesis_transaction(
+        &genesis_stake_funding_account(),
+        u64::try_from(total).expect("genesis stake total exceeds u64"),
+        genesis_stake_deposit_op_id(),
+    )];
 
     for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
         let ownership_id = AccountId::from(ownership_public_key);
@@ -2558,9 +2546,7 @@ fn bridge_lock_holdings(
 ) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
     genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. }
-        | GenesisAction::SupplyBridgeAccount { .. }
-        | GenesisAction::StakeSequencer { .. } => None,
+        GenesisAction::SupplyAccount { .. } | GenesisAction::StakeSequencer { .. } => None,
     })
 }
 
@@ -2576,19 +2562,50 @@ pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
         || program_account_id == programs::fee().id().into()
 }
 
+/// Op id of the `index`-th genesis allocation.
+///
+/// Genesis allocations are `Deposit`s with no L1 event behind them, so their op
+/// ids must be unmistakable: an L1 op id is a hash, and this is a literal ASCII
+/// domain followed by the index, which no hash realistically produces. The
+/// receipt PDA each one claims is what stops a later block replaying it.
+fn genesis_deposit_op_id(index: usize) -> [u8; 32] {
+    const DOMAIN: &[u8; 24] = b"/LEZ/v0.3/GenesisDeposit";
+
+    let mut op_id = [0_u8; 32];
+    op_id[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    op_id[DOMAIN.len()..].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+    op_id
+}
+
+/// The op id reserved for the one deposit that funds every founding stake.
+/// Outside the `genesis_deposit_op_id` index space, which tracks `config.genesis`.
+fn genesis_stake_deposit_op_id() -> [u8; 32] {
+    genesis_deposit_op_id(usize::MAX)
+}
+
 fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
-    balance: lee::Balance,
+    amount: u64,
+    op_id: [u8; 32],
 ) -> PublicTransaction {
-    let faucet_program_id: AccountId = programs::faucet().id().into();
+    let bridge_program_id: AccountId = programs::bridge().id().into();
+    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, op_id);
 
     let message = Message::try_new(
-        faucet_program_id,
-        vec![system_accounts::faucet_account_id(), *account_id],
+        bridge_program_id,
+        vec![
+            system_accounts::bridge_account_id(),
+            *account_id,
+            receipt_id,
+        ],
         Vec::new(),
-        faucet_core::Instruction::GenesisTransfer { amount: balance },
+        bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: op_id,
+            recipient_id: *account_id,
+            amount,
+        },
     )
-    .expect("Failed to serialize genesis transfer instruction");
+    .expect("Failed to serialize genesis deposit instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(Vec::new());
 
     PublicTransaction::new(message, witness_set)

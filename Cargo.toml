@@ -47,7 +47,6 @@ members = [
   "lez/programs/authenticated_transfer",
   "lez/programs/bridge",
   "lez/programs/clock",
-  "lez/programs/faucet",
   "lez/programs/fee",
   "lez/programs/fee/core",
   "lez/programs/token",
@@ -123,7 +122,6 @@ amm_program = { path = "lez/programs/amm" }
 associated_token_account_core = { path = "lez/programs/associated_token_account/core" }
 ata_program = { path = "lez/programs/associated_token_account" }
 authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
-faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }

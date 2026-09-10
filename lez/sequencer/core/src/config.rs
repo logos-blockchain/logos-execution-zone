@@ -36,19 +36,12 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenesisAction {
-    SupplyAccount {
-        account_id: AccountId,
-        balance: Balance,
-    },
-    SupplyBridgeAccount {
-        balance: Balance,
-    },
-    /// Funds a holder's holding PDA at genesis with one replayable faucet
+    /// `u64`, not [`Balance`]: the bridge's `Deposit` amount is `u64`, and this
+    /// is funded through it.
+    SupplyAccount { account_id: AccountId, balance: u64 },
+    /// Funds a holder's holding PDA at genesis with one replayable genesis
     /// credit; the balance-only PDA needs no claim.
-    SupplyBridgeLockHolding {
-        holder: AccountId,
-        amount: Balance,
-    },
+    SupplyBridgeLockHolding { holder: AccountId, amount: Balance },
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
         sequencer_key: sequencer_stake_core::SequencerKey,
