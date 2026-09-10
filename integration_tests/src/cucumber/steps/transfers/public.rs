@@ -170,7 +170,7 @@ async fn transfer_to_new_public_account(
     Ok(())
 }
 
-#[when("I attempt to transfer twice the first configured public account balance to the second")]
+#[when("I attempt to transfer more than the first configured public account balance to the second")]
 async fn attempt_insufficient_public_transfer(
     world: &mut CucumberWorld,
     step: &Step,
@@ -190,7 +190,7 @@ async fn attempt_insufficient_public_transfer(
         snapshot_public_transfer(context.sequencer_client(), sender, receiver).await?;
     let amount =
         sender_initial_balance
-            .checked_mul(2)
+            .checked_add(1)
             .ok_or_else(|| StepError::AssertionFailed {
                 message: format!(
                     "sender {sender:?} balance overflowed while building rejection case"

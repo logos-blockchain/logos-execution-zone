@@ -32,6 +32,64 @@ jobs:
       packages: write
     uses: ./.github/workflows/ci-image.yml
 
+  bedrock-node:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Cargo-authoritative Bedrock node
+        uses: ./.github/actions/resolve-bedrock-node
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          target_platform: linux-x86_64
+
+      - name: Upload resolved Bedrock node
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-node
+          path: bedrock/.resolved
+          include-hidden-files: true
+          if-no-files-found: error
+
+  cucumber:
+    needs: [ci-image, bedrock-node]
+    uses: ./.github/workflows/cucumber-integration-tests.yml
+    with:
+      image: ${{ needs.ci-image.outputs.image }}
+    permissions:
+      contents: read
+      packages: read
+    concurrency:
+      group: cucumber-${{ github.ref }}
+      cancel-in-progress: true
+
+  bedrock-resolver-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Test Bedrock resolver and live release contract
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_LIVE_RELEASE_TESTS: "1"
+        run: python3 bedrock/tools/test_resolve_bedrock_node.py -v
+
+      - name: Test integration test target discovery
+        run: python3 .github/scripts/test_discover_integration_test_targets.py -v
+
   fmt-rs:
     needs: ci-image
     runs-on: ubuntu-latest
@@ -159,7 +217,7 @@ jobs:
   # Not a `container:` job: the tests drive the host's Docker daemon through
   # testcontainers, so they run in the CI image via `run-in-ci-image` instead.
   test-fixtures-tests:
-    needs: ci-image
+    needs: [ci-image, bedrock-node]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -173,6 +231,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download resolved Bedrock node
+        uses: actions/download-artifact@v4
+        with:
+          name: bedrock-node
+          path: bedrock/.resolved
 
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
@@ -230,23 +294,23 @@ jobs:
           name: integration-tests-archive
           path: integration-tests.tar.zst
 
-      - name: List integration test binaries
+      - name: List integration tests
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
           run: |
             cargo nextest list \
               --archive-file integration-tests.tar.zst \
-              --list-type binaries-only \
               --message-format json \
               --no-pager > integration-tests-binaries.json
 
       # $GITHUB_OUTPUT is outside the mounted workspace, so the container cannot
-      # write to it. jq is on the runner, so do this pass here.
+      # write to it. Discover targets on the runner from the full nextest test
+      # inventory so binaries containing only ignored tests are not scheduled.
       - name: Discover integration test targets from archive
         id: discover-targets
         run: |
-          targets_json="$(jq -c '[."rust-binaries" | to_entries[] | select(.value.kind == "test" and .value."binary-name" != "tps") | .value."binary-name"] | sort | unique' integration-tests-binaries.json)"
+          targets_json="$(python3 .github/scripts/discover_integration_test_targets.py integration-tests-binaries.json)"
 
           if [[ "$targets_json" == "[]" ]]; then
             echo "No integration test targets were discovered." >&2
@@ -257,7 +321,7 @@ jobs:
           echo "Discovered integration targets: $targets_json"
 
   integration-tests:
-    needs: [ci-image, test-fixtures-tests, integration-tests-prebuild]
+    needs: [ci-image, bedrock-node, test-fixtures-tests, integration-tests-prebuild]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -282,6 +346,15 @@ jobs:
         with:
           name: integration-tests-archive
 
+      - name: Download resolved Bedrock node
+        uses: actions/download-artifact@v4
+        with:
+          name: bedrock-node
+          path: bedrock/.resolved
+
+      - name: Make resolved Bedrock node executable
+        run: chmod +x bedrock/.resolved/logos-blockchain-node
+
       - name: Run tests
         uses: ./.github/actions/run-in-ci-image
         with:
@@ -289,9 +362,9 @@ jobs:
           env: |
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
+            LOGOS_BLOCKCHAIN_NODE_BIN=${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
           run: |
             source .github/scripts/with_retry.sh
-
             if [[ "${{ matrix.target }}" == "tf_bedrock_builder" || \
                   "${{ matrix.target }}" == "tf_app_deployments" ]]; then
               # The nextest archive contains the absolute Cargo git checkout
@@ -304,7 +377,6 @@ jobs:
             else
               with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
-
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
   artifacts:
