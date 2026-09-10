@@ -126,6 +126,10 @@ pub struct SetCrossZonePeerTip {
     pub tip: PeerChainTip,
 }
 
+pub struct GetBlockHashToBlockIdMapItem {
+    pub block_hash: HashType,
+}
+
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
