@@ -104,7 +104,7 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
-    #[error("Program bytecode is not a valid RISC0 program binary: {0}")]
+    #[error("Program bytecode is not a valid RISC0 program binary")]
     InvalidProgramBinary(#[source] anyhow::Error),
     #[error(
         "Program uses a non-default kernel ELF; only programs built with the protocol's \

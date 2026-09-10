@@ -8,4 +8,4 @@ license = { workspace = true }
 
 [dependencies]
 anyhow.workspace = true
-risc0-binfmt = "3.0.2"
+risc0-binfmt.workspace = true
