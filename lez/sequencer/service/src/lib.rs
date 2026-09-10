@@ -180,6 +180,8 @@ pub fn run(
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
         let slasher_ref = executor.slasher_ref();
+        // The core has already read a committee by the time this returns.
+        let accredited_keys_rx = executor.accredited_keys_watch();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
@@ -221,6 +223,7 @@ pub fn run(
                     approval_tx,
                     max_block_size.as_u64(),
                     submit,
+                    accredited_keys_rx,
                 )
                 .await
                 .context("Failed to start sequencer gossip network")?;

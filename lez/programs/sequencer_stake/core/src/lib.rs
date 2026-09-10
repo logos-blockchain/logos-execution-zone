@@ -210,17 +210,21 @@ impl SequencerStakeConfig {
             .is_some_and(|entry| entry.is_accredited(params.minimum_sequencer_stake))
     }
 
+    /// The keys [`Self::is_accredited_committee_member`] accepts, in key order.
+    pub fn accredited_committee_members(&self) -> impl Iterator<Item = &SequencerKey> {
+        let minimum = self
+            .channel_params
+            .map(|params| params.minimum_sequencer_stake);
+        self.entries
+            .iter()
+            .filter(move |(_, entry)| minimum.is_some_and(|bar| entry.is_accredited(bar)))
+            .map(|(key, _)| key)
+    }
+
     /// How many keys [`Self::is_accredited_committee_member`] accepts.
     #[must_use]
     pub fn accredited_committee_members_count(&self) -> usize {
-        let Some(params) = self.channel_params else {
-            return 0;
-        };
-
-        self.entries
-            .values()
-            .filter(|entry| entry.is_accredited(params.minimum_sequencer_stake))
-            .count()
+        self.accredited_committee_members().count()
     }
 }
 

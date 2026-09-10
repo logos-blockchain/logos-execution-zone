@@ -194,15 +194,14 @@ impl<S: StorageActorTrait> SlasherActor<S> {
 
     /// Screens against `config` from here on, and promotes whatever early
     /// approvals it accredits.
-    async fn adopt_config(&mut self, config: &SequencerStakeConfig) {
-        // Kept so the next inbound approval can be screened on arrival.
-        self.config = config.clone();
-
+    async fn adopt_config(&mut self, config: SequencerStakeConfig) {
         // Ahead of the accreditation gate, so a key not accredited yet still
         // collects what its peers sent.
-        if self.drain_early(config)
-            && let Err(err) = self.persist().await
-        {
+        let moved = self.drain_early(&config);
+        // Kept so the next inbound approval can be screened on arrival.
+        self.config = config;
+
+        if moved && let Err(err) = self.persist().await {
             warn!("Failed to persist drained slash approvals: {err}");
         }
     }
@@ -281,14 +280,14 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
         Propose { config }: Propose,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.adopt_config(&config).await;
+        self.adopt_config(config).await;
 
         // Only an accredited key's approval counts.
-        if !config.is_accredited_committee_member(&self.own_key) {
+        if !self.config.is_accredited_committee_member(&self.own_key) {
             return Vec::new();
         }
 
-        let threshold = slash_approval_threshold(config.accredited_committee_members_count());
+        let threshold = slash_approval_threshold(self.config.accredited_committee_members_count());
         let mut proposed = Vec::new();
         // One burn takes the whole stake, so keep one offence per offender.
         let mut proposed_for = BTreeSet::new();
@@ -296,10 +295,10 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
             if proposed_for.contains(&offence.offender) {
                 continue;
             }
-            let Some(entry) = config.entries.get(&offence.offender) else {
+            let Some(entry) = self.config.entries.get(&offence.offender) else {
                 continue;
             };
-            let approvals = self.approvals_for(offence, &config);
+            let approvals = self.approvals_for(offence, &self.config);
             if approvals.len() < threshold {
                 continue;
             }
@@ -324,7 +323,7 @@ impl<S: StorageActorTrait> Message<SetCommittee> for SlasherActor<S> {
         SetCommittee(config): SetCommittee,
         _ctx: &mut Context<Self, Self::Reply>,
     ) {
-        self.adopt_config(&config).await;
+        self.adopt_config(config).await;
     }
 }
 
@@ -335,12 +334,12 @@ impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
         if msg.signer == self.own_key {
             return;
         }
-        // A peer is trusted for its signature, never for the offence itself.
-        if !msg.verify(self.channel_id) {
+        // Ahead of the signature check, so a junk key buys no verification.
+        if !self.config.is_accredited_committee_member(&msg.signer) {
             return;
         }
-        // Screened against the last config seen, so junk keys take no slot.
-        if !self.config.is_accredited_committee_member(&msg.signer) {
+        // A peer is trusted for its signature, never for the offence itself.
+        if !msg.verify(self.channel_id) {
             return;
         }
         let Approval {

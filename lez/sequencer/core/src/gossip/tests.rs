@@ -65,6 +65,7 @@ async fn start_node(
         approval_tx,
         TEST_MAX_BLOCK_SIZE,
         crate::gossip::unscreened_mempool_submit(mempool_handle),
+        crate::gossip::accredited_keys_channel().1,
     )
     .await
     .expect("node should start");

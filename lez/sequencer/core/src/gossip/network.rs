@@ -25,7 +25,10 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use crate::TransactionOrigin;
-use crate::{config::GossipConfig, gossip::seen_cache::SeenCache};
+use crate::{
+    config::GossipConfig,
+    gossip::{AccreditedKeysReceiver, seen_cache::SeenCache},
+};
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -99,6 +102,7 @@ impl GossipNetwork {
         approval_sink: mpsc::Sender<Approval>,
         max_block_size: u64,
         submit: IngestSubmit,
+        accredited_keys_rx: AccreditedKeysReceiver,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -240,6 +244,7 @@ impl GossipNetwork {
             approvals_topic,
             approval_sink,
             channel_id,
+            accredited_keys_rx,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
@@ -340,6 +345,8 @@ struct DriveTask {
     approval_sink: mpsc::Sender<Approval>,
     /// This node's channel, which an inbound approval must be signed over.
     channel_id: [u8; 32],
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys_rx: AccreditedKeysReceiver,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
@@ -507,10 +514,18 @@ impl DriveTask {
     ) {
         use crate::gossip::validation::{ApprovalEvaluation, evaluate_approval};
 
-        let acceptance = match evaluate_approval(data, self.channel_id) {
+        let evaluation = {
+            let accredited_keys = self.accredited_keys_rx.borrow();
+            evaluate_approval(data, self.channel_id, accredited_keys.as_ref())
+        };
+        let acceptance = match evaluation {
             ApprovalEvaluation::Reject(reason) => {
                 log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
                 gossipsub::MessageAcceptance::Reject
+            }
+            ApprovalEvaluation::Ignore(reason) => {
+                log::debug!("Ignoring gossiped slash approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Ignore
             }
             ApprovalEvaluation::Accept(approval) => {
                 if let Err(err) = self.approval_sink.try_send(approval) {
@@ -754,7 +769,7 @@ mod tests {
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
     use super::*;
-    use crate::config::GossipConfig;
+    use crate::{config::GossipConfig, gossip::accredited_keys_channel};
 
     const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
 
@@ -793,6 +808,7 @@ mod tests {
             mpsc::channel(1).0,
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            accredited_keys_channel().1,
         )
         .await
         .unwrap();
@@ -811,6 +827,7 @@ mod tests {
             mpsc::channel(1).0,
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            accredited_keys_channel().1,
         )
         .await
         .unwrap();

@@ -48,6 +48,9 @@ use tokio_retry::{Retry, strategy::FixedInterval};
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
+    gossip::{
+        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
+    },
     logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
@@ -177,6 +180,8 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     last_committee_submission_slot: Option<Slot>,
     /// Records offending inscriptions and proposes the slashes for them.
     slasher: ActorRef<SlasherActor<S>>,
+    /// The committee the gossip mesh screens inbound slash approvals against.
+    accredited_keys_tx: AccreditedKeysSender,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
 }
@@ -378,6 +383,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .await,
         );
 
+        let (accredited_keys_tx, _) = accredited_keys_channel();
+
         let block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key.clone(),
@@ -388,6 +395,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 Arc::clone(&chain),
                 mempool_handle.clone(),
                 slasher.clone(),
+                accredited_keys_tx.clone(),
             ),
         )
         .await
@@ -415,7 +423,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
         // The committee the slasher loaded with predates this catch-up.
-        refresh_committee(&slasher, &chain).await;
+        refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
 
         // Seed the high water mark from the tip we are starting on. Every stored
         // block reached the store by being published or by being adopted from
@@ -516,6 +524,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             watchers,
             last_committee_submission_slot: None,
             slasher,
+            accredited_keys_tx,
             bedrock_signing_key,
         };
 
@@ -781,18 +790,20 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         slasher: ActorRef<SlasherActor<S>>,
+        accredited_keys_tx: AccreditedKeysSender,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
             let slasher = slasher.clone();
+            let accredited_keys_tx = accredited_keys_tx.clone();
             Box::pin(async move {
                 report_offences(&slasher, &update.undecodable).await;
                 let moved_head = !update.adopted.is_empty();
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
                 if moved_head {
-                    refresh_committee(&slasher, &chain).await;
+                    refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
                 }
             })
         })
@@ -1587,6 +1598,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         &self.slasher
     }
 
+    /// The gossip mesh's view of the committee, as of the last head move.
+    #[must_use]
+    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.accredited_keys_tx.subscribe()
+    }
+
     /// This node's Bedrock public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
@@ -1875,16 +1892,31 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
     }
 }
 
-/// Hands the slasher the committee the head now holds. The produce path also
-/// refreshes it, but only a producing node takes turns.
+/// Hands the slasher and the gossip mesh the committee the head now holds. The
+/// produce path also refreshes it, but only a producing node takes turns.
 async fn refresh_committee<S: StorageActorTrait>(
     slasher: &ActorRef<SlasherActor<S>>,
     chain: &Mutex<ChainState>,
+    accredited_keys_tx: &AccreditedKeysSender,
 ) {
     let config = committee_discovery::read_config(chain.lock().await.head_state());
     let Some(config) = config else {
         return;
     };
+    // The mesh screens against the same committee the slasher gates on.
+    let keys: AccreditedKeys = config
+        .accredited_committee_members()
+        .copied()
+        .map(sequencer_stake_core::SequencerKey::to_bytes)
+        .collect();
+    // Every head move lands here, but the committee changes on almost none.
+    accredited_keys_tx.send_if_modified(|current| {
+        let changed = current.as_ref() != Some(&keys);
+        if changed {
+            *current = Some(keys);
+        }
+        changed
+    });
     if let Err(err) = slasher.tell(SetCommittee(config)).await {
         warn!("Failed to refresh the slasher committee: {err}");
     }
