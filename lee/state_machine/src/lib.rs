@@ -55,6 +55,40 @@ mod test_methods {
         )
     }
 
+    /// A stripped-down token program: no mint/definition account, each account's `data` is just
+    /// a `TokenAccountData { balance: u128 }`. `Initialize` sets that balance directly with no
+    /// access check (test-only); `Transfer` reads both accounts' current token balance, moves
+    /// `amount` between them, and re-encodes both — `Execute` only for now.
+    #[must_use]
+    pub const fn stripped_token() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ELF),
+        )
+    }
+
+    /// Reads two `stripped_token` accounts' balances and chain-calls `stripped_token` to move
+    /// one unit from whichever is larger to whichever is smaller (a no-op if they're equal).
+    /// Never touches either account's balance or data itself — its own diffs are always
+    /// `Add(0)`/unchanged, regardless of route. `Execute` only; doesn't implement `Incremental`.
+    #[must_use]
+    pub const fn stripped_token_robinhood() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ROBINHOOD_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ROBINHOOD_ELF),
+        )
+    }
+
+    /// `simple_balance_transfer`'s twin, opted into `CallKind::Incremental` instead of
+    /// `Execute`.
+    #[must_use]
+    pub const fn incremental_balance_transfer() -> Program {
+        Program::new_unchecked(
+            test_methods::INCREMENTAL_BALANCE_TRANSFER_ID,
+            Cow::Borrowed(test_methods::INCREMENTAL_BALANCE_TRANSFER_ELF),
+        )
+    }
+
     #[cfg(feature = "prove")]
     #[must_use]
     pub const fn multi_segment_burner() -> Program {

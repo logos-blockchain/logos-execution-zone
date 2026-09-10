@@ -18,8 +18,14 @@ fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
         CallKind::Execute
     );
 
-    // Any nonzero discriminant must decode as `Unknown`, not fail.
-    for byte in 1..=u8::MAX {
+    let incremental = borsh::to_vec(&CallKind::Incremental).unwrap();
+    assert_eq!(
+        borsh::from_slice::<CallKind>(&incremental).unwrap(),
+        CallKind::Incremental
+    );
+
+    // Any discriminant with no assigned meaning must decode as `Unknown`, not fail.
+    for byte in 2..=u8::MAX {
         assert_eq!(
             borsh::from_slice::<CallKind>(&[byte]).unwrap(),
             CallKind::Unknown(byte)
@@ -223,6 +229,154 @@ fn validate_execution_rejects_add_overflow() {
         result,
         Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
     ));
+}
+
+// ---- validate_execution_mode_consistency tests ----
+
+#[test]
+fn mode_consistency_accepts_an_account_touched_bound_throughout() {
+    let account_id = AccountId::new([1; 32]);
+    let result = validate_execution_mode_consistency([
+        (account_id, ExecutionMode::Bound),
+        (account_id, ExecutionMode::Bound),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn mode_consistency_accepts_an_account_touched_deferred_throughout() {
+    let account_id = AccountId::new([1; 32]);
+    let result = validate_execution_mode_consistency([
+        (account_id, ExecutionMode::Deferred),
+        (account_id, ExecutionMode::Deferred),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn mode_consistency_accepts_different_accounts_in_different_modes() {
+    let bound_account = AccountId::new([1; 32]);
+    let deferred_account = AccountId::new([2; 32]);
+    let result = validate_execution_mode_consistency([
+        (bound_account, ExecutionMode::Bound),
+        (deferred_account, ExecutionMode::Deferred),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn mode_consistency_rejects_bound_then_deferred_on_the_same_account() {
+    let account_id = AccountId::new([1; 32]);
+    let result = validate_execution_mode_consistency([
+        (account_id, ExecutionMode::Bound),
+        (account_id, ExecutionMode::Deferred),
+    ]);
+    assert!(matches!(
+        result,
+        Err(ExecutionModeConflict {
+            account_id: id,
+            first: ExecutionMode::Bound,
+            second: ExecutionMode::Deferred,
+        }) if id == account_id
+    ));
+}
+
+/// The conflict is symmetric: whichever mode is seen first isn't given priority.
+#[test]
+fn mode_consistency_rejects_deferred_then_bound_on_the_same_account() {
+    let account_id = AccountId::new([1; 32]);
+    let result = validate_execution_mode_consistency([
+        (account_id, ExecutionMode::Deferred),
+        (account_id, ExecutionMode::Bound),
+    ]);
+    assert!(matches!(
+        result,
+        Err(ExecutionModeConflict {
+            account_id: id,
+            first: ExecutionMode::Deferred,
+            second: ExecutionMode::Bound,
+        }) if id == account_id
+    ));
+}
+
+#[test]
+fn mode_consistency_reports_the_first_conflicting_touch_not_the_last() {
+    let account_id = AccountId::new([1; 32]);
+    // Three touches: bound, bound, deferred — the conflict is between the first (bound) and
+    // third (deferred), not some other pairing.
+    let result = validate_execution_mode_consistency([
+        (account_id, ExecutionMode::Bound),
+        (account_id, ExecutionMode::Bound),
+        (account_id, ExecutionMode::Deferred),
+    ]);
+    assert!(matches!(
+        result,
+        Err(ExecutionModeConflict {
+            first: ExecutionMode::Bound,
+            second: ExecutionMode::Deferred,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn mode_consistency_accepts_no_touches() {
+    assert!(validate_execution_mode_consistency(std::iter::empty()).is_ok());
+}
+
+/// The motivating real-world scenario: `stripped_token_robinhood` reads two `stripped_token`
+/// accounts' live balances to decide which one to route a transfer from — its own diffs are a
+/// no-op (`Add(0)`/unchanged for both), but that no-op diff still doesn't mean these accounts are
+/// mode-free. The *decision* of which chained call to emit is inherently tied to whatever balance
+/// values were live when robinhood ran, so both accounts must count as `Bound` for robinhood's
+/// touch even though robinhood itself writes nothing — a no-op diff is not the same thing as "no
+/// dependency on live state." If the same accounts' chained `stripped_token::Transfer` were
+/// requested as `Deferred` (which, looked at in isolation, that call would otherwise be free to
+/// do), the two requirements conflict: this simulates exactly that touch set and confirms it's
+/// rejected.
+#[test]
+fn mode_consistency_rejects_robinhoods_bound_read_conflicting_with_a_deferred_transfer() {
+    let account1 = AccountId::new([1; 32]);
+    let account2 = AccountId::new([2; 32]);
+
+    // Robinhood's own (no-op) touch of both accounts is Bound — it read their live balances to
+    // decide the route. The chained Transfer this scenario imagines requesting as Deferred
+    // touches the same two accounts.
+    let touches = [
+        (account1, ExecutionMode::Bound),
+        (account2, ExecutionMode::Bound),
+        (account1, ExecutionMode::Deferred),
+        (account2, ExecutionMode::Deferred),
+    ];
+
+    let result = validate_execution_mode_consistency(touches);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionModeConflict {
+            first: ExecutionMode::Bound,
+            second: ExecutionMode::Deferred,
+            ..
+        })
+    ));
+}
+
+/// The same scenario, but the wallet correctly requests `Bound` for the chained `Transfer` too
+/// (giving up the deferral for these accounts, since robinhood's own read already forces it) —
+/// no conflict, because every touch now agrees.
+#[test]
+fn mode_consistency_accepts_robinhood_when_the_transfer_is_also_requested_bound() {
+    let account1 = AccountId::new([1; 32]);
+    let account2 = AccountId::new([2; 32]);
+
+    let touches = [
+        (account1, ExecutionMode::Bound),
+        (account2, ExecutionMode::Bound),
+        (account1, ExecutionMode::Bound),
+        (account2, ExecutionMode::Bound),
+    ];
+
+    assert!(validate_execution_mode_consistency(touches).is_ok());
 }
 
 // ---- AccountId::for_private_pda tests ----

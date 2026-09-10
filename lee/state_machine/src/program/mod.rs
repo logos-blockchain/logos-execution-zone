@@ -176,6 +176,50 @@ impl Program {
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
+
+    /// Asks the program to apply a previously-computed diff (`diff_data`) against `pre_state` as
+    /// it stands right now — not necessarily the `pre_state` the diff was originally computed
+    /// against. Per-account, unlike [`Self::execute`]: `CallKind::Incremental`'s contract is one
+    /// account at a time (see [`lee_core::program::ProgramCall::Incremental`]).
+    ///
+    /// A program that never implemented this call kind responds with a no-op plus an
+    /// `UnsupportedCallKind` diagnostic event, rather than an error — the caller distinguishes
+    /// "applied for real" from "fall back to copy/replace" by checking for that event, not by
+    /// matching on `Err`.
+    pub(crate) fn execute_incremental(
+        &self,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
+        pre_state: &AccountWithMetadata,
+        diff_data: &[u8],
+        cycle_budget: Cycles,
+    ) -> Result<(ProgramOutput, Cycles), LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.session_limit(Some(cycle_budget));
+        env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+
+        let input = ProgramInput {
+            self_account_id,
+            caller_account_id,
+            pre_states: vec![pre_state.clone()],
+            instruction: diff_data.to_vec(),
+        };
+        let input_payload =
+            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder.write_slice(&to_frame(&input_payload));
+        let env = env_builder.build().unwrap();
+
+        let session = Self::execute_session(env, self.elf(), cycle_budget)?;
+        let cycles = session.cycles;
+
+        let output_payload = from_frame(&session.journal).ok_or_else(|| {
+            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
+        })?;
+        let program_output = borsh::from_slice(output_payload)
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        Ok((program_output, cycles))
+    }
 }
 
 /// Gates a finished session on its exit code.
