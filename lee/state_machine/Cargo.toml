@@ -20,8 +20,8 @@ rand.workspace = true
 borsh.workspace = true
 hex.workspace = true
 k256.workspace = true
-risc0-binfmt = "3.0.2"
-risc0-zkos-v1compat = "2.2.0"
+risc0-binfmt.workspace = true
+risc0-zkos-v1compat.workspace = true
 semver = { version = "1", optional = true }
 log.workspace = true
 
