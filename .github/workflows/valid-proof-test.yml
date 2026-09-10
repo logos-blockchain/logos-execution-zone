@@ -41,12 +41,10 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
-          # Read-only. `integration-tests-prebuild` is the sole writer of this
-          # cache: it gates all 35 shards, and it is the only job whose build
-          # the cached `target/` actually matches. Letting a second job write
-          # means whichever finishes first defines the cache and every other
-          # job restores a tree whose fingerprints do not match its build.
+          shared-key: ci-host-prebuild
+          # Read-only, and named for its writer: `integration-tests-prebuild`
+          # in ci.yml is the only job that writes this cache. See the longer
+          # note there.
           save-if: false
 
       - name: Test valid proof
