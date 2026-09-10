@@ -232,6 +232,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
       - name: Download resolved Bedrock node
         uses: actions/download-artifact@v4
         with:
@@ -241,8 +243,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-host-prebuild
+          # Read-only; prebuild is the only writer.
+          save-if: false
 
       - name: Run test_fixtures tests
         uses: ./.github/actions/run-in-ci-image
@@ -273,10 +276,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
+          shared-key: ci-host-prebuild
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
@@ -397,11 +404,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-host-prebuild
+          # Read-only; prebuild is the only writer.
+          save-if: false
 
       - name: Build artifacts
         uses: ./.github/actions/run-in-ci-image
