@@ -60,6 +60,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::exits_nonzero());
         self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::validity_window());

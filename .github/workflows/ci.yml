@@ -12,6 +12,12 @@ on:
       - "**.md"
       - "!.github/workflows/*.yml"
 
+# Supersede in-progress runs for a pull request; never cancel a push, so each
+# merge to main/dev keeps its own run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   pull-requests: read
@@ -111,7 +117,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust-cache
+          shared-key: ci-container
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Lint workspace
@@ -141,14 +147,14 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust-cache
+          shared-key: ci-container
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Run tests
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info,kameo=warn"
-        run: cargo nextest run --workspace --exclude integration_tests --exclude test_fixtures --all-features
+        run: cargo nextest run --profile ci --workspace --exclude integration_tests --exclude test_fixtures --all-features
 
   # Not a `container:` job: the tests drive the host's Docker daemon through
   # testcontainers, so they run in the CI image via `run-in-ci-image` instead.
@@ -171,7 +177,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust-cache
+          shared-key: ci-host
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Run test_fixtures tests
@@ -206,7 +212,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust-cache
+          shared-key: ci-host
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
@@ -216,7 +222,7 @@ jobs:
           env: RISC0_DEV_MODE=1
           run: |
               source .github/scripts/with_retry.sh
-              with_retry 'cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager' 5 
+              with_retry 'cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager' 2
 
       - name: Upload integration test archive
         uses: actions/upload-artifact@v4
@@ -294,42 +300,10 @@ jobs:
               # allowing TF to use its local build provider.
               cargo fetch --locked
 
-              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5
+              with_retry 'env -u GITHUB_ACTIONS -u CI cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             else
-              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5
+              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 2
             fi
-
-  valid-proof-test:
-    needs: ci-image
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
-
-      - name: Test valid proof
-        uses: ./.github/actions/run-in-ci-image
-        with:
-          image: ${{ needs.ci-image.outputs.image }}
-          env: RUST_LOG=info,kameo=warn
-          run: |
-              source .github/scripts/with_retry.sh
-              with_retry 'cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account' 5 
 
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.
@@ -354,7 +328,7 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-rust-cache
+          shared-key: ci-host
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build artifacts

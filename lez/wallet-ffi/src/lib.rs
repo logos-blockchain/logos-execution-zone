@@ -98,6 +98,11 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
     }
 }
 
+/// Reads a nullable `FfiBytes32` pointer as an optional `AccountId`.
+pub(crate) unsafe fn read_optional_account_id(ptr: *const FfiBytes32) -> Option<lee::AccountId> {
+    (!ptr.is_null()).then(|| lee::AccountId::from(unsafe { *ptr }))
+}
+
 /// Helper to convert a C string to a Rust String.
 fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
     if ptr.is_null() {

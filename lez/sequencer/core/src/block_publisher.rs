@@ -444,13 +444,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let adopted = channel_update
                                         .adopted
                                         .iter()
-                                        .flat_map(|tx| adopted_blocks(tx, channel_id))
+                                        .flat_map(|tx| channel_blocks(tx, channel_id))
                                         .collect();
                                     let orphaned = channel_update
                                         .orphaned
                                         .iter()
-                                        .filter_map(channel_update_inscription)
-                                        .filter_map(block_from_inscription)
+                                        .flat_map(|tx| channel_blocks(tx, channel_id))
                                         .collect();
 
                                     let mut finalized_blocks = Vec::new();
@@ -759,9 +758,10 @@ fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
         .ok()
 }
 
-/// Every block an adopted tx carries, in op order. Non-block entries are
-/// dropped: they reach consumers as the checkpoint's tip, not as payloads.
-fn adopted_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
+/// Every block a channel tx carries, in op order.
+///
+/// A config op is on the config lineage, not this one, so it is skipped.
+pub(crate) fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
     let entry = |inscription: &InscriptionInfo| {
         if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
             None
@@ -772,7 +772,6 @@ fn adopted_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
     match tx {
         ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
         ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
-        // A config-only tx carries no payload to apply.
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
             .iter()
@@ -791,15 +790,6 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
             .iter()
             .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
             .collect(),
-    }
-}
-
-/// The inscription carried by an orphaned tx (plain or atomic-withdraw bundle).
-const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&InscriptionInfo> {
-    match orphan {
-        ChannelUpdateTx::Inscription(info) => Some(info),
-        ChannelUpdateTx::AtomicWithdraw(bundle) => Some(&bundle.inscription),
-        ChannelUpdateTx::Config(_) | ChannelUpdateTx::Custom(_) => None,
     }
 }
 

@@ -14,7 +14,6 @@ with_retry() {
     if (( attempt < max_attempts )); then
       echo "::warning:: Attempt $attempt failed, cleaning up and retrying..." >&2
       rm -rf target/debug/deps/*.o target/debug/incremental 2>/dev/null || true
-      cargo clean -p integration_tests 2>/dev/null || true
       sleep 5
     fi
 

@@ -170,11 +170,10 @@ async fn transfer_to_new_public_account(
     Ok(())
 }
 
-#[when(expr = "I attempt to transfer {int} from the first configured public account to the second")]
+#[when("I attempt to transfer twice the first configured public account balance to the second")]
 async fn attempt_insufficient_public_transfer(
     world: &mut CucumberWorld,
     step: &Step,
-    amount: u128,
 ) -> StepResult {
     log_step(step);
     let context = world.lez()?;
@@ -189,8 +188,20 @@ async fn attempt_insufficient_public_transfer(
         .ok_or(StepError::MissingSelectedAccount)?;
     let (sender_initial_balance, receiver_initial_balance, sender_initial_nonce) =
         snapshot_public_transfer(context.sequencer_client(), sender, receiver).await?;
+    let amount =
+        sender_initial_balance
+            .checked_mul(2)
+            .ok_or_else(|| StepError::AssertionFailed {
+                message: format!(
+                    "sender {sender:?} balance overflowed while building rejection case"
+                ),
+            })?;
 
-    let rejection = match context.public_transfer(sender, receiver, amount).await {
+    let rejection = match context
+        .wallet()
+        .public_transfer_with_failure_kind(sender, receiver, amount)
+        .await
+    {
         Ok(transfer_hash) => {
             return Err(StepError::AssertionFailed {
                 message: format!(
@@ -198,7 +209,16 @@ async fn attempt_insufficient_public_transfer(
                 ),
             });
         }
-        Err(error) => error.to_string(),
+        Err(wallet::ExecutionFailureKind::InsufficientFundsError) => {
+            "InsufficientFundsError".to_owned()
+        }
+        Err(error) => {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "expected InsufficientFundsError for over-balance transfer, got {error:?}"
+                ),
+            });
+        }
     };
 
     world.environment.transfers.rejected = Some(RejectedTransferAttempt {

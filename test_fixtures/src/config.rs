@@ -55,6 +55,10 @@ pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
 const DEFAULT_PUBLIC_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x11; 32], [0x22; 32]];
 const DEFAULT_PRIVATE_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x33; 32], [0x44; 32]];
 
+// Keep this identity separate from the sorted public-account fixture ordering. The private pool
+// is funded by this account at genesis and when private accounts are initialized.
+const PRIVATE_FUNDER_ACCOUNT_SEED: [u8; 32] = [0x11; 32];
+
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {
     pub key_chain: KeyChain,
@@ -194,6 +198,14 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
         .into_iter()
         .zip(INITIAL_PUBLIC_BALANCES_FOR_WALLET)
         .collect()
+}
+
+/// The public account that funds the private accounts' balances.
+#[must_use]
+pub fn private_funder_account_id() -> AccountId {
+    let private_key = PrivateKey::try_new(PRIVATE_FUNDER_ACCOUNT_SEED)
+        .expect("Fixed private funder account seed must be valid");
+    AccountId::from(&PublicKey::new_from_private_key(&private_key))
 }
 
 #[must_use]
@@ -440,6 +452,20 @@ pub const fn source_only_cross_zone() -> CrossZoneConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_funder_identity_matches_configured_index() {
+        let public_accounts = default_public_accounts_for_wallet();
+        let configured_funder = AccountId::from(&PublicKey::new_from_private_key(
+            &public_accounts[PRIVATE_FUNDER_INDEX].0,
+        ));
+
+        assert_eq!(
+            private_funder_account_id(),
+            configured_funder,
+            "PRIVATE_FUNDER_INDEX must select the explicitly configured private funder"
+        );
+    }
 
     /// `fund_private_accounts` drains the private balances out of the funder.
     #[test]

@@ -40,6 +40,7 @@ const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 fn fast_blocks() -> SequencerPartialConfig {
     SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(2),
+        priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     }
 }

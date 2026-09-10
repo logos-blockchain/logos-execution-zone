@@ -35,9 +35,12 @@ runs:
           env_args+=(--env "$pair")
         done <<< "$INPUT_ENV"
 
-        # Cargo's registry is the only part of CARGO_HOME worth sharing with the
-        # host: mounting all of it would shadow the tools baked into the image.
-        mkdir -p "$HOME/.cargo/registry"
+        # Share Cargo and Logos build state between disposable containers. The
+        # workspace target already persists through the $PWD bind mount.
+        mkdir -p \
+          "$HOME/.cargo/registry" \
+          "$HOME/.cargo/git" \
+          "$HOME/.cache/logos/blockchain"
 
         # Mounting the workspace on its own path is what makes this work. The
         # daemon resolves compose bind mounts against the host, and the test
@@ -52,7 +55,25 @@ runs:
           --volume /var/run/docker.sock:/var/run/docker.sock \
           --volume "$PWD:$PWD" \
           --volume "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+          --volume "$HOME/.cargo/git:/usr/local/cargo/git" \
+          --volume "$HOME/.cache/logos/blockchain:/root/.cache/logos/blockchain" \
           --workdir "$PWD" \
           "${env_args[@]}" \
           "$INPUT_IMAGE" \
           bash -e -o pipefail -c "$INPUT_RUN"
+
+    # The container runs as root, so everything it writes through a bind mount
+    # comes back root-owned and the unprivileged runner cannot tar it for the
+    # cache. Covers every mount above: rust-cache saves `.cargo/git` as well as
+    # `.cargo/registry`, so missing one still breaks the save. Runs on failure
+    # too, since a failed build leaves the same root-owned files behind.
+    - name: Restore workspace ownership
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo chown -R "$(id -u):$(id -g)" \
+          "$PWD" \
+          "$HOME/.cargo/registry" \
+          "$HOME/.cargo/git" \
+          "$HOME/.cache/logos/blockchain"

@@ -4,6 +4,7 @@ use common::transaction::LeeTransaction;
 use lee::{AccountId, PublicKey};
 use lee_core::account::Nonce;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use wallet::DEFAULT_MAX_FEE;
 
 use crate::{
     config::default_public_accounts_for_wallet,
@@ -105,27 +106,68 @@ pub(super) async fn assert_public_balance_delta(
     increase: bool,
     role: &str,
 ) -> Result<u128, StepError> {
-    let expected_balance = expected_balance_after(
-        initial_balance,
-        transfer_amount,
-        expected_amount,
-        increase,
-        role,
-    )?;
+    let expected_balance = if increase {
+        Some(expected_balance_after(
+            initial_balance,
+            transfer_amount,
+            expected_amount,
+            true,
+            role,
+        )?)
+    } else {
+        // Public transfers are charged dynamically. Validate the transfer
+        // amount here, then assert the exact fee bounds below.
+        expected_balance_after(
+            initial_balance,
+            transfer_amount,
+            expected_amount,
+            false,
+            role,
+        )?;
+        None
+    };
     let observed_balance = world
         .lez()?
         .sequencer_client()
         .get_account_balance(account)
         .await
         .map_err(StepError::query_failed)?;
-    if observed_balance != expected_balance {
+    if let Some(expected_balance) = expected_balance {
+        if observed_balance != expected_balance {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "{role} {account:?} has balance {observed_balance}, expected {expected_balance}"
+                ),
+            });
+        }
+    } else {
+        assert_sender_paid_fee(initial_balance, observed_balance, transfer_amount, role)?;
+    }
+    Ok(observed_balance)
+}
+
+pub(super) fn assert_sender_paid_fee(
+    before: u128,
+    after: u128,
+    amount_sent: u128,
+    role: &str,
+) -> Result<(), StepError> {
+    let fee = before
+        .checked_sub(amount_sent)
+        .and_then(|rest| rest.checked_sub(after))
+        .ok_or_else(|| StepError::AssertionFailed {
+            message: format!(
+                "{role} balance {after} did not decrease by transfer amount {amount_sent} plus a fee from {before}"
+            ),
+        })?;
+    if fee == 0 || fee > DEFAULT_MAX_FEE {
         return Err(StepError::AssertionFailed {
             message: format!(
-                "{role} {account:?} has balance {observed_balance}, expected {expected_balance}"
+                "{role} paid fee {fee}, expected a positive fee no greater than {DEFAULT_MAX_FEE}"
             ),
         });
     }
-    Ok(observed_balance)
+    Ok(())
 }
 
 pub(super) async fn assert_private_balance_delta(
@@ -225,7 +267,7 @@ pub(super) fn transfer_details(
 pub(super) fn rejected_transfer_details(
     world: &CucumberWorld,
     sender: bool,
-) -> Result<(AccountId, u128, u128), StepError> {
+) -> Result<(AccountId, u128, u128, Nonce), StepError> {
     let rejected =
         world
             .environment
@@ -246,7 +288,12 @@ pub(super) fn rejected_transfer_details(
         rejected.receiver_balance_before
     };
     let amount = rejected.amount;
-    Ok((account, initial_balance, amount))
+    Ok((
+        account,
+        initial_balance,
+        amount,
+        rejected.sender_nonce_before,
+    ))
 }
 
 pub async fn get_transfer_transaction(

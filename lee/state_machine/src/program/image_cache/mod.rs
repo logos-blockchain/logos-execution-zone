@@ -167,5 +167,6 @@ pub fn execute(env: ExecutorEnv<'_>, elf: &[u8]) -> Result<SessionOutcome> {
             .map(|journal| journal.bytes)
             .unwrap_or_default(),
         cycles: session.user_cycles,
+        exit_code: session.exit_code,
     })
 }

@@ -1,13 +1,10 @@
 use anyhow::{Context as _, Result, bail};
 use common::HashType;
-use lee::{AccountId, PublicKey, Signature, program::Program};
+use lee::{AccountId, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
-use crate::{
-    AccountIdentity, DEFAULT_GAS_LIMIT, DEFAULT_MAX_FEE, ExecutionFailureKind, WalletCore,
-    account_manager::AccountManager,
-};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 /// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` instructions.
 ///
@@ -19,84 +16,19 @@ pub struct ProgramLoader<'wallet>(pub &'wallet WalletCore);
 impl ProgramLoader<'_> {
     /// Sends a `program_loader` instruction over `accounts`, paid by `payer` if given.
     ///
-    /// `accounts`' own accounts are always freshly claimed here — unlike, say, a transfer (whose
-    /// account list always includes an existing, funded sender), a deploy's account list holds
-    /// nothing but the brand-new accounts it is claiming, so there is never a funded account for
-    /// the wallet's ordinary self-pay selection to find. `payer` names a separately-funded account
-    /// to cover the fee instead: it co-signs and gets its own nonce entry, but — unlike
-    /// `accounts` — is never added to the message's `account_ids`, since `program_loader`
-    /// requires an exact account count/shape per instruction and an extra trailing account
-    /// would break that. `payer: None` falls back to the wallet's ordinary self-pay selection via
-    /// [`WalletCore::send_pub_tx`], unchanged from before fees existed — every existing caller
-    /// (the FFI bindings) still gets that behavior.
+    /// A deploy's account list holds nothing but the brand-new accounts it is claiming, so there
+    /// is never a funded account for self-pay to find: `payer` names a separately-funded account
+    /// that co-signs without joining the instruction's account list (see
+    /// [`WalletCore::send_pub_tx_with_pre_check`]).
     async fn send(
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: lee_core::program::InstructionData,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let Some(payer) = payer else {
-            return self
-                .0
-                .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
-                .await;
-        };
-
-        if accounts.iter().any(AccountIdentity::is_private) {
-            return Err(ExecutionFailureKind::TransactionBuildError(
-                lee::error::LeeError::InvalidInput(
-                    "Private accounts are not allowed in public transactions".to_owned(),
-                ),
-            ));
-        }
-
-        let acc_manager = AccountManager::new(self.0, accounts).await?;
-        let account_ids = acc_manager.public_account_ids();
-        let mut nonces = acc_manager.public_account_nonces();
-
-        let payer_account = self
-            .0
-            .get_account_public(payer)
+        self.0
+            .send_pub_tx_paid_by(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID, payer)
             .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        let payer_key = self
-            .0
-            .get_account_public_signing_key(payer)
-            .ok_or_else(|| {
-                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                    "Fee payer's signing key is not held by this wallet".to_owned(),
-                ))
-            })?;
-        // Appended last, after every regular signer `sign_message` produces — nonces and
-        // signatures must line up positionally (see `AccountManager::public_account_nonces`).
-        nonces.push(payer_account.nonce);
-
-        let message = lee::public_transaction::Message::new_preserialized(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            account_ids,
-            nonces,
-            instruction_data,
-            Some(lee::FeeDeclaration::new(
-                payer,
-                DEFAULT_GAS_LIMIT,
-                0,
-                DEFAULT_MAX_FEE,
-            )),
-        );
-
-        let message_hash = message.hash();
-        let mut signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
-        signatures_public_keys.push((
-            Signature::new(payer_key, &message_hash),
-            PublicKey::new_from_private_key(payer_key),
-        ));
-        let witness_set =
-            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
-
-        let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
-        self.0.submit_public_transaction(tx).await
     }
 
     /// Writes one bytecode segment at `target` (must already be a default/unclaimed account,
