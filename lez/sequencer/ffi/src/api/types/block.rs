@@ -1,8 +1,4 @@
-use common::{
-    HashType,
-    block::{BedrockStatus, Block, BlockHeader},
-};
-use lee::{PublicKey, Signature};
+use common::block::{BedrockStatus, Block, BlockHeader};
 
 use crate::api::types::{
     FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
@@ -120,22 +116,7 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 /// - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
-    // We don't really need all the casts, but just in case
-    // All except `ffi_tx_ffi_vec` is Copy types, so no need for Drop
-    let _ = BlockHeader {
-        block_id: val.header.block_id,
-        prev_block_hash: HashType(val.header.prev_block_hash.data),
-        hash: HashType(val.header.hash.data),
-        timestamp: val.header.timestamp,
-        producer: PublicKey::try_new(val.header.producer.data).unwrap(),
-        signature: Signature {
-            value: val.header.signature.data,
-        },
-    };
     let ffi_tx_ffi_vec = val.body;
-
-    #[expect(clippy::let_underscore_must_use, reason = "No use for this Copy type")]
-    let _: BedrockStatus = val.bedrock_status.into();
 
     free_transaction_vec_value(ffi_tx_ffi_vec);
 }

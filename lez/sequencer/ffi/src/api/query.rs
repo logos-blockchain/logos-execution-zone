@@ -2,7 +2,7 @@ use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
     BoundedRangeInclusive, GetAccount, GetBlock, GetBlockRange, GetLastBlockId, GetTransaction,
-    Transaction, TransactionOrigin,
+    MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
 };
 
 use crate::{
@@ -38,6 +38,14 @@ impl LastBlockIdResult {
             block_id: 0,
             is_some: false,
             error,
+        }
+    }
+
+    const fn none() -> Self {
+        Self {
+            block_id: 0,
+            is_some: false,
+            error: OperationStatus::Ok,
         }
     }
 
@@ -85,7 +93,13 @@ pub unsafe extern "C" fn query_last_block(
             log::error!("Failed to query last block id: {e:#}");
             LastBlockIdResult::error(OperationStatus::ClientError)
         },
-        LastBlockIdResult::some,
+        |val| {
+            if val == 0 {
+                LastBlockIdResult::none()
+            } else {
+                LastBlockIdResult::some(val)
+            }
+        },
     )
 }
 
@@ -98,6 +112,10 @@ pub unsafe extern "C" fn query_last_block(
 /// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
 /// know as not known healthy. Lets a client distinguish "still catching up"
 /// from "something went wrong".
+///
+/// Not supporded yet.
+///
+/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -216,7 +234,7 @@ pub unsafe extern "C" fn query_block_by_hash(
 
     log::error!("Not supported yet");
 
-    PointerResult::from_value(FfiBlockOpt::from_none())
+    PointerResult::from_error(OperationStatus::NotSupported)
 }
 
 /// Query the account by id from sequencer.
@@ -376,10 +394,6 @@ pub unsafe extern "C" fn query_transaction(
 
 /// Query the blocks by block range from sequencer.
 ///
-/// Not supporded yet.
-///
-/// `ToDo`: Add support. Needs database modifications.
-///
 /// # Arguments
 ///
 /// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
@@ -397,7 +411,7 @@ pub unsafe extern "C" fn query_transaction(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_block_vec(
     sequencer: *const SequencerServiceFFI,
-    before: u64,
+    before: FfiOption<u64>,
     limit: u64,
 ) -> PointerResult<FfiVec<FfiBlock>, OperationStatus> {
     if sequencer.is_null() {
@@ -407,12 +421,33 @@ pub unsafe extern "C" fn query_block_vec(
 
     let sequencer = unsafe { &*sequencer };
 
+    let before_opt = before.is_some.then_some(unsafe { before.value.read() });
+
+    let before_limit = if let Some(before_val) = before_opt {
+        before_val
+    } else {
+        let last_block_res = unsafe { query_last_block(sequencer) };
+        if last_block_res.error.is_ok() && last_block_res.is_some {
+            last_block_res.block_id
+        } else {
+            log::error!("Failed to get last block in block_vec query. Aborting");
+            return PointerResult::from_error(OperationStatus::ClientError);
+        }
+    };
+
+    if limit > u64::try_from(MAX_BLOCK_RANGE_LEN).expect("1024 must fit into u64") {
+        log::error!("Limit is too big in block_vec query. Aborting");
+        return PointerResult::from_error(OperationStatus::ClientError);
+    }
+
     let block_range_resp = sequencer.runtime().block_on(
         sequencer
             .executor_ref()
             .ask(GetBlockRange {
-                range: BoundedRangeInclusive::try_from(before..=(before.saturating_add(limit)))
-                    .unwrap(),
+                range: BoundedRangeInclusive::try_from(
+                    before_limit.saturating_sub(limit)..=before_limit,
+                )
+                .expect("Previous checks ensure that range fits the limit"),
             })
             .send(),
     );
@@ -469,7 +504,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
 
     log::error!("Not supported yet");
 
-    PointerResult::from_value(FfiVec::from(vec![]))
+    PointerResult::from_error(OperationStatus::NotSupported)
 }
 
 // ToDo: Current sequenсer does not know about events yet. Also needs database updates.

@@ -11,6 +11,7 @@ typedef enum OperationStatus {
   InitializationError = 2,
   ClientError = 3,
   CastError = 4,
+  NotSupported = 5,
 } OperationStatus;
 
 typedef enum FfiTransactionKind {
@@ -400,6 +401,11 @@ typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiBlock_____OperationStatus;
 
+typedef struct FfiOption_u64 {
+  uint64_t *value;
+  bool is_some;
+} FfiOption_u64;
+
 /**
  * Simple wrapper around a pointer to a value or an error.
  *
@@ -509,6 +515,10 @@ struct LastBlockIdResult query_last_block(const struct SequencerServiceFFI *sequ
  * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
  * know as not known healthy. Lets a client distinguish "still catching up"
  * from "something went wrong".
+ *
+ * Not supporded yet.
+ *
+ * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -634,10 +644,6 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
 /**
  * Query the blocks by block range from sequencer.
  *
- * Not supporded yet.
- *
- * `ToDo`: Add support. Needs database modifications.
- *
  * # Arguments
  *
  * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
@@ -654,7 +660,7 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct SequencerServiceFFI *sequencer,
-                                                                         uint64_t before,
+                                                                         struct FfiOption_u64 before,
                                                                          uint64_t limit);
 
 /**

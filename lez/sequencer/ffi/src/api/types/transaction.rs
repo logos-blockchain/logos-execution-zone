@@ -56,9 +56,11 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
     }
 }
 
-impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
-    fn from(value: Box<FfiPublicTransactionBody>) -> Self {
-        Self {
+impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
+    type Error = OperationStatus;
+
+    fn try_from(value: Box<FfiPublicTransactionBody>) -> Result<Self, Self::Error> {
+        Ok(Self {
             message: lee::public_transaction::Message {
                 program_account_id: value.message.program_account_id.into(),
                 account_ids: {
@@ -77,19 +79,24 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
             },
             witness_set: lee::public_transaction::WitnessSet::from_raw_parts({
                 let std_vec: Vec<_> = value.witness_set.into();
-                std_vec
-                    .into_iter()
-                    .map(|ffi_val| {
-                        (
-                            Signature {
-                                value: ffi_val.signature.data,
-                            },
-                            PublicKey::try_new(ffi_val.public_key.data).unwrap(),
-                        )
-                    })
-                    .collect()
+
+                let mut cast_vec = vec![];
+
+                for ffi_val in std_vec {
+                    cast_vec.push((
+                        Signature {
+                            value: ffi_val.signature.data,
+                        },
+                        PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
+                            log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
+                            OperationStatus::CastError
+                        })?,
+                    ));
+                }
+
+                cast_vec
             }),
-        }
+        })
     }
 }
 
@@ -275,10 +282,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 },
                 block_validity_window: cast_ffi_validity_window(
                     value.message.block_validity_window,
-                ),
+                )?,
                 timestamp_validity_window: cast_ffi_validity_window(
                     value.message.timestamp_validity_window,
-                ),
+                )?,
                 program_image_claims: {
                     let std_vec: Vec<_> = value.message.program_image_claims.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -287,17 +294,21 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
                 {
                     let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature {
-                                    value: ffi_val.signature.data,
-                                },
-                                PublicKey::try_new(ffi_val.public_key.data).unwrap(),
-                            )
-                        })
-                        .collect()
+                    let mut cast_vec = vec![];
+
+                    for ffi_val in std_vec {
+                        cast_vec.push((
+                            Signature {
+                                value: ffi_val.signature.data,
+                            },
+                            PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
+                                log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
+                                OperationStatus::CastError
+                            })?,
+                        ));
+                    }
+
+                    cast_vec
                 },
                 Proof::from_inner(value.proof.into()),
             ),
@@ -475,7 +486,7 @@ impl TryFrom<FfiTransaction> for LeeTransaction {
         match value.kind {
             FfiTransactionKind::Public => {
                 let body = unsafe { Box::from_raw(value.body.public_body) };
-                let std_body: PublicTransaction = body.into();
+                let std_body: PublicTransaction = body.try_into()?;
                 Ok(Self::Public(std_body))
             }
             FfiTransactionKind::Private => {
@@ -512,8 +523,16 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
     match val.kind {
         FfiTransactionKind::Public => {
             let body = unsafe { Box::from_raw(val.body.public_body) };
-            let std_body: PublicTransaction = body.into();
-            drop(std_body);
+            let std_body_res: Result<PublicTransaction, OperationStatus> =
+                body.try_into().inspect_err(|_| {
+                    log::error!(
+                        "Failed to cast `Box<FfiPublicTransactionBody>` into `PublicTransaction`"
+                    );
+                });
+
+            if let Ok(std_body) = std_body_res {
+                drop(std_body);
+            }
         }
         FfiTransactionKind::Private => {
             let body = unsafe { Box::from_raw(val.body.private_body) };
@@ -614,7 +633,7 @@ fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
     ]
 }
 
-fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow<u64> {
+fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>, OperationStatus> {
     let left = if ffi_window[0] == 0 {
         None
     } else {
@@ -627,7 +646,10 @@ fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow<u64> {
         Some(ffi_window[1])
     };
 
-    ValidityWindow::try_from((left, right)).unwrap()
+    ValidityWindow::try_from((left, right)).map_err(|e| {
+        log::error!("Failed to cast ffi validity window: {e}");
+        OperationStatus::CastError
+    })
 }
 
 #[cfg(test)]
@@ -658,7 +680,7 @@ mod tests {
         ] {
             let original = tx(fee);
             let ffi: FfiPublicTransactionBody = original.clone().into();
-            let back: PublicTransaction = Box::new(ffi).into();
+            let back: PublicTransaction = Box::new(ffi).try_into().unwrap();
             assert_eq!(back.message.fee, original.message.fee);
         }
     }

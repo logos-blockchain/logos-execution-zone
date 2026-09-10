@@ -1,4 +1,4 @@
-//! End-to-end demo of the sequencer self-join flow.
+//! Sequecner FFI tests.
 
 #![expect(
     clippy::tests_outside_test_module,
@@ -20,13 +20,17 @@ mod sequencer_ffi_helpers;
 
 #[test]
 fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
-    let (ctx, node, ownership_id, sequencer_ffi) = sequencer_ffi_helpers::joining_setup()?;
+    let (ctx, node, ownership_id, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
+
+    let sequencer_ffi =
+    // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
+    unsafe {&*sequencer_ffi_res.value} ;
 
     let joining_sequencer_key =
         Ed25519Key::from_bytes(&sequencer_ffi_helpers::JOINER_SIGNING_KEY).public_key();
 
     let joined_at = ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())?;
-    sequencer_ffi_helpers::wait_for_sequencer_ffi_block(&sequencer_ffi, joined_at)?;
+    sequencer_ffi_helpers::wait_for_sequencer_ffi_block(sequencer_ffi, joined_at)?;
     info!("Joining sequencer synced to block {joined_at}");
 
     // A tip past `joined_at` under the joining key is a block this node built.
@@ -65,7 +69,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             let res =
             // SAFETY: sequencer_ffi created by FFI, it is valid.
             unsafe {
-                sequencer_ffi_helpers::query_last_block(std::ptr::from_ref(&sequencer_ffi))
+                sequencer_ffi_helpers::query_last_block(std::ptr::from_ref(sequencer_ffi))
             };
             if res.error.is_ok() && res.is_some {
                 Ok(res.block_id)
@@ -81,39 +85,42 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
                 .with_context(|| format!("Leader is missing block {id}"))
         })?;
 
-        let joiner_block = {
+        let joiner_block_hash = {
             let joiner_block_res =
             // SAFETY: sequencer_ffi created by FFI, it is valid.
             unsafe {
-                sequencer_ffi_helpers::query_block(std::ptr::from_ref(&sequencer_ffi), id)
+                sequencer_ffi_helpers::query_block(std::ptr::from_ref(sequencer_ffi), id)
             };
             if joiner_block_res.error.is_ok() {
                 let joiner_block_opt =
                 // SAFETY: FFI ensures validity of value.
                 unsafe { joiner_block_res.value.read() };
-                if joiner_block_opt.is_some {
+
+                let ffi_hash = if joiner_block_opt.is_some {
                     Ok(
                         // SAFETY: FFI ensures validity of value.
-                        unsafe { joiner_block_opt.value.read() },
+                        unsafe { joiner_block_opt.value.read().header.hash },
                     )
                 } else {
                     Err(anyhow::anyhow!("Block is missing in FFI"))
-                }
+                };
+
+                // SAFETY: FFI ensures validity of value.
+                unsafe {
+                    sequencer_ffi_helpers::free_ffi_block_opt(joiner_block_res.value);
+                };
+
+                ffi_hash
             } else {
                 Err(anyhow::anyhow!("Failed to get last block from FFI"))
             }
         }?;
         anyhow::ensure!(
-            leader_block.header.hash.0 == joiner_block.header.hash.data,
+            leader_block.header.hash.0 == joiner_block_hash.data,
             "Chain divergence at block {id}: leader {:?} vs joiner {:?}",
             leader_block.header.hash.0,
-            joiner_block.header.hash.data
+            joiner_block_hash.data
         );
-
-        // SAFETY: FFI ensures validity of value.
-        unsafe {
-            sequencer_ffi_helpers::free_ffi_block(joiner_block);
-        };
     }
     info!("Leader and joining sequencer agree on all {common} shared blocks");
 
@@ -127,7 +134,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
         sequencer_ffi_helpers::query_account(
-            std::ptr::from_ref(&sequencer_ffi),
+            std::ptr::from_ref(sequencer_ffi),
             ownership_id.into(),
         )
     };
@@ -150,6 +157,11 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
     assert_eq!(ownership_account, joined_ownership_account_cast);
 
     info!("Leader and joining sequencer agree on {ownership_id} account");
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::stop_sequencer(sequencer_ffi_res.value);
+    }
 
     Ok(())
 }

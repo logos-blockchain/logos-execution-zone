@@ -85,7 +85,7 @@ impl Drop for SequencerServiceFFI {
             drop(scheduler_ref);
         }
 
-        if self.gossip.is_null() {
+        if !self.gossip.is_null() {
             let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<GossipNetwork>>()) };
             // stop the gossip before executor actor.
             drop(gossip);

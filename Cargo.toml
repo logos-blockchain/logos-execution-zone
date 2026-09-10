@@ -17,7 +17,6 @@ members = [
   "lez",
   "lez/system_accounts",
   "lez/chain_state",
-
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
   "lez/sequencer/service",

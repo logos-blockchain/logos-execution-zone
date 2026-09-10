@@ -169,6 +169,11 @@ unsafe fn setup_sequencer(
     runtime: *const Runtime,
     config_path: *const c_char,
 ) -> Result<SequencerServiceFFI, OperationStatus> {
+    if config_path.is_null() {
+        log::error!("Attempted to give a null config_path pointer. This is a bug. Aborting.");
+        return Err(OperationStatus::NullPointer);
+    }
+
     let user_config_path = PathBuf::from(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
             .to_str()

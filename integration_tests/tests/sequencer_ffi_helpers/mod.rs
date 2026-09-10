@@ -59,6 +59,9 @@ unsafe extern "C" {
     ) -> PointerResult<FfiAccount, OperationStatus>;
 
     pub unsafe fn free_ffi_block(val: FfiBlock);
+    pub unsafe fn free_cstring(block: *mut c_char);
+    pub unsafe fn free_ffi_block_opt(val: *mut FfiBlockOpt);
+    pub unsafe fn stop_sequencer(sequencer: *mut SequencerServiceFFI);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
@@ -105,7 +108,7 @@ pub fn joining_setup() -> Result<(
     BlockingTestContext,
     NodeHttpClient,
     AccountId,
-    SequencerServiceFFI,
+    PointerResult<SequencerServiceFFI, OperationStatus>,
 )> {
     let joining_sequencer_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joining_stake_key =
@@ -274,20 +277,21 @@ pub fn joining_setup() -> Result<(
 
     let raw_config_path = config_c_string.into_raw();
 
-    let res =
+    let sequencer_ffi_res =
     // SAFETY: null runtime → the FFI creates and owns its own tokio runtime,
     // so there is no external runtime whose address we must keep stable.
     unsafe { start_sequencer(std::ptr::null(), raw_config_path) };
 
-    if res.error.is_error() {
-        anyhow::bail!("Sequencer FFI error {:?}", res.error);
+    // SAFETY: cstring was constructed from valid string.
+    unsafe {
+        free_cstring(raw_config_path);
     }
 
-    let sequencer_ffi =
-    // SAFETY: FFI ensures validity of value.
-    unsafe { std::ptr::read(res.value) };
+    if sequencer_ffi_res.error.is_error() {
+        anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);
+    }
 
-    Ok((ctx, node, ownership_id, sequencer_ffi))
+    Ok((ctx, node, ownership_id, sequencer_ffi_res))
 }
 
 /// Polls `check` once a second, up to `max_attempts` times, replacing fixed

@@ -7,6 +7,7 @@ pub enum OperationStatus {
     InitializationError = 0x2,
     ClientError = 0x3,
     CastError = 0x4,
+    NotSupported = 0x5,
 }
 
 impl OperationStatus {
