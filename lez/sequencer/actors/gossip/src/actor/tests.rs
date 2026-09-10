@@ -174,7 +174,7 @@ async fn new_binds_and_reports_listen_addr() {
 }
 
 #[tokio::test]
-async fn kill_stops_the_swarm() {
+async fn kill_stops_the_swarm_and_frees_the_socket() {
     let actor = GossipActor::new(
         test_config(),
         [1; 32],
@@ -184,11 +184,30 @@ async fn kill_stops_the_swarm() {
     )
     .await
     .unwrap();
+    let bound_addr = actor.listen_addrs()[0].clone();
     let actor_ref = spawn(actor);
     actor_ref.kill();
-    tokio::time::timeout(Duration::from_secs(5), actor_ref.wait_for_shutdown())
+    // `wait_for_shutdown_result` (unlike `wait_for_shutdown`) resolves only
+    // after `on_stop` has run, i.e. after the swarm released its sockets.
+    tokio::time::timeout(Duration::from_secs(5), actor_ref.wait_for_shutdown_result())
         .await
-        .expect("actor should stop when killed");
+        .expect("actor should stop when killed")
+        .expect("kill is a clean stop");
+
+    // Rebinding the exact freed address proves `on_stop` released it.
+    let rebound = GossipActor::new(
+        GossipConfig {
+            listen_addr: bound_addr.clone(),
+            bootstrap_peers: vec![],
+        },
+        [1; 32],
+        Ed25519Key::from_bytes(&[10; 32]),
+        TEST_MAX_BLOCK_SIZE,
+        unscreened_mempool_submit(test_mempool_handle()),
+    )
+    .await
+    .expect("freed listen address should be rebindable");
+    assert_eq!(rebound.listen_addrs()[0], bound_addr);
 }
 
 #[tokio::test]
