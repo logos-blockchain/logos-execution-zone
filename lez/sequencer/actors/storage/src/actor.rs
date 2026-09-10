@@ -27,16 +27,16 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
-        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
+        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -209,6 +209,12 @@ impl StorageActor {
         for (block_id, block) in &to_write {
             self.db()
                 .put_batch(batch, &encoding::BigEndian::new(block_id), block)?;
+
+            self.db().put_batch(
+                batch,
+                &block.block.header.hash,
+                &entities::BlockHashToBlockIdMappingDestination { id: *block_id },
+            )?;
         }
 
         Ok((to_write, differs_from_stored))
@@ -1202,5 +1208,20 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
         self.db()
             .put(&peer_zone, &entities::CrossZonePeerTip { tip })
             .map_err(Into::into)
+    }
+}
+
+impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        GetBlockHashToBlockIdMapItem { block_hash }: GetBlockHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::BlockHashToBlockIdMappingDestination>(&block_hash)?
+            .map(|dest| dest.id))
     }
 }

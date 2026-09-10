@@ -21,16 +21,16 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
-        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
+        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -245,6 +245,12 @@ mockall::mock! {
             msg: DumpDb,
             ctx: &mut Context<Self, Result<DbDump>>
         ) -> Result<DbDump>;
+
+        pub fn handle_get_block_hash_to_block_id_map_item(
+            &mut self,
+            msg: GetBlockHashToBlockIdMapItem,
+            ctx: &mut Context<Self, Result<Option<u64>>>
+        ) -> Result<Option<u64>>;
     }
 }
 
@@ -708,5 +714,17 @@ impl Message<SetCrossZonePeerTip> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_set_cross_zone_peer_tip(msg, ctx)
+    }
+}
+
+impl Message<GetBlockHashToBlockIdMapItem> for MockStorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetBlockHashToBlockIdMapItem,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_block_hash_to_block_id_map_item(msg, ctx)
     }
 }

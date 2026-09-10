@@ -142,3 +142,7 @@ pub struct RequeueCrossZoneDeadLetter {
 pub struct RequeueCrossZoneDeadLetterReply {
     pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,
 }
+
+pub struct GetBlockHashToBlockIdMapItem {
+    pub block_hash: HashType,
+}

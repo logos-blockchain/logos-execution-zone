@@ -1,8 +1,8 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetBlock, GetBlockRange, GetLastBlockId, GetTransaction,
-    MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
+    BoundedRangeInclusive, GetAccount, GetBlock, GetBlockHashToBlockIdMapItem, GetBlockRange,
+    GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
 };
 
 use crate::{
@@ -206,10 +206,6 @@ pub unsafe extern "C" fn sequencer_ffi_query_block(
 }
 
 /// Query the block by hash from sequencer.
-///  
-/// Not supporded yet.
-///
-/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -227,16 +223,40 @@ pub unsafe extern "C" fn sequencer_ffi_query_block(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
     sequencer: *const SequencerServiceFFI,
-    _hash: FfiHashType,
+    hash: FfiHashType,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
     if sequencer.is_null() {
         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
-    log::error!("Not supported yet");
+    let sequencer = unsafe { &*sequencer };
 
-    PointerResult::from_error(OperationStatus::NotSupported)
+    let map_resp = sequencer
+        .runtime()
+        .block_on(
+            sequencer
+                .executor_ref()
+                .ask(GetBlockHashToBlockIdMapItem {
+                    block_hash: hash.into(),
+                })
+                .send(),
+        )
+        .inspect_err(|e| {
+            log::error!("Failed to query block by id: {e:#}");
+        });
+
+    let block_id = if let Ok(map_opt) = map_resp {
+        if let Some(block_id) = map_opt {
+            block_id
+        } else {
+            return PointerResult::from_value(FfiBlockOpt::from_none());
+        }
+    } else {
+        return PointerResult::from_error(OperationStatus::ClientError);
+    };
+
+    unsafe { sequencer_ffi_query_block(sequencer, block_id) }
 }
 
 /// Query the account by id from sequencer.

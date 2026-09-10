@@ -33,10 +33,10 @@ use crate::{
     error::Error,
     protocol::{
         FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock,
-        GetBlockRange, GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetBlockHashToBlockIdMapItem, GetBlockRange, GetChannelId, GetChannelIdReply,
+        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -534,5 +534,22 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .await
             .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
         Ok(RequeueCrossZoneDeadLetterReply { outcome })
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetBlockHashToBlockIdMapItem> for ExecutorActor<S, BP>
+{
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetBlockHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask::<sequencer_storage_actor::protocol::GetBlockHashToBlockIdMapItem>(msg.into())
+            .await
+            .map_err(Into::into)
     }
 }

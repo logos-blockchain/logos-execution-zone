@@ -17,13 +17,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetBlock, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
-        GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetTransactionByHash, GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RaisePublishedHighWater, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        WithdrawalReconciliationKey,
     },
 };
 
@@ -895,6 +896,15 @@ async fn an_unseeded_store_reports_no_chain() {
             .expect("Failed to read block 1")
             .is_none()
     );
+    assert!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: [0; 32].into()
+            })
+            .await
+            .expect("Failed to get block id by map")
+            .is_none()
+    );
 }
 
 /// The property that lets a genesis go in as an ordinary block write.
@@ -918,9 +928,19 @@ async fn the_first_block_written_starts_the_chain() {
             .expect("Failed to read the last block id"),
         Some(1)
     );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(1)
+    );
 
     // A later block extends the chain rather than restarting it.
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let second_hash = second.header.hash;
     storage_ref
         .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new())))
         .await
@@ -938,6 +958,15 @@ async fn the_first_block_written_starts_the_chain() {
             .ask(GetLastBlockId)
             .await
             .expect("Failed to read the last block id"),
+        Some(2)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: second_hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
         Some(2)
     );
 }

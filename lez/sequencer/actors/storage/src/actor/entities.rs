@@ -40,6 +40,8 @@ pub enum ColumnFamily {
     Meta,
     /// Small records deleted as the work they track settles.
     Pending,
+    /// Many small records, maps block hases to block ids.
+    BlockHashToBlockIdMap,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -47,7 +49,7 @@ impl db::ColumnFamilies for ColumnFamily {
         let mut options = rocksdb::Options::default();
 
         match *self {
-            Self::Block => {
+            Self::Block | Self::BlockHashToBlockIdMap => {
                 // Written in bursts of whole blocks, so more memtables to fill
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
@@ -356,4 +358,17 @@ impl db::Storable<ColumnFamily> for CrossZonePeerTip {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
     const TYPE_NAME: &'static str = db::type_name!(CrossZonePeerTip);
+}
+
+/// The map entry between block hases and block ids
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BlockHashToBlockIdMappingDestination {
+    pub id: u64,
+}
+
+impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
+    type Key = HashType;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockHashToBlockIdMap;
+    const TYPE_NAME: &'static str = db::type_name!(BlockHashToBlockIdMappingDestination);
 }

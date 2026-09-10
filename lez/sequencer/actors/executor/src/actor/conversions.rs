@@ -24,3 +24,13 @@ impl From<sequencer_core::fees::FeeStateQuote> for protocol::FeeStateQuote {
         }
     }
 }
+
+impl From<protocol::GetBlockHashToBlockIdMapItem>
+    for sequencer_storage_actor::protocol::GetBlockHashToBlockIdMapItem
+{
+    fn from(value: protocol::GetBlockHashToBlockIdMapItem) -> Self {
+        Self {
+            block_hash: value.block_hash,
+        }
+    }
+}

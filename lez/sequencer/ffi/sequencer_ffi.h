@@ -559,10 +559,6 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
 
 /**
  * Query the block by hash from sequencer.
- *  
- * Not supporded yet.
- *
- * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -579,7 +575,7 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
-                                                                                    FfiHashType _hash);
+                                                                                    FfiHashType hash);
 
 /**
  * Query the account by id from sequencer.
