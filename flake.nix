@@ -63,36 +63,18 @@
           cargoLock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
           lbc_dir = logos-blockchain-circuits.packages.${system}.default;
 
-          # Parse Cargo.lock at eval time to find the locked risc0-circuit-recursion
-          # version and its crates.io checksum — no hardcoding required.
+          # Parse Cargo.lock at eval time to find the locked risc0-circuit-recursion version.
           risc0CircuitRecursion = builtins.head (
             builtins.filter (p: p.name == "risc0-circuit-recursion") cargoLock.package
           );
 
-          # Download the crate tarball from crates.io; the checksum from Cargo.lock
-          # is the sha256 of the .crate file, so this is a verified fixed-output fetch.
-          risc0CircuitRecursionCrate = pkgs.fetchurl {
-            url = "https://static.crates.io/crates/risc0-circuit-recursion/${risc0CircuitRecursion.version}/download";
-            sha256 = risc0CircuitRecursion.checksum;
-            name = "risc0-circuit-recursion-${risc0CircuitRecursion.version}.crate";
-          };
+          # Recorded from the crate's build.rs; also the zip's sha256 and S3 filename.
+          zkrHashes = builtins.fromJSON (builtins.readFile ./risc0-zkr-hashes.json);
 
-          # Extract the zkr artifact hash from build.rs inside the crate (IFD).
-          # This hash is both the S3 filename and the sha256 of the zip content.
           recursionZkrHash =
-            let
-              hashFile = pkgs.runCommand "extract-risc0-recursion-zkr-hash"
-                { nativeBuildInputs = [ pkgs.gnutar ]; }
-                ''
-                  tmp=$(mktemp -d)
-                  tar xf ${risc0CircuitRecursionCrate} -C "$tmp"
-                  hash=$(grep -o '"[0-9a-f]\{64\}"' \
-                    "$tmp/risc0-circuit-recursion-${risc0CircuitRecursion.version}/build.rs" \
-                    | head -1 | tr -d '"')
-                  printf '%s' "$hash" > $out
-                '';
-            in
-            builtins.replaceStrings [ "\n" " " ] [ "" "" ] (builtins.readFile hashFile);
+            zkrHashes.${risc0CircuitRecursion.version} or (throw
+              "no zkr hash recorded for risc0-circuit-recursion ${risc0CircuitRecursion.version}; add it to risc0-zkr-hashes.json"
+            );
 
           # Pre-fetch the zkr zip so the sandboxed Rust build can't be blocked.
           recursionZkr = pkgs.fetchurl {
