@@ -67,7 +67,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
         let mut program_map = HashMap::new();
 
         let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = AccountId::builtin_default_address(orig_program.id());
+        let self_account_id = AccountId::from_builtin_program(orig_program.id());
 
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.deps_size {
@@ -76,7 +76,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
                 .try_into()?;
 
             program_map.insert(
-                AccountId::builtin_default_address(program_dep.id()),
+                AccountId::from_builtin_program(program_dep.id()),
                 program_dep,
             );
         }
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     match block_on(wallet.send_pub_tx_paid_by(
         accounts,
         instruction_data.to_vec(),
-        AccountId::builtin_default_address(ProgramId::from(program_id)),
+        AccountId::from_builtin_program(ProgramId::from(program_id)),
         payer,
     )) {
         Ok(tx_hash) => {

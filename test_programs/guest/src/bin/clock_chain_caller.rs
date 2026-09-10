@@ -34,7 +34,7 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_account_id: AccountId::builtin_default_address(clock_program_id),
+        program_account_id: AccountId::from_builtin_program(clock_program_id),
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],

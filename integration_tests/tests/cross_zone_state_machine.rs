@@ -38,15 +38,9 @@ const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 /// The peer source the mint tests authorize.
 const MINT_SRC_ZONE: [u8; 32] = [2; 32];
-const MINT_SRC_ACCOUNT_ID: AccountId = AccountId::new([
-    9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0,
-]);
-const DECOY_ACCOUNT_ID_A: AccountId = AccountId::new([
-    3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0,
-]);
-const DECOY_ACCOUNT_ID_B: AccountId = AccountId::new([
-    4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0,
-]);
+const MINT_SRC_ACCOUNT_ID: AccountId = AccountId::new([9; 32]);
+const DECOY_ACCOUNT_ID_A: AccountId = AccountId::new([3; 32]);
+const DECOY_ACCOUNT_ID_B: AccountId = AccountId::new([4; 32]);
 /// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
 
@@ -65,7 +59,7 @@ fn base_state() -> V03State {
 
 /// Seeds the inbox config (inbox-owned), which is now just this zone's id.
 fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let config = InboxConfig { self_zone };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
@@ -131,9 +125,9 @@ fn seed_wrapped_config_entries(
     authority: Option<AccountId>,
     entries: Vec<wrapped_token_core::SourceEntry>,
 ) {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let config = wrapped_token_core::WrappedTokenConfig {
-        minter: AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
+        minter: AccountId::from_builtin_program(programs::cross_zone_inbox().id()),
         governance,
         authority,
         sources: entries,
@@ -168,9 +162,9 @@ fn seed_receiver_config_with_governance(
     authority: Option<AccountId>,
     sources: Vec<([u8; 32], AccountId)>,
 ) {
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let config = ping_core::ReceiverConfig {
-        deliverer: AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
+        deliverer: AccountId::from_builtin_program(programs::cross_zone_inbox().id()),
         governance,
         authority,
         sources,
@@ -191,12 +185,12 @@ fn seed_receiver_config_with_governance(
 /// Seeds the ping-sender config account pinning the real outbox, matching what
 /// genesis seeds for a real zone.
 fn seed_ping_sender_config(state: &mut V03State) {
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         sender_config_account_id(sender_id),
         Account {
             program_owner: sender_id,
-            data: outbox_bytes(AccountId::builtin_default_address(
+            data: outbox_bytes(AccountId::from_builtin_program(
                 programs::cross_zone_outbox().id(),
             ))
             .to_vec()
@@ -210,14 +204,14 @@ fn seed_ping_sender_config(state: &mut V03State) {
 /// The holding PDA a holder's bridgeable balance lives in.
 fn holding_id_of(holder_id: AccountId) -> AccountId {
     bridge_lock_core::holding_account_id(
-        AccountId::builtin_default_address(programs::bridge_lock().id()),
+        AccountId::from_builtin_program(programs::bridge_lock().id()),
         &holder_id.into_value(),
     )
 }
 
 /// Seeds a funded holding PDA for `holder_id`, matching genesis.
 fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         holding_id_of(holder_id),
         Account {
@@ -231,14 +225,14 @@ fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
 /// Seeds the bridge-lock config account pinning the real outbox and the wrapped
 /// token, matching what genesis seeds for a real zone.
 fn seed_bridge_lock_config(state: &mut V03State) {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         bridge_lock_core::config_account_id(bridge_lock_id),
         Account {
             program_owner: bridge_lock_id,
             data: bridge_lock_core::config_bytes(
-                AccountId::builtin_default_address(programs::cross_zone_outbox().id()),
-                AccountId::builtin_default_address(programs::wrapped_token().id()),
+                AccountId::from_builtin_program(programs::cross_zone_outbox().id()),
+                AccountId::from_builtin_program(programs::wrapped_token().id()),
             )
             .to_vec()
             .try_into()
@@ -324,13 +318,13 @@ fn chained_via_inbox(
     authority: AccountId,
     instruction_data: Vec<u8>,
 ) -> PublicTransaction {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_account_id: AccountId::builtin_default_address(programs::bridge_lock().id()),
+        src_account_id: AccountId::from_builtin_program(programs::bridge_lock().id()),
         target_account_id: target,
         payload: instruction_data,
         l1_inclusion_witness: None,
@@ -348,7 +342,7 @@ fn chained_via_inbox(
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
     })
@@ -364,7 +358,7 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
         ordinal,
     };
     let message = Message::try_new(
-        AccountId::builtin_default_address(programs::ping_sender().id()),
+        AccountId::from_builtin_program(programs::ping_sender().id()),
         accounts,
         vec![],
         send,
@@ -415,8 +409,8 @@ fn capped_mint_state(
 /// The inbox dispatch a watcher would build for a mint of `amount` emitted at
 /// `src_tx_index` on the canonical peer source.
 fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let msg = CrossZoneMessage {
         src_zone: MINT_SRC_ZONE,
         src_block_id: 5,
@@ -467,7 +461,7 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
 
 /// The lifetime counter the config holds for the canonical source.
 fn source_minted(state: &V03State) -> u128 {
-    let config_id = wrapped_token_core::config_account_id(AccountId::builtin_default_address(
+    let config_id = wrapped_token_core::config_account_id(AccountId::from_builtin_program(
         programs::wrapped_token().id(),
     ));
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
@@ -499,7 +493,7 @@ fn a_mint_at_the_cap_is_accepted() {
     let diff = dispatch_mint(wrapped_token_core::MAX_MINT_AMOUNT)
         .expect("the cap itself is a legitimate amount");
     let holding_id = wrapped_token_core::holding_account_id(
-        AccountId::builtin_default_address(programs::wrapped_token().id()),
+        AccountId::from_builtin_program(programs::wrapped_token().id()),
         &RECIPIENT,
     );
     let minted = wrapped_token_core::read_balance(
@@ -524,7 +518,7 @@ fn update_sources_tx(
     nonce: u128,
     sources: Vec<wrapped_token_core::SourcePolicy>,
 ) -> PublicTransaction {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     signed_tx(
         wrapped_token_id,
         vec![
@@ -723,7 +717,7 @@ fn a_many_source_config_still_fits_and_mints() {
                 } else {
                     [index.wrapping_add(10); 32]
                 },
-                src_account_id: AccountId::builtin_default_address([u32::from(index) + 100; 8]),
+                src_account_id: AccountId::from_builtin_program([u32::from(index) + 100; 8]),
                 mint_cap: Some(u128::MAX),
             },
             minted: u128::from(u64::MAX),
@@ -749,7 +743,7 @@ fn a_many_source_config_still_fits_and_mints() {
 
     // Only the (zone, program) pair that emitted spends; every other entry,
     // the shared-zone one included, is untouched.
-    let config_id = wrapped_token_core::config_account_id(AccountId::builtin_default_address(
+    let config_id = wrapped_token_core::config_account_id(AccountId::from_builtin_program(
         programs::wrapped_token().id(),
     ));
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
@@ -774,8 +768,8 @@ fn a_many_source_config_still_fits_and_mints() {
 /// records the payload into its own PDA.
 #[test]
 fn inbox_dispatch_delivers_payload_to_ping_receiver() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
 
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
@@ -836,9 +830,9 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 /// escrow, and records the forwarded mint in the outbox PDA.
 #[test]
 fn lock_escrows_balance_and_emits_to_outbox() {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -892,7 +886,7 @@ fn lock_tx(
     ordinal: u32,
     nonce: u128,
 ) -> PublicTransaction {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     lock_tx_to(
         holder_key,
         holder_id,
@@ -924,8 +918,8 @@ fn lock_tx_to(
     target_account_id: AccountId,
     target_accounts: Vec<[u8; 32]>,
 ) -> PublicTransaction {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
 
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
@@ -996,10 +990,10 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
 /// so neither can overwrite or block the other.
 #[test]
 fn two_emitters_share_an_ordinal_without_colliding() {
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -1052,7 +1046,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
 /// field, the account is the only way left to try.
 #[test]
 fn a_send_into_a_foreign_outbox_slot_is_rejected() {
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -1092,7 +1086,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let elsewhere = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let elsewhere = AccountId::from_builtin_program(programs::ping_receiver().id());
     let lock = lock_tx_to(
         &holder_key,
         holder_id,
@@ -1122,7 +1116,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
 /// destination, so the escrow has to be refused here instead.
 #[test]
 fn a_lock_naming_other_mint_accounts_is_rejected() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let zone_b = [2_u8; 32];
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -1167,9 +1161,9 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
 /// address check, 64 bytes a caller controls would re-pin both for one lock.
 #[test]
 fn a_lock_with_a_substituted_config_account_is_rejected() {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -1230,14 +1224,14 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
 
 #[test]
 fn a_direct_transfer_from_the_holding_is_refused() {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
     let message = Message::try_new(
-        AccountId::builtin_default_address(programs::authenticated_transfer().id()),
+        AccountId::from_builtin_program(programs::authenticated_transfer().id()),
         vec![
             holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
@@ -1305,8 +1299,8 @@ fn a_zero_amount_lock_is_refused() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let zone_b = [9_u8; 32];
     let lock = bridge_lock_core::Instruction::Lock {
         amount: 0,
@@ -1324,7 +1318,7 @@ fn a_zero_amount_lock_is_refused() {
             holding_id_of(holder_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(
-                AccountId::builtin_default_address(programs::cross_zone_outbox().id()),
+                AccountId::from_builtin_program(programs::cross_zone_outbox().id()),
                 bridge_lock_id,
                 &zone_b,
                 0,
@@ -1352,8 +1346,8 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
     seed_holding(&mut state, victim_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let zone_b = [9_u8; 32];
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
@@ -1371,7 +1365,7 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
             holding_id_of(victim_id),
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(
-                AccountId::builtin_default_address(programs::cross_zone_outbox().id()),
+                AccountId::from_builtin_program(programs::cross_zone_outbox().id()),
                 bridge_lock_id,
                 &zone_b,
                 0,
@@ -1417,10 +1411,10 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
 /// genesis replay, a different one would redirect every lock on the zone.
 #[test]
 fn the_bridge_pins_are_written_once_and_replayable() {
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
     let config_id = bridge_lock_core::config_account_id(bridge_lock_id);
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
 
     let init = |outbox: AccountId, target: AccountId| {
         let message = Message::try_new(
@@ -1477,8 +1471,8 @@ fn the_bridge_pins_are_written_once_and_replayable() {
 /// emitting. The state a zone reaches by skipping the genesis init.
 #[test]
 fn a_send_before_the_pin_is_set_is_rejected() {
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -1503,8 +1497,8 @@ fn a_send_before_the_pin_is_set_is_rejected() {
 /// rather than pinning the outbox to whatever that account happens to hold.
 #[test]
 fn a_send_with_a_substituted_config_account_is_rejected() {
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
@@ -1528,7 +1522,7 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
 /// to fail, or anyone could redirect every emission on the zone after genesis.
 #[test]
 fn the_outbox_pin_is_written_once_and_replayable() {
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     let config_id = sender_config_account_id(sender_id);
 
     // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
@@ -1546,7 +1540,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     };
 
     let mut state = base_state();
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
 
     let first = init(outbox_id);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
@@ -1576,7 +1570,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
 /// reason.
 #[test]
 fn the_token_authority_path_holds() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let src_zone = [2_u8; 32];
 
@@ -1610,7 +1604,7 @@ fn the_token_authority_path_holds() {
     };
     let bridge_source = vec![(
         src_zone,
-        AccountId::builtin_default_address(programs::bridge_lock().id()),
+        AccountId::from_builtin_program(programs::bridge_lock().id()),
     )];
 
     // With no authority configured, nothing moves in either direction.
@@ -1712,7 +1706,7 @@ fn the_token_authority_path_holds() {
     // Acting again with a different list must replace it, not accumulate.
     let sender_source = vec![(
         src_zone,
-        AccountId::builtin_default_address(programs::ping_sender().id()),
+        AccountId::from_builtin_program(programs::ping_sender().id()),
     )];
     let second = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 1, sender_source.clone()),
@@ -1755,7 +1749,7 @@ fn the_token_authority_path_holds() {
     );
     assert_eq!(
         renounced_cfg.minter,
-        AccountId::builtin_default_address(programs::cross_zone_inbox().id()),
+        AccountId::from_builtin_program(programs::cross_zone_inbox().id()),
         "the minter is unchanged"
     );
     rejects_at(
@@ -1777,8 +1771,8 @@ fn the_token_authority_path_holds() {
 /// the record, and a delivery would prove only that some peer sent it.
 #[test]
 fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
 
@@ -1790,7 +1784,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         None,
         vec![(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
         )],
     );
 
@@ -1803,7 +1797,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
+        src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
         target_account_id: receiver_id,
         payload,
         l1_inclusion_witness: None,
@@ -1838,11 +1832,11 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
 /// would be checking nothing.
 #[test]
 fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
@@ -1873,7 +1867,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
             inbox_source_marker_account_id(
                 inbox_id,
                 &src_zone,
-                AccountId::builtin_default_address(programs::bridge_lock().id()),
+                AccountId::from_builtin_program(programs::bridge_lock().id()),
             ),
             receiver_config_account_id(receiver_id),
             ping_record_pda(receiver_id),
@@ -1897,10 +1891,10 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
 /// exactly where a copy-paste slip hides. Same battery, run against it.
 #[test]
 fn the_receiver_authority_path_holds() {
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let config_id = receiver_config_account_id(receiver_id);
     let src_zone = [2_u8; 32];
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
 
     let key = PrivateKey::try_new([7; 32]).expect("valid key");
     let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1969,7 +1963,7 @@ fn the_receiver_authority_path_holds() {
     assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
     assert_eq!(
         cfg.deliverer,
-        AccountId::builtin_default_address(programs::cross_zone_inbox().id())
+        AccountId::from_builtin_program(programs::cross_zone_inbox().id())
     );
 
     let renounce_diff =
@@ -2002,8 +1996,8 @@ fn the_receiver_authority_path_holds() {
 /// away from the source list.
 #[test]
 fn the_inbox_cannot_reach_the_authority_instructions() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
@@ -2019,7 +2013,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
                 sources: uncapped_policies(&[(
                     src_zone,
-                    AccountId::builtin_default_address(programs::bridge_lock().id())
+                    AccountId::from_builtin_program(programs::bridge_lock().id())
                 )]),
             }),
         )
@@ -2050,8 +2044,8 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
 /// chained call, and renouncing through it is as total as renouncing top-level.
 #[test]
 fn the_governance_path_holds() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let proxy_id = AccountId::builtin_default_address(test_programs::authority_proxy().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let proxy_id = AccountId::from_builtin_program(test_programs::authority_proxy().id());
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let src_zone = [2_u8; 32];
 
@@ -2087,7 +2081,7 @@ fn the_governance_path_holds() {
     let first = ValidatedStateDiff::from_public_transaction(
         &update(vec![(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
         )]),
         &state,
         1,
@@ -2104,7 +2098,7 @@ fn the_governance_path_holds() {
         cfg.sources,
         uncapped_entries(&[(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id())
+            AccountId::from_builtin_program(programs::bridge_lock().id())
         )])
     );
     assert_eq!(
@@ -2139,7 +2133,7 @@ fn the_governance_path_holds() {
         &state,
         &update(vec![(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
         )]),
         4,
         "fixed at genesis",
@@ -2154,9 +2148,9 @@ fn the_governance_path_holds() {
 /// delegating finds the authority unauthorized.
 #[test]
 fn the_governance_path_guards_hold() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
-    let proxy_id = AccountId::builtin_default_address(test_programs::authority_proxy().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+    let proxy_id = AccountId::from_builtin_program(test_programs::authority_proxy().id());
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let src_zone = [2_u8; 32];
 
@@ -2173,7 +2167,7 @@ fn the_governance_path_guards_hold() {
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
                 sources: uncapped_policies(&[(
                     src_zone,
-                    AccountId::builtin_default_address(programs::bridge_lock().id())
+                    AccountId::from_builtin_program(programs::bridge_lock().id())
                 )]),
             }),
         )
@@ -2183,7 +2177,7 @@ fn the_governance_path_guards_hold() {
     let mut other = base_state().with_programs([test_programs::authority_proxy()]);
     seed_wrapped_config_with_governance(
         &mut other,
-        Some(AccountId::builtin_default_address(
+        Some(AccountId::from_builtin_program(
             programs::ping_sender().id(),
         )),
         Some(authority),
@@ -2222,7 +2216,7 @@ fn the_governance_path_guards_hold() {
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(
                     src_zone,
-                    AccountId::builtin_default_address(programs::ping_sender().id())
+                    AccountId::from_builtin_program(programs::ping_sender().id())
                 )],
             }),
         ),
@@ -2262,8 +2256,8 @@ fn the_governance_path_guards_hold() {
 /// never carries a governance in any test.
 #[test]
 fn the_receiver_governance_path_holds() {
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
-    let proxy_id = AccountId::builtin_default_address(test_programs::authority_proxy().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+    let proxy_id = AccountId::from_builtin_program(test_programs::authority_proxy().id());
     let config_id = receiver_config_account_id(receiver_id);
     let src_zone = [2_u8; 32];
 
@@ -2282,7 +2276,7 @@ fn the_receiver_governance_path_holds() {
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(
                 src_zone,
-                AccountId::builtin_default_address(programs::ping_sender().id())
+                AccountId::from_builtin_program(programs::ping_sender().id())
             )],
         }),
     );
@@ -2298,7 +2292,7 @@ fn the_receiver_governance_path_holds() {
         cfg.sources,
         vec![(
             src_zone,
-            AccountId::builtin_default_address(programs::ping_sender().id())
+            AccountId::from_builtin_program(programs::ping_sender().id())
         )]
     );
     assert_eq!(
@@ -2313,9 +2307,9 @@ fn the_receiver_governance_path_holds() {
 /// through the token, then act and renounce on the receiver.
 #[test]
 fn a_shared_authority_serves_both_targets() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
-    let proxy_id = AccountId::builtin_default_address(test_programs::authority_proxy().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+    let proxy_id = AccountId::from_builtin_program(test_programs::authority_proxy().id());
     let token_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let receiver_config_id = receiver_config_account_id(receiver_id);
     let src_zone = [2_u8; 32];
@@ -2336,7 +2330,7 @@ fn a_shared_authority_serves_both_targets() {
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
             sources: uncapped_policies(&[(
                 src_zone,
-                AccountId::builtin_default_address(programs::bridge_lock().id())
+                AccountId::from_builtin_program(programs::bridge_lock().id())
             )]),
         }),
     );
@@ -2358,7 +2352,7 @@ fn a_shared_authority_serves_both_targets() {
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(
                 src_zone,
-                AccountId::builtin_default_address(programs::ping_sender().id())
+                AccountId::from_builtin_program(programs::ping_sender().id())
             )],
         }),
     );
@@ -2376,7 +2370,7 @@ fn a_shared_authority_serves_both_targets() {
         receiver_cfg.sources,
         vec![(
             src_zone,
-            AccountId::builtin_default_address(programs::ping_sender().id())
+            AccountId::from_builtin_program(programs::ping_sender().id())
         )]
     );
     assert_eq!(
@@ -2420,8 +2414,8 @@ fn a_shared_authority_serves_both_targets() {
 /// reachable through the inbox.
 #[test]
 fn the_remaining_authority_guards_hold() {
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
 
@@ -2438,7 +2432,7 @@ fn the_remaining_authority_guards_hold() {
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
             sources: vec![(
                 src_zone,
-                AccountId::builtin_default_address(programs::ping_sender().id())
+                AccountId::from_builtin_program(programs::ping_sender().id())
             )],
         }),
         bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
@@ -2480,7 +2474,7 @@ fn the_remaining_authority_guards_hold() {
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(
                     src_zone,
-                    AccountId::builtin_default_address(programs::ping_sender().id())
+                    AccountId::from_builtin_program(programs::ping_sender().id())
                 )],
             }),
             "must be the receiver config PDA",
@@ -2500,8 +2494,8 @@ fn the_remaining_authority_guards_hold() {
 /// claimed by a first initializer.
 #[test]
 fn a_mint_is_refused_when_the_token_authorizes_no_source() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
 
@@ -2514,7 +2508,7 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
         src_block_id: 5,
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
-        src_account_id: AccountId::builtin_default_address(programs::bridge_lock().id()),
+        src_account_id: AccountId::from_builtin_program(programs::bridge_lock().id()),
         target_account_id: wrapped_token_id,
         payload: mint_payload(),
         l1_inclusion_witness: None,
@@ -2549,10 +2543,10 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
 /// must refuse before it ever looks at it.
 #[test]
 fn a_top_level_mint_is_refused() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let src_zone = [2_u8; 32];
-    let src_program_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let src_program_id = AccountId::from_builtin_program(programs::bridge_lock().id());
 
     let mut state = base_state();
     seed_wrapped_config(&mut state, None, &[(src_zone, src_program_id)]);
@@ -2589,7 +2583,7 @@ fn a_top_level_mint_is_refused() {
 fn inbox_dispatch_mints_wrapped_token() {
     let diff = dispatch_mint(LOCK_AMOUNT).expect("dispatch must validate and execute");
     let holding_id = wrapped_token_core::holding_account_id(
-        AccountId::builtin_default_address(programs::wrapped_token().id()),
+        AccountId::from_builtin_program(programs::wrapped_token().id()),
         &RECIPIENT,
     );
     let minted = wrapped_token_core::read_balance(
@@ -2608,8 +2602,8 @@ fn inbox_dispatch_mints_wrapped_token() {
 /// route table, so it must be the thing that rejects here.
 #[test]
 fn a_mint_from_an_unrouted_emitter_is_rejected() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
 
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
@@ -2623,7 +2617,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         None,
         &[(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
         )],
     );
 
@@ -2633,7 +2627,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
-        src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
+        src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
         target_account_id: wrapped_token_id,
         payload: mint_payload(),
         l1_inclusion_witness: None,
@@ -2665,9 +2659,9 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
 /// delivery.
 #[test]
 fn a_mint_from_the_routed_emitter_is_accepted() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
-    let bridge_lock_id = AccountId::builtin_default_address(programs::bridge_lock().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
 
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
@@ -2680,7 +2674,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         None,
         &[(
             src_zone,
-            AccountId::builtin_default_address(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
         )],
     );
 
@@ -2720,8 +2714,8 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
 /// second time. This is the bridge's replay defense.
 #[test]
 fn mint_replay_rejected() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let wrapped_token_id = AccountId::builtin_default_address(programs::wrapped_token().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
 
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
@@ -2800,8 +2794,8 @@ fn mint_replay_rejected() {
 /// two messages at one coordinate the target program ever sees.
 #[test]
 fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
 
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];

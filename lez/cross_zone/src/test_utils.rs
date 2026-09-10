@@ -31,7 +31,7 @@ pub fn ping_emission(
     target_account_id: AccountId,
     payload: &[u8],
 ) -> LeeTransaction {
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let send = SenderInstruction::Send {
         target_zone,
         target_account_id,
@@ -43,7 +43,7 @@ pub fn ping_emission(
         ordinal: 0,
     };
     let message = Message::try_new(
-        AccountId::builtin_default_address(programs::ping_sender().id()),
+        AccountId::from_builtin_program(programs::ping_sender().id()),
         vec![],
         vec![],
         send,

@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
                 Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
                     sequencer_key,
                     amount,
-                    mover_account_id: AccountId::builtin_default_address(
+                    mover_account_id: AccountId::from_builtin_program(
                         programs::authenticated_transfer().id(),
                     ),
                     mover_instruction_data,
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    AccountId::builtin_default_address(programs::sequencer_stake().id()),
+                    AccountId::from_builtin_program(programs::sequencer_stake().id()),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
                         AccountIdentity::PublicNoSign(config_id),
                     ],
                     instruction_data,
-                    AccountId::builtin_default_address(programs::sequencer_stake().id()),
+                    AccountId::from_builtin_program(programs::sequencer_stake().id()),
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

@@ -81,10 +81,7 @@ mod tests {
 
     fn charged_message(payer: AccountId) -> Message {
         Message::try_new_with_fees(
-            AccountId::new([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0,
-            ]),
+            AccountId::new([0; 32]),
             vec![account_id_of(&keys().0)],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],
@@ -95,10 +92,7 @@ mod tests {
 
     fn exempt_message() -> Message {
         Message::try_new(
-            AccountId::new([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0,
-            ]),
+            AccountId::new([0; 32]),
             vec![account_id_of(&keys().0)],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],

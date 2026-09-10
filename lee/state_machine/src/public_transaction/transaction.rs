@@ -91,7 +91,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -169,7 +169,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![addr1, addr1],
             nonces,
             instruction,
@@ -189,7 +189,7 @@ pub mod tests {
         let nonces = vec![0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -209,7 +209,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -230,7 +230,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 1_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![addr1, addr2],
             nonces,
             instruction,
@@ -247,7 +247,7 @@ pub mod tests {
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
         let message = Message::new_preserialized(
-            AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id()),
+            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
             vec![],
             vec![],
             vec![0; 4],

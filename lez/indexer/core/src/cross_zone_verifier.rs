@@ -836,7 +836,7 @@ impl CrossZoneVerifier {
             return None;
         };
         if public_tx.message().program_account_id
-            != AccountId::builtin_default_address(programs::cross_zone_inbox().id())
+            != AccountId::from_builtin_program(programs::cross_zone_inbox().id())
         {
             return None;
         }
@@ -1478,7 +1478,7 @@ mod tests {
     fn emission(payload: &[u8]) -> LeeTransaction {
         ping_emission(
             SELF_ZONE,
-            AccountId::builtin_default_address(programs::ping_receiver().id()),
+            AccountId::from_builtin_program(programs::ping_receiver().id()),
             payload,
         )
     }
@@ -1549,14 +1549,14 @@ mod tests {
     }
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
-        let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+        let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
+                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
             },
             receiver_id,
             &[

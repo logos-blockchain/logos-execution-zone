@@ -104,7 +104,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
     let offender_account = AccountId::from(&lee::PublicKey::new_from_private_key(&offender_owner));
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
-    let sink = sequencer_stake_core::slash_sink_account_id(AccountId::builtin_default_address(
+    let sink = sequencer_stake_core::slash_sink_account_id(AccountId::from_builtin_program(
         programs::sequencer_stake().id(),
     ));
 

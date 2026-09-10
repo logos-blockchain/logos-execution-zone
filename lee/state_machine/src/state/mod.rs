@@ -198,11 +198,11 @@ impl V03State {
     /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its whole
     /// ELF, chunked the same way a live `program_loader` deploy would — just written directly
     /// rather than through a transaction. The header keeps living at its builtin default address
-    /// (`AccountId::builtin_default_address(program.id())`) so existing call sites addressing
+    /// (`AccountId::from_builtin_program(program.id())`) so existing call sites addressing
     /// builtins by `ProgramId` keep working; each segment's address is this function's own
     /// internal convention, never independently recomputed elsewhere.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let header_account_id = AccountId::builtin_default_address(program.id());
+        let header_account_id = AccountId::from_builtin_program(program.id());
         let elf = program.elf();
         let chunks: Vec<&[u8]> = elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
@@ -403,6 +403,64 @@ impl V03State {
 impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
+    }
+
+    /// Registers `program` at its own bijection address, as a `program_loader` deploy chunked
+    /// into segments the same way a live deploy would be — the shape
+    /// `ProgramWithDependencies::from(program)` assumes.
+    /// `check_privacy_preserving_circuit_proof_is_valid` claims every top-level/dependency
+    /// program against real chain state, so any test that runs a privacy-preserving transaction
+    /// through `Self::transition_from_privacy_preserving_transaction` needs the program
+    /// registered here first, not just known to the local prover.
+    pub fn register_program(&mut self, program: &Program) {
+        let self_account_id = AccountId::from_builtin_program(program.id());
+        let elf = program.elf();
+        let chunks: Vec<&[u8]> = elf
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        let segment_account_ids: Vec<AccountId> = (0..chunks.len())
+            .map(|i| {
+                AccountId::new({
+                    let mut bytes = self_account_id.into_value();
+                    bytes[0] = bytes[0].wrapping_add(u8::try_from(i.saturating_add(1)).unwrap());
+                    bytes
+                })
+            })
+            .collect();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            self.force_insert_account(
+                segment_account_ids[i],
+                Account {
+                    program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                    data: Data::try_from(
+                        ProgramSegment {
+                            bytecode: chunk.to_vec(),
+                            next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+                        }
+                        .to_bytes(),
+                    )
+                    .unwrap(),
+                    ..Account::default()
+                },
+            );
+        }
+        self.force_insert_account(
+            self_account_id,
+            Account {
+                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+                data: Data::try_from(
+                    ProgramHeader {
+                        image_id: program.id(),
+                        program_first_segment: segment_account_ids[0],
+                        immutable: true,
+                    }
+                    .to_bytes(),
+                )
+                .unwrap(),
+                ..Account::default()
+            },
+        );
     }
 }
 

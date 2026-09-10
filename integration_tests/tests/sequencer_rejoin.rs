@@ -142,7 +142,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_account_id: AccountId::builtin_default_address(
+            mover_account_id: AccountId::from_builtin_program(
                 programs::authenticated_transfer().id(),
             ),
             mover_instruction_data,
@@ -201,7 +201,7 @@ async fn send_stake_tx(
         .send_pub_tx(
             accounts,
             data,
-            AccountId::builtin_default_address(programs::sequencer_stake().id()),
+            AccountId::from_builtin_program(programs::sequencer_stake().id()),
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;

@@ -163,11 +163,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = AccountId::builtin_default_address(proxy.id());
+    let proxy_id = AccountId::from_builtin_program(proxy.id());
     // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
     // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
     let auth_transfer_id: ProgramId = auth_transfer.id();
-    let auth_transfer_account_id = AccountId::builtin_default_address(auth_transfer_id);
+    let auth_transfer_account_id = AccountId::from_builtin_program(auth_transfer_id);
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 

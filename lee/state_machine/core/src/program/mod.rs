@@ -37,7 +37,7 @@ impl AccountId {
     /// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
     /// separation is needed just to reinterpret its 8 little-endian `u32` words as 32 raw bytes.
     #[must_use]
-    pub fn builtin_default_address(program_id: ProgramId) -> Self {
+    pub fn from_builtin_program(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
             .iter()
             .flat_map(|word| word.to_le_bytes())

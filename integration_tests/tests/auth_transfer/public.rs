@@ -370,7 +370,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        AccountId::builtin_default_address(programs::authenticated_transfer().id()),
+        AccountId::from_builtin_program(programs::authenticated_transfer().id()),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -412,7 +412,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        AccountId::builtin_default_address(programs::faucet().id()),
+        AccountId::from_builtin_program(programs::faucet().id()),
         vec![faucet_account_id, recipient],
         vec![],
         faucet_core::Instruction::GenesisTransfer { amount },
@@ -446,7 +446,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let faucet_chain_caller_id = AccountId::builtin_default_address(faucet_chain_caller.id());
+    let faucet_chain_caller_id = AccountId::from_builtin_program(faucet_chain_caller.id());
 
     // Deploy through `program_loader`, at `faucet_chain_caller`'s own bijection address: a
     // `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
@@ -526,7 +526,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
-    let faucet_program_id = AccountId::builtin_default_address(programs::faucet().id());
+    let faucet_program_id = AccountId::from_builtin_program(programs::faucet().id());
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(

@@ -33,7 +33,7 @@ fn main() {
     assert_eq!(pre_states.len(), 2);
 
     let chained_calls = vec![ChainedCall {
-        program_account_id: AccountId::builtin_default_address(faucet_program_id),
+        program_account_id: AccountId::from_builtin_program(faucet_program_id),
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransfer { amount }).unwrap(),
         pre_state_ids: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],

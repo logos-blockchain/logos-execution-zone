@@ -513,7 +513,7 @@ impl WalletCore {
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::for_private_pda(
-            &AccountId::builtin_default_address(program_id),
+            &AccountId::from_builtin_program(program_id),
             &pda_seed,
             &npk,
             &vpk,

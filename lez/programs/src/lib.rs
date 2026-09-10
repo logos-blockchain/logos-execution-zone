@@ -127,14 +127,14 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                AccountId::builtin_default_address(bridge().id()),
+                AccountId::from_builtin_program(bridge().id()),
                 vec![
-                    bridge_core::compute_bridge_account_id(AccountId::builtin_default_address(
+                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
                         bridge().id(),
                     )),
                     recipient_id,
                     bridge_core::deposit_receipt_account_id(
-                        AccountId::builtin_default_address(bridge().id()),
+                        AccountId::from_builtin_program(bridge().id()),
                         op_id,
                     ),
                 ],
@@ -160,11 +160,11 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(AccountId::builtin_default_address(
+                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
                         bridge().id(),
                     )),
                     Account {
-                        program_owner: AccountId::builtin_default_address(
+                        program_owner: AccountId::from_builtin_program(
                             authenticated_transfer().id(),
                         ),
                         balance: u128::from(amount),
@@ -179,7 +179,7 @@ mod inner {
             assert_eq!(events.len(), 1);
             assert_eq!(
                 events[0].account_id,
-                AccountId::builtin_default_address(bridge().id())
+                AccountId::from_builtin_program(bridge().id())
             );
             assert_eq!(
                 events[0].event.selector,

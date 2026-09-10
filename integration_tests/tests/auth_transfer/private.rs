@@ -513,7 +513,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let faucet_chain_caller_id = AccountId::builtin_default_address(faucet_chain_caller.id());
+    let faucet_chain_caller_id = AccountId::from_builtin_program(faucet_chain_caller.id());
 
     // Deploy through `program_loader`, at `faucet_chain_caller`'s own bijection address: a
     // `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
@@ -592,9 +592,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
-    let faucet_program_id = AccountId::builtin_default_address(programs::faucet().id());
+    let faucet_program_id = AccountId::from_builtin_program(programs::faucet().id());
     let auth_transfer_program_id =
-        AccountId::builtin_default_address(programs::authenticated_transfer().id());
+        AccountId::from_builtin_program(programs::authenticated_transfer().id());
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);

@@ -157,7 +157,7 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             let mut acc = init_comm_data.account.clone();
 
             acc.program_owner =
-                AccountId::builtin_default_address(programs::authenticated_transfer().id());
+                AccountId::from_builtin_program(programs::authenticated_transfer().id());
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -193,7 +193,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: AccountId::builtin_default_address(
+                    program_owner: AccountId::from_builtin_program(
                         programs::authenticated_transfer().id(),
                     ),
                     balance: acc_data.balance,
@@ -436,7 +436,7 @@ mod tests {
             let account = state.get_account_by_id(*id);
             assert_eq!(
                 account.program_owner,
-                AccountId::builtin_default_address(fee_program_id)
+                AccountId::from_builtin_program(fee_program_id)
             );
             assert_eq!(account.balance, 0);
         }
@@ -508,13 +508,13 @@ mod tests {
         let without = initial_state(false);
         for id in cross_zone_ids {
             assert!(
-                get_program_via(AccountId::builtin_default_address(id), |acc| with
+                get_program_via(AccountId::from_builtin_program(id), |acc| with
                     .get_account_by_id(acc))
                 .is_some(),
                 "registered when declared"
             );
             assert!(
-                get_program_via(AccountId::builtin_default_address(id), |acc| without
+                get_program_via(AccountId::from_builtin_program(id), |acc| without
                     .get_account_by_id(acc))
                 .is_none(),
                 "absent when not declared"
@@ -522,7 +522,7 @@ mod tests {
         }
         assert!(
             get_program_via(
-                AccountId::builtin_default_address(programs::faucet().id()),
+                AccountId::from_builtin_program(programs::faucet().id()),
                 |acc| without.get_account_by_id(acc)
             )
             .is_some()

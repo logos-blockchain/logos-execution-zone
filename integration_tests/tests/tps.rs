@@ -89,7 +89,7 @@ impl TpsTestManager {
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new_with_fees(
-                    AccountId::builtin_default_address(program.id()),
+                    AccountId::from_builtin_program(program.id()),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
@@ -244,7 +244,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         Account {
             balance: 100,
             nonce: Nonce(0xdead_beef),
-            program_owner: AccountId::builtin_default_address(program.id()),
+            program_owner: AccountId::from_builtin_program(program.id()),
             data: Data::default(),
         },
         true,
