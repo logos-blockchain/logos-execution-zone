@@ -42,7 +42,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Read-only. `integration-tests-prebuild` is the sole writer of this
+          # cache: it gates all 35 shards, and it is the only job whose build
+          # the cached `target/` actually matches. Letting a second job write
+          # means whichever finishes first defines the cache and every other
+          # job restores a tree whose fingerprints do not match its build.
+          save-if: false
 
       - name: Test valid proof
         uses: ./.github/actions/run-in-ci-image

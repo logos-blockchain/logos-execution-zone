@@ -178,7 +178,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Read-only. `integration-tests-prebuild` is the sole writer of this
+          # cache: it gates all 35 shards, and it is the only job whose build
+          # the cached `target/` actually matches. Letting a second job write
+          # means whichever finishes first defines the cache and every other
+          # job restores a tree whose fingerprints do not match its build.
+          save-if: false
 
       - name: Run test_fixtures tests
         uses: ./.github/actions/run-in-ci-image
@@ -213,7 +218,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Sole writer, see the read-only note on the other host jobs.
+          # TEMPORARY: `head_ref` clause added to measure the cache on this
+          # branch before merge; `github.ref` is refs/pull/N/merge on a PR, so
+          # the branch has to be named explicitly. REVERT BEFORE MERGE.
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.head_ref == 'moudy/ci-host-cache-writer' }}
 
       - name: Build integration test archive
         uses: ./.github/actions/run-in-ci-image
@@ -329,7 +338,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          # Read-only. `integration-tests-prebuild` is the sole writer of this
+          # cache: it gates all 35 shards, and it is the only job whose build
+          # the cached `target/` actually matches. Letting a second job write
+          # means whichever finishes first defines the cache and every other
+          # job restores a tree whose fingerprints do not match its build.
+          save-if: false
 
       - name: Build artifacts
         uses: ./.github/actions/run-in-ci-image
