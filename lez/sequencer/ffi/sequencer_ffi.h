@@ -441,8 +441,8 @@ extern "C" {
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
  * - `config_path` is a valid pointer to a null-terminated C string.
  */
-InitializedSequencerServiceFFIResult start_sequencer(const struct Runtime *runtime,
-                                                     const char *config_path);
+InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
+                                                                   const char *config_path);
 
 /**
  * Stops and frees the resources associated with the given sequencer service.
@@ -462,7 +462,7 @@ InitializedSequencerServiceFFIResult start_sequencer(const struct Runtime *runti
  * - The `SequencerServiceFFI` instance was created by this library
  * - The pointer will not be used after this function returns
  */
-enum OperationStatus stop_sequencer(struct SequencerServiceFFI *sequencer);
+enum OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
 
 /**
  * Initializes logging for the sequencer at `level`.
@@ -476,7 +476,7 @@ enum OperationStatus stop_sequencer(struct SequencerServiceFFI *sequencer);
  * - `level` must be a valid null-terminated C string, or null.
  * - First call to this function wins; subsequent calls are no-ops.
  */
-void init_logger(const char *level);
+void sequencer_ffi_init_logger(const char *level);
 
 /**
  * # Safety
@@ -484,7 +484,7 @@ void init_logger(const char *level);
  * this is called with a type which doesn't come from a returned `CString` it
  * will cause a segfault.
  */
-void free_cstring(char *block);
+void sequencer_ffi_free_cstring(char *block);
 
 /**
  * Query the last block id from sequencer.
@@ -503,7 +503,7 @@ void free_cstring(char *block);
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct LastBlockIdResult query_last_block(const struct SequencerServiceFFI *sequencer);
+struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the sequencer's current sync status as a JSON C-string.
@@ -535,7 +535,7 @@ struct LastBlockIdResult query_last_block(const struct SequencerServiceFFI *sequ
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-char *query_status(const struct SequencerServiceFFI *sequencer);
+char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the block by id from sequencer.
@@ -554,8 +554,8 @@ char *query_status(const struct SequencerServiceFFI *sequencer);
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct SequencerServiceFFI *sequencer,
-                                                              FfiBlockId block_id);
+struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(const struct SequencerServiceFFI *sequencer,
+                                                                            FfiBlockId block_id);
 
 /**
  * Query the block by hash from sequencer.
@@ -578,8 +578,8 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct Seque
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const struct SequencerServiceFFI *sequencer,
-                                                                      FfiHashType _hash);
+struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
+                                                                                    FfiHashType _hash);
 
 /**
  * Query the account by id from sequencer.
@@ -598,8 +598,8 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const stru
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiAccount__OperationStatus query_account(const struct SequencerServiceFFI *sequencer,
-                                                               FfiAccountId account_id);
+struct PointerResult_FfiAccount__OperationStatus sequencer_ffi_query_account(const struct SequencerServiceFFI *sequencer,
+                                                                             FfiAccountId account_id);
 
 /**
  * Send transaction into sequencer.
@@ -618,8 +618,8 @@ struct PointerResult_FfiAccount__OperationStatus query_account(const struct Sequ
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_u8__OperationStatus send_transaction(const struct SequencerServiceFFI *sequencer,
-                                                          struct FfiTransaction transaction);
+struct PointerResult_u8__OperationStatus sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                        struct FfiTransaction transaction);
 
 /**
  * Query the transaction by hash from sequencer.
@@ -638,8 +638,8 @@ struct PointerResult_u8__OperationStatus send_transaction(const struct Sequencer
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                                    FfiHashType hash);
+struct PointerResult_FfiOption_FfiTransaction_____OperationStatus sequencer_ffi_query_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                                  FfiHashType hash);
 
 /**
  * Query the blocks by block range from sequencer.
@@ -659,9 +659,9 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct SequencerServiceFFI *sequencer,
-                                                                         struct FfiOption_u64 before,
-                                                                         uint64_t limit);
+struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_block_vec(const struct SequencerServiceFFI *sequencer,
+                                                                                       struct FfiOption_u64 before,
+                                                                                       uint64_t limit);
 
 /**
  * Query the transactions range by account id from sequencer.
@@ -686,10 +686,10 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const s
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
-                                                                                             FfiAccountId _account_id,
-                                                                                             uint64_t _offset,
-                                                                                             uint64_t _limit);
+struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
+                                                                                                           FfiAccountId _account_id,
+                                                                                                           uint64_t _offset,
+                                                                                                           uint64_t _limit);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -712,7 +712,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
  */
-void free_ffi_account(struct FfiAccount *val);
+void sequencer_ffi_free_ffi_account(struct FfiAccount *val);
 
 /**
  * Frees the resources owned by an `FfiBlock` value.
@@ -736,7 +736,7 @@ void free_ffi_account(struct FfiAccount *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
  */
-void free_ffi_block(struct FfiBlock val);
+void sequencer_ffi_free_ffi_block(struct FfiBlock val);
 
 /**
  * Frees the resources associated with the given ffi block option.
@@ -758,7 +758,7 @@ void free_ffi_block(struct FfiBlock val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
  */
-void free_ffi_block_opt(FfiBlockOpt *val);
+void sequencer_ffi_free_ffi_block_opt(FfiBlockOpt *val);
 
 /**
  * Frees the resources associated with the given ffi block vector.
@@ -780,7 +780,7 @@ void free_ffi_block_opt(FfiBlockOpt *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
-void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.
@@ -798,7 +798,7 @@ void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiTransaction`.
  */
-void free_ffi_transaction(struct FfiTransaction val);
+void sequencer_ffi_free_ffi_transaction(struct FfiTransaction val);
 
 /**
  * Frees the resources associated with the given ffi transaction option.
@@ -821,7 +821,7 @@ void free_ffi_transaction(struct FfiTransaction val);
  * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
  *   freed.
  */
-void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
+void sequencer_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
 
 /**
  * Frees the resources associated with the given vector of ffi transactions.
@@ -843,7 +843,7 @@ void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
-void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
+void sequencer_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 bool is_ok(const enum OperationStatus *self);
 

@@ -13,7 +13,7 @@ use log::LevelFilter;
 /// - `level` must be a valid null-terminated C string, or null.
 /// - First call to this function wins; subsequent calls are no-ops.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn init_logger(level: *const c_char) {
+pub unsafe extern "C" fn sequencer_ffi_init_logger(level: *const c_char) {
     let level = if level.is_null() {
         LevelFilter::Info
     } else {

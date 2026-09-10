@@ -74,7 +74,7 @@ impl LastBlockIdResult {
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_last_block(
+pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     sequencer: *const SequencerServiceFFI,
 ) -> LastBlockIdResult {
     if sequencer.is_null() {
@@ -132,7 +132,9 @@ pub unsafe extern "C" fn query_last_block(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_status(sequencer: *const SequencerServiceFFI) -> *mut c_char {
+pub unsafe extern "C" fn sequencer_ffi_query_status(
+    sequencer: *const SequencerServiceFFI,
+) -> *mut c_char {
     if sequencer.is_null() {
         log::error!(
             "Attempted to query status on a null sequencer pointer. This is a bug. Aborting."
@@ -173,7 +175,7 @@ pub unsafe extern "C" fn query_status(sequencer: *const SequencerServiceFFI) -> 
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_block(
+pub unsafe extern "C" fn sequencer_ffi_query_block(
     sequencer: *const SequencerServiceFFI,
     block_id: FfiBlockId,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
@@ -223,7 +225,7 @@ pub unsafe extern "C" fn query_block(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_block_by_hash(
+pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
     sequencer: *const SequencerServiceFFI,
     _hash: FfiHashType,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
@@ -253,7 +255,7 @@ pub unsafe extern "C" fn query_block_by_hash(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_account(
+pub unsafe extern "C" fn sequencer_ffi_query_account(
     sequencer: *const SequencerServiceFFI,
     account_id: FfiAccountId,
 ) -> PointerResult<FfiAccount, OperationStatus> {
@@ -298,7 +300,7 @@ pub unsafe extern "C" fn query_account(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn send_transaction(
+pub unsafe extern "C" fn sequencer_ffi_send_transaction(
     sequencer: *const SequencerServiceFFI,
     transaction: FfiTransaction,
 ) -> PointerResult<u8, OperationStatus> {
@@ -357,7 +359,7 @@ pub unsafe extern "C" fn send_transaction(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_transaction(
+pub unsafe extern "C" fn sequencer_ffi_query_transaction(
     sequencer: *const SequencerServiceFFI,
     hash: FfiHashType,
 ) -> PointerResult<FfiOption<FfiTransaction>, OperationStatus> {
@@ -409,7 +411,7 @@ pub unsafe extern "C" fn query_transaction(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_block_vec(
+pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
     sequencer: *const SequencerServiceFFI,
     before: FfiOption<u64>,
     limit: u64,
@@ -426,7 +428,7 @@ pub unsafe extern "C" fn query_block_vec(
     let before_limit = if let Some(before_val) = before_opt {
         before_val
     } else {
-        let last_block_res = unsafe { query_last_block(sequencer) };
+        let last_block_res = unsafe { sequencer_ffi_query_last_block(sequencer) };
         if last_block_res.error.is_ok() && last_block_res.is_some {
             last_block_res.block_id
         } else {
@@ -491,7 +493,7 @@ pub unsafe extern "C" fn query_block_vec(
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_transactions_by_account(
+pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     sequencer: *const SequencerServiceFFI,
     _account_id: FfiAccountId,
     _offset: u64,
@@ -510,7 +512,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
 // ToDo: Current sequenсer does not know about events yet. Also needs database updates.
 
 // #[unsafe(no_mangle)]
-// pub unsafe extern "C" fn query_events(
+// pub unsafe extern "C" fn sequencer_ffi_query_events(
 //     sequencer: *const SequencerServiceFFI,
 //     from_block: u64,
 //     to_block: FfiOption<u64>,

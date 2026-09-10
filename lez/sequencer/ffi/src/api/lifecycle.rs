@@ -33,7 +33,7 @@ pub type InitializedSequencerServiceFFIResult = PointerResult<SequencerServiceFF
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn start_sequencer(
+pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
     runtime: *const Runtime,
     config_path: *const c_char,
 ) -> InitializedSequencerServiceFFIResult {
@@ -230,7 +230,9 @@ unsafe fn setup_sequencer(
 /// - The `SequencerServiceFFI` instance was created by this library
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stop_sequencer(sequencer: *mut SequencerServiceFFI) -> OperationStatus {
+pub unsafe extern "C" fn sequencer_ffi_stop_sequencer(
+    sequencer: *mut SequencerServiceFFI,
+) -> OperationStatus {
     if sequencer.is_null() {
         log::error!("Attempted to stop a null sequencer pointer. This is a bug. Aborting.");
         return OperationStatus::NullPointer;

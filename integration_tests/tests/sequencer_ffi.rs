@@ -69,7 +69,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             let res =
             // SAFETY: sequencer_ffi created by FFI, it is valid.
             unsafe {
-                sequencer_ffi_helpers::query_last_block(std::ptr::from_ref(sequencer_ffi))
+                sequencer_ffi_helpers::sequencer_ffi_query_last_block(std::ptr::from_ref(sequencer_ffi))
             };
             if res.error.is_ok() && res.is_some {
                 Ok(res.block_id)
@@ -89,7 +89,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             let joiner_block_res =
             // SAFETY: sequencer_ffi created by FFI, it is valid.
             unsafe {
-                sequencer_ffi_helpers::query_block(std::ptr::from_ref(sequencer_ffi), id)
+                sequencer_ffi_helpers::sequencer_ffi_query_block(std::ptr::from_ref(sequencer_ffi), id)
             };
             if joiner_block_res.error.is_ok() {
                 let joiner_block_opt =
@@ -107,7 +107,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
 
                 // SAFETY: FFI ensures validity of value.
                 unsafe {
-                    sequencer_ffi_helpers::free_ffi_block_opt(joiner_block_res.value);
+                    sequencer_ffi_helpers::sequencer_ffi_free_ffi_block_opt(joiner_block_res.value);
                 };
 
                 ffi_hash
@@ -133,7 +133,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
     let joined_ownership_account =
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
-        sequencer_ffi_helpers::query_account(
+        sequencer_ffi_helpers::sequencer_ffi_query_account(
             std::ptr::from_ref(sequencer_ffi),
             ownership_id.into(),
         )
@@ -160,7 +160,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
-        sequencer_ffi_helpers::stop_sequencer(sequencer_ffi_res.value);
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
     }
 
     Ok(())

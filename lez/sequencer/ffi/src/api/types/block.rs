@@ -2,7 +2,7 @@ use common::block::{BedrockStatus, Block, BlockHeader};
 
 use crate::api::types::{
     FfiBlockId, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiTimestamp, FfiVec,
-    transaction::free_transaction_vec_value, vectors::FfiBlockBody,
+    transaction::sequencer_ffi_free_transaction_vec_value, vectors::FfiBlockBody,
 };
 
 #[repr(C)]
@@ -115,10 +115,10 @@ impl From<FfiBedrockStatus> for BedrockStatus {
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block(val: FfiBlock) {
     let ffi_tx_ffi_vec = val.body;
 
-    free_transaction_vec_value(ffi_tx_ffi_vec);
+    sequencer_ffi_free_transaction_vec_value(ffi_tx_ffi_vec);
 }
 
 /// Frees the resources associated with the given ffi block option.
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_ffi_block_opt(val: *mut FfiBlockOpt) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -150,7 +150,7 @@ pub unsafe extern "C" fn free_ffi_block_opt(val: *mut FfiBlockOpt) {
     if opt.is_some {
         let block = unsafe { Box::from_raw(opt.value) };
         unsafe {
-            free_ffi_block(*block);
+            sequencer_ffi_free_ffi_block(*block);
         }
     }
 }
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn free_ffi_block_opt(val: *mut FfiBlockOpt) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -184,7 +184,7 @@ pub unsafe extern "C" fn free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
     let ffi_block_std_vec: Vec<_> = (*boxed).into();
     for block in ffi_block_std_vec {
         unsafe {
-            free_ffi_block(block);
+            sequencer_ffi_free_ffi_block(block);
         }
     }
 }

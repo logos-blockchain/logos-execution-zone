@@ -41,27 +41,29 @@ use test_fixtures::{
 use wallet::AccountIdentity;
 
 unsafe extern "C" {
-    pub unsafe fn query_last_block(sequencer: *const SequencerServiceFFI) -> LastBlockIdResult;
+    pub unsafe fn sequencer_ffi_query_last_block(
+        sequencer: *const SequencerServiceFFI,
+    ) -> LastBlockIdResult;
 
-    pub unsafe fn query_block(
+    pub unsafe fn sequencer_ffi_query_block(
         sequencer: *const SequencerServiceFFI,
         block_id: FfiBlockId,
     ) -> PointerResult<FfiBlockOpt, OperationStatus>;
 
-    pub unsafe fn start_sequencer(
+    pub unsafe fn sequencer_ffi_start_sequencer(
         runtime: *const Runtime,
         config_path: *const c_char,
     ) -> InitializedSequencerServiceFFIResult;
 
-    pub unsafe fn query_account(
+    pub unsafe fn sequencer_ffi_query_account(
         sequencer: *const SequencerServiceFFI,
         account_id: FfiAccountId,
     ) -> PointerResult<FfiAccount, OperationStatus>;
 
-    pub unsafe fn free_ffi_block(val: FfiBlock);
-    pub unsafe fn free_cstring(block: *mut c_char);
-    pub unsafe fn free_ffi_block_opt(val: *mut FfiBlockOpt);
-    pub unsafe fn stop_sequencer(sequencer: *mut SequencerServiceFFI);
+    pub unsafe fn sequencer_ffi_free_ffi_block(val: FfiBlock);
+    pub unsafe fn sequencer_ffi_free_cstring(block: *mut c_char);
+    pub unsafe fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt);
+    pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
@@ -86,7 +88,7 @@ pub fn wait_for_sequencer_ffi_block(
     let start = std::time::Instant::now();
     loop {
         // SAFETY: `sequencer` is a valid reference for the duration of the call.
-        let res = unsafe { query_last_block(std::ptr::from_ref(sequencer)) };
+        let res = unsafe { sequencer_ffi_query_last_block(std::ptr::from_ref(sequencer)) };
         if res.error.is_ok() && res.is_some && res.block_id >= min_block_id {
             return Ok(res.block_id);
         }
@@ -280,11 +282,11 @@ pub fn joining_setup() -> Result<(
     let sequencer_ffi_res =
     // SAFETY: null runtime → the FFI creates and owns its own tokio runtime,
     // so there is no external runtime whose address we must keep stable.
-    unsafe { start_sequencer(std::ptr::null(), raw_config_path) };
+    unsafe { sequencer_ffi_start_sequencer(std::ptr::null(), raw_config_path) };
 
     // SAFETY: cstring was constructed from valid string.
     unsafe {
-        free_cstring(raw_config_path);
+        sequencer_ffi_free_cstring(raw_config_path);
     }
 
     if sequencer_ffi_res.error.is_error() {
