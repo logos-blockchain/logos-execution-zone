@@ -350,7 +350,7 @@ impl ValidatedStateDiff {
                 // Looks through `state_diff` first, falling back to `state` — so an earlier
                 // chained call in this same transaction that deployed this program is seen
                 // immediately, rather than only on the next transaction.
-                let Some((program_id, elf)) =
+                let Some((program_id, user_elf)) =
                     get_program_via(chained_call.program_account_id, |id| {
                         state_diff
                             .get(&id)
@@ -362,6 +362,7 @@ impl ValidatedStateDiff {
                         chained: caller_data.account_id.is_some(),
                     });
                 };
+                let elf = crate::program::attach_kernel(&user_elf);
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
                 let (program_output, call_cycles) = program.execute(
                     chained_call.program_account_id,

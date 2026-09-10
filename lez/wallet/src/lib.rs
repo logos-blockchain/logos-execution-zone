@@ -104,6 +104,13 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
+    #[error("Program bytecode is not a valid RISC0 program binary")]
+    InvalidProgramBinary(#[source] anyhow::Error),
+    #[error(
+        "Program uses a non-default kernel ELF; only programs built with the protocol's \
+         default kernel can be deployed"
+    )]
+    UnsupportedKernelElf,
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]

@@ -177,7 +177,14 @@ impl ProgramLoader<'_> {
         if bytecode.is_empty() {
             bail!("program bytecode must not be empty");
         }
-        let chunks: Vec<&[u8]> = bytecode.chunks(MAX_SEGMENT_DATA_LEN).collect();
+        // Every LEZ program is built with the protocol's default kernel, so only `user_elf` is
+        // segmented and uploaded.
+        let binary = risc0_binfmt::ProgramBinary::decode(&bytecode)
+            .map_err(ExecutionFailureKind::InvalidProgramBinary)?;
+        if binary.kernel_elf != risc0_zkos_v1compat::V1COMPAT_ELF {
+            return Err(ExecutionFailureKind::UnsupportedKernelElf.into());
+        }
+        let chunks: Vec<&[u8]> = binary.user_elf.chunks(MAX_SEGMENT_DATA_LEN).collect();
         if chunks.len() != segments.len() {
             return Err(ExecutionFailureKind::SegmentCountMismatch {
                 expected: chunks.len(),

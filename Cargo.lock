@@ -4670,6 +4670,7 @@ dependencies = [
  "ping_core",
  "program_loader_core",
  "programs",
+ "risc0-binfmt",
  "serde",
  "serde_json",
  "serde_with",
@@ -5661,6 +5662,7 @@ dependencies = [
  "program_loader_core",
  "rand 0.8.6",
  "risc0-binfmt",
+ "risc0-zkos-v1compat",
  "risc0-zkvm",
  "semver",
  "serde_with",
@@ -9520,6 +9522,7 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-binfmt",
+ "risc0-zkos-v1compat",
 ]
 
 [[package]]
@@ -13687,6 +13690,8 @@ dependencies = [
  "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "risc0-binfmt",
+ "risc0-zkos-v1compat",
  "rpassword",
  "sequencer_service_rpc",
  "serde",

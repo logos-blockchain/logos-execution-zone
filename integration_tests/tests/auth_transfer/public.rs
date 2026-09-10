@@ -459,12 +459,14 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
+    // Segments only ever hold `user_elf`.
+    let user_elf = faucet_chain_caller.user_elf().expect("valid ProgramBinary");
     let segment_message = public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![segment_id],
         vec![lee_core::account::Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
-            bytecode: faucet_chain_caller.elf().to_vec(),
+            bytecode: user_elf,
             next_segment: None,
         },
         common::test_utils::test_fee_declaration(payer.account_id),

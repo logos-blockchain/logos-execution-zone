@@ -219,6 +219,9 @@ pub fn update_header(
 /// and recomputing the real `image_id` over the result — the same walk `get_program_via` does at
 /// resolution time, so a program built here decodes exactly as it will later execute. Never
 /// trusts a caller-supplied `image_id`, and rejects a chain over `MAX_PROGRAM_SEGMENTS`.
+///
+/// Segments only ever hold `user_elf`; the protocol's default kernel is re-attached here
+/// before the image id is computed.
 fn compute_image_id(segments_with_header: &[AccountWithMetadata]) -> ProgramId {
     let mut elf = Vec::new();
     let mut expected_next = segments_with_header.get(1).map(|pre| pre.account_id);
@@ -251,7 +254,9 @@ fn compute_image_id(segments_with_header: &[AccountWithMetadata]) -> ProgramId {
         "the chain continues past the last supplied segment account"
     );
 
-    risc0_binfmt::compute_image_id(&elf)
+    let full_binary =
+        risc0_binfmt::ProgramBinary::new(&elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode();
+    risc0_binfmt::compute_image_id(&full_binary)
         .expect("concatenated segment bytecode must decode as a valid RISC0 program binary")
         .into()
 }

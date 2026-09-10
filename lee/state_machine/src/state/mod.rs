@@ -195,21 +195,21 @@ impl V03State {
         self
     }
 
-    /// Seeds a builtin as a loader-owned header pointing at one segment holding its whole ELF —
-    /// the same shape a live `program_loader` deploy produces, just written directly rather than
-    /// through a transaction. The header keeps living at the bijection address
-    /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
-    /// keep working; the segment's address is this function's own internal convention, never
-    /// independently recomputed elsewhere.
+    /// Seeds a builtin as a loader-owned header pointing at one segment holding its `user_elf`.
+    /// The header lives at the bijection address (`AccountId::from(program.id())`).
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let header_account_id = AccountId::from(program.id());
         let segment_account_id = genesis_segment_account_id(header_account_id);
 
+        let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+            .expect("builtin program must be a valid ProgramBinary")
+            .user_elf
+            .to_vec();
         let segment = Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
             data: Data::try_from(
                 ProgramSegment {
-                    bytecode: program.elf().to_vec(),
+                    bytecode: user_elf,
                     next_segment: None,
                 }
                 .to_bytes(),
@@ -309,9 +309,10 @@ impl V03State {
     /// through [`get_program_via`] with the real address instead.
     #[must_use]
     pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
-        get_program_via(AccountId::from(program_id), |account_id| {
+        let (image_id, user_elf) = get_program_via(AccountId::from(program_id), |account_id| {
             self.get_account_by_id(account_id)
-        })
+        })?;
+        Some((image_id, crate::program::attach_kernel(&user_elf)))
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
