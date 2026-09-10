@@ -51,6 +51,7 @@ test:
 # Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
 regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
+    @just resolve-bedrock-node
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
 # Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
@@ -86,13 +87,23 @@ run-bedrock *args:
             *) echo "unknown argument: $1" >&2; exit 2 ;;
         esac
     done
+    (cd .. && just resolve-bedrock-node)
     if [ -z "$log" ]; then
-        docker compose up
+        docker compose up --build
     else
         mkdir -p "$(dirname "$log")"
         printf '\n=== %s  bedrock ===\n' "$(date -Is)" >>"$log"
-        docker compose up 2>&1 | tee -a "$log"
+        docker compose up --build 2>&1 | tee -a "$log"
     fi
+
+resolve-bedrock-node:
+    @bash bedrock/tools/resolve_bedrock_node_in_docker.sh
+
+resolve-host-bedrock-node:
+    @python3 bedrock/tools/resolve_bedrock_node.py \
+        --target-platform host \
+        --output-directory bedrock/.resolved-host \
+        --target-directory target/bedrock-node-host
 
 # Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
 # admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
