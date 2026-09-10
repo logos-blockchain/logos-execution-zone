@@ -222,10 +222,7 @@ jobs:
         with:
           shared-key: ci-host-prebuild
           # Sole writer, see the read-only note on the other host jobs.
-          # TEMPORARY: `head_ref` clause added to measure the cache on this
-          # branch before merge; `github.ref` is refs/pull/N/merge on a PR, so
-          # the branch has to be named explicitly. REVERT BEFORE MERGE.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.head_ref == 'moudy/ci-host-cache-writer' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
         uses: ./.github/actions/run-in-ci-image
