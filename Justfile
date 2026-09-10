@@ -90,7 +90,7 @@ run-bedrock *args:
         docker compose up
     else
         mkdir -p "$(dirname "$log")"
-        printf '\n=== %s  bedrock ===\n' "$(date -Is)" >>"$log"
+        printf '\n=== %s  bedrock ===\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" >>"$log"
         docker compose up 2>&1 | tee -a "$log"
     fi
 
