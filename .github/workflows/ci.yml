@@ -174,18 +174,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host-prebuild
-          # Read-only, and named for its writer. `integration-tests-prebuild`
-          # gates all 35 shards and is the only job whose build the cached
-          # `target/` matches; the others restore it for whatever partial
-          # benefit it gives. A shared key with more than one writer is worse
-          # than useless: whichever job finishes first defines the cache, every
-          # other job restores a tree whose fingerprints do not match its
-          # build, and rust-cache then reports `Cache up-to-date` and never
-          # replaces it.
+          # Read-only; prebuild is the only writer.
           save-if: false
 
       - name: Run test_fixtures tests
@@ -217,11 +213,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host-prebuild
-          # Sole writer, see the read-only note on the other host jobs.
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
@@ -334,18 +333,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-host-prebuild
-          # Read-only, and named for its writer. `integration-tests-prebuild`
-          # gates all 35 shards and is the only job whose build the cached
-          # `target/` matches; the others restore it for whatever partial
-          # benefit it gives. A shared key with more than one writer is worse
-          # than useless: whichever job finishes first defines the cache, every
-          # other job restores a tree whose fingerprints do not match its
-          # build, and rust-cache then reports `Cache up-to-date` and never
-          # replaces it.
+          # Read-only; prebuild is the only writer.
           save-if: false
 
       - name: Build artifacts
