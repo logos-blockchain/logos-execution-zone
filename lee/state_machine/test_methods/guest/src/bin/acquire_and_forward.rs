@@ -31,7 +31,7 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_account_id: AccountId::builtin_default_address(callee),
+        program_account_id: AccountId::from_builtin_program(callee),
         instruction_data: callee_instruction,
         pre_state_ids: vec![target.account_id],
         pda_seeds: vec![],

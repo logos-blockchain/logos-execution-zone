@@ -42,12 +42,12 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let receiver_id = AccountId::builtin_default_address(programs::ping_receiver().id());
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_account_id: AccountId::builtin_default_address(programs::ping_sender().id()),
+                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
@@ -110,7 +110,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
 }
 
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
-    let outbox_id = AccountId::builtin_default_address(programs::cross_zone_outbox().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let ordinal = 0;
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
@@ -129,7 +129,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         ordinal,
     };
 
-    let sender_id = AccountId::builtin_default_address(programs::ping_sender().id());
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,

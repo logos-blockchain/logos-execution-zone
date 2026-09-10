@@ -55,7 +55,7 @@ fn emitted(n: u8) -> ProgramEvent {
 fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = AccountId::builtin_default_address(crate::test_methods::event_emitter().id());
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let tx = program_transaction(
         emitter_id,
@@ -83,7 +83,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 fn chained_events_follow_depth_first_pre_order() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = AccountId::builtin_default_address(crate::test_methods::event_emitter().id());
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
         events: vec![emitted(2)],
@@ -127,11 +127,11 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id = AccountId::for_public_pda(
-        &AccountId::builtin_default_address(initiator.id()),
+        &AccountId::from_builtin_program(initiator.id()),
         &PdaSeed::new([0; 32]),
     );
     let receiver_id = AccountId::for_public_pda(
-        &AccountId::builtin_default_address(emitter.id()),
+        &AccountId::from_builtin_program(emitter.id()),
         &PdaSeed::new([1; 32]),
     );
 
@@ -139,7 +139,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     state.force_insert_account(
         vault_id,
         Account {
-            program_owner: AccountId::builtin_default_address(token.id()),
+            program_owner: AccountId::from_builtin_program(token.id()),
             balance: 1000,
             ..Account::default()
         },
@@ -147,7 +147,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     state.force_insert_account(
         receiver_id,
         Account {
-            program_owner: AccountId::builtin_default_address(token.id()),
+            program_owner: AccountId::from_builtin_program(token.id()),
             balance: 0,
             ..Account::default()
         },
@@ -162,8 +162,8 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: AccountId::builtin_default_address(token.id()),
-        callback_program_id: AccountId::builtin_default_address(emitter.id()),
+        token_program_id: AccountId::from_builtin_program(token.id()),
+        callback_program_id: AccountId::from_builtin_program(emitter.id()),
         amount_out: 0,
         callback_instruction_data,
     };
@@ -174,15 +174,15 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     assert_eq!(payloads(&events), vec![vec![0; 4]]);
     assert_eq!(
         events[0].account_id,
-        AccountId::builtin_default_address(emitter.id())
+        AccountId::from_builtin_program(emitter.id())
     );
     assert_ne!(
         events[0].account_id,
-        AccountId::builtin_default_address(initiator.id())
+        AccountId::from_builtin_program(initiator.id())
     );
     assert_ne!(
         events[0].account_id,
-        AccountId::builtin_default_address(token.id())
+        AccountId::from_builtin_program(token.id())
     );
 }
 
@@ -192,7 +192,7 @@ fn program_that_emits_nothing_yields_no_events() {
     let mut state = V03State::new().with_test_programs();
 
     let tx = program_transaction(
-        AccountId::builtin_default_address(crate::test_methods::noop().id()),
+        AccountId::from_builtin_program(crate::test_methods::noop().id()),
         account_id,
         (),
     );
@@ -205,7 +205,7 @@ fn program_that_emits_nothing_yields_no_events() {
 #[test]
 fn emitted_events_leave_state_untouched() {
     let account_id = AccountId::new([1; 32]);
-    let emitter_id = AccountId::builtin_default_address(crate::test_methods::event_emitter().id());
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let run = |events: Vec<ProgramEvent>| {
         let mut state = V03State::new().with_test_programs();
@@ -244,7 +244,7 @@ fn example_event_selector_matches_its_derivation() {
 fn events_are_filterable_by_selector_and_decodable() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = AccountId::builtin_default_address(crate::test_methods::event_emitter().id());
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let example = ExampleEvent {
         account: AccountId::new([7; 32]),
@@ -320,7 +320,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let mut state = V03State::new();
-    register_program(&mut state, &emitter);
+    state.register_program(&emitter);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)

@@ -33,10 +33,7 @@ impl AccountForTests {
     fn definition_account_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -53,10 +50,7 @@ impl AccountForTests {
     fn definition_account_without_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -73,10 +67,7 @@ impl AccountForTests {
     fn holding_different_definition() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id_diff(),
@@ -92,10 +83,7 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -111,10 +99,7 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -130,10 +115,7 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization_overflow() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -149,10 +131,7 @@ impl AccountForTests {
     fn definition_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -169,10 +148,7 @@ impl AccountForTests {
     fn holding_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -196,10 +172,7 @@ impl AccountForTests {
     fn init_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([0; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -215,10 +188,7 @@ impl AccountForTests {
     fn holding_account_same_definition_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -234,10 +204,7 @@ impl AccountForTests {
     fn definition_account_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -254,10 +221,7 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization_and_large_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -273,10 +237,7 @@ impl AccountForTests {
     fn definition_account_with_authorization_nonfungible() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::NonFungible {
                     name: String::from("test"),
@@ -301,10 +262,7 @@ impl AccountForTests {
     fn holding_account_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -320,10 +278,7 @@ impl AccountForTests {
     fn definition_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([0; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -340,10 +295,7 @@ impl AccountForTests {
     fn holding_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([0; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -359,10 +311,7 @@ impl AccountForTests {
     fn holding_account2_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -378,10 +327,7 @@ impl AccountForTests {
     fn holding_account2_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -397,10 +343,7 @@ impl AccountForTests {
     fn holding_account_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -416,10 +359,7 @@ impl AccountForTests {
     fn holding_account_master_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -435,10 +375,7 @@ impl AccountForTests {
     fn holding_account_master_nft_insufficient_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -454,10 +391,7 @@ impl AccountForTests {
     fn holding_account_master_nft_after_print() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -473,10 +407,7 @@ impl AccountForTests {
     fn holding_account_printed_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([0; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftPrintedCopy {
                     definition_id: IdForTests::pool_definition_id(),
@@ -492,10 +423,7 @@ impl AccountForTests {
     fn holding_account_with_master_nft_transferred_to() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([0; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -511,10 +439,7 @@ impl AccountForTests {
     fn holding_account_master_nft_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: AccountId::new([
-                    5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5, 0,
-                    0, 0, 5, 0, 0, 0,
-                ]),
+                program_owner: AccountId::new([5; 32]),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),

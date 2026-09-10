@@ -14,8 +14,7 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader, ProgramId, ProgramSegment,
-        TimestampValidityWindow, TransactionEvent,
+        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
     },
 };
 
@@ -181,7 +180,7 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: AccountId::builtin_default_address(
+                    program_owner: AccountId::from_builtin_program(
                         crate::test_methods::simple_balance_transfer().id(),
                     ),
                     balance,
@@ -204,7 +203,7 @@ fn transfer_transaction(
     let account_ids = vec![from, to];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let program_id =
-        AccountId::builtin_default_address(crate::test_methods::simple_balance_transfer().id());
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message =
         public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
@@ -218,7 +217,7 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        AccountId::builtin_default_address(initiator.id()),
+        AccountId::from_builtin_program(initiator.id()),
         vec![vault_id, receiver_id],
         vec![], // no signers — vault is PDA-authorised
         instruction,
@@ -272,64 +271,6 @@ pub fn init_pda_witness(
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
     })
-}
-
-/// Registers `program` in `state` at its own bijection address, as a `program_loader` deploy
-/// chunked into segments the same way a live deploy would be — the shape
-/// `ProgramWithDependencies::from(program)` assumes.
-/// `check_privacy_preserving_circuit_proof_is_valid` claims every top-level/dependency program
-/// against real chain state, so any test that runs a privacy-preserving transaction through
-/// `V03State::transition_from_privacy_preserving_transaction` needs the program registered here
-/// first, not just known to the local prover.
-pub fn register_program(state: &mut V03State, program: &Program) {
-    let self_account_id = AccountId::builtin_default_address(program.id());
-    let elf = program.elf();
-    let chunks: Vec<&[u8]> = elf
-        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
-        .collect();
-    let segment_account_ids: Vec<AccountId> = (0..chunks.len())
-        .map(|i| {
-            AccountId::new({
-                let mut bytes = self_account_id.into_value();
-                bytes[0] = bytes[0].wrapping_add(u8::try_from(i + 1).unwrap());
-                bytes
-            })
-        })
-        .collect();
-
-    for (i, chunk) in chunks.iter().enumerate() {
-        state.force_insert_account(
-            segment_account_ids[i],
-            Account {
-                program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-                data: Data::try_from(
-                    ProgramSegment {
-                        bytecode: chunk.to_vec(),
-                        next_segment: segment_account_ids.get(i + 1).copied(),
-                    }
-                    .to_bytes(),
-                )
-                .unwrap(),
-                ..Account::default()
-            },
-        );
-    }
-    state.force_insert_account(
-        self_account_id,
-        Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
-                ProgramHeader {
-                    image_id: program.id(),
-                    program_first_segment: segment_account_ids[0],
-                    immutable: true,
-                }
-                .to_bytes(),
-            )
-            .unwrap(),
-            ..Account::default()
-        },
-    );
 }
 
 fn shielded_balance_transfer_for_tests(
@@ -502,7 +443,7 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: AccountId::builtin_default_address(
+        program_owner: AccountId::from_builtin_program(
             crate::test_methods::simple_balance_transfer().id(),
         ),
         balance: 100,
@@ -511,7 +452,7 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
     };
     let recipient_keys = test_private_account_keys_2();
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
+    state.register_program(&crate::test_methods::simple_balance_transfer());
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

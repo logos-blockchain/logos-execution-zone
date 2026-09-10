@@ -27,7 +27,7 @@ impl Bridge<'_> {
                     AccountIdentity::PublicNoSign(bridge_account_id),
                 ],
                 instruction_data,
-                AccountId::builtin_default_address(programs::bridge().id()),
+                AccountId::from_builtin_program(programs::bridge().id()),
             )
             .await
     }

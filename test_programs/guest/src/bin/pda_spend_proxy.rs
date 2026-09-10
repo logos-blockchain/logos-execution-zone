@@ -36,7 +36,7 @@ fn main() {
     let second_post = AccountStateDiff::unchanged(second.clone());
 
     let chained_call = ChainedCall {
-        program_account_id: AccountId::builtin_default_address(auth_transfer_id),
+        program_account_id: AccountId::from_builtin_program(auth_transfer_id),
         instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
             .unwrap(),
         pre_state_ids: vec![first.account_id, second.account_id],

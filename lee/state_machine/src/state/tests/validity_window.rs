@@ -25,7 +25,7 @@ fn validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = AccountId::builtin_default_address(validity_window_program.id());
+        let program_id = AccountId::from_builtin_program(validity_window_program.id());
         let instruction = (
             block_validity_window,
             TimestampValidityWindow::new_unbounded(),
@@ -76,7 +76,7 @@ fn timestamp_validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = AccountId::builtin_default_address(validity_window_program.id());
+        let program_id = AccountId::from_builtin_program(validity_window_program.id());
         let instruction = (
             BlockValidityWindow::new_unbounded(),
             timestamp_validity_window,

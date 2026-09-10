@@ -36,7 +36,7 @@ fn main() {
         Vec::new(),
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: AccountId::builtin_default_address(callee_program_id),
+        program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
         pre_state_ids: vec![second.account_id, first.account_id],
         pda_seeds,

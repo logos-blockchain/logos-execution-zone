@@ -39,7 +39,7 @@ fn main() {
     ))
     .unwrap();
     let chained_call = ChainedCall {
-        program_account_id: AccountId::builtin_default_address(chained_program_id),
+        program_account_id: AccountId::from_builtin_program(chained_program_id),
         instruction_data: chained_instruction,
         pre_state_ids: pre_states.iter().map(|p| p.account_id).collect(),
         pda_seeds: vec![],

@@ -723,7 +723,7 @@ pub(crate) fn check_event_coverage(
     selector: Option<Selector>,
 ) -> Result<(), ErrorObjectOwned> {
     if stored.covers(
-        program_id.map(|id| lee_core::account::AccountId::builtin_default_address(id.0)),
+        program_id.map(|id| lee_core::account::AccountId::from_builtin_program(id.0)),
         selector.map(|s| s.0),
     ) {
         Ok(())
@@ -743,7 +743,7 @@ pub(crate) fn check_range_coverage(
         segments,
         from,
         to,
-        program_id.map(|id| lee_core::account::AccountId::builtin_default_address(id.0)),
+        program_id.map(|id| lee_core::account::AccountId::from_builtin_program(id.0)),
         selector.map(|s| s.0),
     ) {
         Ok(())
@@ -953,7 +953,7 @@ mod tests {
         assert!(check_event_coverage(&EventFilter::Archival, None, None).is_ok());
 
         let declared = EventFilter::Sources(HashMap::from([(
-            lee_core::account::AccountId::builtin_default_address([7_u32; 8]),
+            lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
             SelectorFilter::All,
         )]));
         assert!(
@@ -965,7 +965,7 @@ mod tests {
     #[test]
     fn range_coverage_follows_segment_history() {
         let declared = EventFilter::Sources(HashMap::from([(
-            lee_core::account::AccountId::builtin_default_address([7_u32; 8]),
+            lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
             SelectorFilter::All,
         )]));
         let segments = [(declared, 0), (EventFilter::Archival, 100)];

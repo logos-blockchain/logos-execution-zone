@@ -187,7 +187,7 @@ mod tests {
             (
                 staked.account_id,
                 Account {
-                    program_owner: AccountId::builtin_default_address(
+                    program_owner: AccountId::from_builtin_program(
                         programs::sequencer_stake().id(),
                     ),
                     balance: staked.balance,
@@ -204,7 +204,7 @@ mod tests {
         });
 
         let config = Account {
-            program_owner: AccountId::builtin_default_address(programs::sequencer_stake().id()),
+            program_owner: AccountId::from_builtin_program(programs::sequencer_stake().id()),
             data: SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: MINIMUM,

@@ -19,7 +19,7 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
     pda_seed: FfiPdaSeed,
 ) -> FfiBytes32 {
     AccountId::for_public_pda(
-        &AccountId::builtin_default_address(program_id.data),
+        &AccountId::from_builtin_program(program_id.data),
         &pda_seed.into(),
     )
     .into()
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
     unsafe {
         *account_id = AccountId::for_private_pda(
-            &AccountId::builtin_default_address(program_id.data),
+            &AccountId::from_builtin_program(program_id.data),
             &pda_seed.into(),
             &ffi_private_keys.npk(),
             &vpk.unwrap(),
@@ -103,7 +103,7 @@ mod tests {
         let pda_seed = PdaSeed::new([42; 32]);
 
         let pda_id =
-            AccountId::for_public_pda(&AccountId::builtin_default_address(program_id), &pda_seed);
+            AccountId::for_public_pda(&AccountId::from_builtin_program(program_id), &pda_seed);
         let ffi_pda_id = wallet_ffi_account_id_for_public_pda(program_id.into(), pda_seed.into());
 
         assert_eq!(pda_id.into_value(), ffi_pda_id.data);
@@ -118,7 +118,7 @@ mod tests {
         let identifier = 100_000_u128;
 
         let pda_id = AccountId::for_private_pda(
-            &AccountId::builtin_default_address(program_id),
+            &AccountId::from_builtin_program(program_id),
             &pda_seed,
             &npk,
             &vpk,

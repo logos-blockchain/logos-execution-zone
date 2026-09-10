@@ -20,7 +20,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx_with_pre_check(
                 vec![from, to],
                 instruction_data,
-                AccountId::builtin_default_address(program.id()),
+                AccountId::from_builtin_program(program.id()),
                 None,
                 tx_pre_check,
             )

@@ -44,17 +44,14 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .await?;
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
-    let inbox_id = AccountId::builtin_default_address(programs::cross_zone_inbox().id());
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 1,
         src_block_hash: [7; 32],
         src_tx_index: 0,
-        src_account_id: AccountId::new([
-            9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9,
-            0, 0, 0,
-        ]),
-        target_account_id: AccountId::builtin_default_address(programs::ping_receiver().id()),
+        src_account_id: AccountId::new([9; 32]),
+        target_account_id: AccountId::from_builtin_program(programs::ping_receiver().id()),
         payload: vec![],
         l1_inclusion_witness: None,
     };

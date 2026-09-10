@@ -151,7 +151,7 @@ async fn import_private_account() -> Result<()> {
         0,
     ));
     let account = lee::Account {
-        program_owner: lee::AccountId::builtin_default_address(
+        program_owner: lee::AccountId::from_builtin_program(
             programs::authenticated_transfer().id(),
         ),
         balance: 777,
@@ -217,7 +217,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
     let initial_account = lee::Account {
-        program_owner: lee::AccountId::builtin_default_address(
+        program_owner: lee::AccountId::from_builtin_program(
             programs::authenticated_transfer().id(),
         ),
         balance: 100,
@@ -238,7 +238,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     .await?;
 
     let updated_account = lee::Account {
-        program_owner: lee::AccountId::builtin_default_address(
+        program_owner: lee::AccountId::from_builtin_program(
             programs::authenticated_transfer().id(),
         ),
         balance: 999,
