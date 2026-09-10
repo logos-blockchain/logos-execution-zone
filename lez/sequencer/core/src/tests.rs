@@ -9,13 +9,15 @@ use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
-    test_utils::sequencer_sign_key_for_testing,
+    test_utils::{
+        create_transaction_native_token_transfer_with_fees, sequencer_sign_key_for_testing,
+    },
     transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, PrivateKey, ProgramId, PublicKey, PublicTransaction, V03State,
-    program::Program,
+    Account, AccountId, FeeDeclaration, PrivateKey, ProgramId, PublicKey, PublicTransaction,
+    V03State, program::Program,
 };
 use lee_core::account::Nonce;
 use logos_blockchain_core::{
@@ -380,6 +382,55 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
             .await,
         "a dropped deposit must not mint the receipt PDA",
     );
+}
+
+#[tokio::test]
+async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+
+    let accounts = initial_pub_accounts_private_keys();
+    let transfer = |from: usize, nonce: u128, tip: u64| {
+        let (from_id, to_id) = (accounts[from].account_id, accounts[1 - from].account_id);
+        create_transaction_native_token_transfer_with_fees(
+            from_id,
+            nonce,
+            to_id,
+            1,
+            &accounts[from].pub_sign_key,
+            FeeDeclaration::new(from_id, 2_000_000, tip, u128::MAX >> 1),
+        )
+    };
+    // Alice's tipped second transfer must wait behind her first;
+    // Bob's tip beats Alice's untipped head even though he arrived last.
+    let alice_first = transfer(0, 0, 0);
+    let alice_second = transfer(0, 1, 5);
+    let bob = transfer(1, 0, 3);
+
+    for tx in [&alice_first, &alice_second, &bob] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .store
+        .block_at_id(block_id)
+        .await
+        .unwrap()
+        .expect("produced block is stored");
+
+    let position = |needle: &LeeTransaction| {
+        block
+            .body
+            .transactions
+            .iter()
+            .position(|tx| tx == needle)
+            .expect("all three transfers are included")
+    };
+    assert!(position(&bob) < position(&alice_first));
+    assert!(position(&alice_first) < position(&alice_second));
 }
 
 #[tokio::test]
