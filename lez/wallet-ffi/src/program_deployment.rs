@@ -233,9 +233,10 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
 
 /// Deploys a new program from `elf_data`.
 ///
-/// Chunks `elf_data`, uploads one segment per account in `segments`, then creates `header`
-/// pointing at the resulting chain. `segments_len` must exactly match the number of chunks
-/// `elf_data` splits into.
+/// `elf_data` is the full two-part program binary (kernel + user elf); only the user elf is
+/// chunked and uploaded as segments (the kernel must match the protocol's default and is never
+/// stored). `segments_len` must exactly match the number of chunks the user elf splits into, not
+/// `elf_data` as a whole.
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
@@ -299,9 +300,11 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
 
 /// Updates an existing program in place with `elf_data`.
 ///
-/// Chunks `elf_data`, uploads a fresh set of segments (segments are write-once), then rewrites
-/// `header` to point at them. `segments_len` must exactly match the number of chunks `elf_data`
-/// splits into.
+/// `elf_data` is the full two-part program binary (kernel + user elf); only the user elf is
+/// chunked and uploaded as a fresh set of segments (segments are write-once; the kernel must
+/// match the protocol's default and is never stored), then `header` is rewritten to point at
+/// them. `segments_len` must exactly match the number of chunks the user elf splits into, not
+/// `elf_data` as a whole.
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
