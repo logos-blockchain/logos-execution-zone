@@ -9,11 +9,11 @@ use lee_core::{
     },
 };
 use sequencer_stake_core::{
-    ChannelParams, Instruction, PendingUnstake, SLASH_APPROVAL_THRESHOLD, SequencerEntry,
-    SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
+    ChannelParams, Instruction, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
+    SlashApproval, StakeRecord,
     ed25519_dalek::{Signature, VerifyingKey},
-    sequencer_stake_config_account_id, slash_approval_message, slash_sink_account_id,
-    stake_funds_account_id, stake_funds_seed,
+    sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
+    slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
 };
 
 fn main() {
@@ -80,12 +80,12 @@ fn main() {
             );
             finalize_unstake(self_account_id, pre_states)
         }
-        Instruction::InitChannelParams(channel_params) => {
+        Instruction::InitChannelParams { params, channel_id } => {
             assert!(
                 caller_account_id.is_none(),
                 "InitChannelParams is only invoked as a top-level user transaction"
             );
-            let post = init_channel_params(self_account_id, pre_states, channel_params);
+            let post = init_channel_params(self_account_id, pre_states, params, channel_id);
             (post, Vec::new())
         }
         Instruction::Slash {
@@ -379,12 +379,12 @@ fn verify_approvals(
     inscription: [u8; 32],
     approvals: &[SlashApproval],
 ) {
-    let message = slash_approval_message(sequencer_key, inscription);
+    let message = slash_approval_message(channel_id(config), sequencer_key, inscription);
 
     let mut approvers: Vec<SequencerKey> = Vec::with_capacity(approvals.len());
     for approval in approvals {
         assert!(
-            config.entries.contains_key(&approval.signer),
+            config.is_accredited_committee_member(&approval.signer),
             "approval from a key this config does not accredit"
         );
         assert!(
@@ -404,7 +404,7 @@ fn verify_approvals(
     }
 
     assert!(
-        approvers.len() >= SLASH_APPROVAL_THRESHOLD,
+        approvers.len() >= slash_approval_threshold(config.accredited_committee_members_count()),
         "slash carries fewer approvals than the threshold"
     );
 }
@@ -417,10 +417,18 @@ const fn channel_params(config: &SequencerStakeConfig) -> ChannelParams {
         .expect("genesis sets the channel params before any stake exists")
 }
 
+/// The channel genesis fixed, on the same terms as [`channel_params`].
+const fn channel_id(config: &SequencerStakeConfig) -> [u8; 32] {
+    config
+        .channel_id
+        .expect("genesis sets the channel id before any stake exists")
+}
+
 fn init_channel_params(
     self_account_id: AccountId,
     pre_states: Vec<AccountWithMetadata>,
     channel_params: ChannelParams,
+    channel_id: [u8; 32],
 ) -> Vec<AccountStateDiff> {
     let [config_account] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("InitChannelParams requires the config account");
@@ -448,6 +456,7 @@ fn init_channel_params(
     );
 
     config.channel_params = Some(channel_params);
+    config.channel_id = Some(channel_id);
 
     let config_post = AccountStateDiff::new(
         config_account,

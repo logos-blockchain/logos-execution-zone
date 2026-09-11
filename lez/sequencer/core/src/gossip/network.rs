@@ -19,12 +19,16 @@ use libp2p::{
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 #[cfg(test)]
 use mempool::MemPoolHandle;
+use sequencer_slasher_actor::Approval;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use crate::TransactionOrigin;
-use crate::{config::GossipConfig, gossip::seen_cache::SeenCache};
+use crate::{
+    config::GossipConfig,
+    gossip::{AccreditedKeysReceiver, seen_cache::SeenCache},
+};
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,6 +48,8 @@ const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
+/// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
+const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -61,6 +67,7 @@ pub struct GossipNetwork {
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
     tx_tx: mpsc::Sender<LeeTransaction>,
+    approval_tx: mpsc::Sender<Approval>,
 }
 
 /// Submits a gossiped transaction to the node's admission door (fee screen +
@@ -92,8 +99,10 @@ impl GossipNetwork {
         config: GossipConfig,
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
+        approval_sink: mpsc::Sender<Approval>,
         max_block_size: u64,
         submit: IngestSubmit,
+        accredited_keys_rx: AccreditedKeysReceiver,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -109,7 +118,13 @@ impl GossipNetwork {
         let listen_addr = config.listen_addr;
         let bootstrap = config.bootstrap_peers;
 
-        let message_id_fn = |msg: &gossipsub::Message| {
+        // An approval is re-announced verbatim, so a content digest would make
+        // every re-announcement a duplicate the sender itself drops.
+        let approvals_topic_hash = Self::get_approvals_topic_for_channel(channel_id).hash();
+        let message_id_fn = move |msg: &gossipsub::Message| {
+            if msg.topic == approvals_topic_hash {
+                return default_message_id(msg);
+            }
             // Undecodable messages still need a message-id, but it must be a
             // deterministic digest, not the attacker-controlled bytes
             // themselves and not a process-local hash (`DefaultHasher`):
@@ -175,6 +190,13 @@ impl GossipNetwork {
             .subscribe(&topic)
             .context("Failed to subscribe to gossip tx topic")?;
 
+        let approvals_topic = Self::get_approvals_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&approvals_topic)
+            .context("Failed to subscribe to gossip slash approval topic")?;
+
         swarm
             .listen_on(listen_addr)
             .context("Failed to listen on gossip address")?;
@@ -209,6 +231,8 @@ impl GossipNetwork {
         let (connected_tx, connected_rx) = watch::channel(Vec::new());
         let shutdown = CancellationToken::new();
         let (tx_tx, tx_rx) = mpsc::channel::<LeeTransaction>(TX_PUBLISH_CHANNEL_CAPACITY);
+        let (approval_tx, approval_rx) =
+            mpsc::channel::<Approval>(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
 
         let driver = tokio::spawn(run_drive_task(DriveTask {
             swarm,
@@ -217,12 +241,18 @@ impl GossipNetwork {
             connected_tx,
             shutdown: shutdown.clone(),
             topic,
+            approvals_topic,
+            approval_sink,
+            channel_id,
+            accredited_keys_rx,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
             tx_rx,
+            approval_rx,
             bootstrap,
             pending_publish: VecDeque::new(),
+            pending_approvals: VecDeque::new(),
         }));
         spawn_driver_watchdog(driver, shutdown.clone());
 
@@ -232,12 +262,21 @@ impl GossipNetwork {
             listen_addrs,
             local_peer_id,
             tx_tx,
+            approval_tx,
         })
     }
 
     #[must_use]
     pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+    }
+
+    /// Slash approvals ride their own topic so the tx wire format is untouched.
+    fn get_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/slash-approvals",
+            hex::encode(channel_id)
+        ))
     }
 
     #[must_use]
@@ -264,6 +303,12 @@ impl GossipNetwork {
     #[must_use]
     pub fn tx_publisher(&self) -> GossipTxPublisher {
         GossipTxPublisher(self.tx_tx.clone())
+    }
+
+    /// Sink the slasher publishes its own approvals into.
+    #[must_use]
+    pub fn approval_publisher(&self) -> mpsc::Sender<Approval> {
+        self.approval_tx.clone()
     }
 
     /// Ed25519 public keys of currently connected peers.
@@ -295,15 +340,25 @@ struct DriveTask {
     connected_tx: watch::Sender<Vec<[u8; 32]>>,
     shutdown: CancellationToken,
     topic: gossipsub::IdentTopic,
+    approvals_topic: gossipsub::IdentTopic,
+    /// Where verified inbound approvals go; the slasher decides what to keep.
+    approval_sink: mpsc::Sender<Approval>,
+    /// This node's channel, which an inbound approval must be signed over.
+    channel_id: [u8; 32],
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys_rx: AccreditedKeysReceiver,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
     tx_rx: mpsc::Receiver<LeeTransaction>,
+    approval_rx: mpsc::Receiver<Approval>,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
     /// Local transactions whose publish failed, retried when a peer
     /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
     pending_publish: VecDeque<LeeTransaction>,
+    /// Same, for approvals whose publish failed.
+    pending_approvals: VecDeque<Approval>,
 }
 
 impl DriveTask {
@@ -343,13 +398,22 @@ impl DriveTask {
                 message_id,
                 message,
             }) => {
-                self.on_gossip_message(propagation_source, &message_id, &message.data)
-                    .await;
+                if message.topic == self.approvals_topic.hash() {
+                    self.on_approval_message(propagation_source, &message_id, &message.data);
+                } else {
+                    self.on_gossip_message(propagation_source, &message_id, &message.data)
+                        .await;
+                }
             }
             GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
                 if topic == self.topic.hash() =>
             {
                 self.flush_pending_publishes();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.approvals_topic.hash() =>
+            {
+                self.flush_pending_approvals();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(ed25519_pubkey) = info.public_key.try_into_ed25519() {
@@ -441,6 +505,69 @@ impl DriveTask {
             .report_message_validation_result(message_id, &source, acceptance);
     }
 
+    /// Verifies an inbound slash approval and hands it to the slasher.
+    fn on_approval_message(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use crate::gossip::validation::{ApprovalEvaluation, evaluate_approval};
+
+        let evaluation = {
+            let accredited_keys = self.accredited_keys_rx.borrow();
+            evaluate_approval(data, self.channel_id, accredited_keys.as_ref())
+        };
+        let acceptance = match evaluation {
+            ApprovalEvaluation::Reject(reason) => {
+                log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Reject
+            }
+            ApprovalEvaluation::Ignore(reason) => {
+                log::debug!("Ignoring gossiped slash approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            ApprovalEvaluation::Accept(approval) => {
+                if let Err(err) = self.approval_sink.try_send(approval) {
+                    log::debug!("Dropping inbound slash approval: {err}");
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes this node's own approval, queued and retried like a transaction.
+    fn publish_approval(&mut self, approval: Approval) {
+        let bytes = borsh::to_vec(&approval).expect("approval borsh serialization should not fail");
+        match self
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.approvals_topic.clone(), bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                log::debug!("Queueing slash approval publish for retry: {err}");
+                if self.pending_approvals.len() >= PENDING_PUBLISH_CAPACITY {
+                    self.pending_approvals.pop_front();
+                }
+                self.pending_approvals.push_back(approval);
+            }
+        }
+    }
+
+    fn flush_pending_approvals(&mut self) {
+        for approval in std::mem::take(&mut self.pending_approvals) {
+            self.publish_approval(approval);
+        }
+    }
+
     /// Publishes a locally-submitted transaction to the mesh. Marked seen
     /// only once actually published; a failed publish (e.g.
     /// `InsufficientPeers` while the mesh is still forming) is queued and
@@ -514,6 +641,14 @@ fn is_unspecified(addr: &Multiaddr) -> bool {
         Protocol::Ip6(ip) => ip.is_unspecified(),
         _ => false,
     })
+}
+
+/// Gossipsub's own default id: publisher plus a fresh per-publish sequence number.
+fn default_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
+    let mut id = msg.source.map(PeerId::to_base58).unwrap_or_default();
+    id.push_str(&msg.sequence_number.unwrap_or_default().to_string());
+
+    gossipsub::MessageId::from(id)
 }
 
 /// Derives the libp2p `PeerId` an Ed25519 public key produces.
@@ -596,6 +731,7 @@ async fn run_drive_task(mut task: DriveTask) {
             () = task.shutdown.cancelled() => break,
             event = task.swarm.select_next_some() => task.on_swarm_event(event).await,
             Some(tx) = task.tx_rx.recv() => task.publish_transaction(tx),
+            Some(approval) = task.approval_rx.recv() => task.publish_approval(approval),
             _ = bootstrap_retry.tick() => task.retry_bootstrap(),
         }
     }
@@ -633,7 +769,7 @@ mod tests {
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
     use super::*;
-    use crate::config::GossipConfig;
+    use crate::{config::GossipConfig, gossip::accredited_keys_channel};
 
     const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
 
@@ -669,8 +805,10 @@ mod tests {
             test_config(),
             [1; 32],
             Ed25519Key::from_bytes(&[9; 32]),
+            mpsc::channel(1).0,
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            accredited_keys_channel().1,
         )
         .await
         .unwrap();
@@ -686,8 +824,10 @@ mod tests {
             test_config(),
             [1; 32],
             Ed25519Key::from_bytes(&[9; 32]),
+            mpsc::channel(1).0,
             TEST_MAX_BLOCK_SIZE,
             unscreened_mempool_submit(test_mempool_handle()),
+            accredited_keys_channel().1,
         )
         .await
         .unwrap();

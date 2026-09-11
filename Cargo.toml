@@ -26,6 +26,7 @@ members = [
   "lez/sequencer/actors/executor/metrics",
   "lez/sequencer/actors/rpc_server",
   "lez/sequencer/actors/rpc_server/metrics",
+  "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -95,6 +96,7 @@ sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
 sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
 sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
+sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_service = { path = "lez/sequencer/service" }
 indexer_core = { path = "lez/indexer/core" }
