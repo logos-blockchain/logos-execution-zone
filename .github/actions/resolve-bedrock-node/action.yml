@@ -1,0 +1,25 @@
+name: Resolve Bedrock node
+description: Resolve the Cargo-authoritative Logos node into bedrock/.resolved
+
+inputs:
+  image:
+    description: LEZ CI image reference from the ci-image workflow
+    required: true
+  target_platform:
+    description: Binary platform to resolve
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Cargo-authoritative Bedrock node
+      uses: ./.github/actions/run-in-ci-image
+      with:
+        image: ${{ inputs.image }}
+        env: |
+          GITHUB_TOKEN=${{ github.token }}
+          RUSTFLAGS=-A single-use-lifetimes
+          RISC0_DEV_MODE=1
+        run: >-
+          python3 bedrock/tools/resolve_bedrock_node.py
+          --target-platform "${{ inputs.target_platform }}"

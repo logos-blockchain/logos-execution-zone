@@ -115,6 +115,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                                 system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                             posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                         }),
+                        channel_id: Some([0xC1; 32]),
                         entries: BTreeMap::new(),
                     }
                     .to_bytes()

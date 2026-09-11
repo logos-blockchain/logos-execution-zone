@@ -22,8 +22,10 @@ use sequencer_core::{
     PinBehindTip, SequencerCore, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
+    gossip::AccreditedKeysReceiver,
     task_group::TaskGroup,
 };
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -125,6 +127,18 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
                 failed_attempts: 0,
             }
         }
+    }
+
+    /// Handle to the slasher, for the service to supervise.
+    #[must_use]
+    pub fn slasher_ref(&self) -> ActorRef<SlasherActor<S>> {
+        self.sequencer.slasher_ref().clone()
+    }
+
+    /// The committee the gossip mesh screens slash approvals against.
+    #[must_use]
+    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.sequencer.accredited_keys_watch()
     }
 }
 

@@ -126,11 +126,13 @@ pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
 #[must_use]
 pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
+    channel_id: Option<[u8; 32]>,
 ) -> Account {
     Account {
         program_owner: AccountId::from_builtin_program(programs::sequencer_stake().id()),
         data: sequencer_stake_core::SequencerStakeConfig {
             channel_params,
+            channel_id,
             entries: BTreeMap::new(),
         }
         .to_bytes()

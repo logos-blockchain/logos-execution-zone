@@ -218,7 +218,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         )
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
-            system_accounts::sequencer_stake_config_account(None),
+            system_accounts::sequencer_stake_config_account(None, None),
         )])
         .chain([
             (

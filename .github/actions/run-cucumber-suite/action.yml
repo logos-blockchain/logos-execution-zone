@@ -18,6 +18,9 @@ inputs:
   image:
     description: LEZ CI image reference from the ci-image workflow
     required: true
+  node_binary:
+    description: Absolute path to the Cargo-authoritative Bedrock node binary
+    required: true
 
 runs:
   using: composite
@@ -34,11 +37,8 @@ runs:
           RUST_LOG=info,logos_blockchain_chain_leader_service=trace,risc0_zkvm::host::server::exec::executor=off
           CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL=true
           MAX_CUCUMBER_CONCURRENT_SCENARIOS=${{ inputs.max_concurrent_scenarios }}
-
-        # The pinned Logos TF revision has no matching downloadable node binary.
-        # Until #793, unset CI markers so TF uses its source-build provider.
+          LOGOS_BLOCKCHAIN_NODE_BIN=${{ inputs.node_binary }}
         run: >-
-          env -u GITHUB_ACTIONS -u CI
           cargo test -p integration_tests --features cucumber
           --test cucumber -- --tags "${{ inputs.suite_tag }}"
 

@@ -19,7 +19,7 @@ use common::{
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -31,6 +31,7 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
+use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -47,6 +48,9 @@ use tokio_retry::{Retry, strategy::FixedInterval};
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
+    gossip::{
+        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
+    },
     logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
@@ -61,7 +65,6 @@ pub mod gossip;
 pub mod logging;
 #[cfg(feature = "mock")]
 pub mod mock;
-pub mod slashing;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -175,8 +178,10 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
-    /// Offending inscriptions, attributed and not.
-    slash_record: slashing::SlashRecord,
+    /// Records offending inscriptions and proposes the slashes for them.
+    slasher: ActorRef<SlasherActor<S>>,
+    /// The committee the gossip mesh screens inbound slash approvals against.
+    accredited_keys_tx: AccreditedKeysSender,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
 }
@@ -340,21 +345,17 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .expect("Failed to read state from store")
             .expect("Store holds a chain but no state");
 
-        assert!(
-            committee_discovery::config_is_readable(&state),
+        let stake_config = committee_discovery::read_config(&state).expect(
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
-             one this sequencer can operate on"
+             one this sequencer can operate on",
         );
 
         // print your own sequencer entry,
         // allowing to see that fees land to your account on explorer
-        if let Some(reward_account) =
-            committee_discovery::read_config(&state).and_then(|stake_config| {
-                stake_config
-                    .entries
-                    .get(&own_sequencer_key)
-                    .map(|entry| entry.account_id)
-            })
+        if let Some(reward_account) = stake_config
+            .entries
+            .get(&own_sequencer_key)
+            .map(|entry| entry.account_id)
         {
             log::info!("Producer reward account (stake ownership): {reward_account}");
         }
@@ -372,7 +373,17 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
         sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
-        let slash_record = slashing::SlashRecord::load(store.storage_ref()).await;
+        let slasher = SlasherActor::spawn(
+            SlasherActor::load(
+                store.storage_ref().clone(),
+                bedrock_signing_key.clone(),
+                stake_config,
+                *config.bedrock_config.channel_id.as_ref(),
+            )
+            .await,
+        );
+
+        let (accredited_keys_tx, _) = accredited_keys_channel();
 
         let block_publisher = BP::new(
             &config.bedrock_config,
@@ -383,7 +394,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 store.storage_ref().clone(),
                 Arc::clone(&chain),
                 mempool_handle.clone(),
-                slash_record.clone(),
+                slasher.clone(),
+                accredited_keys_tx.clone(),
             ),
         )
         .await
@@ -409,6 +421,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             Self::verify_and_reconstruct(&block_publisher, &store, &chain, is_fresh_start)
                 .await
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
+
+        // The committee the slasher loaded with predates this catch-up.
+        refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
 
         // Seed the high water mark from the tip we are starting on. Every stored
         // block reached the store by being published or by being adopted from
@@ -508,7 +523,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             block_publisher,
             watchers,
             last_committee_submission_slot: None,
-            slash_record,
+            slasher,
+            accredited_keys_tx,
             bedrock_signing_key,
         };
 
@@ -773,17 +789,22 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         storage_ref: ActorRef<S>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-        slash_record: slashing::SlashRecord,
+        slasher: ActorRef<SlasherActor<S>>,
+        accredited_keys_tx: AccreditedKeysSender,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
-            let slash_record = slash_record.clone();
+            let slasher = slasher.clone();
+            let accredited_keys_tx = accredited_keys_tx.clone();
             Box::pin(async move {
-                // Before the checkpoint moves past them.
-                slash_record.report(&storage_ref, &update.undecodable).await;
+                report_offences(&slasher, &update.undecodable).await;
+                let moved_head = !update.adopted.is_empty();
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
+                if moved_head {
+                    refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
+                }
             })
         })
     }
@@ -1174,7 +1195,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
-            slash_txs,
             committee_update,
             parent,
         ) = {
@@ -1218,14 +1238,22 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
-                slashing::slash_candidates(
-                    chain.head_state(),
-                    &self.slash_record,
-                    &self.bedrock_signing_key,
-                ),
                 committee_update,
                 parent,
             )
+        };
+
+        // A Slash executes against the head config, so it is proposed from it.
+        let slash_txs = match committee_discovery::read_config(&working_state) {
+            Some(config) => self
+                .slasher
+                .ask(Propose { config })
+                .await
+                .unwrap_or_else(|err| {
+                    warn!("Proposing no slashes this turn: {err}");
+                    Vec::new()
+                }),
+            None => Vec::new(),
         };
 
         // The live committee is the finalized one only while no config is in
@@ -1566,6 +1594,16 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         &self.sequencer_config
     }
 
+    pub const fn slasher_ref(&self) -> &ActorRef<SlasherActor<S>> {
+        &self.slasher
+    }
+
+    /// The gossip mesh's view of the committee, as of the last head move.
+    #[must_use]
+    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.accredited_keys_tx.subscribe()
+    }
+
     /// This node's Bedrock public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
@@ -1856,6 +1894,58 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
             warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
         }
     }
+}
+
+/// Hands the slasher and the gossip mesh the committee the head now holds. The
+/// produce path also refreshes it, but only a producing node takes turns.
+async fn refresh_committee<S: StorageActorTrait>(
+    slasher: &ActorRef<SlasherActor<S>>,
+    chain: &Mutex<ChainState>,
+    accredited_keys_tx: &AccreditedKeysSender,
+) {
+    let config = committee_discovery::read_config(chain.lock().await.head_state());
+    let Some(config) = config else {
+        return;
+    };
+    // The mesh screens against the same committee the slasher gates on.
+    let keys: AccreditedKeys = config
+        .accredited_committee_members()
+        .copied()
+        .map(sequencer_stake_core::SequencerKey::to_bytes)
+        .collect();
+    // Every head move lands here, but the committee changes on almost none.
+    accredited_keys_tx.send_if_modified(|current| {
+        let changed = current.as_ref() != Some(&keys);
+        if changed {
+            *current = Some(keys);
+        }
+        changed
+    });
+    if let Err(err) = slasher.tell(SetCommittee(config)).await {
+        warn!("Failed to refresh the slasher committee: {err}");
+    }
+}
+
+/// Records what the follow path saw, before the checkpoint moves past it.
+async fn report_offences<S: StorageActorTrait>(
+    slasher: &ActorRef<SlasherActor<S>>,
+    undecodable: &[(MsgId, Ed25519PublicKey)],
+) {
+    if undecodable.is_empty() {
+        return;
+    }
+
+    let offences = undecodable
+        .iter()
+        .map(|(msg_id, signer)| ReportedOffence {
+            signer: signer.to_bytes(),
+            inscription: (*msg_id).into(),
+        })
+        .collect();
+    slasher
+        .ask(Report { offences })
+        .await
+        .unwrap_or_else(|err| panic!("Failed to persist the slash record: {err}"));
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:
@@ -2229,6 +2319,7 @@ fn build_genesis_state(
 
     let mut genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
         config.bedrock_config.channel_params,
+        *config.bedrock_config.channel_id.as_ref(),
     ))
     .chain(cross_zone_config_txs)
     .chain(inbox_config_tx)
@@ -2389,12 +2480,16 @@ pub fn sign_genesis_stake(
 /// block rather than needing the sequencer's config.
 fn build_init_channel_params_transaction(
     channel_params: config::ChannelParams,
+    channel_id: [u8; 32],
 ) -> PublicTransaction {
     let message = Message::try_new(
         AccountId::from_builtin_program(programs::sequencer_stake().id()),
         vec![system_accounts::sequencer_stake_config_account_id()],
         vec![],
-        sequencer_stake_core::Instruction::InitChannelParams(channel_params),
+        sequencer_stake_core::Instruction::InitChannelParams {
+            params: channel_params,
+            channel_id,
+        },
     )
     .expect("Failed to build the InitChannelParams genesis message");
     PublicTransaction::new(
