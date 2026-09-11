@@ -1,8 +1,7 @@
 use super::*;
 
-// Host-side mirror of `stripped_token`'s own `Instruction`/`TokenAccountData` guest types, for
-// host-side (de)serialisation — the guest crate isn't a dependency of the host, so these can't
-// be imported directly; they only need to match its borsh layout.
+// Host-side mirror of `stripped_token`'s `Instruction`/`TokenAccountData` — the guest crate
+// isn't a host dependency, so these can't be imported directly, only match the borsh layout.
 #[derive(borsh::BorshSerialize)]
 enum StrippedTokenInstruction {
     Initialize { balance: u128 },
@@ -46,11 +45,10 @@ fn initialize_token_account(
         .unwrap();
 }
 
-/// End-to-end proof that `resolve_diff`'s dispatch-level `Incremental` probe actually runs and
-/// resolves `stripped_token`'s `TokenDiff` deltas into real balances — not just that the guest
-/// and dispatch code compile. If `resolve_diff` silently fell back to copy/replace instead of
-/// invoking `Incremental`, the account's `data` would hold raw `TokenDiff` bytes rather than a
-/// `TokenAccountData`, and decoding it here would fail outright.
+/// End-to-end proof that `resolve_diff` actually invokes `Incremental` and resolves
+/// `stripped_token`'s `TokenDiff` deltas into real balances: if it silently fell back to
+/// copy/replace instead, the account's `data` would hold raw `TokenDiff` bytes, and decoding it
+/// here as `TokenAccountData` would fail outright.
 #[test]
 fn stripped_token_transfer_resolves_through_incremental_dispatch() {
     let mut state = V03State::new().with_test_programs();
@@ -58,9 +56,8 @@ fn stripped_token_transfer_resolves_through_incremental_dispatch() {
     let sender_id = AccountId::new([1; 32]);
     let receiver_id = AccountId::new([2; 32]);
 
-    // Initialize only the sender — the receiver is left completely untouched, exercising
-    // `Incremental`'s "empty data defaults to a zero balance" path for a never-initialized
-    // account.
+    // Initialize only the sender — the receiver stays untouched, exercising `Incremental`'s
+    // empty-data-defaults-to-zero path for a never-initialized account.
     let initialize_message = public_transaction::Message::try_new(
         program_id,
         vec![sender_id],
@@ -119,13 +116,11 @@ fn robinhood_message(
     .unwrap()
 }
 
-/// `stripped_token_robinhood` reads both accounts' *real* token balances to decide a route —
-/// it never touches either account's balance or data itself (its own diffs are always
-/// `Add(0)`/unchanged), all the actual movement happens through the chained `stripped_token`
-/// call it emits. This is the scenario that motivates `ExecutionMode` mode-locking: robinhood's
-/// own read of these accounts is inherently `Bound` (it needs their live values *now* to decide
-/// which way to route), while `stripped_token`'s `Transfer` on those same accounts would
-/// otherwise be free to defer.
+/// `stripped_token_robinhood` reads both accounts' real balances to pick a route, but its own
+/// diffs are always unchanged — the actual movement happens in the chained `stripped_token`
+/// call. This is the scenario `ExecutionMode` mode-locking exists for: robinhood's read is
+/// inherently `Bound` (it needs live values now), while the chained `Transfer` on the same
+/// accounts would otherwise be free to defer.
 #[test]
 fn stripped_token_robinhood_moves_one_unit_from_the_larger_account_to_the_smaller() {
     let mut state = V03State::new().with_test_programs();
@@ -154,8 +149,8 @@ fn stripped_token_robinhood_moves_one_unit_from_the_larger_account_to_the_smalle
     assert_eq!(token_balance(&state, account2_id), 41);
 }
 
-/// Same as above with the accounts' relative sizes swapped, proving the route follows whichever
-/// account is actually larger rather than always favoring a fixed position.
+/// Same as above with sizes swapped, proving the route follows whichever account is larger, not
+/// a fixed position.
 #[test]
 fn stripped_token_robinhood_follows_whichever_account_is_actually_larger() {
     let mut state = V03State::new().with_test_programs();

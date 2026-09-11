@@ -13,10 +13,9 @@ struct TokenAccountData {
     balance: u128,
 }
 
-/// A delta to a token account's balance, carried as the account's `data` in an `Execute` call's
-/// output. Mirrors `BalanceDiff` at the program level: `Account.data` has no protocol-level
-/// delta mechanism of its own, so this program defines one for itself, the same way `BalanceDiff`
-/// does for `Account.balance`.
+/// A delta to a token account's balance, carried as `post_data` in `Execute`'s output —
+/// `Account.data` has no protocol-level delta mechanism, so this program defines its own, the
+/// way `BalanceDiff` does for `Account.balance`.
 #[derive(BorshSerialize, BorshDeserialize)]
 enum TokenDiff {
     Add(u128),
@@ -44,11 +43,9 @@ fn main() {
             },
             instruction_data,
         ) => {
-            // Neither arm reads `pre_state.data` at all — same as `simple_balance_transfer`
-            // never reading `pre_state.balance` — so the resulting diff never depends on which
-            // `pre_state` it gets applied against. Insufficient-balance enforcement can't live
-            // here as a result: it belongs to `Incremental`, the only place that ever sees the
-            // real current balance.
+            // Neither arm reads `pre_state.data`, so the diff never depends on which `pre_state`
+            // it's applied against — insufficient-balance enforcement belongs to `Incremental`
+            // instead, the only place that sees the real current balance.
             let state_diffs = match instruction {
                 Instruction::Initialize { balance } => {
                     let [pre]: [_; 1] = pre_states

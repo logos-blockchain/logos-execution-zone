@@ -695,9 +695,8 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
-    /// A call whose diffs the calling program has asserted are safe to apply against any
-    /// current `pre_state`, not just the one they were computed against — opted into by the
-    /// program itself, via this `CallKind`, rather than negotiated per account.
+    /// A call kind a program opts into for a custom `data`-update step, run against whatever
+    /// `data` an account currently holds rather than the value seen at the original call.
     Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
@@ -737,14 +736,8 @@ impl BorshDeserialize for CallKind {
 #[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
-    /// Applies a previously-computed diff (this call's `instruction`) against `pre_states` as
-    /// they stand right now — not necessarily the `pre_state` the diff was originally computed
-    /// against. Its instruction shape is program-defined and generally *not* the same type as
-    /// `Execute`'s (e.g. `Execute`'s instruction might be a user-facing enum, while
-    /// `Incremental`'s is whatever diff type that enum's handlers emit), so unlike `Execute` it
-    /// arrives undecoded — the program decodes it itself, once it knows what to expect. A
-    /// program that doesn't implement this arm falls through to [`respond_unsupported_call`]
-    /// exactly like a genuinely unrecognized `CallKind`.
+    /// Runs a program's custom `data`-update step against `pre_states` as they stand right now.
+    /// The instruction shape is program-defined, so it arrives undecoded.
     Incremental(ProgramInput<InstructionData>),
     /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
     /// discriminant and the envelope common to every call kind.
@@ -769,18 +762,10 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Whether a privacy-preserving execution's diff for an account is bound to the `pre_state` it
-/// was computed against, or deferred.
-///
-/// `Bound` means verified immediately, exactly like a public transaction. `Deferred` means
-/// carried through as an unresolved diff for the sequencer to apply later, against whatever the
-/// account's real state is by settlement time.
-///
-/// Distinct from [`CallKind`]: a `CallKind::Incremental` call can be used in *either* mode — the
-/// caller decides whether to resolve its result locally (`Bound`) or carry it through unresolved
-/// (`Deferred`); `CallKind::Execute` is always `Bound`. Public transactions never have a
-/// `Deferred` side at all — see [`validate_execution_mode_consistency`]'s doc for why this
-/// distinction only matters for privacy-preserving execution.
+/// Whether a privacy-preserving execution resolves an account's diff against real state now
+/// (`Bound`), or carries it through unresolved for the sequencer to resolve later, against real
+/// state at settlement time (`Deferred`). A `CallKind::Incremental` call can go either way;
+/// `CallKind::Execute` is always `Bound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
     Bound,
@@ -862,20 +847,15 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
                 instruction_data,
             )
         }
-        // Undecoded on purpose: this call kind's instruction shape is program-defined and
-        // generally not `T` (`Execute`'s type), so only the program itself knows how to decode
-        // it, once it's confirmed this arm is the one that matched.
+        // Undecoded: the instruction shape is program-defined, not necessarily `T` (Execute's).
         CallKind::Incremental => ProgramCall::Incremental(envelope),
         CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }
 
-/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip.
-///
-/// Generic over every `ProgramCall` variant on purpose: which kind a given program treats as
-/// "the one it implements" is the program's own choice (`simple_balance_transfer` opts into
-/// `Execute`, `incremental_balance_transfer` opts into `Incremental`), so this can't assume any
-/// particular variant was already ruled out by the caller before reaching here.
+/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip, not
+/// a failure. Generic over every `ProgramCall` variant, since which kind a program implements is
+/// its own choice, not something the caller can rule out in advance.
 pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
     let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
         match call {
@@ -973,20 +953,10 @@ pub fn get_program_via(
 }
 
 /// Checks that every account touched across a privacy-preserving execution's chain of calls
-/// agrees on [`ExecutionMode`].
-///
-/// Mixing modes on the same account within one execution is unsound in both directions: a
-/// `Deferred` touch's real value only exists once the sequencer resolves it against real state
-/// after settlement, so a `Bound` touch elsewhere in the same execution has nothing well-defined
-/// to commit to yet; conversely a `Bound` touch commits to a specific value now, which a later
-/// `Deferred` touch's eventual resolution has no sound way to reconcile with. Order-independent:
-/// whichever mode is seen first for an account is not given priority, a conflict is a conflict
-/// either way round.
-///
-/// Only relevant to privacy-preserving execution. Public transactions settle synchronously — the
-/// public dispatch path (`resolve_diff`) always tries `Incremental` immediately after `Execute`
-/// and falls back to copy/replace on the spot, so there's no proof committing in advance to a
-/// mode that could later turn out to conflict.
+/// agrees on one [`ExecutionMode`]. Mixing `Bound` and `Deferred` on the same account is
+/// unsound: one commits to a value now, the other only resolves one later, and there's no sound
+/// way to reconcile the two. Only relevant to privacy-preserving execution — public transactions
+/// settle synchronously, so nothing is ever deferred.
 pub fn validate_execution_mode_consistency(
     touches: impl IntoIterator<Item = (AccountId, ExecutionMode)>,
 ) -> Result<(), ExecutionModeConflict> {

@@ -302,8 +302,7 @@ fn mode_consistency_rejects_deferred_then_bound_on_the_same_account() {
 #[test]
 fn mode_consistency_reports_the_first_conflicting_touch_not_the_last() {
     let account_id = AccountId::new([1; 32]);
-    // Three touches: bound, bound, deferred — the conflict is between the first (bound) and
-    // third (deferred), not some other pairing.
+    // Bound, bound, deferred: the conflict must pair the first touch with the deferred one.
     let result = validate_execution_mode_consistency([
         (account_id, ExecutionMode::Bound),
         (account_id, ExecutionMode::Bound),
@@ -324,24 +323,15 @@ fn mode_consistency_accepts_no_touches() {
     assert!(validate_execution_mode_consistency(std::iter::empty()).is_ok());
 }
 
-/// The motivating real-world scenario: `stripped_token_robinhood` reads two `stripped_token`
-/// accounts' live balances to decide which one to route a transfer from — its own diffs are a
-/// no-op (`Add(0)`/unchanged for both), but that no-op diff still doesn't mean these accounts are
-/// mode-free. The *decision* of which chained call to emit is inherently tied to whatever balance
-/// values were live when robinhood ran, so both accounts must count as `Bound` for robinhood's
-/// touch even though robinhood itself writes nothing — a no-op diff is not the same thing as "no
-/// dependency on live state." If the same accounts' chained `stripped_token::Transfer` were
-/// requested as `Deferred` (which, looked at in isolation, that call would otherwise be free to
-/// do), the two requirements conflict: this simulates exactly that touch set and confirms it's
-/// rejected.
+/// The motivating scenario: `stripped_token_robinhood` reads two accounts' live balances to
+/// pick a route — a no-op diff, but still a `Bound` touch, since the routing decision itself
+/// depends on live state. If the chained `Transfer` on those same accounts were `Deferred`, the
+/// touches conflict; this simulates that touch set and confirms it's rejected.
 #[test]
 fn mode_consistency_rejects_robinhoods_bound_read_conflicting_with_a_deferred_transfer() {
     let account1 = AccountId::new([1; 32]);
     let account2 = AccountId::new([2; 32]);
 
-    // Robinhood's own (no-op) touch of both accounts is Bound — it read their live balances to
-    // decide the route. The chained Transfer this scenario imagines requesting as Deferred
-    // touches the same two accounts.
     let touches = [
         (account1, ExecutionMode::Bound),
         (account2, ExecutionMode::Bound),
@@ -361,9 +351,8 @@ fn mode_consistency_rejects_robinhoods_bound_read_conflicting_with_a_deferred_tr
     ));
 }
 
-/// The same scenario, but the wallet correctly requests `Bound` for the chained `Transfer` too
-/// (giving up the deferral for these accounts, since robinhood's own read already forces it) —
-/// no conflict, because every touch now agrees.
+/// Same scenario, but the chained `Transfer` is also requested `Bound` — no conflict, since
+/// every touch now agrees.
 #[test]
 fn mode_consistency_accepts_robinhood_when_the_transfer_is_also_requested_bound() {
     let account1 = AccountId::new([1; 32]);

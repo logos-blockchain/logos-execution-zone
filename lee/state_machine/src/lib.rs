@@ -55,10 +55,10 @@ mod test_methods {
         )
     }
 
-    /// A stripped-down token program: no mint/definition account, each account's `data` is just
-    /// a `TokenAccountData { balance: u128 }`. `Initialize` sets that balance directly with no
-    /// access check (test-only); `Transfer` reads both accounts' current token balance, moves
-    /// `amount` between them, and re-encodes both — `Execute` only for now.
+    /// A stripped-down token program: no mint/definition account, just a `TokenAccountData {
+    /// balance: u128 }`. `Execute`'s `Initialize` (test-only, no access check) and `Transfer`
+    /// never read balance — they emit a `TokenDiff` delta, which `Incremental` decodes and
+    /// resolves against the account's real current balance.
     #[must_use]
     pub const fn stripped_token() -> Program {
         Program::new_unchecked(
@@ -68,9 +68,8 @@ mod test_methods {
     }
 
     /// Reads two `stripped_token` accounts' balances and chain-calls `stripped_token` to move
-    /// one unit from whichever is larger to whichever is smaller (a no-op if they're equal).
-    /// Never touches either account's balance or data itself — its own diffs are always
-    /// `Add(0)`/unchanged, regardless of route. `Execute` only; doesn't implement `Incremental`.
+    /// one unit from the larger to the smaller (a no-op if equal) — its own diffs are always
+    /// unchanged. `Execute` only; doesn't implement `Incremental`.
     #[must_use]
     pub const fn stripped_token_robinhood() -> Program {
         Program::new_unchecked(
@@ -79,8 +78,8 @@ mod test_methods {
         )
     }
 
-    /// `simple_balance_transfer`'s twin, opted into `CallKind::Incremental` instead of
-    /// `Execute`.
+    /// `simple_balance_transfer`'s twin, opted into `Incremental`: `Execute` moves the balance
+    /// but emits each side as a delta, which `Incremental` then decodes and resolves.
     #[must_use]
     pub const fn incremental_balance_transfer() -> Program {
         Program::new_unchecked(
