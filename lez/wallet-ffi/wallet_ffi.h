@@ -546,12 +546,18 @@ enum WalletFfiError wallet_ffi_get_account_private(struct WalletHandle *handle,
                                                    const struct FfiBytes32 *account_id,
                                                    struct FfiAccount *out_account);
 
+enum WalletFfiError wallet_ffi_get_account_view(struct WalletHandle *handle,
+                                                const struct FfiBytes32 *account_id,
+                                                const struct FfiBytes32 *program_account_id,
+                                                struct FfiAccount *out_account);
+
 /**
- * Free account data returned by `wallet_ffi_get_account_public`.
+ * Free account data returned by any account query (`wallet_ffi_get_account_public`,
+ * `wallet_ffi_get_account_private`, or `wallet_ffi_get_account_view`).
  *
  * # Safety
- * The account must be either null or a valid account returned by
- * `wallet_ffi_get_account_public`.
+ * The account must be either null or a valid account returned by one of those
+ * functions.
  */
 void wallet_ffi_free_account_data(struct FfiAccount *account);
 

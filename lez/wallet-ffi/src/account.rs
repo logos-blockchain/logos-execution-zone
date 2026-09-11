@@ -3,7 +3,7 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
-use lee::AccountId;
+use lee::{AccountId, ProgramShardSelector};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
@@ -468,11 +468,67 @@ pub unsafe extern "C" fn wallet_ffi_get_account_private(
     WalletFfiError::Success
 }
 
-/// Free account data returned by `wallet_ffi_get_account_public`.
+#[no_mangle]
+#[expect(
+    clippy::missing_safety_doc,
+    reason = "mirrors the safety contract of wallet_ffi_get_account_public/private above"
+)]
+pub unsafe extern "C" fn wallet_ffi_get_account_view(
+    handle: *mut WalletHandle,
+    account_id: *const FfiBytes32,
+    program_account_id: *const FfiBytes32,
+    out_account: *mut FfiAccount,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if account_id.is_null() || out_account.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let account_id = AccountId::new(unsafe { (*account_id).data });
+
+    let shard_selector = if program_account_id.is_null() {
+        ProgramShardSelector::balance_only(account_id)
+    } else {
+        ProgramShardSelector::new(
+            account_id,
+            AccountId::new(unsafe { (*program_account_id).data }),
+        )
+    };
+
+    let account = match block_on(wallet.get_account_view(shard_selector)) {
+        Ok(a) => a,
+        Err(e) => {
+            print_error(format!("Failed to get account: {e}"));
+            return WalletFfiError::NetworkError;
+        }
+    };
+
+    unsafe {
+        *out_account = account.into();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Free account data returned by any account query (`wallet_ffi_get_account_public`,
+/// `wallet_ffi_get_account_private`, or `wallet_ffi_get_account_view`).
 ///
 /// # Safety
-/// The account must be either null or a valid account returned by
-/// `wallet_ffi_get_account_public`.
+/// The account must be either null or a valid account returned by one of those
+/// functions.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) {
     if account.is_null() {
