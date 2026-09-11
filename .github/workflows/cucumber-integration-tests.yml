@@ -110,6 +110,45 @@ jobs:
           image: ${{ inputs.image }}
           node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
 
+      # Feature: Sequencer registration (@stake_registration_ci)
+      - name: Run cucumber suite - stake registration
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@stake_registration_ci"
+          suite_name: stake-registration
+          artifact_subdir: "Sequencer registration"
+          max_concurrent_scenarios: "1"
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+
+      # Feature: Stake account validation (@stake_accounts_ci)
+      - name: Run cucumber suite - stake accounts
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@stake_accounts_ci"
+          suite_name: stake-accounts
+          artifact_subdir: "Stake account validation"
+          max_concurrent_scenarios: "1"
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+
+      # Feature: Stake instruction validation (@stake_instruction_ci)
+      - name: Run cucumber suite - stake instruction
+        if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@stake_instruction_ci"
+          suite_name: stake-instruction
+          artifact_subdir: "Stake instruction validation"
+          max_concurrent_scenarios: "1"
+          image: ${{ inputs.image }}
+          node_binary: ${{ github.workspace }}/bedrock/.resolved/logos-blockchain-node
+
       - name: Upload cucumber JUnit results
         if: ${{ !cancelled() && steps.build_cucumber.outcome == 'success' }}
         continue-on-error: true
