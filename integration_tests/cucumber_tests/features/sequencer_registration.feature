@@ -18,16 +18,30 @@ Feature: Sequencer registration
   # unchanged accounts; the expected in-program reason is kept as a comment
   # on each scenario and stays pinned by sequencer_core's unit tests.
   #
-  # The non-inclusion protocol depends on two node properties that no API
-  # documents or pins; if either changes, the rejection scenarios weaken to
-  # vacuous passes rather than failing:
+  # Non-inclusion alone is not evidence of a rejection: a transaction the
+  # builder accepted into a candidate block whose publish then failed is also
+  # in no block for ever, since a failed turn does not requeue what it popped,
+  # and later turns move the chain on regardless. The non-inclusion step
+  # therefore submits a canary, a plain transfer signed by the second genesis
+  # supply account, right behind the transaction under test, and asserts the
+  # canary landed in a block within the named window. That rests on two node
+  # properties that no API documents or pins:
   # - mempool admission is synchronous with the send RPC reply, so a tip read
-  #   after submission is at or past the admission point
-  # - the block builder pulls the whole mempool on every turn, so two blocks
-  #   past that tip guarantee a post-admission pull tried the transaction;
-  #   this is the "within the next 2 blocks" window each rejection step names
-  # Should the node ever gain a transaction status API (pending, included, or
-  # dropped with a reason), replace the two-block window with it.
+  #   after submission is at or past the admission point, and the canary is
+  #   admitted behind the transaction under test
+  # - the block builder pulls the whole mempool on every turn, in admission
+  #   order, so the turn that pulled the canary had pulled the transaction
+  #   under test; the canary landing proves that turn published, and two
+  #   blocks past the tip bound where it lands, the "within the next 2 blocks"
+  #   window each rejection step names
+  # A canary that lands later, or never, fails the step instead of letting a
+  # failed turn pass as a rejection. One gap stays open: a turn that starts
+  # between the two admissions, pulls only the transaction under test and
+  # then fails to publish. With a two-second block cadence that needs the turn
+  # to begin inside the milliseconds between the two sends, and the RPC API
+  # exposes nothing that would close it. Should the node ever gain a
+  # transaction status API (pending, included, or dropped with a reason),
+  # replace the canary with it.
   #
   # Registration cases not yet covered here:
   # - G-01..G-03 exercise genesis builders private to sequencer_core, where

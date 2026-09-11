@@ -15,12 +15,16 @@ use super::super::wait_until;
 use crate::cucumber::{
     context::LezScenarioContext,
     error::{StepError, StepResult},
-    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction},
+    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction, transfer_instruction},
     world::CucumberWorld,
 };
 
 /// Cadence of the inclusion and non-inclusion polls.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Amount the non-inclusion canary moves between the two genesis supply
+/// accounts; only its inclusion matters, not its size.
+const CANARY_AMOUNT: u128 = 1;
 
 /// Reads one account from the sequencer; an untouched account comes back with
 /// default values.
@@ -61,19 +65,32 @@ pub(super) async fn config_entry(
         .copied())
 }
 
-/// Returns the first genesis-funded public account configured into the
-/// scenario wallet, identified by its fixture-derived id so the choice does
-/// not depend on the wallet's account iteration order.
-pub(super) async fn first_configured_public_account(
+/// Returns the genesis-funded public accounts configured into the scenario
+/// wallet, in fixture order, identified by their fixture-derived ids so the
+/// choice does not depend on the wallet's account iteration order.
+async fn configured_public_accounts(
     context: &LezScenarioContext,
-) -> Result<AccountId, StepError> {
+) -> Result<Vec<AccountId>, StepError> {
     let existing = context.existing_public_accounts().await?;
-    crate::config::default_public_accounts_for_wallet()
+    Ok(crate::config::default_public_accounts_for_wallet()
         .iter()
         .map(|(private_key, _balance)| {
             AccountId::from(&PublicKey::new_from_private_key(private_key))
         })
-        .find(|account_id| existing.contains(account_id))
+        .filter(|account_id| existing.contains(account_id))
+        .collect())
+}
+
+/// Returns the first genesis-funded public account configured into the
+/// scenario wallet: the supply every scenario funds from and signs its plain
+/// transfers with.
+pub(super) async fn first_configured_public_account(
+    context: &LezScenarioContext,
+) -> Result<AccountId, StepError> {
+    configured_public_accounts(context)
+        .await?
+        .first()
+        .copied()
         .ok_or(StepError::MissingSelectedAccount)
 }
 
@@ -136,12 +153,13 @@ pub(super) async fn submit_and_record(
     Ok(())
 }
 
-/// Waits until `hash` appears in a block, giving up after `timeout`.
+/// Waits until `hash` appears in a block and returns that block's id, giving
+/// up after `timeout`.
 pub(super) async fn wait_for_inclusion(
     context: &LezScenarioContext,
     hash: HashType,
     timeout: Duration,
-) -> StepResult {
+) -> Result<u64, StepError> {
     wait_until(
         POLL_INTERVAL,
         timeout,
@@ -152,16 +170,52 @@ pub(super) async fn wait_for_inclusion(
                 .get_transaction(hash)
                 .await
                 .map_err(StepError::query_failed)?
-                .map(|_included| ()))
+                .map(|(_transaction, block_id)| block_id))
         },
     )
     .await
 }
 
-/// Waits until the chain has moved `blocks` past the post-admission tip and
-/// asserts the transaction is in none of them, giving up after `timeout`. The
-/// scenario chooses both; see the feature file for why two blocks prove a
-/// dropped transaction.
+/// Submits the canary a non-inclusion assertion is judged against: a plain
+/// transfer signed by the second genesis supply account, which no scenario
+/// submission signs with, so a rejected submission cannot leave a nonce gap
+/// in front of it. The recipient is the first supply account, which no
+/// scenario snapshots.
+async fn submit_canary(context: &LezScenarioContext) -> Result<HashType, StepError> {
+    let supply = configured_public_accounts(context).await?;
+    let [recipient, donor] = supply[..] else {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "the non-inclusion canary needs both genesis supply accounts, found {}",
+                supply.len()
+            ),
+        });
+    };
+    context
+        .send_program_transaction(
+            vec![
+                AccountIdentity::Public(donor),
+                AccountIdentity::PublicNoSign(recipient),
+            ],
+            transfer_instruction(CANARY_AMOUNT)?,
+            programs::authenticated_transfer().id(),
+        )
+        .await
+}
+
+/// Asserts the submission was dropped by the block builder, giving up after
+/// `timeout`. The RPC API cannot tell a builder rejection from a transaction
+/// the builder accepted into a candidate block whose publish then failed:
+/// both leave `get_transaction` empty for ever while later turns move the
+/// chain on, and the failed turn does not requeue what it popped. The
+/// evidence is therefore a canary admitted right behind the submission: the
+/// builder pulls the whole mempool each turn in admission order, so the turn
+/// that pulls the canary has pulled the submission, and the canary landing in
+/// a block proves that turn published. The canary must land within `blocks`
+/// of the post-admission tip, the window the scenario names; a canary that
+/// lands later or never fails the step rather than letting a stalled or
+/// failed turn pass as a rejection. See the feature file for the one gap this
+/// leaves open.
 pub(super) async fn assert_not_included(
     context: &LezScenarioContext,
     submission: &SubmissionRecord,
@@ -169,13 +223,19 @@ pub(super) async fn assert_not_included(
     timeout: Duration,
 ) -> StepResult {
     let target = submission.submitted_at_block.saturating_add(blocks);
-    wait_until(
-        POLL_INTERVAL,
-        timeout,
-        format!("the chain to reach block {target} proving non-inclusion"),
-        || async move { Ok((last_block(context).await? >= target).then_some(())) },
-    )
-    .await?;
+    let canary = submit_canary(context).await?;
+    let canary_block = wait_for_inclusion(context, canary, timeout).await?;
+    if canary_block > target {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "canary transaction {canary} landed in block {canary_block}, past the \
+                 {blocks}-block window ending at block {target}: a production turn in \
+                 the window did not publish, or the canary was admitted more than a \
+                 block after transaction {}, so its non-inclusion proves nothing",
+                submission.hash
+            ),
+        });
+    }
 
     let included = context
         .sequencer_client()
@@ -218,5 +278,6 @@ pub(super) async fn submit_accepted_stake(
             programs::sequencer_stake().id(),
         )
         .await?;
-    wait_for_inclusion(context, hash, timeout).await
+    wait_for_inclusion(context, hash, timeout).await?;
+    Ok(())
 }

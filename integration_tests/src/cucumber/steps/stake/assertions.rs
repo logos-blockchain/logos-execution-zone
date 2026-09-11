@@ -54,7 +54,8 @@ async fn stake_transaction_accepted(world: &mut CucumberWorld, step: &Step) -> S
     log_step(step);
     let scenario = world.stake()?;
     let hash = scenario.last_submission()?.hash;
-    wait_for_inclusion(world.lez()?, hash, scenario.wait_timeout()?).await
+    wait_for_inclusion(world.lez()?, hash, scenario.wait_timeout()?).await?;
+    Ok(())
 }
 
 #[then(expr = "the stake transaction is not included within the next {int} blocks")]
