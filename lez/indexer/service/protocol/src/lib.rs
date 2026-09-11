@@ -224,7 +224,7 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
@@ -567,7 +567,7 @@ pub struct EventRecord {
     pub block_id: BlockId,
     pub tx_index: u32,
     pub tx_hash: HashType,
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub selector: Selector,
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded event data")]
@@ -578,10 +578,11 @@ impl EventRecord {
     #[must_use]
     pub fn matches_fields(
         &self,
-        program_id: Option<ProgramId>,
+        program_account_id: Option<AccountId>,
         selector: Option<Selector>,
     ) -> bool {
-        program_id.is_none_or(|program_id| program_id == self.program_id)
+        program_account_id
+            .is_none_or(|program_account_id| program_account_id == self.program_account_id)
             && selector.is_none_or(|selector| selector == self.selector)
     }
 }
@@ -594,7 +595,7 @@ pub struct GetEventsFilter {
     pub from_block: Option<BlockId>,
     pub to_block: Option<BlockId>,
     pub tx_hash: Option<HashType>,
-    pub program_id: Option<ProgramId>,
+    pub program_account_id: Option<AccountId>,
     pub selector: Option<Selector>,
 }
 
@@ -603,7 +604,7 @@ pub struct GetEventsFilter {
 #[serde(deny_unknown_fields)]
 pub struct EventSubscriptionFilter {
     pub tx_hash: Option<HashType>,
-    pub program_id: Option<ProgramId>,
+    pub program_account_id: Option<AccountId>,
     pub selector: Option<Selector>,
 }
 
@@ -795,7 +796,12 @@ mod tests {
             block_id: 7,
             tx_index: 1,
             tx_hash: HashType([2; 32]),
-            program_id: ProgramId([1; 8]),
+            program_account_id: AccountId {
+                value: [
+                    1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+                    0, 0, 1, 0, 0, 0,
+                ],
+            },
             selector: Selector([1; 8]),
             data: vec![1, 2, 3],
         };
@@ -806,7 +812,7 @@ mod tests {
                 "block_id": 7,
                 "tx_index": 1,
                 "tx_hash": "0202020202020202020202020202020202020202020202020202020202020202",
-                "program_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+                "program_account_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
                 "selector": "0101010101010101",
                 "data": "AQID",
             })

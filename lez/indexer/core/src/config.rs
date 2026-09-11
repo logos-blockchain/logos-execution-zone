@@ -97,28 +97,12 @@ impl Default for EventFilterConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventSourceConfig {
-    /// The ID of the program emitting an event.
-    pub program_id: ProgramId,
+    /// The account of the program emitting an event.
+    #[serde(rename = "program_id")]
+    pub program_account_id: AccountId,
     /// The optional selectors that are being monitored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selectors: Option<Vec<Selector>>,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
-pub struct ProgramId(pub lee_core::program::ProgramId);
-
-impl Display for ProgramId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        AccountId::from_builtin_program(self.0).fmt(f)
-    }
-}
-
-impl FromStr for ProgramId {
-    type Err = <AccountId as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.parse::<AccountId>()?.into()))
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
@@ -154,20 +138,17 @@ impl EventFilterConfig {
                     ensure!(
                         !selectors.is_empty(),
                         "event_filter declares program {} with no selectors",
-                        source.program_id
+                        source.program_account_id
                     );
                     SelectorFilter::Only(selectors.iter().map(|selector| selector.0).collect())
                 }
             };
             ensure!(
                 sources
-                    .insert(
-                        AccountId::from_builtin_program(source.program_id.0),
-                        selectors,
-                    )
+                    .insert(source.program_account_id, selectors)
                     .is_none(),
                 "event_filter declares program {} twice",
-                source.program_id
+                source.program_account_id
             );
         }
         Ok(EventFilter::Sources(sources))

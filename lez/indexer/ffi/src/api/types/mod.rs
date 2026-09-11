@@ -1,4 +1,4 @@
-use indexer_service_protocol::{AccountId, HashType, ProgramId, PublicKey, Selector, Signature};
+use indexer_service_protocol::{AccountId, HashType, PublicKey, Selector, Signature};
 
 pub mod account;
 pub mod block;
@@ -25,19 +25,6 @@ pub struct FfiBytes8 {
 #[derive(Clone, Copy)]
 pub struct FfiBytes64 {
     pub data: [u8; 64],
-}
-
-/// Program ID - 8 u32 values (32 bytes total).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiProgramId {
-    pub data: [u32; 8],
-}
-
-impl From<ProgramId> for FfiProgramId {
-    fn from(value: ProgramId) -> Self {
-        Self { data: value.0 }
-    }
 }
 
 /// U128 - 16 bytes little endian.

@@ -46,19 +46,6 @@ impl AccountId {
     }
 }
 
-impl From<AccountId> for ProgramId {
-    fn from(account_id: AccountId) -> Self {
-        let mut program_id = [0_u32; 8];
-        for (word, chunk) in program_id
-            .iter_mut()
-            .zip(account_id.value().chunks_exact(4))
-        {
-            *word = u32::from_le_bytes(chunk.try_into().expect("chunk is exactly 4 bytes"));
-        }
-        program_id
-    }
-}
-
 /// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
 
