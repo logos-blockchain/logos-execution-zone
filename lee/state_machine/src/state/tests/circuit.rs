@@ -1,4 +1,4 @@
-use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader};
+use lee_core::program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, immutable_mirror_commitment};
 use program_loader_core::Instruction;
 
 use super::*;
@@ -1920,11 +1920,45 @@ fn shadow_program_claims_a_public_pda_it_legitimately_owns() {
     );
 }
 
+/// A shadow dependency whose witness elf doesn't hash to its declared `account_id`, never
+/// actually dispatched by the call graph. Every supplied shadow witness is resolved up front, so
+/// this is still rejected — the call graph never reaching it doesn't matter.
+#[test]
+fn shadow_witness_that_does_not_match_its_account_id_is_rejected_even_if_unused() {
+    let program = crate::test_methods::noop();
+    let account_id = AccountId::new([7; 32]);
+    let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let unused_dependency = crate::test_methods::noop();
+    let wrong_shadow_account_id = AccountId::new([0xEE; 32]);
+    let program_with_deps = ProgramWithDependencies::new(
+        program.clone(),
+        AccountId::from(program.id()),
+        std::collections::HashMap::from([(wrong_shadow_account_id, unused_dependency)]),
+    )
+    .with_shadow_dependency(wrong_shadow_account_id);
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    );
+
+    let err = result.expect_err(
+        "an invalid shadow witness must be rejected even when the call graph never dispatches it",
+    );
+    assert!(
+        format!("{err:?}").contains("does not hash to its own declared account_id"),
+        "rejection should cite the mismatched witness, got: {err:?}"
+    );
+}
+
 /// Deploys a program with an immutable header (landing the private mirror commitment via
 /// `CreateHeader`), then references it in a privacy-preserving transaction through a
-/// `ProgramImageClaim::Private` claim instead of a `Public` one. The sequencer independently
-/// reconstructs the claimed commitment and finds it in private state, so the transaction
-/// succeeds without ever doing a public `get_program` lookup for this program.
+/// `ProgramImageClaim::Private` claim instead of a `Public` one. The circuit checks the supplied
+/// membership proof against the real commitment itself, so the transaction succeeds without the
+/// sequencer ever doing a public lookup for this program.
 #[test]
 fn private_claim_matching_a_real_commitment_passes_verification() {
     let program = crate::test_methods::noop();
@@ -1968,9 +2002,15 @@ fn private_claim_matching_a_real_commitment_passes_verification() {
         AccountId::for_private_pda(&header_account_id, &seed, &npk, &keys.vpk(), u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
+    let membership_proof = state
+        .get_proof_for_commitment(&immutable_mirror_commitment(
+            header_account_id,
+            &program_header,
+        ))
+        .expect("the header's immutable mirror commitment should be in private state");
     let program_with_deps =
         ProgramWithDependencies::new(program, header_account_id, std::collections::HashMap::new())
-            .as_private_program(program_header);
+            .as_private_program(program_header, membership_proof);
 
     let (output, proof) = execute_and_prove(
         vec![pre_state],
@@ -1994,9 +2034,9 @@ fn private_claim_matching_a_real_commitment_passes_verification() {
 }
 
 /// Same shape as `private_claim_matching_a_real_commitment_passes_verification`, but the header
-/// was never actually deployed — no `CreateHeader` transaction ran, so no matching commitment
-/// exists in private state. The circuit itself has no chain state to check against, so proving
-/// still succeeds; the sequencer's independent reconstruction is what catches it.
+/// was never actually deployed, so there's no real membership proof to supply — a fabricated one
+/// is used instead. Proving still succeeds, since the circuit has no live chain state to check
+/// against; the fabricated proof's implied root just won't be one the tree has ever actually had.
 #[test]
 fn private_claim_with_no_matching_commitment_is_rejected() {
     let program = crate::test_methods::noop();
@@ -2016,9 +2056,10 @@ fn private_claim_with_no_matching_commitment_is_rejected() {
         AccountId::for_private_pda(&header_account_id, &seed, &npk, &keys.vpk(), u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
+    let fabricated_membership_proof = (0, vec![[0xab; 32]; 4]);
     let program_with_deps =
         ProgramWithDependencies::new(program, header_account_id, std::collections::HashMap::new())
-            .as_private_program(program_header);
+            .as_private_program(program_header, fabricated_membership_proof);
 
     let (output, proof) = execute_and_prove(
         vec![pre_state],
@@ -2030,7 +2071,7 @@ fn private_claim_with_no_matching_commitment_is_rejected() {
         )],
         &program_with_deps,
     )
-    .expect("the circuit has no chain state to check, so proving still succeeds");
+    .expect("the circuit has no live chain state to check the proof against, so proving succeeds");
 
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
@@ -2038,9 +2079,10 @@ fn private_claim_with_no_matching_commitment_is_rejected() {
 
     let err = state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
-        .expect_err("a Private claim with no matching commitment must be rejected");
+        .expect_err("a Private claim with a fabricated membership proof must be rejected");
     assert!(
-        err.to_string().contains("no private commitment"),
-        "rejection should cite the missing commitment, got: {err}"
+        err.to_string()
+            .contains("Unrecognized commitment set digest"),
+        "rejection should cite the unrecognized root, got: {err}"
     );
 }

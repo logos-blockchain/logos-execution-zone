@@ -800,10 +800,11 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
-    // Anchor each claim to real chain state, reconstructing it independently rather than
+    // Anchor each `Public` claim to real chain state, reconstructing it independently rather than
     // trusting the message's own claim — a wrong claim means the reconstructed journal won't
-    // match what the receipt actually committed to, so `proof.is_valid_for` fails below. Same
-    // mechanism `public_actions` relies on for authenticating account content.
+    // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
+    // `Private`'s membership check already happened in-circuit; the one thing left to check here
+    // is that its `root` is one the commitment tree has actually had.
     let program_image_claims = message
         .program_image_claims
         .iter()
@@ -817,17 +818,10 @@ fn check_privacy_preserving_circuit_proof_is_valid(
                     image_id,
                 })
             }
-            ProgramImageClaim::Private {
-                account_id,
-                program_header,
-            } => {
-                let commitment =
-                    program_loader_core::immutable_mirror_commitment(*account_id, program_header);
+            ProgramImageClaim::Private { root } => {
                 ensure!(
-                    state.get_proof_for_commitment(&commitment).is_some(),
-                    LeeError::InvalidInput(format!(
-                        "no private commitment matching the claimed program_header for {account_id}"
-                    ))
+                    state.is_known_commitment_root(root),
+                    LeeError::InvalidInput("Unrecognized commitment set digest".to_owned())
                 );
                 Ok(*claim)
             }
