@@ -328,7 +328,8 @@ jobs:
           echo "Discovered integration targets: $targets_json"
 
   integration-tests:
-    needs: [ci-image, bedrock-node, test-fixtures-tests, integration-tests-prebuild]
+    # Not gated on test-fixtures-tests: prebuild produces the archive.
+    needs: [ci-image, bedrock-node, integration-tests-prebuild]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
