@@ -66,6 +66,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+fee_core.workspace = true
 sequencer_core = { workspace = true, features = ["test-utils"] }
 
 [features]

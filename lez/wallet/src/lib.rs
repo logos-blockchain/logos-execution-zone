@@ -952,7 +952,7 @@ impl WalletCore {
             instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
-                DEFAULT_GAS_LIMIT,
+                self.config.gas_limit,
                 0,
                 DEFAULT_MAX_FEE,
             )),

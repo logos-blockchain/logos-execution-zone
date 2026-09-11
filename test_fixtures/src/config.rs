@@ -305,6 +305,7 @@ pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
             distribution_limit: 1,
             calibration_limit: 5,
         },
+        gas_limit: wallet::DEFAULT_GAS_LIMIT,
     })
 }
 
