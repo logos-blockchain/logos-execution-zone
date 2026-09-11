@@ -1,6 +1,9 @@
 use std::io;
 
-use lee_core::account::{AccountId, AccountInput, BalanceDiffError, Cycles};
+use lee_core::{
+    account::{AccountId, BalanceDiffError, Cycles},
+    program::AccountInput,
+};
 use thiserror::Error;
 
 #[macro_export]

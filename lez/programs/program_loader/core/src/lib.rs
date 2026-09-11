@@ -5,8 +5,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, ShardData},
-    program::{AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
+    account::{AccountId, BalanceDiff, ShardData},
+    program::{AccountInput, AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
 };
 
 /// Recommended max bytes of bytecode per segment.

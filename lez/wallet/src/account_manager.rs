@@ -8,12 +8,12 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, AccountInput, Nonce, ProgramShardSelector},
+    account::{Account, Nonce, ProgramShardSelector},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
     },
-    program::PdaSeed,
+    program::{AccountInput, PdaSeed},
 };
 use rand::{RngCore as _, rngs::OsRng};
 

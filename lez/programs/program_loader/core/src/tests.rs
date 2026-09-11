@@ -5,7 +5,10 @@
 //! RISC0 program (`compute_image_id` rejects anything else), so those are covered at the
 //! state-machine integration level instead, against real guest ELFs.
 
-use lee_core::account::{AccountId, AccountInput, BalanceDiff};
+use lee_core::{
+    account::{AccountId, BalanceDiff},
+    program::AccountInput,
+};
 
 use super::*;
 

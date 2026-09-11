@@ -27,8 +27,8 @@ use lee::{
 };
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
-    account::{AccountInput, Nonce, ProgramShardSelector},
-    program::InstructionData,
+    account::{Nonce, ProgramShardSelector},
+    program::{AccountInput, InstructionData},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};

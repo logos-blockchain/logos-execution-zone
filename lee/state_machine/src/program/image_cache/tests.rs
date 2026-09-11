@@ -4,7 +4,7 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{AccountId, AccountInput, Cycles, ShardData},
+    account::{AccountId, Cycles, ShardData},
     program::ProgramInput,
     to_borsh_frame, to_frame,
 };
@@ -13,7 +13,7 @@ use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
 
 use crate::{
     error::LeeError,
-    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
+    program::{AccountInput, DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
 fn transfer_pre_states() -> Vec<AccountInput> {

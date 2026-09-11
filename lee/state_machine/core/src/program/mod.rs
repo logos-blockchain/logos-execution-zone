@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountId, AccountInput, BalanceDiff, BalanceDiffError, ProgramShardSelector,
-        ShardData, apply_balance_diff,
+        Account, AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError,
+        ProgramShardSelector, ShardData, apply_balance_diff,
     },
     encryption::ViewingPublicKey,
 };
@@ -55,6 +55,84 @@ impl From<AccountId> for ProgramId {
 
 /// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
+
+/// An account seen as an input to an LEE program.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AccountInput {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub balance: Balance,
+    pub shard: Option<(AccountId, ShardData)>,
+}
+
+impl AccountInput {
+    #[must_use]
+    pub const fn with_shard(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+        program_account_id: AccountId,
+        data: ShardData,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: Some((program_account_id, data)),
+        }
+    }
+
+    #[must_use]
+    pub const fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: None,
+        }
+    }
+
+    #[must_use]
+    pub fn at(
+        shard_selector: ProgramShardSelector,
+        is_authorized: bool,
+        data: &AccountData,
+    ) -> Self {
+        Self {
+            account_id: shard_selector.account_id,
+            is_authorized,
+            balance: data.balance,
+            shard: shard_selector
+                .program_account_id
+                .map(|program| (program, data.shard(program).clone())),
+        }
+    }
+
+    #[must_use]
+    pub fn program_account_id(&self) -> Option<AccountId> {
+        self.shard.as_ref().map(|(program, _)| *program)
+    }
+
+    /// Returns the shard data. Panics unless the input selects `program`'s shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &ShardData {
+        let (selected, data) = self.shard.as_ref().expect("AccountInput carries no shard");
+        assert_eq!(
+            *selected, program,
+            "AccountInput carries another program's shard"
+        );
+        data
+    }
+}
+
+impl From<&AccountInput> for ProgramShardSelector {
+    fn from(input: &AccountInput) -> Self {
+        Self {
+            account_id: input.account_id,
+            program_account_id: input.program_account_id(),
+        }
+    }
+}
 
 /// Struct encoding the input to an LEE program.
 #[derive(BorshSerialize, BorshDeserialize)]

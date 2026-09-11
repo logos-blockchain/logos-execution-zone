@@ -34,8 +34,8 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     Timestamp,
-    account::{AccountId, AccountInput, ShardData},
-    program::InstructionData,
+    account::{AccountId, ShardData},
+    program::{AccountInput, InstructionData},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;

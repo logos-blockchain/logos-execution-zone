@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
-use lee_core::account::{AccountId, AccountInput, ProgramShardSelector, ShardData};
+use lee_core::{
+    account::{AccountId, ProgramShardSelector, ShardData},
+    program::AccountInput,
+};
 use token_core::{TokenDefinition, TokenHolding};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
