@@ -24,7 +24,6 @@ fn main() {
         &shadow_program_witnesses,
     );
 
-    // For `Private`, this is where the membership check itself happens.
     let program_image_claims = program_image_witnesses
         .iter()
         .map(ProgramImageWitness::to_claim)

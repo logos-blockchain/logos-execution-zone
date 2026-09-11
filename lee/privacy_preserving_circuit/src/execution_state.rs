@@ -76,11 +76,8 @@ impl ExecutionState {
             .iter()
             .map(|witness| (witness.account_id(), witness.image_id()))
             .collect();
-        // Shadow programs resolve here too, once per witness, rather than per dispatch: a shadow
-        // program invoked N times in the call graph would otherwise decode and hash its elf N
-        // times. Every supplied witness is resolved (and so must be valid) even if the call graph
-        // never actually dispatches it — tighter than strictly necessary, but a prover has no
-        // reason to supply a witness it doesn't intend to use.
+        // Resolved once per witness rather than per dispatch, so a shadow program invoked N
+        // times in the call graph isn't decoded and hashed N times.
         for witness in shadow_program_witnesses {
             let previous =
                 image_id_by_account_id.insert(witness.account_id, resolve_shadow_witness(witness));

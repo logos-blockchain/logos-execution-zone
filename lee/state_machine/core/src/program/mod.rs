@@ -31,9 +31,8 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
 pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
-/// Sentinel nullifier public key for the immutable-mirror commitment. Not a real key — nobody
-/// can authorize a write against this commitment (the header can never change again) and nobody
-/// needs to discover it by scanning (its content was already public). Exists only to satisfy
+/// Sentinel nullifier public key for the immutable-mirror commitment — not a real key, since the
+/// mirror can never be written to or scanned for. Exists only to satisfy
 /// `AccountId::for_private_pda`'s signature.
 const IMMUTABLE_MIRROR_NPK: NullifierPublicKey = NullifierPublicKey([0; 32]);
 
