@@ -419,13 +419,7 @@ impl V03State {
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .collect();
         let segment_account_ids: Vec<AccountId> = (0..chunks.len())
-            .map(|i| {
-                AccountId::new({
-                    let mut bytes = self_account_id.into_value();
-                    bytes[0] = bytes[0].wrapping_add(u8::try_from(i.saturating_add(1)).unwrap());
-                    bytes
-                })
-            })
+            .map(|i| genesis_segment_account_id(self_account_id, i))
             .collect();
 
         for (i, chunk) in chunks.iter().enumerate() {

@@ -281,7 +281,7 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             fee,
         } = value;
         Self {
-            program_id: ProgramId(program_account_id.into()),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
@@ -293,14 +293,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
 impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self::new_preserialized(
-            lee::AccountId::from_builtin_program(program_id.0),
+            program_account_id.into(),
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
@@ -939,7 +939,7 @@ impl EventRecord {
                 block_id,
                 tx_index,
                 tx_hash: tx_hash.into(),
-                program_id: ProgramId(event.account_id.into()),
+                program_account_id: event.account_id.into(),
                 selector: event.event.selector.into(),
                 data: event.event.data,
             })
@@ -970,11 +970,10 @@ mod tests {
 
         assert_eq!(records.len(), 3);
         assert!(records.iter().all(|r| r.block_id == 77 && r.tx_index == 4));
-        assert!(
-            records
-                .iter()
-                .all(|r| r.tx_hash == HashType([9_u8; 32]) && r.program_id == ProgramId([7; 8]))
-        );
+        let expected_program_account_id: AccountId =
+            lee_core::account::AccountId::from_builtin_program([7; 8]).into();
+        assert!(records.iter().all(|r| r.tx_hash == HashType([9_u8; 32])
+            && r.program_account_id == expected_program_account_id));
         assert_eq!(records[1].selector, Selector([2; 8]));
         assert_eq!(records[2].data, vec![3, 3]);
     }

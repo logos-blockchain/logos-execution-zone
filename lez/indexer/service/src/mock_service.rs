@@ -12,8 +12,8 @@ use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
     CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
     GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Selector, Signature, Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, PublicActionWithID, PublicKey, PublicMessage,
+    PublicTransaction, Selector, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -387,7 +387,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
         Ok(records
             .into_iter()
-            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
+            .filter(|record| record.matches_fields(filter.program_account_id, filter.selector))
             .collect())
     }
 
@@ -423,7 +423,7 @@ fn mock_event_record(block: &Block) -> Option<EventRecord> {
         block_id: block.header.block_id,
         tx_index: 0,
         tx_hash: *tx.hash(),
-        program_id: ProgramId([7_u32; 8]),
+        program_account_id: AccountId { value: [7; 32] },
         selector: Selector([1_u8; 8]),
         data: vec![block.header.block_id as u8; 4],
     })
@@ -438,7 +438,7 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            program_id: ProgramId([1_u32; 8]),
+            program_account_id: AccountId { value: [1; 32] },
             account_ids: vec![
                 account_ids[tx_idx as usize % account_ids.len()],
                 account_ids[(tx_idx as usize + 1) % account_ids.len()],
@@ -585,7 +585,7 @@ mod tests {
         };
         let matching = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([7_u32; 8])),
+            program_account_id: Some(AccountId { value: [7; 32] }),
             ..GetEventsFilter::default()
         };
         let hit = service.get_events(matching).await.unwrap();
@@ -594,7 +594,7 @@ mod tests {
 
         let mismatched = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([8_u32; 8])),
+            program_account_id: Some(AccountId { value: [8; 32] }),
             ..GetEventsFilter::default()
         };
         let miss = service.get_events(mismatched).await.unwrap();
