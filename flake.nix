@@ -116,10 +116,17 @@
 
             sdk=
             tool=
+            find=
             args=()
             while [ $# -gt 0 ]; do
               case "$1" in
-                --sdk) sdk=$2; shift 2 ;;
+                # A bare --sdk would make `shift 2` spin; let xcrun reject it.
+                --sdk)
+                  [ $# -ge 2 ] || exec /usr/bin/xcrun "''${orig[@]}"
+                  sdk=$2
+                  shift 2
+                  ;;
+                --find|-f) find=1; shift ;;
                 metal|metallib)
                   if [ -z "$tool" ]; then tool=$1; else args+=("$1"); fi
                   shift
@@ -135,12 +142,19 @@
             if [ -n "$tool" ]; then
               for cand in /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin/"$tool"; do
                 [ -x "$cand" ] || continue
+                # --find asks for the path; returning xcrun's would defeat this.
+                if [ -n "$find" ]; then
+                  echo "$cand"
+                  exit 0
+                fi
                 if [ "$tool" = metal ] && [ -n "$sdk" ]; then
                   # --sdk was xcrun's job; hand the compiler the sysroot itself.
-                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null || true)
-                  if [ -n "$sysroot" ]; then
-                    exec "$cand" -isysroot "$sysroot" "''${args[@]}"
+                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null) || sysroot=
+                  if [ -z "$sysroot" ]; then
+                    echo "xcrun: cannot resolve SDK '$sdk'" >&2
+                    exit 1
                   fi
+                  exec "$cand" -isysroot "$sysroot" "''${args[@]}"
                 fi
                 exec "$cand" "''${args[@]}"
               done
