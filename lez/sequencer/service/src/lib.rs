@@ -297,7 +297,11 @@ async fn setup_gossip(
         })
     });
 
-    let gossip_actor = GossipActor::new(
+    // note on `Box::pin` here: the swarm construction makes this awaited future large,
+    // and it would otherwise sit inline in every future that awaits the service start.
+    //
+    // see: https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#large_futures
+    let gossip_actor = Box::pin(GossipActor::new(
         gossip_config,
         channel_id,
         signing_key,
@@ -306,7 +310,7 @@ async fn setup_gossip(
         max_block_size,
         submit,
         accredited_keys_rx,
-    )
+    ))
     .await
     .context("Failed to start sequencer gossip network")?;
     info!("Gossip network started as {}", gossip_actor.local_peer_id());
