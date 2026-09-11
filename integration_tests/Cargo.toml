@@ -70,6 +70,8 @@ sequencer_core = { workspace = true, features = ["test-utils"] }
 
 [features]
 cucumber = ["dep:cucumber"]
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["lee/prove"]
 
 [[test]]
 harness = false                     # Cucumber has its own main() function to run tests.

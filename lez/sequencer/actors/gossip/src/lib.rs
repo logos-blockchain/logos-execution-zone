@@ -1,0 +1,18 @@
+//! Sequencer p2p gossip as an actor: a libp2p swarm that discovers peers via
+//! Kademlia, Identify, and bootstrap (plus mDNS behind a cargo feature).
+//!
+//! p2p is a latency optimization, never a source of truth: gossip being
+//! down degrades to L1-only behavior, and a gossip failure after startup
+//! never halts the node.
+
+#[cfg(feature = "actor")]
+pub use actor::{
+    BOOTSTRAP_RETRY_INTERVAL, GossipActor, IngestSubmit, MAILBOX_CAPACITY, WatchdogGuard,
+    spawn_gossip_outage_watchdog,
+};
+#[cfg(feature = "actor")]
+pub use libp2p::Multiaddr;
+
+#[cfg(feature = "actor")]
+pub mod actor;
+pub mod protocol;
