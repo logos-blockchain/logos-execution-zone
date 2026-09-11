@@ -8,12 +8,11 @@ pub use lee_core::program::PdaSeed;
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Create the Associated Token Account for (owner, definition).
-    /// Idempotent: no-op if its token shard is nonempty.
     ///
     /// Required accounts (3):
     /// - Owner account (address only)
     /// - Token definition account (under `token_program_id`)
-    /// - Associated token account (under `token_program_id`; empty, or already initialized)
+    /// - Associated token account (under `token_program_id`)
     Create { token_program_id: AccountId },
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.

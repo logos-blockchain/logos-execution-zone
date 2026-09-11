@@ -39,7 +39,7 @@ pub enum Instruction {
     ///
     /// Required accounts:
     /// - Token Definition account (initialized),
-    /// - Token Holding account (empty),
+    /// - Token Holding account,
     InitializeAccount,
 
     /// Burn tokens from the holder's account.

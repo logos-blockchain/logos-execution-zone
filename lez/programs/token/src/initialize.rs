@@ -11,8 +11,9 @@ pub fn initialize_account(
     self_account_id: AccountId,
 ) -> Vec<AccountStateDiff> {
     assert!(
-        account_to_initialize.shard_of(self_account_id).is_empty(),
-        "Only Uninitialized accounts can be initialized"
+        account_to_initialize.shard_of(self_account_id).is_empty()
+            || account_to_initialize.is_authorized,
+        "Only Uninitialized or authorized accounts can be initialized"
     );
 
     let definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
