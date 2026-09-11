@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -52,7 +52,9 @@ pub struct PrivacyPreservingCircuitInput {
 )]
 pub enum InputAccountIdentity {
     /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier.
+    /// commitment, ciphertext, or nullifier. Whether a given touch ends up `Bound` or `Deferred`
+    /// is never declared here — it's inferred per diff from whether the executing program
+    /// implements `CallKind::Incremental` (see `ExecutionState`'s per-account accumulation).
     Public,
     Private(PrivateWitness),
 }
@@ -178,11 +180,46 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
+/// One pending, unresolved update to a `Deferred` account's `data`.
+///
+/// Everything settlement needs to replay `CallKind::Incremental` for real, host-side, against
+/// live state. A `Deferred` account carries a list of these (see `PublicAction::Deferred`), one
+/// per touch by a program that implements `Incremental`, applied in order at settlement.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct DeferredResolution {
+    /// The program whose ELF resolves this account's `post_data` via `CallKind::Incremental` —
+    /// not necessarily the touched account itself (mirrors `resolve_diff`'s own distinction
+    /// between `executing_account_id` and `diff.pre_state.account_id`).
+    pub executing_account_id: AccountId,
+    pub caller_account_id: Option<AccountId>,
+    pub post_balance_diff: BalanceDiff,
+    pub post_data: Option<Data>,
+}
+
+/// A public account's outcome for one privacy-preserving execution.
+///
+/// `Bound` and `Deferred` are never declared by a caller — every touch is classified per diff, by
+/// whether the program producing it implements `CallKind::Incremental`; a `Deferred`-eligible
+/// touch that later shares an account with a `Bound`-forced one folds into `Bound` for the rest
+/// of the execution (see `ExecutionState`'s accumulation logic).
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct PublicAction {
-    pub pre: AccountWithMetadata,
-    pub post: Account,
+pub enum PublicAction {
+    /// Resolved in-circuit, part of what the proof attests to — `pre` anchors the proof's
+    /// validity to that exact starting value, checked against live state at settlement.
+    Bound {
+        pre: AccountWithMetadata,
+        post: Account,
+    },
+    /// Unresolved — no `pre` at all, deliberately: a `Deferred` account's value was never tied
+    /// to any specific starting state in the first place, so there's nothing to anchor or check
+    /// against live state at settlement. `resolutions` are replayed in order, each against
+    /// whatever the account actually holds when it's applied.
+    Deferred {
+        account_id: AccountId,
+        resolutions: Vec<DeferredResolution>,
+    },
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -239,7 +276,7 @@ mod tests {
     fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
-                PublicAction {
+                PublicAction::Bound {
                     pre: AccountWithMetadata::new(
                         Account {
                             program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
@@ -257,7 +294,7 @@ mod tests {
                         nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
                     },
                 },
-                PublicAction {
+                PublicAction::Bound {
                     pre: AccountWithMetadata::new(
                         Account {
                             program_owner: [9, 9, 9, 8, 8, 8, 7, 7].into(),
@@ -274,6 +311,23 @@ mod tests {
                         data: b"post state data 2".to_vec().try_into().unwrap(),
                         nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),
                     },
+                },
+                PublicAction::Deferred {
+                    account_id: AccountId::new([5; 32]),
+                    resolutions: vec![
+                        DeferredResolution {
+                            executing_account_id: AccountId::new([6; 32]),
+                            caller_account_id: None,
+                            post_balance_diff: BalanceDiff::Add(5),
+                            post_data: Some(b"delta 1".to_vec().try_into().unwrap()),
+                        },
+                        DeferredResolution {
+                            executing_account_id: AccountId::new([6; 32]),
+                            caller_account_id: Some(AccountId::new([7; 32])),
+                            post_balance_diff: BalanceDiff::Sub(2),
+                            post_data: None,
+                        },
+                    ],
                 },
             ],
             private_actions: vec![PrivateAction {

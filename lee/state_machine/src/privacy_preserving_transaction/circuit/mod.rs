@@ -7,7 +7,8 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     from_frame,
     program::{
-        ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas, post_state,
+        AccountStateDiff, ChainedCall, InstructionData, ProgramOutput, UnsupportedCallKind,
+        compute_public_authorized_pdas, post_state,
     },
     to_frame,
 };
@@ -235,6 +236,11 @@ pub fn execute_and_prove_with_padded_inputs(
         // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
         let mut authorized_output_accounts = caller_authorized_accounts;
 
+        // Diffs with `post_data` need a matching proven `Incremental` receipt supplied right
+        // after this call's own output, in diff order — mirrors exactly what
+        // `resolve_diff_in_circuit` expects to pop from `program_outputs`.
+        let mut incremental_receipts_and_outputs = Vec::new();
+
         for diff in &program_output.state_diffs {
             let pre = &diff.pre_state;
             let account_id = pre.account_id;
@@ -262,9 +268,58 @@ pub fn execute_and_prove_with_padded_inputs(
                     })
                 });
 
+            // Best-effort mirror of the circuit's own resolution (see the comment at the top of
+            // this function): whenever `post_data` is present, resolve it now too, proving the
+            // resolution so the circuit can verify it — unconditionally, regardless of whether
+            // this account ends up `Bound` or `Deferred` in the circuit's own output (that's
+            // decided there, not here; see `ExecutionState`'s accumulation). A program that
+            // hasn't implemented `Incremental` responds with `UnsupportedCallKind`, itself a
+            // valid receipt — the original diff then applies verbatim, exactly like copy/replace.
+            let resolved_diff = if let Some(post_data) = &diff.post_data {
+                let incremental_receipt = execute_and_prove_incremental(
+                    program,
+                    chained_call.program_account_id,
+                    caller_account_id,
+                    pre,
+                    post_data,
+                )?;
+                let incremental_output: ProgramOutput = borsh::from_slice(
+                    from_frame(&incremental_receipt.journal.bytes).ok_or_else(|| {
+                        LeeError::ProgramOutputDeserializationError(
+                            "malformed inner-receipt journal frame".to_owned(),
+                        )
+                    })?,
+                )
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+
+                let unsupported = incremental_output
+                    .events
+                    .iter()
+                    .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
+                let resolved = if unsupported {
+                    diff.clone()
+                } else {
+                    let [resolved]: [AccountStateDiff; 1] =
+                        incremental_output.state_diffs.clone().try_into().map_err(
+                            |diffs: Vec<AccountStateDiff>| {
+                                LeeError::ProgramOutputDeserializationError(format!(
+                                    "Incremental resolution for account {account_id} returned \
+                                     {} diffs, expected 1",
+                                    diffs.len()
+                                ))
+                            },
+                        )?;
+                    resolved
+                };
+                incremental_receipts_and_outputs.push((incremental_receipt, incremental_output));
+                resolved
+            } else {
+                diff.clone()
+            };
+
             // A data write to an unowned account acquires it; the guest doesn't write this into
             // its own post_state, the circuit does it afterward, so predict it here too.
-            let post = post_state(diff, chained_call.program_account_id)
+            let post = post_state(&resolved_diff, chained_call.program_account_id)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(account_id, post);
             if pre.is_authorized {
@@ -281,9 +336,12 @@ pub fn execute_and_prove_with_padded_inputs(
 
         // TODO: remove clone
         program_outputs.push(program_output.clone());
-
-        // Prove circuit.
         env_builder.add_assumption(inner_receipt);
+
+        for (incremental_receipt, incremental_output) in incremental_receipts_and_outputs {
+            program_outputs.push(incremental_output);
+            env_builder.add_assumption(incremental_receipt);
+        }
 
         for new_call in program_output.chained_calls.into_iter().rev() {
             let next_program = dependencies.get(&new_call.program_account_id).ok_or(
@@ -360,7 +418,6 @@ fn execute_and_prove_program(
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
-    // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
     program.write_inputs(
         self_account_id,
@@ -370,11 +427,40 @@ fn execute_and_prove_program(
         &mut env_builder,
     )?;
     let env = env_builder.build().unwrap();
+    prove_and_check(program.elf(), env)
+}
 
-    // Prove the program
+/// Proves a `CallKind::Incremental` invocation of `program` for one account — the wallet-side
+/// counterpart to `resolve_diff_in_circuit`'s expectations: every diff with `post_data` needs a
+/// matching Incremental receipt supplied to the circuit, whether or not the program actually
+/// implements `Incremental` (an `UnsupportedCallKind` response is itself a valid, provable
+/// outcome the circuit checks for).
+fn execute_and_prove_incremental(
+    program: &Program,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    pre_state: &AccountWithMetadata,
+    diff_data: &[u8],
+) -> Result<Receipt, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
+    let input = lee_core::program::ProgramInput {
+        self_account_id,
+        caller_account_id,
+        pre_states: vec![pre_state.clone()],
+        instruction: diff_data.to_vec(),
+    };
+    let payload = borsh::to_vec(&input)
+        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+    env_builder.write_slice(&to_frame(&payload));
+    let env = env_builder.build().unwrap();
+    prove_and_check(program.elf(), env)
+}
+
+fn prove_and_check(elf: &[u8], env: ExecutorEnv<'_>) -> Result<Receipt, LeeError> {
     let prover = default_prover();
     let prove_info = prover
-        .prove(env, program.elf())
+        .prove(env, elf)
         .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
 
     // The local prover proves any exit code, and the circuit's `env::verify` only resolves a

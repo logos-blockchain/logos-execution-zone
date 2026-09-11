@@ -55,6 +55,48 @@ mod test_methods {
         )
     }
 
+    /// A token program whose account `data` is just a balance. `Execute` emits a `TokenDiff`
+    /// delta; `Incremental` decodes it and resolves against the real current balance.
+    #[must_use]
+    pub const fn stripped_token() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ELF),
+        )
+    }
+
+    /// Reads two `stripped_token` balances and chain-calls a 1-unit transfer from the larger to
+    /// the smaller (a no-op if equal); never touches either account itself. `Execute` only.
+    #[must_use]
+    pub const fn stripped_token_robinhood() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ROBINHOOD_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ROBINHOOD_ELF),
+        )
+    }
+
+    /// `stripped_token`'s `Initialize`, plus a forward on the same account to a supplied callee —
+    /// lets a test compose an `Incremental`-eligible touch with a further chained touch on the
+    /// same account, which `stripped_token` alone can't do (it never chains).
+    #[must_use]
+    pub const fn stripped_token_and_forward() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_AND_FORWARD_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_AND_FORWARD_ELF),
+        )
+    }
+
+    /// `simple_balance_transfer`'s twin, opted into `Incremental`. `BalanceDiff` already
+    /// composes safely, so `Execute` moves the balance directly and `Incremental` is only ever
+    /// reached by a caller that dispatches it directly, not through `resolve_diff`.
+    #[must_use]
+    pub const fn incremental_balance_transfer() -> Program {
+        Program::new_unchecked(
+            test_methods::INCREMENTAL_BALANCE_TRANSFER_ID,
+            Cow::Borrowed(test_methods::INCREMENTAL_BALANCE_TRANSFER_ELF),
+        )
+    }
+
     #[cfg(feature = "prove")]
     #[must_use]
     pub const fn multi_segment_burner() -> Program {

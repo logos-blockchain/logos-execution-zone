@@ -10,9 +10,10 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER, PROGRAM_LOADER_ACCOUNT_ID,
-        ProgramOutput, TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        is_ownership_settled, post_state, pre_states_match_accounts, validate_execution,
+        AccountStateDiff, CallKind, CallerData, ChainedCall, DEFAULT_PROGRAM_OWNER,
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput, TransactionEvent, UnsupportedCallKind,
+        compute_public_authorized_pdas, get_program_via, is_ownership_settled, post_state,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -22,7 +23,9 @@ use crate::{
     V03State, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof, message::Message,
+        PrivacyPreservingTransaction,
+        circuit::Proof,
+        message::{Message, PublicActionWithID},
     },
     program::Program,
     public_transaction::PublicTransaction,
@@ -472,9 +475,27 @@ impl ValidatedStateDiff {
                 );
             }
 
+            // Resolve each diff to what should actually be applied — via `Incremental` if the
+            // program supports it, or verbatim otherwise — before `validate_execution` sees it.
+            let resolved_diffs = program_output
+                .state_diffs
+                .iter()
+                .map(|diff| {
+                    resolve_diff(
+                        diff,
+                        chained_call.program_account_id,
+                        caller_data.account_id,
+                        state,
+                        &state_diff,
+                        cycle_budget,
+                        cycles_used,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(&program_output.state_diffs, chained_call.program_account_id)
+            validate_execution(&resolved_diffs, chained_call.program_account_id)
                 .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
@@ -488,7 +509,7 @@ impl ValidatedStateDiff {
 
             // Update the state diff, acquiring ownership of every unowned account this call
             // wrote data to.
-            for diff in &program_output.state_diffs {
+            for diff in &resolved_diffs {
                 let post = post_state(diff, chained_call.program_account_id)
                     .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
                 state_diff.insert(diff.pre_state.account_id, post);
@@ -582,6 +603,26 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_with_cycle_budget(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+    }
+
+    /// Like [`Self::from_privacy_preserving_transaction`], but with an explicit cycle budget for
+    /// resolving any `Deferred` public action — settlement-time `CallKind::Incremental`
+    /// re-resolution (see `resolve_public_action`) runs a real host-side guest execution, unlike
+    /// `Bound` actions, which are already fully resolved and proven by the circuit.
+    pub fn from_privacy_preserving_transaction_with_cycle_budget(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<Self, LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
@@ -672,11 +713,12 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
+        let mut cycles_used = 0;
         let public_diff = message
             .public_actions
             .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
-            .collect();
+            .map(|action| resolve_public_action(action, state, cycle_budget, &mut cycles_used))
+            .collect::<Result<HashMap<_, _>, _>>()?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -750,6 +792,159 @@ fn execute_program_loader(
     ))
 }
 
+/// Resolves one message-level public action to the `Account` it leaves behind. A `Bound`
+/// action's `post_state` is already final and proven — used as-is. A `Deferred` action carries a
+/// list of raw, unresolved deltas (one per touch by an `Incremental`-supporting program during
+/// the execution, in order); this replays each in turn, host-side and unproven, through the same
+/// `resolve_diff` + `post_state` machinery a public transaction's own `Incremental` diffs use —
+/// each resolution building on the previous one's result (threaded through a local `state_diff`
+/// map, exactly like `execute_authorized`'s own chained calls do), with the *first* resolved
+/// against real, live state directly. Settlement never needs a sibling *transaction*'s
+/// uncommitted diff here — block application is strictly sequential — only its own prior
+/// resolutions within this same action.
+fn resolve_public_action(
+    action: &PublicActionWithID,
+    state: &V03State,
+    cycle_budget: Cycles,
+    cycles_used: &mut u64,
+) -> Result<(AccountId, Account), LeeError> {
+    let (account_id, resolutions) = match action {
+        PublicActionWithID::Bound {
+            account_id,
+            post_state,
+        } => return Ok((*account_id, post_state.clone())),
+        PublicActionWithID::Deferred {
+            account_id,
+            resolutions,
+        } => (*account_id, resolutions),
+    };
+    ensure!(
+        !resolutions.is_empty(),
+        LeeError::InvalidInput(format!(
+            "Deferred action for account {account_id} carries no resolutions"
+        ))
+    );
+
+    let mut resolved_so_far: HashMap<AccountId, Account> = HashMap::new();
+    for deferred in resolutions {
+        let diff = AccountStateDiff {
+            pre_state: AccountWithMetadata::new(Account::default(), false, account_id),
+            post_balance_diff: deferred.post_balance_diff,
+            post_data: deferred.post_data.clone(),
+        };
+        let resolved = resolve_diff(
+            &diff,
+            deferred.executing_account_id,
+            deferred.caller_account_id,
+            state,
+            &resolved_so_far,
+            cycle_budget,
+            cycles_used,
+        )?;
+        let post = post_state(&resolved, deferred.executing_account_id)
+            .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+        resolved_so_far.insert(account_id, post);
+    }
+
+    Ok((
+        account_id,
+        resolved_so_far
+            .remove(&account_id)
+            .expect("just inserted above: resolutions is non-empty"),
+    ))
+}
+
+/// Resolves one `Execute`-produced diff to what should actually be applied. A diff with no
+/// `post_data` has nothing to resolve — used as-is. Otherwise, probes the same program with
+/// `CallKind::Incremental` against the account's real current state; if the program hasn't
+/// implemented `Incremental` (signaled by an `UnsupportedCallKind` event), falls back to `diff`
+/// verbatim.
+///
+/// `program_loader` is exempt — a native pseudo-program with no guest ELF to probe, so it always
+/// falls back to verbatim directly.
+fn resolve_diff(
+    diff: &AccountStateDiff,
+    executing_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    state: &V03State,
+    state_diff: &HashMap<AccountId, Account>,
+    cycle_budget: u64,
+    cycles_used: &mut u64,
+) -> Result<AccountStateDiff, LeeError> {
+    if executing_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+        return Ok(diff.clone());
+    }
+    let Some(post_data) = diff.post_data.as_ref() else {
+        return Ok(diff.clone());
+    };
+
+    let account_id = diff.pre_state.account_id;
+    let real_pre_state = AccountWithMetadata::new(
+        state_diff
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(account_id)),
+        diff.pre_state.is_authorized,
+        account_id,
+    );
+
+    let Some((program_id, elf)) = get_program_via(executing_account_id, |id| {
+        state_diff
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(id))
+    }) else {
+        return Err(LeeError::UnknownProgram {
+            chained: caller_account_id.is_some(),
+        });
+    };
+    let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+
+    let (incremental_output, incremental_cycles) = program.execute_incremental(
+        executing_account_id,
+        caller_account_id,
+        &real_pre_state,
+        post_data.as_ref(),
+        cycle_budget.saturating_sub(*cycles_used),
+    )?;
+    *cycles_used = cycles_used
+        .checked_add(incremental_cycles)
+        .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+
+    let supported = !incremental_output
+        .events
+        .iter()
+        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
+    if !supported {
+        return Ok(diff.clone());
+    }
+
+    let [resolved]: [AccountStateDiff; 1] =
+        incremental_output
+            .state_diffs
+            .try_into()
+            .map_err(|diffs: Vec<AccountStateDiff>| {
+                InvalidProgramBehaviorError::MalformedIncrementalResponse {
+                    program_account_id: executing_account_id,
+                    account_id,
+                    reason: format!("expected exactly 1 diff, got {}", diffs.len()),
+                }
+            })?;
+    ensure!(
+        resolved.pre_state.account_id == account_id,
+        InvalidProgramBehaviorError::MalformedIncrementalResponse {
+            program_account_id: executing_account_id,
+            account_id,
+            reason: format!(
+                "returned a diff for {} instead",
+                resolved.pre_state.account_id
+            ),
+        }
+    );
+
+    Ok(resolved)
+}
+
 /// Validates the witness set and replay nonces of a public transaction against
 /// `state`, returning the signer account ids.
 fn authenticate_public_transaction_signers(
@@ -810,14 +1005,41 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 
+    // `Bound` actions need their real, live pre-state to reconstruct what the circuit actually
+    // committed to (that's the anchor check itself); `Deferred` actions need none at all — see
+    // `PublicAction`'s own doc for why. Looked up by id rather than zipped positionally, since
+    // the two lists no longer line up 1:1 once some actions carry no pre-state at all.
+    let public_pre_state_by_id: HashMap<AccountId, AccountWithMetadata> = public_pre_states
+        .iter()
+        .cloned()
+        .map(|pre| (pre.account_id, pre))
+        .collect();
+
     let output = PrivacyPreservingCircuitOutput {
-        public_actions: public_pre_states
+        public_actions: message
+            .public_actions
             .iter()
-            .cloned()
-            .zip(&message.public_actions)
-            .map(|(pre, action)| PublicAction {
-                pre,
-                post: action.post_state.clone(),
+            .map(|action| match action {
+                PublicActionWithID::Bound {
+                    account_id,
+                    post_state,
+                } => {
+                    let pre = public_pre_state_by_id
+                        .get(account_id)
+                        .cloned()
+                        .expect("pre-state must exist for every public account in the message");
+                    PublicAction::Bound {
+                        pre,
+                        post: post_state.clone(),
+                    }
+                }
+                PublicActionWithID::Deferred {
+                    account_id,
+                    resolutions,
+                } => PublicAction::Deferred {
+                    account_id: *account_id,
+                    resolutions: resolutions.clone(),
+                },
             })
             .collect(),
         private_actions: message.private_actions.clone(),

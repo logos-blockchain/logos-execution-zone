@@ -695,17 +695,25 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
+    /// A call kind a program opts into for a custom `data`-update step.
+    Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
 }
 
+impl CallKind {
+    const fn discriminant(self) -> u8 {
+        match self {
+            Self::Execute => 0,
+            Self::Incremental => 1,
+            Self::Unknown(byte) => byte,
+        }
+    }
+}
+
 impl BorshSerialize for CallKind {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let discriminant: u8 = match *self {
-            Self::Execute => 0,
-            Self::Unknown(byte) => byte,
-        };
-        BorshSerialize::serialize(&discriminant, writer)
+        BorshSerialize::serialize(&self.discriminant(), writer)
     }
 }
 
@@ -714,6 +722,7 @@ impl BorshDeserialize for CallKind {
         let discriminant = u8::deserialize_reader(reader)?;
         Ok(match discriminant {
             0 => Self::Execute,
+            1 => Self::Incremental,
             other => Self::Unknown(other),
         })
     }
@@ -726,6 +735,9 @@ impl BorshDeserialize for CallKind {
 #[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
+    /// Runs a program's custom `data`-update step against `pre_states` as they stand right now.
+    /// The instruction shape is program-defined, so it arrives undecoded.
+    Incremental(ProgramInput<InstructionData>),
     /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
     /// discriminant and the envelope common to every call kind.
     Unsupported(ProgramInput<InstructionData>, u8),
@@ -812,16 +824,37 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
                 instruction_data,
             )
         }
+        // Undecoded: the instruction shape is program-defined, not necessarily `T` (Execute's).
+        CallKind::Incremental => ProgramCall::Incremental(envelope),
         CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }
 
-/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip,
-/// not a failure.
+/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip, not
+/// a failure.
+///
+/// Generic over every `ProgramCall` variant, since which kind a program implements is its own
+/// choice, not something the caller can rule out in advance.
 pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
-    let ProgramCall::Unsupported(envelope, raw_discriminant) = call else {
-        unreachable!("only reached after Execute was already ruled out by the caller");
-    };
+    let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
+        match call {
+            ProgramCall::Execute(input, instruction_data) => (
+                ProgramInput {
+                    self_account_id: input.self_account_id,
+                    caller_account_id: input.caller_account_id,
+                    pre_states: input.pre_states,
+                    instruction: instruction_data,
+                },
+                CallKind::Execute,
+                CallKind::Execute.discriminant(),
+            ),
+            ProgramCall::Incremental(envelope) => (
+                envelope,
+                CallKind::Incremental,
+                CallKind::Incremental.discriminant(),
+            ),
+            ProgramCall::Unsupported(envelope, raw) => (envelope, CallKind::Unknown(raw), raw),
+        };
     let state_diffs = envelope
         .pre_states
         .iter()
@@ -834,7 +867,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         envelope.instruction,
         state_diffs,
     )
-    .with_call_kind(CallKind::Unknown(raw_discriminant))
+    .with_call_kind(call_kind)
     .with_events(vec![ProgramEvent {
         selector: UnsupportedCallKind::SELECTOR,
         data: UnsupportedCallKind { raw_discriminant }.to_bytes(),

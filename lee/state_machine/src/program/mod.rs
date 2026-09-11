@@ -176,6 +176,47 @@ impl Program {
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
+
+    /// Invokes a program's `Incremental` handler for one account, feeding it `post_data` — bytes
+    /// the program previously emitted for that account, whatever they mean to it — against
+    /// `pre_state` as it stands right now, not necessarily the one that produced `post_data`. A
+    /// program that hasn't implemented `Incremental` responds with a no-op plus an
+    /// `UnsupportedCallKind` event instead of an error; the caller checks for that event to fall
+    /// back to copy/replace.
+    pub(crate) fn execute_incremental(
+        &self,
+        self_account_id: AccountId,
+        caller_account_id: Option<AccountId>,
+        pre_state: &AccountWithMetadata,
+        post_data: &[u8],
+        cycle_budget: Cycles,
+    ) -> Result<(ProgramOutput, Cycles), LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.session_limit(Some(cycle_budget));
+        env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+
+        let input = ProgramInput {
+            self_account_id,
+            caller_account_id,
+            pre_states: vec![pre_state.clone()],
+            instruction: post_data.to_vec(),
+        };
+        let input_payload =
+            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder.write_slice(&to_frame(&input_payload));
+        let env = env_builder.build().unwrap();
+
+        let session = Self::execute_session(env, self.elf(), cycle_budget)?;
+        let cycles = session.cycles;
+
+        let output_payload = from_frame(&session.journal).ok_or_else(|| {
+            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
+        })?;
+        let program_output = borsh::from_slice(output_payload)
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        Ok((program_output, cycles))
+    }
 }
 
 /// Gates a finished session on its exit code.

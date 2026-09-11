@@ -3,12 +3,13 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, BlockIngestError,
-    Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
-    EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
-    Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountId, BalanceDiff, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
+    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data,
+    DeferredResolution, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
+    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
+    StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -312,11 +313,65 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
+impl From<lee_core::account::BalanceDiff> for BalanceDiff {
+    fn from(value: lee_core::account::BalanceDiff) -> Self {
+        match value {
+            lee_core::account::BalanceDiff::Add(amount) => Self::Add(amount),
+            lee_core::account::BalanceDiff::Sub(amount) => Self::Sub(amount),
+        }
+    }
+}
+
+impl From<BalanceDiff> for lee_core::account::BalanceDiff {
+    fn from(value: BalanceDiff) -> Self {
+        match value {
+            BalanceDiff::Add(amount) => Self::Add(amount),
+            BalanceDiff::Sub(amount) => Self::Sub(amount),
+        }
+    }
+}
+
+impl From<lee_core::DeferredResolution> for DeferredResolution {
+    fn from(value: lee_core::DeferredResolution) -> Self {
+        Self {
+            executing_account_id: value.executing_account_id.into(),
+            caller_account_id: value.caller_account_id.map(Into::into),
+            post_balance_diff: value.post_balance_diff.into(),
+            post_data: value.post_data.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<DeferredResolution> for lee_core::DeferredResolution {
+    type Error = lee_core::account::data::DataTooBigError;
+
+    fn try_from(value: DeferredResolution) -> Result<Self, Self::Error> {
+        Ok(Self {
+            executing_account_id: value.executing_account_id.into(),
+            caller_account_id: value.caller_account_id.map(Into::into),
+            post_balance_diff: value.post_balance_diff.into(),
+            post_data: value.post_data.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
 impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-            post_state: value.post_state.into(),
+        match value {
+            lee::privacy_preserving_transaction::message::PublicActionWithID::Bound {
+                account_id,
+                post_state,
+            } => Self::Bound {
+                account_id: account_id.into(),
+                post_state: post_state.into(),
+            },
+            lee::privacy_preserving_transaction::message::PublicActionWithID::Deferred {
+                account_id,
+                resolutions,
+            } => Self::Deferred {
+                account_id: account_id.into(),
+                resolutions: resolutions.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
@@ -361,12 +416,27 @@ impl TryFrom<PublicActionWithID>
     type Error = lee::error::LeeError;
 
     fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
-        Ok(Self {
-            account_id: value.account_id.into(),
-            post_state: value
-                .post_state
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+        Ok(match value {
+            PublicActionWithID::Bound {
+                account_id,
+                post_state,
+            } => Self::Bound {
+                account_id: account_id.into(),
+                post_state: post_state
+                    .try_into()
+                    .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            },
+            PublicActionWithID::Deferred {
+                account_id,
+                resolutions,
+            } => Self::Deferred {
+                account_id: account_id.into(),
+                resolutions: resolutions
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            },
         })
     }
 }
