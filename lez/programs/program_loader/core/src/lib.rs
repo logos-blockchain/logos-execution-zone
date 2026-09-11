@@ -10,8 +10,11 @@
 //! owns — that requires the caller to be `is_authorized` for it, checked here directly rather
 //! than through the diff-validation rules (which only gate balance decreases on authorization).
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
+pub use lee_core::program::{
+    MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+};
 use lee_core::{
+    Commitment,
     account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Data},
     program::{AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
 };
@@ -119,12 +122,14 @@ pub fn write_segment(
 }
 
 /// Executes `CreateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when `immutable` is set from birth.
 #[must_use]
 pub fn create_header(
     pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
@@ -140,36 +145,20 @@ pub fn create_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let image_id = compute_image_id(pre_states);
-
-    let mut diffs = vec![AccountStateDiff::new(
-        pre_states[0].clone(),
-        BalanceDiff::Add(0),
-        Data::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
-    )];
-    diffs.extend(
-        pre_states[1..]
-            .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
-    );
-    diffs
+    finalize_header(pre_states, first_segment, immutable)
 }
 
 /// Executes `UpdateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when this call is what flips `immutable`
+/// to `true` — the only transition possible, since a target that's already `immutable` is
+/// rejected outright.
 #[must_use]
 pub fn update_header(
     pre_states: &[AccountWithMetadata],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
@@ -191,27 +180,38 @@ pub fn update_header(
         "first_segment must match the first supplied segment account"
     );
 
+    finalize_header(pre_states, first_segment, immutable)
+}
+
+/// Shared tail of `create_header`/`update_header`, once each has run its own distinct validation:
+/// recomputes the real `image_id` from the segment chain, builds the finalized `ProgramHeader`,
+/// emits its mirror commitment if `immutable` is set, and diffs the header account (every segment
+/// behind it is left unchanged).
+fn finalize_header(
+    pre_states: &[AccountWithMetadata],
+    first_segment: AccountId,
+    immutable: bool,
+) -> (Vec<AccountStateDiff>, Option<Commitment>) {
+    let header_account_id = pre_states[0].account_id;
     let image_id = compute_image_id(pre_states);
+    let header = ProgramHeader {
+        image_id,
+        program_first_segment: first_segment,
+        immutable,
+    };
+    let new_commitment = immutable.then(|| immutable_mirror_commitment(header_account_id, &header));
 
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
+        Data::try_from(header.to_bytes()).expect("program header must fit under DATA_MAX_LENGTH"),
     )];
     diffs.extend(
         pre_states[1..]
             .iter()
             .map(|pre| AccountStateDiff::unchanged(pre.clone())),
     );
-    diffs
+    (diffs, new_commitment)
 }
 
 /// `segments_with_header[0]` is the header account, not part of the chain. Walks

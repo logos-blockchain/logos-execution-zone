@@ -271,6 +271,7 @@ impl ValidatedStateDiff {
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
         let declared_account_ids: HashSet<AccountId> = account_ids.iter().copied().collect();
         let mut events: Vec<TransactionEvent> = Vec::new();
+        let mut new_commitments: Vec<Commitment> = Vec::new();
 
         let initial_call = ChainedCall {
             program_account_id,
@@ -340,12 +341,14 @@ impl ValidatedStateDiff {
             let program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
                 // Native dispatch: `program_loader` is a pseudo-program run as Rust rather than a
                 // guest ELF, so there is no zkVM session to charge cycles against.
-                execute_program_loader(
+                let (program_output, new_commitment) = execute_program_loader(
                     chained_call.program_account_id,
                     caller_data.account_id,
                     &real_pre_states,
                     &chained_call.instruction_data,
-                )?
+                )?;
+                new_commitments.extend(new_commitment);
+                program_output
             } else {
                 // Looks through `state_diff` first, falling back to `state` — so an earlier
                 // chained call in this same transaction that deployed this program is seen
@@ -570,7 +573,7 @@ impl ValidatedStateDiff {
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
             public_diff: state_diff,
-            new_commitments: vec![],
+            new_commitments,
             new_nullifiers: vec![],
             events,
         }))
@@ -715,15 +718,20 @@ fn execute_program_loader(
     caller_account_id: Option<AccountId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &[u8],
-) -> Result<ProgramOutput, LeeError> {
+) -> Result<(ProgramOutput, Option<Commitment>), LeeError> {
     let instruction: ProgramLoaderInstruction = borsh::from_slice(instruction_data)
         .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
-    let state_diffs = catch_unwind(AssertUnwindSafe(|| match instruction {
+    // WriteSegment never emits a commitment; CreateHeader/UpdateHeader emit one only when this
+    // call is what makes the header immutable.
+    let (state_diffs, new_commitment) = catch_unwind(AssertUnwindSafe(|| match instruction {
         ProgramLoaderInstruction::WriteSegment {
             bytecode,
             next_segment,
-        } => program_loader_core::write_segment(pre_states, bytecode, next_segment),
+        } => (
+            program_loader_core::write_segment(pre_states, bytecode, next_segment),
+            None,
+        ),
         ProgramLoaderInstruction::CreateHeader {
             first_segment,
             immutable,
@@ -742,11 +750,14 @@ fn execute_program_loader(
         LeeError::ProgramExecutionFailed(message)
     })?;
 
-    Ok(ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data.to_vec(),
-        state_diffs,
+    Ok((
+        ProgramOutput::new(
+            self_account_id,
+            caller_account_id,
+            instruction_data.to_vec(),
+            state_diffs,
+        ),
+        new_commitment,
     ))
 }
 
@@ -789,24 +800,31 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
 ) -> Result<(), LeeError> {
-    // Anchor each claimed image_id to real chain state: reconstruct the claims using the
-    // program's *actual* current image_id (via `get_program_image_id`), not the message's own
-    // claim. If the claim was wrong, the reconstructed journal won't match what the receipt
-    // actually committed to, and `proof.is_valid_for` below fails — the same mechanism
-    // `public_actions` already relies on for authenticating account content against real state.
+    // Anchor each `Public` claim to real chain state, reconstructing it independently rather than
+    // trusting the message's own claim — a wrong claim means the reconstructed journal won't
+    // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
+    // `Private`'s membership check already happened in-circuit; the one thing left to check here
+    // is that its `root` is one the commitment tree has actually had.
     let program_image_claims = message
         .program_image_claims
         .iter()
-        .map(|claim| {
-            let image_id = state
-                .get_program_image_id(claim.account_id)
-                .ok_or_else(|| {
-                    LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
+        .map(|claim| match claim {
+            ProgramImageClaim::Public { account_id, .. } => {
+                let image_id = state.get_program_image_id(*account_id).ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {account_id}"))
                 })?;
-            Ok(ProgramImageClaim {
-                account_id: claim.account_id,
-                image_id,
-            })
+                Ok(ProgramImageClaim::Public {
+                    account_id: *account_id,
+                    image_id,
+                })
+            }
+            ProgramImageClaim::Private { root } => {
+                ensure!(
+                    state.is_known_commitment_root(root),
+                    LeeError::InvalidInput("Unrecognized commitment set digest".to_owned())
+                );
+                Ok(*claim)
+            }
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 

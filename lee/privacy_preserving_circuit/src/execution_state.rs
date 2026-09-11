@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageClaim,
-    WitnessKind,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageWitness,
+    ShadowProgramWitness, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
@@ -65,17 +65,31 @@ impl ExecutionState {
         program_account_id: AccountId,
         program_outputs: Vec<ProgramOutput>,
         initial_pre_states: &[AccountId],
-        program_image_claims: &[ProgramImageClaim],
+        program_image_witnesses: &[ProgramImageWitness],
+        shadow_program_witnesses: &[ShadowProgramWitness],
     ) -> Self {
-        // Untrusted claims supplied by the prover: `env::verify` needs a real image id, not an
-        // arbitrary dispatch address. The circuit does not check these against real chain state —
-        // the sequencer does that independently (`V03State::get_program_image_id`) before
-        // accepting the proof, which fails naturally if a claim is a lie (the receipt's actually
-        // committed bytes won't match the reconstructed output). See `ProgramImageClaim`.
-        let image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_claims
+        // Untrusted witnesses supplied by the prover: `env::verify` needs a real image id, not an
+        // arbitrary dispatch address. `Public` is not checked against real chain state here — the
+        // sequencer does that independently before accepting the proof. `Private` is checked
+        // in-circuit instead, when deriving the published claim.
+        let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
             .iter()
-            .map(|claim| (claim.account_id, claim.image_id))
+            .map(|witness| (witness.account_id(), witness.image_id()))
             .collect();
+        // Shadow programs resolve here too, once per witness, rather than per dispatch: a shadow
+        // program invoked N times in the call graph would otherwise decode and hash its elf N
+        // times. Every supplied witness is resolved (and so must be valid) even if the call graph
+        // never actually dispatches it — tighter than strictly necessary, but a prover has no
+        // reason to supply a witness it doesn't intend to use.
+        for witness in shadow_program_witnesses {
+            let previous =
+                image_id_by_account_id.insert(witness.account_id, resolve_shadow_witness(witness));
+            assert!(
+                previous.is_none(),
+                "account {} claimed by both a program-image claim and a shadow witness",
+                witness.account_id
+            );
+        }
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
         // order, so position here matches `pre_state_position` used downstream in
@@ -190,8 +204,7 @@ impl ExecutionState {
 
             // Check that `program_output` is consistent with the execution of the corresponding
             // program. `env::verify` needs the invoked program's real image id, not its dispatch
-            // address — resolved from the prover-supplied (and independently, externally
-            // verified) claims. See `ProgramImageClaim`.
+            // address — resolved above, from the prover-supplied claims and shadow witnesses.
             let image_id = image_id_by_account_id
                 .get(&chained_call.program_account_id)
                 .copied()
@@ -683,4 +696,21 @@ fn assert_authorization_and_record_bindings(
         pre_is_authorized, is_authorized,
         "Inconsistent authorization for account {pre_account_id}",
     );
+}
+
+/// Decodes and hashes a shadow program's witness elf, asserting it genuinely hashes to its own
+/// declared `account_id`, and returns the resulting `image_id`. Called once per witness — no
+/// cheaper way to establish a shadow program's identity than hashing its elf.
+fn resolve_shadow_witness(witness: &ShadowProgramWitness) -> ProgramId {
+    let image_id: ProgramId = risc0_binfmt::ProgramBinary::decode(&witness.full_binary)
+        .expect("shadow program witness must be a well-formed ProgramBinary")
+        .compute_image_id()
+        .expect("shadow program witness must be a valid RISC0 program binary")
+        .into();
+    assert_eq!(
+        witness.account_id,
+        AccountId::for_shadow_program(&image_id),
+        "shadow program witness's elf does not hash to its own declared account_id"
+    );
+    image_id
 }

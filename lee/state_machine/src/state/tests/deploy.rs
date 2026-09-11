@@ -311,3 +311,160 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         "noop changes nothing"
     );
 }
+
+/// A `CreateHeader` transaction with `immutable: true` lands the private commitment mirroring the
+/// finalized header, so it can later be referenced in a privacy-preserving transaction without
+/// public disclosure.
+#[test]
+fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x01);
+
+    let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("an immutable-from-birth CreateHeader should succeed");
+
+    let expected_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: segment_account_ids[0],
+        immutable: true,
+    };
+    let commitment =
+        program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
+    assert!(
+        state.get_proof_for_commitment(&commitment).is_some(),
+        "an immutable-from-birth header must land its private mirror commitment"
+    );
+}
+
+/// A `CreateHeader` transaction with `immutable: false` leaves the private commitment tree
+/// untouched — only a header that's actually immutable ever gets a mirror commitment.
+#[test]
+fn create_header_mutable_leaves_commitment_tree_unchanged() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let root_before = state.commitment_root();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x02);
+
+    let header_key = PrivateKey::try_new([0xCD; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+        },
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("a mutable CreateHeader should succeed");
+
+    assert_eq!(
+        state.commitment_root(),
+        root_before,
+        "a header deployed with immutable: false must not emit any private commitment"
+    );
+}
+
+/// An `UpdateHeader` transaction that flips `immutable` from `false` to `true` lands the private
+/// mirror commitment at that exact moment — the same as being immutable from birth.
+#[test]
+fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x03);
+
+    let header_key = PrivateKey::try_new([0xEF; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let create_message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids.clone(),
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+        },
+    )
+    .unwrap();
+    let create_witness_set =
+        public_transaction::WitnessSet::for_message(&create_message, &[&header_key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(create_message, create_witness_set),
+            1,
+            0,
+        )
+        .expect("the initial mutable CreateHeader should succeed");
+
+    let root_after_create = state.commitment_root();
+    let current_nonce = state.get_account_by_id(header_account_id).nonce;
+
+    let update_message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        vec![current_nonce],
+        Instruction::UpdateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+    )
+    .unwrap();
+    let update_witness_set =
+        public_transaction::WitnessSet::for_message(&update_message, &[&header_key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(update_message, update_witness_set),
+            2,
+            0,
+        )
+        .expect("flipping immutable to true via UpdateHeader should succeed");
+
+    assert_ne!(
+        state.commitment_root(),
+        root_after_create,
+        "flipping immutable to true must land a new private commitment"
+    );
+
+    let expected_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: segment_account_ids[0],
+        immutable: true,
+    };
+    let commitment =
+        program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
+    assert!(
+        state.get_proof_for_commitment(&commitment).is_some(),
+        "the landed commitment must match the now-immutable header"
+    );
+}

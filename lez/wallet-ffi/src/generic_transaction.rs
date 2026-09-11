@@ -77,11 +77,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             program_map.insert(program_dep.id().into(), program_dep);
         }
 
-        Ok(Self {
-            program: orig_program,
-            self_account_id,
-            dependencies: program_map,
-        })
+        Ok(Self::new(orig_program, self_account_id, program_map))
     }
 }
 

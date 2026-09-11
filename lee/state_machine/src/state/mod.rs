@@ -394,13 +394,18 @@ impl V03State {
             if self.private_state.1.contains(nullifier) {
                 return Err(LeeError::InvalidInput("Nullifier already seen".to_owned()));
             }
-            if !self.private_state.0.root_history.contains(digest) {
+            if !self.is_known_commitment_root(digest) {
                 return Err(LeeError::InvalidInput(
                     "Unrecognized commitment set digest".to_owned(),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Whether `digest` is a root the commitment tree has actually had at some point.
+    pub(crate) fn is_known_commitment_root(&self, digest: &CommitmentSetDigest) -> bool {
+        self.private_state.0.root_history.contains(digest)
     }
 }
 

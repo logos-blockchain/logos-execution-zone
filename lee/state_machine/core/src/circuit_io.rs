@@ -4,24 +4,113 @@ use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountId, AccountWithMetadata},
+    compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        BlockValidityWindow, PdaSeed, ProgramHeader, ProgramId, ProgramOutput,
+        TimestampValidityWindow, immutable_mirror_commitment,
+    },
 };
 
-/// A claim that `account_id`'s program account currently has `image_id`.
+/// Untrusted circuit input claiming a program's real `image_id`, used for `env::verify` in place
+/// of a header's address (which doesn't encode its image id).
 ///
-/// Supplied by the prover as circuit input (untrusted). The circuit uses it for `env::verify` in
-/// place of a legacy-bijection lookup — an address-deployed program's account doesn't encode its
-/// image id — and echoes it unchanged into the circuit's output. The circuit itself does **not**
-/// check `image_id` against `account_id`; the sequencer does, independently, against real chain
-/// state (`V03State::get_program_image_id`) before accepting the proof. Side effect for now:
-/// every program invoked in a private transaction's call graph is publicly visible via this claim
-/// list.
+/// The circuit derives the published [`ProgramImageClaim`] from this — for `Private`, by checking
+/// membership in-circuit rather than echoing the witness unchanged, so which program this is
+/// stays genuinely hidden in the output.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum ProgramImageWitness {
+    /// Anchored against real, live public chain state. Every publicly-anchored program invoked
+    /// in a private transaction's call graph is visible via the resulting claim.
+    Public {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Anchored against the private commitment mirroring an immutable header's `ProgramHeader`.
+    /// The membership proof is checked against a commitment recomputed from
+    /// `account_id`/`program_header` — the same values used for `env::verify` — so the asserted
+    /// `image_id` can never be decoupled from the proof; only the resulting digest is published.
+    Private {
+        account_id: AccountId,
+        program_header: ProgramHeader,
+        membership_proof: MembershipProof,
+    },
+}
+
+impl ProgramImageWitness {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Public { account_id, .. } | Self::Private { account_id, .. } => *account_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn image_id(&self) -> ProgramId {
+        match self {
+            Self::Public { image_id, .. } => *image_id,
+            Self::Private { program_header, .. } => program_header.image_id,
+        }
+    }
+
+    /// Derives the claim this witness commits to in the circuit output.
+    ///
+    /// For `Private`, this is where membership is actually checked: the Merkle path is walked
+    /// in-circuit from a commitment recomputed here, so a wrong pair produces a `root` that won't
+    /// match any real historical commitment-tree state.
+    #[must_use]
+    pub fn to_claim(&self) -> ProgramImageClaim {
+        match self {
+            Self::Public {
+                account_id,
+                image_id,
+            } => ProgramImageClaim::Public {
+                account_id: *account_id,
+                image_id: *image_id,
+            },
+            Self::Private {
+                account_id,
+                program_header,
+                membership_proof,
+            } => {
+                let commitment = immutable_mirror_commitment(*account_id, program_header);
+                ProgramImageClaim::Private {
+                    root: compute_digest_for_path(&commitment, membership_proof),
+                }
+            }
+        }
+    }
+}
+
+/// A claim of a program's real `image_id`, committed into the circuit's public output.
+///
+/// The circuit doesn't independently verify `Public` against real state — the sequencer does,
+/// before accepting the proof, which fails naturally if a claim is a lie. `Private` needs no such
+/// follow-up: `root` is only ever produced by an in-circuit membership check, so the receipt's
+/// own soundness is the whole guarantee.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct ProgramImageClaim {
+pub enum ProgramImageClaim {
+    Public {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    Private {
+        root: CommitmentSetDigest,
+    },
+}
+
+/// A shadow program's identity, established fresh in this one proof from a real ELF supplied as a
+/// private witness.
+///
+/// Never echoed into the output or anchored against chain state, since a shadow program was never
+/// deployed. `image_id` is hashed from `full_binary` here every time — nothing attested to it
+/// before now.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub struct ShadowProgramWitness {
     pub account_id: AccountId,
-    pub image_id: ProgramId,
+    /// The full two-ELF `ProgramBinary` blob — same format `Program::elf()` produces.
+    pub full_binary: Vec<u8>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -41,8 +130,10 @@ pub struct PrivacyPreservingCircuitInput {
     /// silently dropping an account from its own output.
     pub initial_pre_states: Vec<AccountId>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
-    /// account id. See [`ProgramImageClaim`].
-    pub program_image_claims: Vec<ProgramImageClaim>,
+    /// account id.
+    pub program_image_witnesses: Vec<ProgramImageWitness>,
+    /// Identities of every shadow program invoked in the call graph.
+    pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -291,7 +382,7 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![ProgramImageClaim {
+            program_image_claims: vec![ProgramImageClaim::Public {
                 account_id: AccountId::new([3; 32]),
                 image_id: [4; 8],
             }],
