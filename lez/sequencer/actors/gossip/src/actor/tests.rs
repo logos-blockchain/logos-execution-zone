@@ -1,15 +1,23 @@
 use std::{
+    convert::Infallible,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
-use kameo::actor::{ActorRef, Spawn as _};
+use kameo::{
+    Actor,
+    actor::{ActorRef, Spawn as _},
+    message::{Context, Message},
+};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
-use sequencer_core::{TransactionOrigin, config::GossipConfig};
+use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
+use sequencer_slasher_actor::{Approval, Offence};
+use sequencer_stake_core::SequencerKey;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
+use tokio::sync::mpsc;
 
 use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
 use crate::protocol::{GetConnectedPeers, PublishTransaction};
@@ -22,6 +30,37 @@ struct TestNode {
     actor_ref: ActorRef<GossipActor>,
     listen_addrs: Vec<libp2p::Multiaddr>,
     local_peer_id: libp2p::PeerId,
+}
+
+/// The mempool and the approval receiver a started node feeds.
+struct NodeSinks {
+    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    approvals: mpsc::UnboundedReceiver<Approval>,
+}
+
+/// Forwards every approval the gossip actor delivers into a channel the
+/// test can assert on; stands in for the slasher.
+struct ApprovalSink(mpsc::UnboundedSender<Approval>);
+
+impl Actor for ApprovalSink {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        Ok(args)
+    }
+}
+
+impl Message<Approval> for ApprovalSink {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: Approval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        _ = self.0.send(msg);
+    }
 }
 
 impl TestNode {
@@ -37,6 +76,34 @@ impl TestNode {
             .tell(PublishTransaction(tx))
             .try_send()
             .expect("gossip mailbox should accept the publish");
+    }
+
+    fn publish_approval(&self, approval: Approval) {
+        self.actor_ref
+            .tell(approval)
+            .try_send()
+            .expect("gossip mailbox should accept the approval publish");
+    }
+}
+
+/// An approval a peer would accept, signed by `secret` over `inscription`.
+fn approval(secret: [u8; 32], inscription: [u8; 32]) -> Approval {
+    let key = Ed25519Key::from_bytes(&secret);
+    let signer = SequencerKey::new(key.public_key().to_bytes()).expect("valid key");
+    let offence = Offence {
+        offender: SequencerKey::new(pubkey([99; 32]).to_bytes()).expect("valid key"),
+        inscription,
+    };
+    let message = sequencer_stake_core::slash_approval_message(
+        CHANNEL,
+        offence.offender,
+        offence.inscription,
+    );
+
+    Approval {
+        offence,
+        signer,
+        signature: key.sign_payload(&message).to_bytes(),
     }
 }
 
@@ -73,6 +140,10 @@ fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
     MemPool::new(1000).1
 }
 
+fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
+    ApprovalSink::spawn(ApprovalSink(mpsc::unbounded_channel().0)).recipient()
+}
+
 /// A real, validly-signed transfer, reusing the same helper the RPC-side
 /// admission tests use.
 fn valid_transaction() -> LeeTransaction {
@@ -98,21 +169,22 @@ fn invalidly_signed_transaction() -> LeeTransaction {
     LeeTransaction::Public(tx)
 }
 
-async fn start_node(
-    secret: [u8; 32],
-    bootstrap: Vec<libp2p::Multiaddr>,
-) -> (TestNode, MemPool<(TransactionOrigin, LeeTransaction)>) {
+async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (TestNode, NodeSinks) {
     let config = GossipConfig {
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
     let (mempool, mempool_handle) = MemPool::new(1000);
+    let (approval_tx, approvals) = mpsc::unbounded_channel();
+    let sink_ref = ApprovalSink::spawn(ApprovalSink(approval_tx));
     let actor = GossipActor::new(
         config,
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
+        sink_ref.recipient(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(mempool_handle),
+        accredited_keys_channel().1,
     )
     .await
     .expect("node should start");
@@ -125,7 +197,7 @@ async fn start_node(
             listen_addrs,
             local_peer_id,
         },
-        mempool,
+        NodeSinks { mempool, approvals },
     )
 }
 
@@ -162,8 +234,10 @@ async fn new_binds_and_reports_listen_addr() {
         test_config(),
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
+        test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
+        accredited_keys_channel().1,
     )
     .await
     .unwrap();
@@ -179,8 +253,10 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_config(),
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
+        test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
+        accredited_keys_channel().1,
     )
     .await
     .unwrap();
@@ -202,8 +278,10 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         },
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
+        test_approval_sink(),
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
+        accredited_keys_channel().1,
     )
     .await
     .expect("freed listen address should be rebindable");
@@ -213,7 +291,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
 #[tokio::test]
 async fn nodes_discover_each_other_via_bootstrap() {
     let secrets = [[10; 32], [11; 32], [12; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs[0].clone();
     // B bootstraps with a `/p2p/`-suffixed address (the Kademlia-seeded
     // branch operators configure), C with a plain one (the direct-dial
@@ -221,8 +299,8 @@ async fn nodes_discover_each_other_via_bootstrap() {
     let a_addr_with_peer_id = a_addr
         .clone()
         .with(libp2p::multiaddr::Protocol::P2p(node_a.local_peer_id));
-    let (node_b, _mempool_b) = start_node(secrets[1], vec![a_addr_with_peer_id]).await;
-    let (node_c, _mempool_c) = start_node(secrets[2], vec![a_addr]).await;
+    let (node_b, _sinks_b) = start_node(secrets[1], vec![a_addr_with_peer_id]).await;
+    let (node_c, _sinks_c) = start_node(secrets[2], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), async || {
@@ -244,10 +322,10 @@ async fn nodes_discover_each_other_via_bootstrap() {
 #[tokio::test]
 async fn transaction_submitted_to_one_node_reaches_others() {
     let secrets = [[20; 32], [21; 32], [22; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs[0].clone();
-    let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
-    let (node_c, mut mempool_c) = start_node(secrets[2], vec![a_addr]).await;
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    let (node_c, mut sinks_c) = start_node(secrets[2], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), async || {
@@ -264,7 +342,8 @@ async fn transaction_submitted_to_one_node_reaches_others() {
 
     assert!(
         wait_for(Duration::from_secs(30), async || {
-            mempool_b
+            sinks_b
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == expected_hash)
         })
@@ -273,7 +352,8 @@ async fn transaction_submitted_to_one_node_reaches_others() {
     );
     assert!(
         wait_for(Duration::from_secs(30), async || {
-            mempool_c
+            sinks_c
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == expected_hash)
         })
@@ -292,9 +372,9 @@ async fn invalid_transaction_is_not_propagated() {
     // path (`evaluate_transaction`'s stateless check, then
     // `MessageAcceptance::Reject`) end-to-end.
     let secrets = [[30; 32], [31; 32]];
-    let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs[0].clone();
-    let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr]).await;
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr]).await;
 
     assert!(
         wait_for(Duration::from_secs(30), async || {
@@ -313,7 +393,8 @@ async fn invalid_transaction_is_not_propagated() {
     node_a.publish(valid_tx);
     assert!(
         wait_for(Duration::from_secs(30), async || {
-            mempool_b
+            sinks_b
+                .mempool
                 .pop()
                 .is_some_and(|(_, received)| received.hash() == valid_hash)
         })
@@ -325,8 +406,45 @@ async fn invalid_transaction_is_not_propagated() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
-        mempool_b.pop().is_none(),
+        sinks_b.mempool.pop().is_none(),
         "an invalidly-signed transaction must not reach the mempool"
     );
     drop((node_a, node_b));
+}
+
+#[tokio::test]
+async fn slash_approval_published_by_one_node_reaches_others() {
+    let secrets = [[40; 32], [41; 32], [42; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let a_addr = node_a.listen_addrs[0].clone();
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    let (node_c, mut sinks_c) = start_node(secrets[2], vec![a_addr]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            let peers = node_a.connected_peers().await;
+            peers.contains(&pubkey(secrets[1])) && peers.contains(&pubkey(secrets[2]))
+        })
+        .await,
+        "A never connected to both B and C"
+    );
+
+    let sent = approval(secrets[0], [7; 32]);
+    node_a.publish_approval(sent.clone());
+
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            sinks_b.approvals.try_recv().is_ok_and(|got| got == sent)
+        })
+        .await,
+        "B never received the gossiped approval"
+    );
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            sinks_c.approvals.try_recv().is_ok_and(|got| got == sent)
+        })
+        .await,
+        "C never received the gossiped approval"
+    );
+    drop((node_a, node_b, node_c));
 }

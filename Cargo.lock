@@ -11218,11 +11218,11 @@ dependencies = [
  "lee",
  "libp2p",
  "log",
- "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-zone-sdk",
  "mempool",
  "sequencer_core",
+ "sequencer_slasher_actor",
+ "sequencer_stake_core",
  "testnet_initial_state",
  "tokio",
 ]

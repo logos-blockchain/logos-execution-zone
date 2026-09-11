@@ -13,7 +13,6 @@ pub use actor::{
 #[cfg(feature = "actor")]
 pub use libp2p::Multiaddr;
 
-pub mod accreditation;
 #[cfg(feature = "actor")]
 pub mod actor;
 pub mod protocol;

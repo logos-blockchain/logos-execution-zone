@@ -6,17 +6,20 @@ use kameo::actor::{ActorRef, Recipient, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
 use log::info;
 pub use sequencer_core::config::*;
-use sequencer_core::load_or_create_signing_key;
+use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_gossip_actor::{GossipActor, protocol::PublishTransaction};
 use sequencer_rpc_server_actor::RpcServerActor;
-use sequencer_slasher_actor::SlasherActor;
+use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
 
 mod actor_handle;
+
+/// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
+const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -195,6 +198,8 @@ pub fn run(
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
         let slasher_ref = executor.slasher_ref();
+        // The core has already read a committee by the time this returns.
+        let accredited_keys_rx = executor.accredited_keys_watch();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
@@ -208,7 +213,9 @@ pub fn run(
                     *bedrock_config.channel_id.as_ref(),
                     &sequencer_home,
                     max_block_size.as_u64(),
+                    accredited_keys_rx,
                     &executor_ref,
+                    &slasher_ref,
                     &scheduler_ref,
                 )
                 .await?,
@@ -256,12 +263,19 @@ pub fn run(
 /// Starts the gossip actor together with its outage watchdog and its
 /// scheduled bootstrap retries, returning its service handle and the
 /// recipient the RPC server publishes admitted transactions to.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The gossip actor is wired to most of the node: its config and identity, the \
+              executor's admission door, the slasher's approval flow, and the scheduler"
+)]
 async fn setup_gossip(
     gossip_config: GossipConfig,
     channel_id: [u8; 32],
     sequencer_home: &Path,
     max_block_size: u64,
+    accredited_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor<StorageActor, BlockPublisher>>,
+    slasher_ref: &ActorRef<SlasherActor>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 bedrock signing key is deliberately reused as the
@@ -287,8 +301,11 @@ async fn setup_gossip(
         gossip_config,
         channel_id,
         signing_key,
+        // Verified inbound approvals go straight to the slasher.
+        slasher_ref.clone().recipient(),
         max_block_size,
         submit,
+        accredited_keys_rx,
     )
     .await
     .context("Failed to start sequencer gossip network")?;
@@ -301,6 +318,20 @@ async fn setup_gossip(
     );
     info!("Gossip Actor spawned");
     let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
+
+    // The slasher's own approvals flow into the mesh through the gossip
+    // mailbox; the channel bridges its `SetApprovalPublisher` API.
+    let (approval_tx, mut approval_rx) =
+        tokio::sync::mpsc::channel(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
+    slasher_ref.tell(SetApprovalPublisher(approval_tx)).await?;
+    let approval_gossip_ref = gossip_ref.clone();
+    tokio::spawn(async move {
+        while let Some(approval) = approval_rx.recv().await {
+            if approval_gossip_ref.tell(approval).send().await.is_err() {
+                break;
+            }
+        }
+    });
 
     // Startup already dialed the bootstrap peers, so the first retry waits
     // a full interval.

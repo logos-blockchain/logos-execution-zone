@@ -10,7 +10,7 @@ use common::{bounded_vec_deque::BoundedVecDeque, transaction::LeeTransaction};
 use futures::{StreamExt as _, future::BoxFuture};
 use kameo::{
     Actor,
-    actor::{ActorRef, WeakActorRef},
+    actor::{ActorRef, Recipient, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
@@ -25,7 +25,8 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_core::config::GossipConfig;
+use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
+use sequencer_slasher_actor::Approval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;
@@ -71,9 +72,17 @@ pub struct GossipActor {
     /// freed as soon as the actor is stopped, not when it is dropped.
     swarm: Option<Swarm<GossipBehaviour>>,
     connected: HashSet<PeerId>,
+    /// This node's channel, which an inbound approval must be signed over.
+    channel_id: [u8; 32],
     /// Ed25519 public keys of peers seen via Identify, keyed by `PeerId`.
     pubkeys: HashMap<PeerId, Ed25519PublicKey>,
     topic: gossipsub::IdentTopic,
+    /// Slash approvals ride their own topic so the tx wire format is untouched.
+    approvals_topic: gossipsub::IdentTopic,
+    /// Where verified inbound approvals go; the slasher decides what to keep.
+    approval_sink: Recipient<Approval>,
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys_rx: AccreditedKeysReceiver,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
@@ -82,6 +91,8 @@ pub struct GossipActor {
     /// Local transactions whose publish failed, retried when a peer
     /// subscribes to the topic; the oldest is dropped on overflow.
     pending_publish: BoundedVecDeque<LeeTransaction>,
+    /// Same, for this node's own slash approvals.
+    pending_approvals: BoundedVecDeque<Approval>,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
 }
@@ -105,8 +116,10 @@ impl GossipActor {
         config: GossipConfig,
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
+        approval_sink: Recipient<Approval>,
         max_block_size: u64,
         submit: IngestSubmit,
+        accredited_keys_rx: AccreditedKeysReceiver,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -122,7 +135,13 @@ impl GossipActor {
         let listen_addr = config.listen_addr;
         let bootstrap = config.bootstrap_peers;
 
-        let message_id_fn = |msg: &gossipsub::Message| {
+        // An approval is re-announced verbatim, so a content digest would make
+        // every re-announcement a duplicate the sender itself drops.
+        let approvals_topic_hash = Self::get_approvals_topic_for_channel(channel_id).hash();
+        let message_id_fn = move |msg: &gossipsub::Message| {
+            if msg.topic == approvals_topic_hash {
+                return default_message_id(msg);
+            }
             // Undecodable messages still need a message-id, but it must be a
             // deterministic digest, not the attacker-controlled bytes
             // themselves and not a process-local hash (`DefaultHasher`):
@@ -188,6 +207,13 @@ impl GossipActor {
             .subscribe(&topic)
             .context("Failed to subscribe to gossip tx topic")?;
 
+        let approvals_topic = Self::get_approvals_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&approvals_topic)
+            .context("Failed to subscribe to gossip slash approval topic")?;
+
         swarm
             .listen_on(listen_addr)
             .context("Failed to listen on gossip address")?;
@@ -222,13 +248,18 @@ impl GossipActor {
         Ok(Self {
             swarm: Some(swarm),
             connected: HashSet::new(),
+            channel_id,
             pubkeys: HashMap::new(),
             topic,
+            approvals_topic,
+            approval_sink,
+            accredited_keys_rx,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
         })
@@ -237,6 +268,14 @@ impl GossipActor {
     #[must_use]
     pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+    }
+
+    /// Slash approvals ride their own topic so the tx wire format is untouched.
+    fn get_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/slash-approvals",
+            hex::encode(channel_id)
+        ))
     }
 
     #[must_use]
@@ -310,13 +349,22 @@ impl GossipActor {
                 message_id,
                 message,
             }) => {
-                self.on_gossip_message(propagation_source, &message_id, &message.data)
-                    .await;
+                if message.topic == self.approvals_topic.hash() {
+                    self.on_approval_message(propagation_source, &message_id, &message.data);
+                } else {
+                    self.on_gossip_message(propagation_source, &message_id, &message.data)
+                        .await;
+                }
             }
             GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
                 if topic == self.topic.hash() =>
             {
                 self.flush_pending_publishes();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.approvals_topic.hash() =>
+            {
+                self.flush_pending_approvals();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(pubkey) = info.public_key.try_into_ed25519()
@@ -390,6 +438,67 @@ impl GossipActor {
             .behaviour_mut()
             .gossipsub
             .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Verifies an inbound slash approval and hands it to the slasher.
+    fn on_approval_message(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use self::validation::{ApprovalEvaluation, evaluate_approval};
+
+        let evaluation = {
+            let accredited_keys = self.accredited_keys_rx.borrow();
+            evaluate_approval(data, self.channel_id, accredited_keys.as_ref())
+        };
+        let acceptance = match evaluation {
+            ApprovalEvaluation::Reject(reason) => {
+                log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Reject
+            }
+            ApprovalEvaluation::Ignore(reason) => {
+                log::debug!("Ignoring gossiped slash approval from {source}: {reason}");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            ApprovalEvaluation::Accept(approval) => {
+                if let Err(err) = self.approval_sink.tell(approval).try_send() {
+                    log::debug!("Dropping inbound slash approval: {err}");
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes this node's own approval, queued and retried like a transaction.
+    fn publish_approval(&mut self, approval: Approval) {
+        let bytes = borsh::to_vec(&approval).expect("approval borsh serialization should not fail");
+        let approvals_topic = self.approvals_topic.clone();
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(approvals_topic, bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                log::debug!("Queueing slash approval publish for retry: {err}");
+                _ = self.pending_approvals.push_back(approval);
+            }
+        }
+    }
+
+    fn flush_pending_approvals(&mut self) {
+        for approval in self.pending_approvals.drain_all() {
+            self.publish_approval(approval);
+        }
     }
 
     /// Publishes a locally-submitted transaction to the mesh. Marked seen
@@ -502,6 +611,19 @@ impl Message<GetConnectedPeers> for GossipActor {
     }
 }
 
+impl Message<Approval> for GossipActor {
+    type Reply = ();
+
+    /// Publish this node's own slash approval to the mesh.
+    async fn handle(
+        &mut self,
+        msg: Approval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_approval(msg);
+    }
+}
+
 impl Message<PublishTransaction> for GossipActor {
     type Reply = ();
 
@@ -545,6 +667,14 @@ fn is_unspecified(addr: &Multiaddr) -> bool {
         Protocol::Ip6(ip) => ip.is_unspecified(),
         _ => false,
     })
+}
+
+/// Gossipsub's own default id: publisher plus a fresh per-publish sequence number.
+fn default_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
+    let mut id = msg.source.map(PeerId::to_base58).unwrap_or_default();
+    id.push_str(&msg.sequence_number.unwrap_or_default().to_string());
+
+    gossipsub::MessageId::from(id)
 }
 
 /// Derives the libp2p `PeerId` an Ed25519 public key produces.
