@@ -29,6 +29,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
+use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
@@ -101,6 +102,13 @@ unsafe extern "C" {
     fn wallet_ffi_get_account_private(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
+        out_account: *mut FfiAccount,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_get_account_view(
+        handle: *mut WalletHandle,
+        account_id: *const FfiBytes32,
+        program_account_id: *const FfiBytes32,
         out_account: *mut FfiAccount,
     ) -> error::WalletFfiError;
 
@@ -616,7 +624,86 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     assert!(account.data.shards.is_empty());
     assert_eq!(account.nonce.0, 2);
 
+    let mut out_balance_only = FfiAccount::default();
+    let balance_only: Account = unsafe {
+        let ffi_account_id = FfiBytes32::from(account_id);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_account_id,
+            std::ptr::null::<FfiBytes32>(),
+            &raw mut out_balance_only,
+        )
+        .unwrap();
+        (&out_balance_only).try_into().unwrap()
+    };
+
+    assert_eq!(
+        balance_only.data.balance,
+        INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
+    );
+    assert_eq!(balance_only.nonce.0, 2);
+    assert!(balance_only.data.shards.is_empty());
+
+    let program_id = AccountId::from(programs::token().id());
+    let mut out_program_full = FfiAccount::default();
+    let program_full: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        wallet_ffi_get_account_public(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            &raw mut out_program_full,
+        )
+        .unwrap();
+        (&out_program_full).try_into().unwrap()
+    };
+    let expected_shard = program_full.data.shards[&PROGRAM_LOADER_ACCOUNT_ID].clone();
+    assert!(!expected_shard.is_empty());
+
+    let mut out_program_view = FfiAccount::default();
+    let program_view: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            std::ptr::null::<FfiBytes32>(),
+            &raw mut out_program_view,
+        )
+        .unwrap();
+        (&out_program_view).try_into().unwrap()
+    };
+
+    assert!(
+        program_view.data.shards.is_empty(),
+        "a null program pointer must not select a shard the account actually holds"
+    );
+    assert_eq!(program_view.data.balance, program_full.data.balance);
+
+    let mut out_named_shard = FfiAccount::default();
+    let named_shard: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        let ffi_program_id = FfiBytes32::from(PROGRAM_LOADER_ACCOUNT_ID);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            &raw const ffi_program_id,
+            &raw mut out_named_shard,
+        )
+        .unwrap();
+        (&out_named_shard).try_into().unwrap()
+    };
+
+    assert_eq!(named_shard.data.shards.len(), 1);
+    assert_eq!(
+        named_shard.data.shards[&PROGRAM_LOADER_ACCOUNT_ID],
+        expected_shard
+    );
+    assert_eq!(named_shard.data.balance, program_full.data.balance);
+
     unsafe {
+        wallet_ffi_free_account_data(&raw mut out_balance_only);
+        wallet_ffi_free_account_data(&raw mut out_program_full);
+        wallet_ffi_free_account_data(&raw mut out_program_view);
+        wallet_ffi_free_account_data(&raw mut out_named_shard);
         wallet_ffi_free_account_data(&raw mut out_account);
         wallet_ffi_destroy(wallet_ffi_handle);
     }

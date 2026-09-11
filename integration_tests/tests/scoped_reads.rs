@@ -9,7 +9,10 @@ use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
-    utils::{account_balance, get_account, get_account_view, new_account, send},
+    utils::{
+        account_balance, get_account, get_account_view, new_account, send,
+        wait_for_indexer_to_catch_up,
+    },
 };
 use lee::{
     AccountId, PrivateKey, ProgramShardSelector, PublicKey,
@@ -20,7 +23,11 @@ use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
-use wallet::{AccountIdentity, program_facades::program_loader::ProgramLoader};
+use wallet::{
+    AccountIdentity,
+    cli::{Command, account::AccountSubcommand, execute_subcommand},
+    program_facades::program_loader::ProgramLoader,
+};
 
 const BLOAT_SHARD_BYTES: usize = 700 * 1024;
 
@@ -158,6 +165,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let mut ctx = TestContext::new().await?;
     let victim = ctx.existing_public_accounts()[0];
 
+    let height_before_bloat = ctx.sequencer_client().get_last_block_id().await?;
     let writers = bloat_account(&mut ctx, victim).await?;
 
     let error = get_account(&ctx, victim)
@@ -180,6 +188,97 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let balance_only = get_account_view(&ctx, ProgramShardSelector::balance_only(victim)).await?;
     assert!(balance_only.data.shards.is_empty());
+
+    let last_writer = writers[BLOAT_WRITERS - 1];
+    let scoped_get = |program_account_id: Option<AccountId>, all_shards: bool, raw: bool| {
+        Command::Account(AccountSubcommand::Get {
+            raw,
+            keys: false,
+            account_id: public_mention(victim),
+            program_account_id,
+            all_shards,
+        })
+    };
+    execute_subcommand(ctx.wallet_mut(), scoped_get(None, false, false)).await?;
+    execute_subcommand(
+        ctx.wallet_mut(),
+        scoped_get(Some(last_writer), false, false),
+    )
+    .await?;
+    execute_subcommand(ctx.wallet_mut(), scoped_get(Some(last_writer), false, true)).await?;
+    let cli_error = execute_subcommand(ctx.wallet_mut(), scoped_get(None, true, false))
+        .await
+        .expect_err("--all-shards must stay a whole-account read");
+    assert!(
+        is_oversized_response(&cli_error),
+        "--all-shards must fail on response size specifically: {cli_error:?}"
+    );
+
+    let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
+    let selector: indexer_service_protocol::ProgramShardSelector =
+        ProgramShardSelector::new(victim, last_writer).into();
+    let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
+
+    let indexer = &**ctx.indexer_client();
+    let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
+
+    let current = indexer_service_rpc::RpcClient::get_account_view(indexer, selector).await?;
+    assert_eq!(
+        current.data.shards.len(),
+        1,
+        "the indexer view must carry only the selected shard"
+    );
+    assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
+    assert_eq!(current.data.balance, balance_only.data.balance);
+    assert_eq!(current.nonce, balance_only.nonce.0);
+
+    let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        selector,
+        height_before_bloat,
+    )
+    .await?;
+    assert!(
+        before_population.data.shards[&last_writer_key].0.is_empty(),
+        "the historical view must predate the shard, not mirror current state"
+    );
+    assert_eq!(
+        before_population.data.balance, balance_only.data.balance,
+        "the historical view must be the real account at that height, not a default"
+    );
+
+    let after_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        selector,
+        indexer_height,
+    )
+    .await?;
+    assert_eq!(
+        after_population.data.shards[&last_writer_key].0, expected_shard,
+        "the historical view must serve real shard data, not always empty"
+    );
+    assert_eq!(after_population.data.balance, balance_only.data.balance);
+    assert_eq!(after_population.nonce, balance_only.nonce.0);
+
+    let missing = indexer_service_rpc::RpcClient::get_account_view(
+        indexer,
+        ProgramShardSelector::balance_only(AccountId::new([0x5A; 32])).into(),
+    )
+    .await?;
+    assert_eq!(missing.data.balance, 0);
+    assert_eq!(missing.nonce, 0);
+    assert!(missing.data.shards.is_empty());
+
+    assert!(
+        indexer_service_rpc::RpcClient::get_account_view_at_block(
+            indexer,
+            selector,
+            indexer_height + 1_000_000,
+        )
+        .await
+        .is_err(),
+        "a height the indexer has not reached must error rather than serve current state"
+    );
 
     Ok(())
 }
