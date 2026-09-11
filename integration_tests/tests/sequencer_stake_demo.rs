@@ -30,9 +30,6 @@ use test_fixtures::{
 use tokio::test;
 use wallet::AccountIdentity;
 
-/// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
-const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-
 /// Bedrock signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
@@ -54,13 +51,18 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
 
+    // Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`, and
+    // `u64` because genesis funds it through the bridge's `Deposit`.
+    let funding_balance = u64::try_from(2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
+        .expect("funding balance fits u64");
+
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
                     account_id: funding_id,
-                    balance: FUNDING_BALANCE,
+                    balance: funding_balance,
                 }]),
         )
         .build()
@@ -75,10 +77,10 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     info!("Waiting for the genesis supply to land on the funding account");
     poll_until("genesis supply to land", 30, || async {
-        Ok(account_balance(&ctx, funding_id).await? == FUNDING_BALANCE)
+        Ok(account_balance(&ctx, funding_id).await? == u128::from(funding_balance))
     })
     .await?;
-    info!("Funded demo account {funding_id} with {FUNDING_BALANCE} native balance");
+    info!("Funded demo account {funding_id} with {funding_balance} native balance");
 
     let ownership_id = new_account(&mut ctx, false, None)
         .await
@@ -89,13 +91,13 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let mover_instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount: FUNDING_BALANCE,
+            amount: u128::from(funding_balance),
         })
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
-            amount: FUNDING_BALANCE,
+            amount: u128::from(funding_balance),
             mover_account_id: programs::authenticated_transfer().id().into(),
             mover_instruction_data,
         })
@@ -137,7 +139,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
     let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
-        staked_balance, FUNDING_BALANCE,
+        staked_balance,
+        u128::from(funding_balance),
         "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
@@ -248,7 +251,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let unstake_request_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
-            amount: FUNDING_BALANCE,
+            amount: u128::from(funding_balance),
             destination: destination_id,
         })
         .context("Failed to serialize UnstakeRequest instruction")?;
@@ -318,7 +321,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let destination_balance = account_balance(&ctx, destination_id).await?;
     assert_eq!(
-        destination_balance, FUNDING_BALANCE,
+        destination_balance,
+        u128::from(funding_balance),
         "destination should receive the released stake"
     );
 
@@ -331,7 +335,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "the config entry should be gone once the stake is fully released"
     );
     info!(
-        "FinalizeUnstake auto-included: {FUNDING_BALANCE} released to {destination_id}, nothing left at stake"
+        "FinalizeUnstake auto-included: {funding_balance} released to {destination_id}, nothing left at stake"
     );
 
     Ok(())

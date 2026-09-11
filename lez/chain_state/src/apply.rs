@@ -215,7 +215,7 @@ pub fn apply_block_to_state(
     // but it must not be a restricted system account: the fee tx settles via the
     // direct transition, bypassing the user-tx restricted-account guards, so
     // without this floor a producer could credit the bridge and decouple its
-    // balance from L1 deposits (or the faucet and inflate its supply).
+    // balance from L1 deposits.
     let producer_account = common::transaction::fee_invocation_producer(fee_tx)
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     if *fee_tx != fee_invocation(summary, producer_account) {
@@ -469,7 +469,7 @@ fn settle_charged_transaction(
             }
         })?;
 
-    // A charged transaction whose program touches the fee/clock/faucet accounts
+    // A charged transaction whose program touches the fee/clock accounts
     // is a drain attempt (the canonical fee invocation is the block tail,
     // byte-compared separately). A reverted action's diff is nonce-only and
     // passes trivially; a successful one is guarded here so followers do not
