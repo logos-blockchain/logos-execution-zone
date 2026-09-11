@@ -97,11 +97,14 @@ const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 type SlotCount = u64;
 
 /// A founding sequencer's key, plus the ownership account attesting to its stake.
-type FoundingStake = (
-    sequencer_stake_core::SequencerKey,
-    lee::PublicKey,
-    lee::Signature,
-);
+struct FoundingStake {
+    /// Index of the `StakeSequencer` action configuring this stake, which names
+    /// the genesis deposit funding it.
+    genesis_index: u64,
+    key: sequencer_stake_core::SequencerKey,
+    owner: lee::PublicKey,
+    signature: lee::Signature,
+}
 
 /// The block's gas budget: the gas the included transactions were actually
 /// charged (read off the settlement summary).
@@ -2250,9 +2253,13 @@ fn build_genesis_state(
     // is initialized: each builtin has a user-callable InitConfig, so a default
     // config PDA would be claimable by the first initializer. The inbox's is
     // receiving-zones-only.
+    // The self-stake is appended here, so every index below is an index into
+    // this list, not into `config.genesis`.
+    let genesis_actions = effective_genesis_actions(config, bootstrap_sequencer_key);
+
     let cross_zone_declared = config.cross_zone.as_ref();
     assert!(
-        cross_zone_declared.is_some() || bridge_lock_holdings(&config.genesis).next().is_none(),
+        cross_zone_declared.is_some() || bridge_lock_holdings(&genesis_actions).next().is_none(),
         "SupplyBridgeLockHolding requires cross_zone to be configured: bridge_lock is not registered on this zone"
     );
     let cross_zone_config_txs = cross_zone_declared
@@ -2270,46 +2277,33 @@ fn build_genesis_state(
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         cross_zone::build_inbox_init_config_tx(self_zone)
     });
-    let supply_txs = config
-        .genesis
+    let supply_txs = genesis_actions
         .iter()
         .enumerate()
-        .filter_map(|(index, action)| match action {
-            GenesisAction::SupplyAccount {
-                account_id,
-                balance,
-            } => Some(build_supply_account_genesis_transaction(
-                account_id,
-                *balance,
-                genesis_deposit_op_id(index),
-            )),
-            GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
-                Some(build_supply_account_genesis_transaction(
-                    &cross_zone::bridge_lock_holding_account_id(*holder),
-                    u64::try_from(*amount).expect("bridge-lock holding exceeds u64"),
+        .filter_map(|(index, action)| {
+            let index = u64::try_from(index).expect("genesis action count fits in u64");
+            match action {
+                GenesisAction::SupplyAccount {
+                    account_id,
+                    balance,
+                } => Some(build_supply_account_genesis_transaction(
+                    account_id,
+                    *balance,
                     genesis_deposit_op_id(index),
-                ))
+                )),
+                GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
+                    Some(build_supply_account_genesis_transaction(
+                        &cross_zone::bridge_lock_holding_account_id(*holder),
+                        *amount,
+                        genesis_deposit_op_id(index),
+                    ))
+                }
+                // Stakes are built below.
+                GenesisAction::StakeSequencer { .. } => None,
             }
-            // Stakes are built below.
-            GenesisAction::StakeSequencer { .. } => None,
         });
 
-    // The creator falls back to staking itself, signing with the key it owns.
-    let mut staked = founding_stakes(config);
-    if staked.is_empty() {
-        staked.extend(bootstrap_sequencer_key.map(|key| {
-            let key_path = config.home.join("sequencer_stake_signing_key");
-            let owner = load_or_create_stake_signing_key(&key_path)
-                .expect("Failed to load or create the stake signing key");
-            let signature = sign_genesis_stake(
-                0,
-                key,
-                &owner,
-                config.bedrock_config.channel_params.minimum_sequencer_stake,
-            );
-            (key, lee::PublicKey::new_from_private_key(&owner), signature)
-        }));
-    }
+    let staked = founding_stakes(&genesis_actions);
     let bootstrap_stake_txs = build_stake_genesis_transactions(
         &staked,
         config.bedrock_config.channel_params.minimum_sequencer_stake,
@@ -2341,7 +2335,7 @@ fn build_genesis_state(
     // credit is zero and the unclaimed account is left untouched.
     let producer = staked.first().map_or_else(
         || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
-        |(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key),
+        |stake| lee::AccountId::from(&stake.owner),
     );
     for tx in [
         fee_invocation(fee_core::BlockFeeSummary::default(), producer),
@@ -2360,25 +2354,65 @@ fn build_genesis_state(
     (state, genesis_txs)
 }
 
-fn founding_stakes(config: &SequencerConfig) -> Vec<FoundingStake> {
-    config
-        .genesis
+fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
+    genesis
         .iter()
-        .filter_map(|action| match action {
+        .enumerate()
+        .filter_map(|(index, action)| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_public_key,
                 stake_signature,
-            } => Some((
-                *sequencer_key,
-                ownership_public_key.clone(),
-                stake_signature.clone(),
-            )),
+            } => {
+                let index = u64::try_from(index).expect("genesis action count fits in u64");
+                Some(FoundingStake {
+                    genesis_index: index,
+                    key: *sequencer_key,
+                    owner: ownership_public_key.clone(),
+                    signature: stake_signature.clone(),
+                })
+            }
             GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeLockHolding { .. } => {
                 None
             }
         })
         .collect()
+}
+
+/// `config.genesis`, plus the creator's self-stake when nothing configures one.
+///
+/// A self-stake is authored at startup rather than by hand, so appending it as
+/// a real action lets the rest of genesis treat it like any other: one staker
+/// and many are the same path, differing only in count.
+fn effective_genesis_actions(
+    config: &SequencerConfig,
+    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+) -> Vec<GenesisAction> {
+    let mut actions = config.genesis.clone();
+    if actions
+        .iter()
+        .any(|action| matches!(action, GenesisAction::StakeSequencer { .. }))
+    {
+        return actions;
+    }
+
+    actions.extend(bootstrap_sequencer_key.map(|key| {
+        let key_path = config.home.join("sequencer_stake_signing_key");
+        let owner = load_or_create_stake_signing_key(&key_path)
+            .expect("Failed to load or create the stake signing key");
+        GenesisAction::StakeSequencer {
+            sequencer_key: key,
+            ownership_public_key: lee::PublicKey::new_from_private_key(&owner),
+            // The only stake, so it is the first to sign with the funding key.
+            stake_signature: sign_genesis_stake(
+                0,
+                key,
+                &owner,
+                config.bedrock_config.channel_params.minimum_sequencer_stake,
+            ),
+        }
+    }));
+    actions
 }
 
 /// The accredited keys a newly created channel should carry, `own_key` first
@@ -2388,9 +2422,9 @@ fn founding_committee(
     config: &SequencerConfig,
     own_key: sequencer_stake_core::SequencerKey,
 ) -> Option<Vec<block_publisher::Ed25519PublicKey>> {
-    let mut keys: Vec<_> = founding_stakes(config)
+    let mut keys: Vec<_> = founding_stakes(&config.genesis)
         .into_iter()
-        .map(|(key, ..)| key)
+        .map(|stake| stake.key)
         .collect();
     if keys.is_empty() {
         return None;
@@ -2503,35 +2537,37 @@ fn build_stake_genesis_transactions(
 
     let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
     let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
-    let amount = minimum_stake;
-    let total = u128::try_from(staked.len())
-        .ok()
-        .and_then(|count| amount.checked_mul(count))
-        .expect("genesis stake total overflow");
+    let amount = u64::try_from(minimum_stake).expect("minimum sequencer stake exceeds u64");
 
-    let mut txs = vec![build_supply_account_genesis_transaction(
-        &genesis_stake_funding_account(),
-        u64::try_from(total).expect("genesis stake total exceeds u64"),
-        genesis_stake_deposit_op_id(),
-    )];
+    // One deposit per stake, so no total has to fit `u64`. They precede the
+    // stakes because each one funds the account the stakes draw on.
+    let mut txs: Vec<_> = staked
+        .iter()
+        .map(|stake| {
+            build_supply_account_genesis_transaction(
+                &genesis_stake_funding_account(),
+                amount,
+                genesis_deposit_op_id(stake.genesis_index),
+            )
+        })
+        .collect();
 
-    for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
-        let ownership_id = AccountId::from(ownership_public_key);
-        let stake_message =
-            genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
+    for (index, stake) in staked.iter().enumerate() {
+        let ownership_id = AccountId::from(&stake.owner);
+        let stake_message = genesis_stake_message(index, stake.key, ownership_id, minimum_stake);
         let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
             (
                 lee::Signature::new(&funding_key, &stake_message.hash()),
                 funding_public_key.clone(),
             ),
-            (signature.clone(), ownership_public_key.clone()),
+            (stake.signature.clone(), stake.owner.clone()),
         ]);
 
         // Redundant with the signature check every tx gets, but names the entry.
         assert!(
             stake_witness_set.is_valid_for(&stake_message),
             "genesis stake signature does not match founding sequencer {index} ({})",
-            hex::encode(sequencer_key)
+            hex::encode(stake.key)
         );
 
         txs.push(PublicTransaction::new(stake_message, stake_witness_set));
@@ -2543,7 +2579,7 @@ fn build_stake_genesis_transactions(
 /// Bridge-lock holder balances configured for this zone's genesis.
 fn bridge_lock_holdings(
     genesis: &[GenesisAction],
-) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
+) -> impl Iterator<Item = (lee::AccountId, u64)> + '_ {
     genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
         GenesisAction::SupplyAccount { .. } | GenesisAction::StakeSequencer { .. } => None,
@@ -2568,19 +2604,13 @@ pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
 /// ids must be unmistakable: an L1 op id is a hash, and this is a literal ASCII
 /// domain followed by the index, which no hash realistically produces. The
 /// receipt PDA each one claims is what stops a later block replaying it.
-fn genesis_deposit_op_id(index: usize) -> [u8; 32] {
+fn genesis_deposit_op_id(index: u64) -> [u8; 32] {
     const DOMAIN: &[u8; 24] = b"/LEZ/v0.3/GenesisDeposit";
 
     let mut op_id = [0_u8; 32];
     op_id[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    op_id[DOMAIN.len()..].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+    op_id[DOMAIN.len()..].copy_from_slice(&index.to_le_bytes());
     op_id
-}
-
-/// The op id reserved for the one deposit that funds every founding stake.
-/// Outside the `genesis_deposit_op_id` index space, which tracks `config.genesis`.
-fn genesis_stake_deposit_op_id() -> [u8; 32] {
-    genesis_deposit_op_id(usize::MAX)
 }
 
 fn build_supply_account_genesis_transaction(
