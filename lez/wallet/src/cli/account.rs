@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
 use lee_core::Identifier;
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -32,6 +32,18 @@ pub enum AccountSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(short, long)]
         account_id: CliAccountMention,
+        #[arg(
+            long,
+            conflicts_with = "all_shards",
+            help = "Read only this program's shard instead of the balance-only view"
+        )]
+        program_account_id: Option<AccountId>,
+        #[arg(
+            long,
+            conflicts_with = "program_account_id",
+            help = "Read the full account across all shards"
+        )]
+        all_shards: bool,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -326,6 +338,8 @@ impl AccountSubcommand {
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
+        program_account_id: Option<AccountId>,
+        all_shards: bool,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
@@ -336,7 +350,29 @@ impl AccountSubcommand {
                 println!("Label: {label}");
             });
 
-        let account = wallet_core.get_account(resolved).await?;
+        let account = match resolved {
+            AccountIdWithPrivacy::Public(id) => {
+                if all_shards {
+                    wallet_core.get_account_public(id).await?
+                } else {
+                    let selector = program_account_id.map_or_else(
+                        || ProgramShardSelector::balance_only(id),
+                        |program| ProgramShardSelector::new(id, program),
+                    );
+                    wallet_core.get_account_view(selector).await?
+                }
+            }
+            AccountIdWithPrivacy::Private(id) => {
+                let Some(found) = wallet_core.storage().key_chain().private_account(id) else {
+                    anyhow::bail!("Private account with id {id} not found in storage");
+                };
+                if all_shards {
+                    found.account.clone()
+                } else {
+                    project_private_account(found.account, program_account_id)
+                }
+            }
+        };
 
         // Helper closure to display keys for the account
         let display_keys = |wallet_core: &WalletCore| -> Result<()> {
@@ -368,7 +404,7 @@ impl AccountSubcommand {
             Ok(())
         };
 
-        if account == Account::default() {
+        if all_shards && account == Account::default() {
             println!("Account is Uninitialized");
 
             if keys {
@@ -450,11 +486,11 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.get_account_public(id).await {
-                Ok(account) if account != Account::default() => {
-                    print_account_details(&account, "  ");
-                }
-                Ok(_) => println!("  Uninitialized"),
+            match wallet_core
+                .get_account_view(ProgramShardSelector::balance_only(id))
+                .await
+            {
+                Ok(account) => print_account_details(&account, "  "),
                 Err(e) => println!("  Error fetching account: {e}"),
             }
         }
@@ -469,11 +505,10 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.get_account_private(id) {
-                Some(account) if account != Account::default() => {
-                    print_account_details(&account, "  ");
+            match wallet_core.storage().key_chain().private_account(id) {
+                Some(found) => {
+                    print_account_details(&project_private_account(found.account, None), "  ");
                 }
-                Some(_) => println!("  Uninitialized"),
                 None => println!("  Not found in local storage"),
             }
         }
@@ -541,7 +576,19 @@ impl WalletSubcommand for AccountSubcommand {
                 raw,
                 keys,
                 account_id,
-            } => Self::handle_get(raw, keys, account_id, wallet_core).await,
+                program_account_id,
+                all_shards,
+            } => {
+                Self::handle_get(
+                    raw,
+                    keys,
+                    account_id,
+                    program_account_id,
+                    all_shards,
+                    wallet_core,
+                )
+                .await
+            }
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
                 let curr_last_block = wallet_core.sync_to_latest_block().await?;
@@ -632,6 +679,15 @@ impl WalletSubcommand for ImportSubcommand {
                 Ok(SubcommandReturnValue::Empty)
             }
         }
+    }
+}
+
+fn project_private_account(account: &Account, program_account_id: Option<AccountId>) -> Account {
+    let mut data = account.data.project(program_account_id);
+    data.shards.retain(|_, shard| !shard.is_empty());
+    Account {
+        nonce: account.nonce,
+        data,
     }
 }
 
