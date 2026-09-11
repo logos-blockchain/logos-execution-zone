@@ -56,7 +56,9 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        if public.message().program_account_id != programs::sequencer_stake().id().into() {
+        if public.message().program_account_id
+            != AccountId::from_builtin_program(programs::sequencer_stake().id())
+        {
             return None;
         }
         match borsh::from_slice(&public.message().instruction_data) {
