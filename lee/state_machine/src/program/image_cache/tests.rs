@@ -4,7 +4,7 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{AccountId, AccountInput, Cycles, Data},
+    account::{AccountId, AccountInput, Cycles, ShardData},
     program::ProgramInput,
     to_borsh_frame, to_frame,
 };
@@ -85,7 +85,7 @@ fn cached_path_matches_rebuild_path() {
                 true,
                 0,
                 AccountId::from(crate::test_methods::data_changer().id()),
-                Data::empty(),
+                ShardData::empty(),
             )],
             Program::serialize_instruction(vec![9_u8; 32]).unwrap(),
         ),

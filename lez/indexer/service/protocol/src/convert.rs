@@ -4,12 +4,12 @@ use lee_core::account::Nonce;
 
 use crate::{
     Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data,
+    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
     EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus,
     IndexerSyncState, Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, Signature,
-    StallReason, Transaction, ValidityWindow, WitnessSet,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
+    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -125,16 +125,16 @@ impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
     }
 }
 
-impl From<lee_core::account::Data> for Data {
-    fn from(value: lee_core::account::Data) -> Self {
+impl From<lee_core::account::ShardData> for ShardData {
+    fn from(value: lee_core::account::ShardData) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl TryFrom<Data> for lee_core::account::Data {
+impl TryFrom<ShardData> for lee_core::account::ShardData {
     type Error = lee_core::account::data::DataTooBigError;
 
-    fn try_from(value: Data) -> Result<Self, Self::Error> {
+    fn try_from(value: ShardData) -> Result<Self, Self::Error> {
         Self::try_from(value.0)
     }
 }

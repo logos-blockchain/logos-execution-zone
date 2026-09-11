@@ -1,7 +1,7 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, Data};
+use lee_core::account::{AccountId, ShardData};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
@@ -90,15 +90,15 @@ pub enum TokenDefinition {
     },
 }
 
-impl TryFrom<&Data> for TokenDefinition {
+impl TryFrom<&ShardData> for TokenDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenDefinition> for Data {
+impl From<&TokenDefinition> for ShardData {
     fn from(definition: &TokenDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -106,7 +106,7 @@ impl From<&TokenDefinition> for Data {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into Data")
+        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
     }
 }
 
@@ -174,15 +174,15 @@ impl TokenHolding {
     }
 }
 
-impl TryFrom<&Data> for TokenHolding {
+impl TryFrom<&ShardData> for TokenHolding {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenHolding> for Data {
+impl From<&TokenHolding> for ShardData {
     fn from(holding: &TokenHolding) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(holding));
@@ -190,7 +190,7 @@ impl From<&TokenHolding> for Data {
         BorshSerialize::serialize(holding, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token holding encoded data should fit into Data")
+        Self::try_from(data).expect("Token holding encoded data should fit into ShardData")
     }
 }
 
@@ -225,15 +225,15 @@ pub enum MetadataStandard {
     Expanded,
 }
 
-impl TryFrom<&Data> for TokenMetadata {
+impl TryFrom<&ShardData> for TokenMetadata {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenMetadata> for Data {
+impl From<&TokenMetadata> for ShardData {
     fn from(metadata: &TokenMetadata) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(metadata));
@@ -241,6 +241,6 @@ impl From<&TokenMetadata> for Data {
         BorshSerialize::serialize(metadata, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token metadata encoded data should fit into Data")
+        Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
     }
 }

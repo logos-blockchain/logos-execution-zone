@@ -10,7 +10,9 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, AccountInput, Balance, Nonce, ProgramShardSelector, data::Data},
+    account::{
+        Account, AccountId, AccountInput, Balance, Nonce, ProgramShardSelector, data::ShardData,
+    },
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,

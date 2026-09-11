@@ -141,7 +141,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: Data = b"stranger".to_vec().try_into().unwrap();
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
     let initial_balance = 100;
     let amount: u128 = 37;
     let mut state = V03State::new()

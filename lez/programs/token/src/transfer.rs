@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::AccountStateDiff,
 };
 use token_core::TokenHolding;
@@ -103,13 +103,13 @@ pub fn transfer(
     let sender_diff = AccountStateDiff::new(
         sender.clone(),
         BalanceDiff::Add(0),
-        Data::from(&sender_holding),
+        ShardData::from(&sender_holding),
     );
 
     let recipient_diff = AccountStateDiff::new(
         recipient.clone(),
         BalanceDiff::Add(0),
-        Data::from(&recipient_holding),
+        ShardData::from(&recipient_holding),
     );
 
     vec![sender_diff, recipient_diff]

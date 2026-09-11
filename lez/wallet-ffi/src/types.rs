@@ -8,7 +8,7 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId, Data, ProgramId, SharedSecretKey};
+use lee::{AccountId, ProgramId, ShardData, SharedSecretKey};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -429,10 +429,10 @@ impl TryFrom<&FfiAccount> for lee::Account {
             for shard in shards {
                 let data = if shard.data_len > 0 {
                     let bytes = unsafe { slice::from_raw_parts(shard.data, shard.data_len) };
-                    Data::try_from(bytes.to_vec())
+                    ShardData::try_from(bytes.to_vec())
                         .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
                 } else {
-                    Data::default()
+                    ShardData::default()
                 };
                 account.data.set_shard(shard.program.into(), data);
             }

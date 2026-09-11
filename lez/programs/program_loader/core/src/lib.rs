@@ -5,15 +5,15 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::{AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
 };
 
 /// Recommended max bytes of bytecode per segment.
 ///
-/// Not enforced here — `Data::try_from` in `write_segment` rejects an oversized segment against
-/// the account's own `DATA_MAX_LENGTH` cap regardless — this just keeps a live deploy's segments
-/// comfortably under it.
+/// Not enforced here — `ShardData::try_from` in `write_segment` rejects an oversized segment
+/// against the account's own `DATA_MAX_LENGTH` cap regardless — this just keeps a live deploy's
+/// segments comfortably under it.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
@@ -74,7 +74,7 @@ pub fn write_segment(
     let mut diffs = vec![AccountStateDiff::new(
         target.clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
+        ShardData::try_from(
             ProgramSegment {
                 bytecode,
                 next_segment,
@@ -125,7 +125,7 @@ pub fn create_header(
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
+        ShardData::try_from(
             ProgramHeader {
                 image_id,
                 program_first_segment: first_segment,
@@ -177,7 +177,7 @@ pub fn update_header(
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        Data::try_from(
+        ShardData::try_from(
             ProgramHeader {
                 image_id,
                 program_first_segment: first_segment,

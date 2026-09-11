@@ -2,7 +2,7 @@ use std::num::NonZeroU128;
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed};
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
+    account::{AccountId, AccountInput, BalanceDiff, ProgramShardSelector, ShardData},
     program::{AccountStateDiff, ChainedCall},
 };
 
@@ -176,7 +176,7 @@ pub fn add_liquidity(
         AccountStateDiff::new(
             pool.clone(),
             BalanceDiff::Add(0),
-            Data::from(&pool_post_definition),
+            ShardData::from(&pool_post_definition),
         ),
         AccountStateDiff::unchanged(vault_a.clone()),
         AccountStateDiff::unchanged(vault_b.clone()),

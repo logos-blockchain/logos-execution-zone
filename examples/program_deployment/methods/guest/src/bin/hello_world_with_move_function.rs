@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::{
         AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -26,12 +26,12 @@ fn write(
     greeting: &[u8],
 ) -> AccountStateDiff {
     // Construct the new data value: the existing data with the greeting appended.
-    let new_data: Data = {
+    let new_data: ShardData = {
         let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(greeting);
         bytes
             .try_into()
-            .expect("Data should fit within the allowed limits")
+            .expect("ShardData should fit within the allowed limits")
     };
 
     AccountStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
@@ -45,14 +45,15 @@ fn move_data(
     // Construct the new data values.
     let from_data: Vec<u8> = from_pre.shard_of(self_account_id).clone().into_inner();
 
-    let from_post = AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), Data::default());
+    let from_post =
+        AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), ShardData::default());
 
     let to_post = {
         let mut bytes = to_pre.shard_of(self_account_id).clone().into_inner();
         bytes.extend_from_slice(&from_data);
-        let new_data: Data = bytes
+        let new_data: ShardData = bytes
             .try_into()
-            .expect("Data should fit within the allowed limits");
+            .expect("ShardData should fit within the allowed limits");
         AccountStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
     };
 

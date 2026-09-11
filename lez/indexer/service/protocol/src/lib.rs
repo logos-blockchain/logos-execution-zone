@@ -156,7 +156,7 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
     pub balance: u128,
-    pub shards: BTreeMap<AccountId, Data>,
+    pub shards: BTreeMap<AccountId, ShardData>,
 }
 
 /// Selects an account's balance and optionally one program shard.
@@ -375,7 +375,7 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Data(
+pub struct ShardData(
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded account data")]
     pub Vec<u8>,

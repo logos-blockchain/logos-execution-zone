@@ -124,7 +124,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                     }
                     .to_bytes()
                     .try_into()
-                    .expect("Sequencer stake config must fit into Data"),
+                    .expect("Sequencer stake config must fit into ShardData"),
                 ),
             ),
             (

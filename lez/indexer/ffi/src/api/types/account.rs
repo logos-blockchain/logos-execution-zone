@@ -43,8 +43,8 @@ pub struct FfiAccountData {
 
 // Helper functions to convert between Rust and FFI types
 
-impl From<(lee::AccountId, lee::Data)> for FfiShard {
-    fn from((program, data): (lee::AccountId, lee::Data)) -> Self {
+impl From<(lee::AccountId, lee::ShardData)> for FfiShard {
+    fn from((program, data): (lee::AccountId, lee::ShardData)) -> Self {
         let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
         Self {
             program: FfiBytes32::from_account_id(&program),
@@ -147,7 +147,7 @@ impl From<FfiAccountData> for indexer_service_protocol::AccountData {
 }
 
 /// Converts shards into a boxed slice and returns its pointer and length.
-fn shards_into_raw(shards: BTreeMap<lee::AccountId, lee::Data>) -> (*mut FfiShard, usize) {
+fn shards_into_raw(shards: BTreeMap<lee::AccountId, lee::ShardData>) -> (*mut FfiShard, usize) {
     let boxed: Box<[FfiShard]> = shards.into_iter().map(FfiShard::from).collect();
     let len = boxed.len();
     (Box::into_raw(boxed).cast::<FfiShard>(), len)
@@ -162,7 +162,7 @@ fn shards_into_raw(shards: BTreeMap<lee::AccountId, lee::Data>) -> (*mut FfiShar
 unsafe fn shards_from_raw(
     ptr: *mut FfiShard,
     len: usize,
-) -> BTreeMap<indexer_service_protocol::AccountId, indexer_service_protocol::Data> {
+) -> BTreeMap<indexer_service_protocol::AccountId, indexer_service_protocol::ShardData> {
     let boxed = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)) };
     Vec::from(boxed)
         .into_iter()
@@ -177,7 +177,7 @@ unsafe fn shards_from_raw(
                 indexer_service_protocol::AccountId {
                     value: program.data,
                 },
-                indexer_service_protocol::Data(unsafe {
+                indexer_service_protocol::ShardData(unsafe {
                     Vec::from_raw_parts(data, data_len, data_cap)
                 }),
             )

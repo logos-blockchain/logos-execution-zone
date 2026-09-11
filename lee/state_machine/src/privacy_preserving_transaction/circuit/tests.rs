@@ -1073,8 +1073,8 @@ fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
     let balance = 500;
-    let on_chain = Data::try_from(vec![1; 8]).unwrap();
-    let own_shard = Data::try_from(vec![2; 8]).unwrap();
+    let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
+    let own_shard = ShardData::try_from(vec![2; 8]).unwrap();
     let write = vec![3; 16];
 
     let sparse = Account::funded(balance).with_shard(forwarder_id, own_shard.clone());
@@ -1107,7 +1107,7 @@ fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_
     assert_eq!(action.post.balance, balance);
     assert_eq!(
         action.post.shards[&callee_id],
-        Data::try_from(write.clone()).unwrap()
+        ShardData::try_from(write.clone()).unwrap()
     );
 
     let (complete_output, _) = execute_and_prove(
@@ -1131,7 +1131,8 @@ fn resolving_an_empty_shard_matches_not_resolving_at_all() {
     let account_id = AccountId::new([7; 32]);
     let write = vec![3; 16];
 
-    let sparse = Account::funded(500).with_shard(forwarder_id, Data::try_from(vec![2; 8]).unwrap());
+    let sparse =
+        Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
 
     let (unresolved_output, _) = execute_and_prove(
         forwarding_input(account_id, forwarder_id, callee_id, sparse.clone(), &write),
@@ -1145,7 +1146,7 @@ fn resolving_an_empty_shard_matches_not_resolving_at_all() {
         &program,
         &mut |_| {
             asked += 1;
-            Ok(Some(Data::empty()))
+            Ok(Some(ShardData::empty()))
         },
     )
     .unwrap();
@@ -1196,7 +1197,7 @@ fn forwarder_over_itself() -> (ProgramWithDependencies, AccountId) {
 fn a_top_level_shard_selector_is_never_resolved_for() {
     let (program, forwarder_id) = forwarder_over_itself();
     let account_id = AccountId::new([7; 32]);
-    let supplied = Data::try_from(vec![0xA1; 12]).unwrap();
+    let supplied = ShardData::try_from(vec![0xA1; 12]).unwrap();
 
     let instruction = forwarder_instruction(
         None,
@@ -1217,7 +1218,7 @@ fn a_top_level_shard_selector_is_never_resolved_for() {
         &program,
         &mut |shard_selector| {
             asked.push(shard_selector);
-            Ok(Some(Data::try_from(vec![0xEE; 12]).unwrap()))
+            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
         },
     )
     .unwrap();
@@ -1259,7 +1260,7 @@ fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
         &program,
         &mut |shard_selector| {
             asked.push(shard_selector);
-            Ok(Some(Data::empty()))
+            Ok(Some(ShardData::empty()))
         },
     )
     .unwrap();
@@ -1272,7 +1273,7 @@ fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
     let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
     assert_eq!(
         action.post.shards[&callee_id],
-        Data::try_from(second).unwrap()
+        ShardData::try_from(second).unwrap()
     );
 }
 
@@ -1303,7 +1304,7 @@ fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
         &program,
         &mut |shard_selector| {
             asked.push(shard_selector);
-            Ok(Some(Data::try_from(vec![0xEE; 12]).unwrap()))
+            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
         },
     )
     .unwrap();
@@ -1322,7 +1323,7 @@ fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
         .expect("the fresh account must appear in the journal");
     assert_eq!(
         fresh.post.shards[&forwarder_id],
-        Data::try_from(written).unwrap(),
+        ShardData::try_from(written).unwrap(),
         "the callee must have run against the root's write, not the resolver's value"
     );
 }

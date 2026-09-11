@@ -14,11 +14,11 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EventRecord,
-    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
-    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
-    Selector, Signature, Transaction, ValidityWindow, WitnessSet,
+    Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
+    Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -121,7 +121,7 @@ impl MockIndexerService {
                             AccountId {
                                 value: [i as u8; 32],
                             },
-                            Data(vec![0xaa, 0xbb, 0xcc]),
+                            ShardData(vec![0xaa, 0xbb, 0xcc]),
                         )]),
                     },
                 },
@@ -467,7 +467,7 @@ fn project_account(account: Option<&Account>, selector: ProgramShardSelector) ->
                     .shards
                     .get(&program)
                     .cloned()
-                    .unwrap_or(Data(Vec::new())),
+                    .unwrap_or(ShardData(Vec::new())),
             )])
         });
     Account {
@@ -538,7 +538,7 @@ fn mock_privacy_preserving_tx(
                     balance: 500,
                     shards: BTreeMap::from([(
                         AccountId { value: [1_u8; 32] },
-                        Data(vec![0xdd, 0xee]),
+                        ShardData(vec![0xdd, 0xee]),
                     )]),
                 },
             }],

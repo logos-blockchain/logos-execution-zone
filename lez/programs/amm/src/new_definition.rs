@@ -5,7 +5,7 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
+    account::{AccountId, AccountInput, BalanceDiff, ProgramShardSelector, ShardData},
     program::{AccountStateDiff, ChainedCall},
 };
 
@@ -111,7 +111,7 @@ pub fn new_definition(
     let pool_post = AccountStateDiff::new(
         pool.clone(),
         BalanceDiff::Add(0),
-        Data::from(&pool_post_definition),
+        ShardData::from(&pool_post_definition),
     );
 
     // Chain call for Token A (user_holding_a -> Vault_A)

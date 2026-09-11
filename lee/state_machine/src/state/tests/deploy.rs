@@ -42,7 +42,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
             segment_account_ids[i],
             Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                Data::try_from(
+                ShardData::try_from(
                     ProgramSegment {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i + 1).copied(),
@@ -59,7 +59,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         header_account_id,
         Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            Data::try_from(
+            ShardData::try_from(
                 ProgramHeader {
                     image_id: program.id(),
                     program_first_segment: segment_account_ids[0],
@@ -141,7 +141,7 @@ fn program_with_more_than_max_segments_is_rejected() {
             segment_account_ids[i],
             Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                Data::try_from(
+                ShardData::try_from(
                     ProgramSegment {
                         bytecode: vec![],
                         next_segment,
@@ -158,7 +158,7 @@ fn program_with_more_than_max_segments_is_rejected() {
         header_account_id,
         Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            Data::try_from(
+            ShardData::try_from(
                 ProgramHeader {
                     image_id: [0; 8],
                     program_first_segment: segment_account_ids[0],
@@ -193,7 +193,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
             segment_account_ids[i],
             Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                Data::try_from(
+                ShardData::try_from(
                     ProgramSegment {
                         bytecode: vec![],
                         next_segment: segment_account_ids.get(i + 1).copied(),

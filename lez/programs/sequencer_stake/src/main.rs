@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 
 use authenticated_transfer_core::custody_transfer;
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data, ProgramShardSelector},
+    account::{AccountId, AccountInput, BalanceDiff, ProgramShardSelector, ShardData},
     program::{
         AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -224,7 +224,7 @@ fn stake(
     // pass-through: propagates authorization into the nested mover call
     let funding_account_post = AccountStateDiff::unchanged(funding_account);
 
-    let new_stake_record_data: Data = StakeRecord {
+    let new_stake_record_data: ShardData = StakeRecord {
         sequencer_key,
         pending_unstake: None,
     }

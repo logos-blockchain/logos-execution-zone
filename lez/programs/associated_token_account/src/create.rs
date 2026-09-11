@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, Data, ProgramShardSelector},
+    account::{AccountId, AccountInput, ProgramShardSelector, ShardData},
     program::{AccountStateDiff, ChainedCall},
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -55,7 +55,7 @@ pub fn create_associated_token_account(
 }
 
 fn holds_intended_asset(
-    shard: &Data,
+    shard: &ShardData,
     token_definition: &AccountInput,
     token_program_id: AccountId,
 ) -> bool {

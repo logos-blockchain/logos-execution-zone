@@ -201,7 +201,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountData, AccountId, Data},
+        account::{Account, AccountData, AccountId, ShardData},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
@@ -218,7 +218,7 @@ mod tests {
                         balance: 12_345_678_901_234_567_890,
                         shards: [
                             (touched, b"test data".to_vec().try_into().unwrap()),
-                            (also_touched, Data::empty()),
+                            (also_touched, ShardData::empty()),
                         ]
                         .into(),
                     },

@@ -15,7 +15,7 @@ fn empty_target(account_id: AccountId, is_authorized: bool) -> AccountInput {
         is_authorized,
         0,
         PROGRAM_LOADER_ACCOUNT_ID,
-        Data::empty(),
+        ShardData::empty(),
     )
 }
 
@@ -29,7 +29,7 @@ fn segment_pre(
         false,
         0,
         PROGRAM_LOADER_ACCOUNT_ID,
-        Data::try_from(
+        ShardData::try_from(
             ProgramSegment {
                 bytecode,
                 next_segment,
@@ -46,7 +46,7 @@ fn header_pre(account_id: AccountId, header: &ProgramHeader, is_authorized: bool
         is_authorized,
         0,
         PROGRAM_LOADER_ACCOUNT_ID,
-        Data::try_from(header.to_bytes()).unwrap(),
+        ShardData::try_from(header.to_bytes()).unwrap(),
     )
 }
 
@@ -80,7 +80,7 @@ fn write_segment_accepts_a_target_holding_balance() {
         false,
         5,
         PROGRAM_LOADER_ACCOUNT_ID,
-        Data::empty(),
+        ShardData::empty(),
     )];
 
     let diffs = write_segment(&pre_states, vec![1, 2, 3], None);
@@ -163,7 +163,7 @@ fn write_segment_rejects_a_next_segment_shard_selector_naming_another_shard() {
         false,
         0,
         AccountId::new([9; 32]),
-        Data::try_from(vec![1]).unwrap(),
+        ShardData::try_from(vec![1]).unwrap(),
     );
     let pre_states = [empty_target(target_id, false), foreign_next];
     let _diffs = write_segment(&pre_states, vec![1], Some(next_id));
@@ -179,7 +179,7 @@ fn write_segment_rejects_a_next_segment_with_malformed_data() {
         false,
         0,
         PROGRAM_LOADER_ACCOUNT_ID,
-        Data::try_from(vec![0xff, 0xff]).unwrap(),
+        ShardData::try_from(vec![0xff, 0xff]).unwrap(),
     );
     let pre_states = [empty_target(target_id, false), malformed_next];
     let _diffs = write_segment(&pre_states, vec![1], Some(next_id));

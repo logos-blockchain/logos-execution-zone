@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::AccountStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -96,13 +96,13 @@ pub fn burn(
     let definition_diff = AccountStateDiff::new(
         definition_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&definition),
+        ShardData::from(&definition),
     );
 
     let holding_diff = AccountStateDiff::new(
         user_holding_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&holding),
+        ShardData::from(&holding),
     );
 
     vec![definition_diff, holding_diff]

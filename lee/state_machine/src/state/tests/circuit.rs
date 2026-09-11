@@ -39,7 +39,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let program = crate::test_methods::data_changer();
     let program_id: AccountId = program.id().into();
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: Data = b"stranger".to_vec().try_into().unwrap();
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let keys = test_private_account_keys_1();
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);

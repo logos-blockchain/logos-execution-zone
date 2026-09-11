@@ -34,7 +34,7 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     Timestamp,
-    account::{AccountId, AccountInput, Data},
+    account::{AccountId, AccountInput, ShardData},
     program::InstructionData,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
@@ -303,7 +303,7 @@ fn token_holding(
         is_authorized,
         0,
         programs::token().id().into(),
-        Data::from(&TokenHolding::Fungible {
+        ShardData::from(&TokenHolding::Fungible {
             definition_id,
             balance,
         }),
@@ -320,7 +320,7 @@ fn token_definition(
         is_authorized,
         0,
         programs::token().id().into(),
-        Data::from(&TokenDefinition::Fungible {
+        ShardData::from(&TokenDefinition::Fungible {
             name: String::from("test"),
             total_supply,
             metadata_id: None,
@@ -408,7 +408,7 @@ fn amm_pool_account() -> AccountInput {
         true,
         0,
         programs::amm().id().into(),
-        Data::from(&PoolDefinition {
+        ShardData::from(&PoolDefinition {
             token_program_id: programs::token().id().into(),
             definition_token_a_id: amm_token_a_def_id(),
             definition_token_b_id: amm_token_b_def_id(),
@@ -458,7 +458,7 @@ fn ata_create_pre_states() -> Vec<AccountInput> {
         false,
         0,
         programs::token().id().into(),
-        Data::empty(),
+        ShardData::empty(),
     );
     vec![owner, token_def, ata_account]
 }

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountId, AccountInput, BalanceDiff, BalanceDiffError, Data,
-        ProgramShardSelector, apply_balance_diff,
+        Account, AccountId, AccountInput, BalanceDiff, BalanceDiffError, ProgramShardSelector,
+        ShardData, apply_balance_diff,
     },
     encryption::ViewingPublicKey,
 };
@@ -323,7 +323,7 @@ pub struct AccountStateDiff {
     pub pre_state: AccountInput,
     pub post_balance_diff: BalanceDiff,
     /// The new shard data, or `None` to leave it unchanged.
-    pub post_data: Option<Data>,
+    pub post_data: Option<ShardData>,
 }
 
 impl AccountStateDiff {
@@ -350,7 +350,7 @@ impl AccountStateDiff {
     pub const fn new(
         pre_state: AccountInput,
         post_balance_diff: BalanceDiff,
-        post_data: Data,
+        post_data: ShardData,
     ) -> Self {
         Self {
             pre_state,

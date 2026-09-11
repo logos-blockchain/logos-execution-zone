@@ -201,7 +201,7 @@ mod tests {
     use lee_core::{
         AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, NullifierPublicKey,
         PublicAction,
-        account::{AccountData, Data},
+        account::{AccountData, ShardData},
     };
 
     use super::*;
@@ -270,7 +270,7 @@ mod tests {
         }
     }
 
-    fn data(bytes: &[u8]) -> Data {
+    fn data(bytes: &[u8]) -> ShardData {
         bytes.to_vec().try_into().expect("test data is small")
     }
 

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use data::Data;
+pub use data::ShardData;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -123,7 +123,7 @@ pub struct Account {
 
 impl Account {
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: Data) -> Self {
+    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
         self.data.set_shard(program, data);
         self
     }
@@ -149,17 +149,17 @@ impl Account {
 )]
 pub struct AccountData {
     pub balance: Balance,
-    pub shards: BTreeMap<AccountId, Data>,
+    pub shards: BTreeMap<AccountId, ShardData>,
 }
 
 impl AccountData {
     #[must_use]
-    pub fn shard(&self, program: AccountId) -> &Data {
-        const EMPTY: &Data = &Data::empty();
+    pub fn shard(&self, program: AccountId) -> &ShardData {
+        const EMPTY: &ShardData = &ShardData::empty();
         self.shards.get(&program).unwrap_or(EMPTY)
     }
 
-    pub fn set_shard(&mut self, program: AccountId, data: Data) {
+    pub fn set_shard(&mut self, program: AccountId, data: ShardData) {
         if data.is_empty() {
             self.shards.remove(&program);
         } else {
@@ -168,7 +168,7 @@ impl AccountData {
     }
 
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: Data) -> Self {
+    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
         self.set_shard(program, data);
         self
     }
@@ -247,7 +247,7 @@ pub struct AccountInput {
     pub account_id: AccountId,
     pub is_authorized: bool,
     pub balance: Balance,
-    pub shard: Option<(AccountId, Data)>,
+    pub shard: Option<(AccountId, ShardData)>,
 }
 
 impl AccountInput {
@@ -257,7 +257,7 @@ impl AccountInput {
         is_authorized: bool,
         balance: Balance,
         program_account_id: AccountId,
-        data: Data,
+        data: ShardData,
     ) -> Self {
         Self {
             account_id,
@@ -304,7 +304,7 @@ impl AccountInput {
 
     /// Returns the shard data. Panics unless the input selects `program`'s shard.
     #[must_use]
-    pub fn shard_of(&self, program: AccountId) -> &Data {
+    pub fn shard_of(&self, program: AccountId) -> &ShardData {
         let (selected, data) = self.shard.as_ref().expect("AccountInput carries no shard");
         assert_eq!(
             *selected, program,
@@ -610,7 +610,7 @@ mod tests {
                     b"record".to_vec().try_into().unwrap(),
                 ),
                 BalanceDiff::Sub(3),
-                Data::empty(),
+                ShardData::empty(),
             ))
             .unwrap();
 
@@ -626,7 +626,7 @@ mod tests {
         account
             .data
             .set_shard(program, b"record".to_vec().try_into().unwrap());
-        account.data.set_shard(program, Data::empty());
+        account.data.set_shard(program, ShardData::empty());
 
         assert_eq!(account.to_bytes(), Account::default().to_bytes());
     }
@@ -702,7 +702,7 @@ mod tests {
         let projection = data.project([held, absent]);
 
         assert_eq!(projection.balance, 9);
-        assert_eq!(projection.shards.get(&absent), Some(&Data::empty()));
+        assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
         assert_eq!(projection.shards.len(), 2);
     }
 
@@ -716,7 +716,7 @@ mod tests {
 
         account.data.apply(&AccountData {
             balance: 1,
-            shards: [(program, Data::empty())].into(),
+            shards: [(program, ShardData::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));

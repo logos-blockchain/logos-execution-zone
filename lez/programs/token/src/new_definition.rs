@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::AccountStateDiff,
 };
 use token_core::{
@@ -39,13 +39,13 @@ pub fn new_fungible_definition(
     let definition_diff = AccountStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&token_definition),
+        ShardData::from(&token_definition),
     );
 
     let holding_diff = AccountStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&token_holding),
+        ShardData::from(&token_holding),
     );
 
     vec![definition_diff, holding_diff]
@@ -116,19 +116,19 @@ pub fn new_definition_with_metadata(
     let definition_diff = AccountStateDiff::new(
         definition_target_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&token_definition),
+        ShardData::from(&token_definition),
     );
 
     let holding_diff = AccountStateDiff::new(
         holding_target_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&token_holding),
+        ShardData::from(&token_holding),
     );
 
     let metadata_diff = AccountStateDiff::new(
         metadata_target_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&token_metadata),
+        ShardData::from(&token_metadata),
     );
 
     vec![definition_diff, holding_diff, metadata_diff]

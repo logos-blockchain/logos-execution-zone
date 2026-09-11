@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateWitness,
     ProgramImageClaim, WitnessKind,
-    account::{Account, AccountData, AccountId, AccountInput, Data, ProgramShardSelector},
+    account::{Account, AccountData, AccountId, AccountInput, ProgramShardSelector, ShardData},
     from_frame,
     program::{ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas},
     to_frame,
@@ -106,7 +106,7 @@ pub fn execute_and_prove(
 pub fn execute_and_prove_with(
     input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
-    resolve: &mut dyn FnMut(ProgramShardSelector) -> Result<Option<Data>, LeeError>,
+    resolve: &mut dyn FnMut(ProgramShardSelector) -> Result<Option<ShardData>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProvingInput {
         shard_selectors,

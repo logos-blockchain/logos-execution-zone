@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId, Data},
+    account::{Account, AccountId, ShardData},
     program::{
         PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
         get_program_via,
@@ -206,7 +206,7 @@ impl V03State {
 
         let segment = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            Data::try_from(
+            ShardData::try_from(
                 ProgramSegment {
                     bytecode: program.elf().to_vec(),
                     next_segment: None,
@@ -217,7 +217,7 @@ impl V03State {
         );
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            Data::try_from(
+            ShardData::try_from(
                 ProgramHeader {
                     image_id: program.id(),
                     program_first_segment: segment_account_id,

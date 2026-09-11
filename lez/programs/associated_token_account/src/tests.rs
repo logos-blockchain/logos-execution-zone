@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
-use lee_core::account::{AccountId, AccountInput, Data, ProgramShardSelector};
+use lee_core::account::{AccountId, AccountInput, ProgramShardSelector, ShardData};
 use token_core::{TokenDefinition, TokenHolding};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
@@ -26,7 +26,7 @@ fn ata_id() -> AccountId {
     ata_of(definition_id())
 }
 
-fn token_input(account_id: AccountId, shard: Data) -> AccountInput {
+fn token_input(account_id: AccountId, shard: ShardData) -> AccountInput {
     AccountInput::with_shard(account_id, false, 0, TOKEN_PROGRAM_ID, shard)
 }
 
@@ -41,7 +41,7 @@ fn unauthorized_owner_account() -> AccountInput {
 fn definition_account() -> AccountInput {
     token_input(
         definition_id(),
-        Data::from(&TokenDefinition::Fungible {
+        ShardData::from(&TokenDefinition::Fungible {
             name: "TEST".to_string(),
             total_supply: 1000,
             metadata_id: None,
@@ -49,15 +49,15 @@ fn definition_account() -> AccountInput {
     )
 }
 
-fn matching_holding() -> Data {
-    Data::from(&TokenHolding::Fungible {
+fn matching_holding() -> ShardData {
+    ShardData::from(&TokenHolding::Fungible {
         definition_id: definition_id(),
         balance: 100,
     })
 }
 
-fn foreign_holding() -> Data {
-    Data::from(&TokenHolding::Fungible {
+fn foreign_holding() -> ShardData {
+    ShardData::from(&TokenHolding::Fungible {
         definition_id: AccountId::new([0x99u8; 32]),
         balance: 100,
     })
@@ -68,7 +68,7 @@ fn create_emits_chained_call_for_uninitialized_ata() {
     let (post_diffs, chained_calls) = crate::create::create_associated_token_account(
         unauthorized_owner_account(),
         definition_account(),
-        token_input(ata_id(), Data::empty()),
+        token_input(ata_id(), ShardData::empty()),
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
@@ -84,7 +84,7 @@ fn create_panics_on_wrong_ata_address() {
     crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
-        token_input(AccountId::new([0xFFu8; 32]), Data::empty()),
+        token_input(AccountId::new([0xFFu8; 32]), ShardData::empty()),
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );
@@ -149,7 +149,7 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
     crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
-        AccountInput::with_shard(ata_id(), false, 0, stranger, Data::empty()),
+        AccountInput::with_shard(ata_id(), false, 0, stranger, ShardData::empty()),
         ATA_PROGRAM_ID,
         stranger,
     );
@@ -160,7 +160,7 @@ fn create_leaves_a_matching_holding_untouched_however_the_owner_is_authorized() 
     const NFT_DEFINITION_ID: AccountId = AccountId::new([0x03u8; 32]);
     let nft_definition = token_input(
         NFT_DEFINITION_ID,
-        Data::from(&TokenDefinition::NonFungible {
+        ShardData::from(&TokenDefinition::NonFungible {
             name: "NFT".to_string(),
             printable_supply: 5,
             metadata_id: AccountId::new([0u8; 32]),
@@ -170,14 +170,14 @@ fn create_leaves_a_matching_holding_untouched_however_the_owner_is_authorized() 
         (definition_account(), matching_holding()),
         (
             nft_definition.clone(),
-            Data::from(&TokenHolding::NftMaster {
+            ShardData::from(&TokenHolding::NftMaster {
                 definition_id: NFT_DEFINITION_ID,
                 print_balance: 5,
             }),
         ),
         (
             nft_definition,
-            Data::from(&TokenHolding::NftPrintedCopy {
+            ShardData::from(&TokenHolding::NftPrintedCopy {
                 definition_id: NFT_DEFINITION_ID,
                 owned: true,
             }),
@@ -209,11 +209,11 @@ fn create_repairs_a_squatted_ata_and_delegates_the_seed() {
     ];
     let squats = [
         foreign_holding(),
-        Data::from(&TokenHolding::NftMaster {
+        ShardData::from(&TokenHolding::NftMaster {
             definition_id: definition_id(),
             print_balance: 5,
         }),
-        Data::try_from(vec![0xFFu8; 4]).unwrap(),
+        ShardData::try_from(vec![0xFFu8; 4]).unwrap(),
     ];
 
     for shard in squats {

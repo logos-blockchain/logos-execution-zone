@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::AccountStateDiff,
 };
 use token_core::TokenHolding;
@@ -42,13 +42,13 @@ pub fn print_nft(
     let master_diff = AccountStateDiff::new(
         master_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&master_account_data),
+        ShardData::from(&master_account_data),
     );
 
     let printed_diff = AccountStateDiff::new(
         printed_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&TokenHolding::NftPrintedCopy {
+        ShardData::from(&TokenHolding::NftPrintedCopy {
             definition_id,
             owned: true,
         }),

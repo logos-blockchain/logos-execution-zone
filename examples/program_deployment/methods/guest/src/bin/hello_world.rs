@@ -42,7 +42,7 @@ fn main() {
         bytes.extend_from_slice(&greeting);
         bytes
             .try_into()
-            .expect("Data should fit within the allowed limits")
+            .expect("ShardData should fit within the allowed limits")
     };
 
     // Wrap the diff inside an `AccountStateDiff` instance.

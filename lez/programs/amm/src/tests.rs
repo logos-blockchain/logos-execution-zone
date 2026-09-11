@@ -6,7 +6,7 @@ use amm_core::{
 };
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
-    account::{Account, AccountId, AccountInput, Data, ProgramShardSelector},
+    account::{Account, AccountId, AccountInput, ProgramShardSelector, ShardData},
     program::{AccountStateDiff, ChainedCall},
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -504,11 +504,23 @@ impl IdForTests {
 
 impl InputsForTests {
     fn holding(account_id: AccountId, holding: &TokenHolding) -> AccountInput {
-        AccountInput::with_shard(account_id, true, 0, TOKEN_PROGRAM_ID, Data::from(holding))
+        AccountInput::with_shard(
+            account_id,
+            true,
+            0,
+            TOKEN_PROGRAM_ID,
+            ShardData::from(holding),
+        )
     }
 
     fn pool(account_id: AccountId, definition: &PoolDefinition) -> AccountInput {
-        AccountInput::with_shard(account_id, true, 0, AMM_PROGRAM_ID, Data::from(definition))
+        AccountInput::with_shard(
+            account_id,
+            true,
+            0,
+            AMM_PROGRAM_ID,
+            ShardData::from(definition),
+        )
     }
 
     fn pool_base() -> PoolDefinition {
@@ -633,7 +645,7 @@ impl InputsForTests {
             true,
             0,
             TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            ShardData::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::lp_supply_init(),
                 metadata_id: None,
@@ -647,7 +659,7 @@ impl InputsForTests {
             true,
             0,
             TOKEN_PROGRAM_ID,
-            Data::from(&TokenDefinition::Fungible {
+            ShardData::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
                 total_supply: BalanceForTests::lp_supply_init(),
                 metadata_id: None,
@@ -1083,15 +1095,15 @@ impl AccountsForExeTests {
             nonce: nonce.into(),
             ..Account::default()
         }
-        .with_shard(programs::token().id().into(), Data::from(holding))
+        .with_shard(programs::token().id().into(), ShardData::from(holding))
     }
 
     fn definition(definition: &TokenDefinition) -> Account {
-        Account::default().with_shard(programs::token().id().into(), Data::from(definition))
+        Account::default().with_shard(programs::token().id().into(), ShardData::from(definition))
     }
 
     fn pool(definition: &PoolDefinition) -> Account {
-        Account::default().with_shard(programs::amm().id().into(), Data::from(definition))
+        Account::default().with_shard(programs::amm().id().into(), ShardData::from(definition))
     }
 
     fn pool_base() -> PoolDefinition {
@@ -1523,7 +1535,7 @@ impl AccountsForExeTests {
 
 /// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
 /// pre-state's data if it was left unchanged.
-fn effective_post_data(diff: &AccountStateDiff) -> Data {
+fn effective_post_data(diff: &AccountStateDiff) -> ShardData {
     diff.post_data.clone().unwrap_or_else(|| {
         diff.pre_state
             .shard
@@ -2586,7 +2598,7 @@ fn swap_exact_output_overflow_protection() {
         true,
         0,
         AMM_PROGRAM_ID,
-        Data::from(&PoolDefinition {
+        ShardData::from(&PoolDefinition {
             token_program_id: TOKEN_PROGRAM_ID,
             definition_token_a_id: IdForTests::token_a_definition_id(),
             definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -2606,7 +2618,7 @@ fn swap_exact_output_overflow_protection() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::from(&TokenHolding::Fungible {
+        ShardData::from(&TokenHolding::Fungible {
             definition_id: IdForTests::token_a_definition_id(),
             balance: large_reserve,
         }),
@@ -2617,7 +2629,7 @@ fn swap_exact_output_overflow_protection() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::from(&TokenHolding::Fungible {
+        ShardData::from(&TokenHolding::Fungible {
             definition_id: IdForTests::token_b_definition_id(),
             balance: reserve_b,
         }),

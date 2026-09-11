@@ -6,7 +6,7 @@
 )]
 
 use lee_core::{
-    account::{AccountId, AccountInput, BalanceDiff, Data},
+    account::{AccountId, AccountInput, BalanceDiff, ShardData},
     program::AccountStateDiff,
 };
 use token_core::{
@@ -39,7 +39,7 @@ impl AccountForTests {
             is_authorized,
             0,
             TOKEN_PROGRAM_ID,
-            Data::from(holding),
+            ShardData::from(holding),
         )
     }
 
@@ -53,7 +53,7 @@ impl AccountForTests {
             is_authorized,
             0,
             TOKEN_PROGRAM_ID,
-            Data::from(definition),
+            ShardData::from(definition),
         )
     }
 
@@ -154,7 +154,7 @@ impl AccountForTests {
             false,
             0,
             TOKEN_PROGRAM_ID,
-            Data::empty(),
+            ShardData::empty(),
         )
     }
 
@@ -221,7 +221,7 @@ impl AccountForTests {
             false,
             0,
             TOKEN_PROGRAM_ID,
-            Data::empty(),
+            ShardData::empty(),
         )
     }
 
@@ -430,7 +430,7 @@ fn new_definition_data_bearing_first_account_should_fail() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::from(&TokenDefinition::Fungible {
+        ShardData::from(&TokenDefinition::Fungible {
             name: String::from("taken"),
             total_supply: 1,
             metadata_id: None,
@@ -441,7 +441,7 @@ fn new_definition_data_bearing_first_account_should_fail() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let _post_diffs = new_fungible_definition(
         &definition_account,
@@ -460,14 +460,14 @@ fn new_definition_data_bearing_second_account_should_fail() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::from(&TokenHolding::Fungible {
+        ShardData::from(&TokenHolding::Fungible {
             definition_id: AccountId::new([1; 32]),
             balance: 1,
         }),
@@ -862,14 +862,14 @@ fn call_new_definition_metadata_with_init_definition() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([3; 32]),
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
@@ -898,14 +898,14 @@ fn call_new_definition_metadata_with_init_metadata() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([3; 32]),
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let metadata_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
@@ -935,14 +935,14 @@ fn call_new_definition_metadata_with_init_holding() {
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let metadata_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
         0,
         TOKEN_PROGRAM_ID,
-        Data::empty(),
+        ShardData::empty(),
     );
     let holding_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
@@ -1040,7 +1040,7 @@ fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() 
             true,
             0,
             TOKEN_PROGRAM_ID,
-            Data::from(&TokenHolding::Fungible {
+            ShardData::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id_diff(),
                 balance: BalanceForTests::holding_balance(),
             }),
@@ -1050,7 +1050,7 @@ fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() 
             true,
             0,
             TOKEN_PROGRAM_ID,
-            Data::try_from(vec![0xFF; 4]).unwrap(),
+            ShardData::try_from(vec![0xFF; 4]).unwrap(),
         ),
     ];
 
