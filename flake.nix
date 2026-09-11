@@ -112,15 +112,60 @@
           # intact. (On recent macOS the Metal Toolchain is a per-user component;
           # `xcodebuild -downloadComponent MetalToolchain` must have been run.)
           metalStub = pkgs.writeShellScriptBin "xcrun" ''
+            orig=("$@")
+
+            sdk=
             tool=
-            for a in "$@"; do
-              case "$a" in metal|metallib) tool=1 ;; esac
+            find=
+            args=()
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                # A bare --sdk would make `shift 2` spin; let xcrun reject it.
+                --sdk)
+                  [ $# -ge 2 ] || exec /usr/bin/xcrun "''${orig[@]}"
+                  sdk=$2
+                  shift 2
+                  ;;
+                --find|-f) find=1; shift ;;
+                metal|metallib)
+                  if [ -z "$tool" ]; then tool=$1; else args+=("$1"); fi
+                  shift
+                  ;;
+                *) args+=("$1"); shift ;;
+              esac
             done
+
+            # The Metal Toolchain is a per-user cryptex mount. xcrun resolves it
+            # only for the user that downloaded it, so a nix build user gets
+            # Xcode's stub, which exits with "cannot execute tool 'metal'". The
+            # mount is world-readable, so address the real binary directly.
             if [ -n "$tool" ]; then
+              for cand in /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin/"$tool"; do
+                [ -x "$cand" ] || continue
+                # --find asks for the path; returning xcrun's would defeat this.
+                if [ -n "$find" ]; then
+                  echo "$cand"
+                  exit 0
+                fi
+                if [ "$tool" = metal ] && [ -n "$sdk" ]; then
+                  # --sdk was xcrun's job; hand the compiler the sysroot itself.
+                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null) || sysroot=
+                  if [ -z "$sysroot" ]; then
+                    echo "xcrun: cannot resolve SDK '$sdk'" >&2
+                    exit 1
+                  fi
+                  exec "$cand" -isysroot "$sysroot" "''${args[@]}"
+                fi
+                exec "$cand" "''${args[@]}"
+              done
+
+              # No cryptex toolchain present: clear the nix SDK vars and let
+              # xcrun look the tool up the way it used to.
               unset DEVELOPER_DIR SDKROOT
               export xcrun_nocache=1
             fi
-            exec /usr/bin/xcrun "$@"
+
+            exec /usr/bin/xcrun "''${orig[@]}"
           '';
 
           commonArgs = {
