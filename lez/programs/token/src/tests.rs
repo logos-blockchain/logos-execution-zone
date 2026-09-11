@@ -15,6 +15,7 @@ use token_core::{
 
 use crate::{
     burn::burn,
+    initialize::initialize_account,
     mint::mint,
     new_definition::{new_definition_with_metadata, new_fungible_definition},
     print_nft::print_nft,
@@ -1019,4 +1020,51 @@ fn print_nft_success() {
         &post_printed,
         &AccountForTests::holding_account_printed_nft(),
     );
+}
+
+#[test]
+fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() {
+    let definition_account = AccountForTests::definition_account_auth();
+    let expected = AccountForTests::holding(
+        IdForTests::holding_id_2(),
+        true,
+        &TokenHolding::Fungible {
+            definition_id: IdForTests::pool_definition_id(),
+            balance: 0,
+        },
+    );
+    let targets = [
+        AccountForTests::holding_account_uninit(),
+        AccountInput::with_shard(
+            IdForTests::holding_id_2(),
+            true,
+            0,
+            TOKEN_PROGRAM_ID,
+            Data::from(&TokenHolding::Fungible {
+                definition_id: IdForTests::pool_definition_id_diff(),
+                balance: BalanceForTests::holding_balance(),
+            }),
+        ),
+        AccountInput::with_shard(
+            IdForTests::holding_id_2(),
+            true,
+            0,
+            TOKEN_PROGRAM_ID,
+            Data::try_from(vec![0xFF; 4]).unwrap(),
+        ),
+    ];
+
+    for target in targets {
+        let post_diffs = initialize_account(&definition_account, &target, TOKEN_PROGRAM_ID);
+        let [_, holding_post] = post_diffs.try_into().unwrap();
+        assert_data_diff(&holding_post, &expected);
+    }
+}
+
+#[should_panic(expected = "Only Uninitialized or authorized accounts can be initialized")]
+#[test]
+fn initialize_account_rejects_occupied_unauthorized_target() {
+    let definition_account = AccountForTests::definition_account_auth();
+    let target = AccountForTests::holding_same_definition_without_authorization();
+    let _post_diffs = initialize_account(&definition_account, &target, TOKEN_PROGRAM_ID);
 }

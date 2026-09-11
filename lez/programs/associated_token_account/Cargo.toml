@@ -8,3 +8,8 @@ license = { workspace = true }
 lee_core.workspace = true
 token_core.workspace = true
 associated_token_account_core.workspace = true
+
+[dev-dependencies]
+borsh.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
+programs = { workspace = true }

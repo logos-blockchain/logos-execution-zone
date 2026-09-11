@@ -7,4 +7,6 @@ pub mod create;
 pub mod transfer;
 
 #[cfg(test)]
+mod execution_tests;
+#[cfg(test)]
 mod tests;
