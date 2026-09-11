@@ -4859,6 +4859,7 @@ dependencies = [
  "program_loader_core",
  "programs",
  "sequencer_core",
+ "sequencer_ffi",
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",
@@ -11203,6 +11204,28 @@ name = "sequencer_executor_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+]
+
+[[package]]
+name = "sequencer_ffi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cbindgen",
+ "common",
+ "env_logger",
+ "kameo",
+ "kameo_actors",
+ "lee",
+ "lee_core",
+ "log",
+ "sequencer_core",
+ "sequencer_executor_actor",
+ "sequencer_service",
+ "sequencer_slasher_actor",
+ "sequencer_storage_actor",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

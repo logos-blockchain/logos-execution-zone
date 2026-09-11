@@ -33,6 +33,7 @@ sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service.workspace = true
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
+sequencer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true

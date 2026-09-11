@@ -10,7 +10,7 @@ use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use sequencer_core::block_publisher::ED25519_SECRET_KEY_SIZE;
-use sequencer_service::{GenesisAction, SequencerHandle};
+use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
@@ -124,6 +124,18 @@ impl SequencerSetup {
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
+        sequencer_service::run(
+            self.prepare_sequencers_config(home)?,
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+        )
+        .await
+        .context("Failed to run Sequencer Service")
+    }
+
+    /// Prepare just config for sequencer, without running the service.
+    ///
+    /// Useful for cases, where you want to run service manually.
+    pub fn prepare_sequencers_config(self, home: PathBuf) -> Result<SequencerConfig> {
         let Self {
             partial,
             bedrock_addr,
@@ -170,7 +182,7 @@ impl SequencerSetup {
 
         let config = config::sequencer_config(
             partial,
-            home.clone(),
+            home,
             bedrock_addr,
             channel_id,
             config::bedrock_funding_key(),
@@ -181,9 +193,7 @@ impl SequencerSetup {
         )
         .context("Failed to create Sequencer config")?;
 
-        sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .context("Failed to run Sequencer Service")
+        Ok(config)
     }
 }
 
