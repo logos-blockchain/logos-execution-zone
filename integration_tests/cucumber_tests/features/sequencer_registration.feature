@@ -1,10 +1,15 @@
-Feature: Sequencer registration — a first Stake turns balance into stake
+Feature: Sequencer registration
 
-  # Node-level (L3) registration coverage: a first Stake turns balance into
-  # stake. Every scenario runs against a deployed LEZ stack: transactions are
-  # signed and submitted through the scenario wallet, executed by the real
-  # sequencer, and every assertion reads state back through the sequencer's
-  # RPC API. The @P-NN tags are stable case ids.
+  # Node-level (L3) coverage of the amount a first Stake moves: the happy
+  # path, the minimum-stake boundary from both sides, a funding account that
+  # cannot cover the amount, and a donation that reaches the ownership
+  # account before the first Stake. Every scenario runs against a deployed
+  # LEZ stack: transactions are signed and submitted through the scenario
+  # wallet, executed by the real sequencer, and every assertion reads state
+  # back through the sequencer's RPC API. The @P-NN tags are stable case ids.
+  #
+  # The account list a Stake names is covered by stake_account_validation.feature
+  # and the instruction bytes and call path by stake_instruction_validation.feature.
   #
   # Rejection semantics at node level: an invalid transaction is admitted to
   # the mempool and only fails during block building, where the builder drops
@@ -25,9 +30,6 @@ Feature: Sequencer registration — a first Stake turns balance into stake
   # dropped with a reason), replace the two-block window with it.
   #
   # Registration cases not yet covered here:
-  # - P-15, P-16 need a bad-mover guest
-  # - P-17, P-19 need a chained-caller guest
-  # - P-21 needs a second mover program fitting Stake's two-account slot
   # - G-01..G-03 exercise genesis builders private to sequencer_core, where
   #   G-01 and G-02 are already covered
 
@@ -67,37 +69,6 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     Then the stake transaction is accepted
     And the config entry tracks the staked amount with no pending unstake
 
-  @stake_registration_ci @P-04 @P0 @L3
-  # In-program reason: "must sign for the ownership account".
-  Scenario: Registration without the ownership account's signature is rejected
-    When a Stake of "twice the minimum stake" is submitted without the ownership account's signature
-    Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
-
-  @stake_registration_ci @P-13 @P1 @L3
-  # In-program reason: "not a sequencer_stake ownership account". Claiming is
-  # implicit on data writes, so a plain transfer leaves its recipient
-  # unowned; the token program claims the ownership account by writing a
-  # token holding into it, which is the foreign owner the plan names.
-  Scenario: Ownership account owned by another program is rejected
-    Given the ownership account is already claimed by the token program
-    When a Stake of "twice the minimum stake" is submitted
-    Then the stake transaction is not included within the next 2 blocks
-    And the config has no entry for the sequencer key
-    And the config, funding and ownership accounts are unchanged
-
-  @stake_registration_ci @P-14 @P0 @L3
-  # In-program reason: "not the sequencer_stake config account". Mirrors
-  # lez/sequencer/core/src/tests.rs::an_ownership_account_cannot_stand_in_for_the_config_account
-  # for the Stake path: the stand-in is owned by sequencer_stake too, so only
-  # the id check can reject it.
-  Scenario: An ownership account cannot stand in for the config account
-    Given a second sequencer key staked through its own ownership account
-    When a Stake of "twice the minimum stake" is submitted with the second ownership account standing in for the config account
-    Then the stake transaction is not included within the next 2 blocks
-    And the ownership account is not claimed
-    And the config, funding, ownership and second ownership accounts are unchanged
-
   @stake_registration_ci @P-25 @P0 @L3
   # In-program reason: "Sender has insufficient balance" — the mover call
   # itself fails, so the whole transaction is rejected atomically. The most
@@ -109,32 +80,6 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And the ownership account is not claimed
     And the config has no entry for the sequencer key
     And the config, funding and ownership accounts are unchanged
-
-  @stake_registration_ci @P-18 @P0 @L3
-  # In-program reason: "ConfirmStake can only be invoked as a self-chained
-  # call". The expected balance matches the stake funds account, the account
-  # ConfirmStake reads, and the caller check is the handler's first assert,
-  # so it is the one that rejects. The ownership account signs because a
-  # top-level transaction needs a signer and the funds PDA has no key.
-  Scenario: ConfirmStake submitted top-level is rejected
-    When a ConfirmStake matching the current funds balance is submitted as a top-level transaction
-    Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
-
-  @stake_registration_ci @P-20 @P2 @L3
-  # In-program reason: "Stake requires a funding account, an ownership
-  # account, the stake funds account, and the config account". The canonical
-  # count is 4, so the examples sit one short of and one past it; a
-  # 4-account list with a wrong funds slot is P-27, not this case.
-  Scenario Outline: Wrong pre-state account count is rejected
-    When a Stake of "the minimum stake" is submitted with <count> pre-state accounts
-    Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
-
-    Examples:
-      | count |
-      | 2     |
-      | 5     |
 
   @stake_registration_ci @P-23 @P1 @L3
   # The plan expects a donation made before the first Stake to be absorbed
@@ -157,18 +102,3 @@ Feature: Sequencer registration — a first Stake turns balance into stake
     And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
     And the funds account balance increased by the staked amount
     And the ownership account balance is unchanged
-
-  @stake_registration_ci @P-24 @P1 @L3
-  # The borsh half mirrors sequencer_stake core's
-  # a_non_curve_point_is_not_a_sequencer_key; the instruction half is
-  # the 🆕 path of the plan: an off-curve Stake never reaches the handler
-  # (the instruction decode panics inside the zkVM guest and surfaces as a
-  # program-execution failure).
-  Scenario: SequencerKey accepts only Ed25519 curve points
-    Given 32 bytes that are not an Ed25519 curve point
-    Then the bytes are not decodable as a SequencerKey
-    And a StakeRecord carrying the bytes fails to decode
-    And an Instruction carrying the bytes fails to deserialize
-    When a Stake carrying the off-curve key bytes is submitted
-    Then the stake transaction is not included within the next 2 blocks
-    And the config, funding and ownership accounts are unchanged
