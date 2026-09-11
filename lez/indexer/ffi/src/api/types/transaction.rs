@@ -1,8 +1,9 @@
 use indexer_service_protocol::{
-    AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
-    EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    AccountId, BalanceDiff, Ciphertext, Commitment, CommitmentSetDigest, Data,
+    DeferredResolution, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
+    Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
+    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -10,8 +11,8 @@ use crate::api::types::{
     FfiU128, FfiVec,
     account::FfiAccount,
     vectors::{
-        FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiAccountIdList, FfiDeferredResolutionList, FfiInstructionDataList, FfiNonceList,
+        FfiPrivateActionList, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -207,15 +208,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             message: PrivacyPreservingMessage {
                 public_actions: {
                     let std_vec: Vec<_> = value.message.public_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PublicActionWithID {
-                            account_id: AccountId {
-                                value: ffi_val.account_id.data,
-                            },
-                            post_state: ffi_val.post_state.into(),
-                        })
-                        .collect()
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
@@ -265,21 +258,117 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
+/// Mirrors `indexer_service_protocol::DeferredResolution` — one pending, unresolved update to a
+/// `Deferred` account's `data`.
+#[repr(C)]
+pub struct FfiDeferredResolution {
+    pub executing_account_id: FfiAccountId,
+    pub has_caller_account_id: bool,
+    pub caller_account_id: FfiAccountId,
+    pub post_balance_diff_is_sub: bool,
+    pub post_balance_diff_amount: FfiU128,
+    pub has_post_data: bool,
+    pub post_data: FfiVecU8,
+}
+
+impl From<DeferredResolution> for FfiDeferredResolution {
+    fn from(value: DeferredResolution) -> Self {
+        let (post_balance_diff_is_sub, post_balance_diff_amount) = match value.post_balance_diff {
+            BalanceDiff::Add(amount) => (false, amount),
+            BalanceDiff::Sub(amount) => (true, amount),
+        };
+        Self {
+            executing_account_id: value.executing_account_id.into(),
+            has_caller_account_id: value.caller_account_id.is_some(),
+            caller_account_id: value.caller_account_id.map(Into::into).unwrap_or_default(),
+            post_balance_diff_is_sub,
+            post_balance_diff_amount: post_balance_diff_amount.into(),
+            has_post_data: value.post_data.is_some(),
+            post_data: value.post_data.map(|data| data.0).unwrap_or_default().into(),
+        }
+    }
+}
+
+impl From<FfiDeferredResolution> for DeferredResolution {
+    fn from(value: FfiDeferredResolution) -> Self {
+        let post_balance_diff = if value.post_balance_diff_is_sub {
+            BalanceDiff::Sub(value.post_balance_diff_amount.into())
+        } else {
+            BalanceDiff::Add(value.post_balance_diff_amount.into())
+        };
+        Self {
+            executing_account_id: AccountId {
+                value: value.executing_account_id.data,
+            },
+            caller_account_id: value.has_caller_account_id.then(|| AccountId {
+                value: value.caller_account_id.data,
+            }),
+            post_balance_diff,
+            post_data: value.has_post_data.then(|| Data(value.post_data.into())),
+        }
+    }
+}
+
+/// Mirrors `indexer_service_protocol::PublicActionWithID` — `Bound`/`Deferred` flattened via
+/// `is_deferred` (the FFI boundary has no tagged unions): `post_state` is only meaningful when
+/// `!is_deferred` (zeroed otherwise), `resolutions` only when `is_deferred` (empty otherwise).
 #[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
+    pub is_deferred: bool,
     pub post_state: FfiAccount,
+    pub resolutions: FfiDeferredResolutionList,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post_state: lee::Account = value
-            .post_state
-            .try_into()
-            .expect("Source is in blocks, must fit");
-        Self {
-            account_id: value.account_id.into(),
-            post_state: post_state.into(),
+        match value {
+            PublicActionWithID::Bound {
+                account_id,
+                post_state,
+            } => {
+                let post_state: lee::Account =
+                    post_state.try_into().expect("Source is in blocks, must fit");
+                Self {
+                    account_id: account_id.into(),
+                    is_deferred: false,
+                    post_state: post_state.into(),
+                    resolutions: Vec::new().into(),
+                }
+            }
+            PublicActionWithID::Deferred {
+                account_id,
+                resolutions,
+            } => Self {
+                account_id: account_id.into(),
+                is_deferred: true,
+                post_state: lee::Account::default().into(),
+                resolutions: resolutions
+                    .into_iter()
+                    .map(FfiDeferredResolution::from)
+                    .collect::<Vec<_>>()
+                    .into(),
+            },
+        }
+    }
+}
+
+impl From<FfiPublicAction> for PublicActionWithID {
+    fn from(value: FfiPublicAction) -> Self {
+        let account_id = AccountId {
+            value: value.account_id.data,
+        };
+        if value.is_deferred {
+            let resolutions: Vec<FfiDeferredResolution> = value.resolutions.into();
+            Self::Deferred {
+                account_id,
+                resolutions: resolutions.into_iter().map(Into::into).collect(),
+            }
+        } else {
+            Self::Bound {
+                account_id,
+                post_state: value.post_state.into(),
+            }
         }
     }
 }

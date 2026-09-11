@@ -32,15 +32,22 @@ pub fn compute_circuit_output(
         "Invalid account_identities length"
     );
 
-    for (pos, (account_identity, (pre_state, post_state))) in
+    for (pos, (account_identity, (pre_state, post_account, deferred))) in
         account_identities.iter().zip(states_iter).enumerate()
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                output.public_actions.push(PublicAction {
-                    pre: pre_state,
-                    post: post_state,
-                });
+                let action = match deferred {
+                    Some(resolutions) => PublicAction::Deferred {
+                        account_id: pre_state.account_id,
+                        resolutions,
+                    },
+                    None => PublicAction::Bound {
+                        pre: pre_state,
+                        post: post_account,
+                    },
+                };
+                output.public_actions.push(action);
             }
             InputAccountIdentity::Private(PrivateWitness {
                 vpk,
@@ -142,9 +149,14 @@ pub fn compute_circuit_output(
                     }
                 };
 
+                assert!(
+                    deferred.is_none(),
+                    "a private account is never marked Deferred: only a Public(Deferred) \
+                     account produces one"
+                );
                 emit_private_output(
                     &mut output,
-                    post_state,
+                    post_account,
                     &account_id,
                     &account_kind,
                     view_tag,

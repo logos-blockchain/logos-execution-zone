@@ -416,7 +416,11 @@ impl AccountManager {
         self.states
             .iter()
             .map(|state| match state {
-                State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
+                // `Bound`/`Deferred` is inferred in-circuit per diff, from whether the program
+                // executing that diff supports `CallKind::Incremental` — never declared here.
+                State::Public { .. } | State::PublicKeycard { .. } => {
+                    InputAccountIdentity::Public
+                }
                 State::Private(pre) => InputAccountIdentity::Private(PrivateWitness {
                     vpk: pre.vpk.clone(),
                     random_seed: pre.random_seed,

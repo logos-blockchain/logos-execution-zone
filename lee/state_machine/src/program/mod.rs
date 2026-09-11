@@ -177,17 +177,18 @@ impl Program {
         Ok(())
     }
 
-    /// Invokes a program's `Incremental` handler for one account, feeding it `diff_data` — bytes
-    /// it previously emitted for that account — against `pre_state` as it stands right now, not
-    /// necessarily the one that produced `diff_data`. A program that hasn't implemented
-    /// `Incremental` responds with a no-op plus an `UnsupportedCallKind` event instead of an
-    /// error; the caller checks for that event to fall back to copy/replace.
+    /// Invokes a program's `Incremental` handler for one account, feeding it `post_data` — bytes
+    /// the program previously emitted for that account, whatever they mean to it — against
+    /// `pre_state` as it stands right now, not necessarily the one that produced `post_data`. A
+    /// program that hasn't implemented `Incremental` responds with a no-op plus an
+    /// `UnsupportedCallKind` event instead of an error; the caller checks for that event to fall
+    /// back to copy/replace.
     pub(crate) fn execute_incremental(
         &self,
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         pre_state: &AccountWithMetadata,
-        diff_data: &[u8],
+        post_data: &[u8],
         cycle_budget: Cycles,
     ) -> Result<(ProgramOutput, Cycles), LeeError> {
         let mut env_builder = ExecutorEnv::builder();
@@ -198,7 +199,7 @@ impl Program {
             self_account_id,
             caller_account_id,
             pre_states: vec![pre_state.clone()],
-            instruction: diff_data.to_vec(),
+            instruction: post_data.to_vec(),
         };
         let input_payload =
             borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;

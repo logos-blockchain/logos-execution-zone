@@ -9,16 +9,18 @@ use lee_core::{
 
 type Instruction = u128;
 
-/// A balance-transfer delta, carried as `post_data` between `Execute` and `Incremental` —
-/// `Execute` never reads `pre_state`, so the amount alone can't say which direction to apply.
+/// A balance-transfer delta, `Incremental`'s own instruction shape — direction-tagged because
+/// `Incremental` resolves one account at a time, with no sender/receiver role to infer it from.
 #[derive(BorshSerialize, BorshDeserialize)]
 enum BalanceTransferDelta {
     Add(u128),
     Sub(u128),
 }
 
-/// `simple_balance_transfer`'s twin: `Execute` moves `amount` the same way, but emits each side
-/// as a `BalanceTransferDelta` for `Incremental` to decode and reapply.
+/// `simple_balance_transfer`'s twin, opted into `Incremental`. `BalanceDiff` already composes
+/// safely against any `pre_state`, so `Execute` moves `amount` directly and never touches
+/// `data` — meaning `Incremental` is never actually reached through `resolve_diff` here, only
+/// by a caller that dispatches it directly.
 fn main() {
     let call = read_lee_call::<Instruction>();
     match call {
@@ -35,22 +37,13 @@ fn main() {
                 .try_into()
                 .unwrap_or_else(|_| panic!("Transfer takes exactly two accounts"));
 
-            let sender_diff = AccountStateDiff::new(
-                sender_pre,
-                BalanceDiff::Sub(amount),
-                borsh::to_vec(&BalanceTransferDelta::Sub(amount))
-                    .expect("delta serializes")
-                    .try_into()
-                    .expect("delta fits under the size limit"),
-            );
-            let receiver_diff = AccountStateDiff::new(
-                receiver_pre,
-                BalanceDiff::Add(amount),
-                borsh::to_vec(&BalanceTransferDelta::Add(amount))
-                    .expect("delta serializes")
-                    .try_into()
-                    .expect("delta fits under the size limit"),
-            );
+            let sender_post_data = sender_pre.account.data.clone();
+            let receiver_post_data = receiver_pre.account.data.clone();
+
+            let sender_diff =
+                AccountStateDiff::new(sender_pre, BalanceDiff::Sub(amount), sender_post_data);
+            let receiver_diff =
+                AccountStateDiff::new(receiver_pre, BalanceDiff::Add(amount), receiver_post_data);
 
             ProgramOutput::new(
                 self_account_id,

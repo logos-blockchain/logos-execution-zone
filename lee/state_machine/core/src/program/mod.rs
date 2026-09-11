@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -695,8 +695,7 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
-    /// A call kind a program opts into for a custom `data`-update step, run against whatever
-    /// `data` an account currently holds rather than the value seen at the original call.
+    /// A call kind a program opts into for a custom `data`-update step.
     Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
@@ -760,28 +759,6 @@ impl UnsupportedCallKind {
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("UnsupportedCallKind serializes")
     }
-}
-
-/// Whether a privacy-preserving execution resolves an account's diff against real state now
-/// (`Bound`), or carries it through unresolved for the sequencer to resolve later, against real
-/// state at settlement time (`Deferred`). A `CallKind::Incremental` call can go either way;
-/// `CallKind::Execute` is always `Bound`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionMode {
-    Bound,
-    Deferred,
-}
-
-/// An account was touched in both [`ExecutionMode`]s within one privacy-preserving execution.
-#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
-#[error(
-    "account {account_id} was touched in both {first:?} and {second:?} mode within the same \
-     privacy-preserving execution"
-)]
-pub struct ExecutionModeConflict {
-    pub account_id: AccountId,
-    pub first: ExecutionMode,
-    pub second: ExecutionMode,
 }
 
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
@@ -854,8 +831,10 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
 }
 
 /// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip, not
-/// a failure. Generic over every `ProgramCall` variant, since which kind a program implements is
-/// its own choice, not something the caller can rule out in advance.
+/// a failure.
+///
+/// Generic over every `ProgramCall` variant, since which kind a program implements is its own
+/// choice, not something the caller can rule out in advance.
 pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
     let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
         match call {
@@ -950,34 +929,6 @@ pub fn get_program_via(
     }
 
     Some((header.image_id, elf))
-}
-
-/// Checks that every account touched across a privacy-preserving execution's chain of calls
-/// agrees on one [`ExecutionMode`]. Mixing `Bound` and `Deferred` on the same account is
-/// unsound: one commits to a value now, the other only resolves one later, and there's no sound
-/// way to reconcile the two. Only relevant to privacy-preserving execution — public transactions
-/// settle synchronously, so nothing is ever deferred.
-pub fn validate_execution_mode_consistency(
-    touches: impl IntoIterator<Item = (AccountId, ExecutionMode)>,
-) -> Result<(), ExecutionModeConflict> {
-    let mut modes: HashMap<AccountId, ExecutionMode> = HashMap::new();
-    for (account_id, mode) in touches {
-        match modes.entry(account_id) {
-            std::collections::hash_map::Entry::Occupied(existing) => {
-                if *existing.get() != mode {
-                    return Err(ExecutionModeConflict {
-                        account_id,
-                        first: *existing.get(),
-                        second: mode,
-                    });
-                }
-            }
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(mode);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Validates well-behaved program execution.

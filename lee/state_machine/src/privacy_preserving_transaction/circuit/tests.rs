@@ -3,8 +3,8 @@
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
-    PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
 
@@ -18,6 +18,25 @@ use crate::{
         tests::{init_pda_witness, test_private_account_keys_1, test_private_account_keys_2},
     },
 };
+
+// Host-side mirror of `stripped_token`'s `Instruction`/`TokenAccountData`/`TokenDiff` — the
+// guest crate isn't a host dependency, so these can't be imported directly, only match the
+// borsh layout. `stripped_token_and_forward` reuses the same `TokenDiff`/`TokenAccountData`
+// shapes for its own `Incremental` resolution (`Add` only).
+#[derive(borsh::BorshSerialize)]
+enum StrippedTokenInstruction {
+    Initialize { balance: u128 },
+}
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct TokenAccountData {
+    balance: u128,
+}
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+enum TokenDiff {
+    Add(u128),
+}
 
 fn decrypt_kind(
     output: &PrivacyPreservingCircuitOutput,
@@ -108,9 +127,11 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     assert!(proof.is_valid_for(&output));
 
     let [action] = output.public_actions.try_into().unwrap();
-    let (sender_pre, sender_post) = (action.pre, action.post);
-    assert_eq!(sender_pre, expected_sender_pre);
-    assert_eq!(sender_post, expected_sender_post);
+    let PublicAction::Bound { pre, post } = action else {
+        panic!("simple_balance_transfer does not support Incremental: expected Bound");
+    };
+    assert_eq!(pre, expected_sender_pre);
+    assert_eq!(post, expected_sender_post);
     assert_eq!(output.private_actions.len(), 1);
 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
@@ -402,6 +423,253 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// End-to-end proof that `Bound`/`Deferred` is inferred purely from whether the program
+/// executing a given diff supports `CallKind::Incremental` — never declared upfront by any
+/// caller. A Public account touched by `stripped_token` (which does support it) comes out
+/// `Deferred`, carrying the raw, unresolved delta for the sequencer to replay at settlement.
+#[test]
+fn public_account_touched_by_an_incremental_capable_program_is_deferred() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 100;
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .expect("an Incremental-eligible public touch must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Deferred {
+        account_id: deferred_account_id,
+        resolutions,
+    } = action
+    else {
+        panic!("stripped_token supports Incremental: expected Deferred");
+    };
+    assert_eq!(deferred_account_id, account_id);
+    let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
+    assert_eq!(resolution.executing_account_id, program_id);
+    assert_eq!(resolution.caller_account_id, None);
+    assert_eq!(resolution.post_balance_diff, BalanceDiff::Add(0));
+    assert_eq!(
+        resolution.post_data.unwrap().as_ref(),
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap().as_slice()
+    );
+}
+
+/// Once an account is forced `Bound` (a touch whose `post_data` a program declines to resolve
+/// via `Incremental`), a later touch by that same program that *is* `Incremental`-eligible
+/// resolves immediately instead of re-entering `deferred` — `bound_accounts` short-circuits it
+/// for the rest of the execution.
+///
+/// Both touches must come from the same program: ownership rules forbid a *different* program
+/// from writing to an account once one program has acquired it, so the only reachable way to
+/// force `Bound` and then take a genuinely-`Incremental` touch on the same account is the same
+/// program declining one `post_data` payload and accepting another. `stripped_token_and_forward`
+/// chains into itself for exactly this: the first touch writes a bare `TokenAccountData`
+/// encoding (not a `TokenDiff` — declined as `Unsupported`, forcing `Bound`), the second writes a
+/// genuine `TokenDiff::Add` (`Incremental`-eligible, but too late to defer).
+#[test]
+fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferring() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let noop = crate::test_methods::noop();
+    let noop_id = noop.id();
+    let noop_account_id: AccountId = noop_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        program_account_id,
+        [
+            (program_account_id, crate::test_methods::stripped_token_and_forward()),
+            (noop_account_id, noop),
+        ]
+        .into(),
+    );
+
+    let seed_balance: u128 = 7;
+    let amount: u128 = 50;
+
+    // Second touch: a genuine `TokenDiff::Add`, forwarding to `noop` to terminate the chain
+    // (this program always forwards, so there's no way to skip a callee entirely).
+    let second_touch_instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenDiff::Add(amount)).unwrap(),
+        noop_id,
+        Program::serialize_instruction(()).unwrap(),
+    ))
+    .unwrap();
+
+    // First touch (top-level): a bare `TokenAccountData` encoding — not a valid `TokenDiff`, so
+    // it's declined as `Unsupported` and forces `Bound` — then chains into itself for the second
+    // touch above.
+    let instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenAccountData {
+            balance: seed_balance,
+        })
+        .unwrap(),
+        program_id,
+        second_touch_instruction,
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a later Incremental-eligible touch on an already-Bound account must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!("the first touch is declined as Unsupported: expected Bound");
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("the second touch's Incremental resolution must still have run");
+    assert_eq!(data.balance, seed_balance + amount);
+}
+
+/// The inverse: an account already carrying a pending `Deferred` resolution folds permanently
+/// into `Bound` the moment a later touch on it is forced `Bound` — the pending resolution is
+/// discarded (its effect is already reflected in the genuinely-resolved value everything is
+/// tracked against internally; only the *emission* differs). `stripped_token_and_forward`'s own
+/// `Incremental` write happens to leave the account's data byte-identical to its pre-state
+/// (adding zero to an already-initialized balance), so ownership is never acquired by it —
+/// leaving the account free for the next program, `acquire_and_forward`, to acquire instead when
+/// it forces `Bound`.
+#[test]
+fn a_bound_forcing_touch_discards_a_previously_deferred_accounts_pending_resolution() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id: AccountId = program.id().into();
+    let forwarder = crate::test_methods::acquire_and_forward();
+    let forwarder_id = forwarder.id();
+    let forwarder_account_id: AccountId = forwarder_id.into();
+    let noop = crate::test_methods::noop();
+    let noop_id = noop.id();
+    let noop_account_id: AccountId = noop_id.into();
+
+    let account_id = AccountId::new([1; 32]);
+    let existing_balance: u128 = 100;
+    let pre_account = Account {
+        data: borsh::to_vec(&TokenAccountData {
+            balance: existing_balance,
+        })
+        .unwrap()
+        .try_into()
+        .unwrap(),
+        ..Account::default()
+    };
+    let pre = AccountWithMetadata::new(pre_account, false, account_id);
+    let overwritten_data = vec![7_u8, 8, 9];
+
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        program_id,
+        [(forwarder_account_id, forwarder), (noop_account_id, noop)].into(),
+    );
+
+    let forwarder_instruction = Program::serialize_instruction((
+        Some(overwritten_data.clone()),
+        noop_id,
+        Program::serialize_instruction(()).unwrap(),
+    ))
+    .unwrap();
+
+    // Add(0) adds nothing, so the Incremental-resolved data comes back byte-identical to
+    // `existing_balance` — see the doc comment above for why that matters.
+    let instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenDiff::Add(0)).unwrap(),
+        forwarder_id,
+        forwarder_instruction,
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a fold-in must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!(
+            "acquire_and_forward's later write forces Bound: expected Bound, deferred discarded"
+        );
+    };
+    assert_eq!(post.data.as_ref(), overwritten_data.as_slice());
+    assert_eq!(post.program_owner, forwarder_account_id);
+}
+
+/// End-to-end proof that a *private* account also gets genuinely resolved via
+/// `CallKind::Incremental` in-circuit — not just the `UnsupportedCallKind` fallback path
+/// `an_unauthorized_private_data_write_acquires_the_account` already covers for a program that
+/// doesn't implement it. `stripped_token`'s `Initialize` emits an opaque `TokenDiff` delta as
+/// `post_data`; if the circuit silently used it verbatim instead of running `Incremental`,
+/// decoding the decrypted result as `TokenAccountData` here would fail outright.
+#[test]
+fn stripped_token_initialize_resolves_incremental_for_a_private_account() {
+    let program = crate::test_methods::stripped_token();
+    let keys = test_private_account_keys_1();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+    let balance: u128 = 100;
+
+    let init_nonce = Nonce::private_account_nonce_init(&account_id);
+    let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &init_nonce);
+    let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Regular {
+                ask: Some(keys.ask),
+            },
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program.into(),
+    )
+    .expect("a private Incremental resolution must prove");
+
+    assert!(proof.is_valid_for(&output));
+    assert!(output.public_actions.is_empty());
+    assert_eq!(output.private_actions.len(), 1);
+
+    let (_kind, post_account) = EncryptionScheme::decrypt(
+        &output.private_actions[0].encrypted_post_state.ciphertext,
+        &shared_secret,
+        &output.private_actions[0].nullifier,
+    )
+    .unwrap();
+
+    let data: TokenAccountData = borsh::from_slice(post_account.data.as_ref()).expect(
+        "decrypted data must decode as TokenAccountData: did Incremental resolution run?",
+    );
+    assert_eq!(data.balance, balance);
 }
 
 /// A private PDA bound with a non-default identifier produces a ciphertext that decrypts
