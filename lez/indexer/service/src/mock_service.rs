@@ -296,6 +296,24 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
+    async fn get_account_view(
+        &self,
+        selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(project_account(
+            self.state.read().await.accounts.get(&selector.account_id),
+            selector,
+        ))
+    }
+
+    async fn get_account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
+        _block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        self.get_account_view(selector).await
+    }
+
     async fn get_transaction(
         &self,
         tx_hash: HashType,
@@ -426,6 +444,38 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
+    }
+}
+
+fn project_account(account: Option<&Account>, selector: ProgramShardSelector) -> Account {
+    let Some(account) = account else {
+        return Account {
+            nonce: 0,
+            data: AccountData {
+                balance: 0,
+                shards: BTreeMap::new(),
+            },
+        };
+    };
+    let shards = selector
+        .program_account_id
+        .map_or_else(BTreeMap::new, |program| {
+            BTreeMap::from([(
+                program,
+                account
+                    .data
+                    .shards
+                    .get(&program)
+                    .cloned()
+                    .unwrap_or(Data(Vec::new())),
+            )])
+        });
+    Account {
+        nonce: account.nonce,
+        data: AccountData {
+            balance: account.data.balance,
+            shards,
+        },
     }
 }
 

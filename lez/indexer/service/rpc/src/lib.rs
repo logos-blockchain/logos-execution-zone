@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
     Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, Transaction,
+    HashType, IndexerStatus, ProgramShardSelector, Transaction,
 };
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
@@ -66,6 +66,19 @@ pub trait Rpc {
     async fn get_account_at_block(
         &self,
         account_id: AccountId,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned>;
+
+    #[method(name = "getAccountView")]
+    async fn get_account_view(
+        &self,
+        selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned>;
+
+    #[method(name = "getAccountViewAtBlock")]
+    async fn get_account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned>;
 

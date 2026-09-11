@@ -8,7 +8,7 @@ use common::{
     block::{BedrockStatus, Block, BlockHeader},
     transaction::{LeeTransaction, TxEvents},
 };
-use lee::{Account, AccountId, V03State};
+use lee::{Account, AccountId, ProgramShardSelector, V03State};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
@@ -256,6 +256,22 @@ impl IndexerStore {
             .get_account_by_id(*account_id))
     }
 
+    pub async fn account_current_view(&self, selector: ProgramShardSelector) -> Result<Account> {
+        let state = self.current_state.read().await;
+        Ok(project_account(&state, selector))
+    }
+
+    pub fn account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
+        block_id: u64,
+    ) -> Result<Account> {
+        Ok(project_account(
+            &self.get_state_at_block(block_id)?,
+            selector,
+        ))
+    }
+
     /// The last successfully applied block, or `None` on a cold store.
     /// Read fresh from the store each call.
     fn validated_tip(&self) -> Result<Option<Tip>> {
@@ -338,6 +354,16 @@ impl IndexerStore {
             warn!("Failed to clear stall marker after applying block: {err:#}");
         }
         Ok(AcceptOutcome::Applied)
+    }
+}
+
+fn project_account(state: &V03State, selector: ProgramShardSelector) -> Account {
+    let Some(account) = state.get_account_by_id_ref(selector.account_id) else {
+        return Account::default();
+    };
+    Account {
+        nonce: account.nonce,
+        data: account.data.project(selector.program_account_id),
     }
 }
 
