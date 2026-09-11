@@ -256,6 +256,17 @@ jobs:
             RUST_LOG=info,kameo=warn
           run: cargo nextest run -p test_fixtures
 
+  abort-on-stale-fixtures:
+    needs: test-fixtures-tests
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # Not a `container:` job: the test binaries bake CARGO_MANIFEST_DIR in at
   # compile time, so the archive has to be built on the same path the matrix
   # jobs later run it from.
@@ -328,7 +339,6 @@ jobs:
           echo "Discovered integration targets: $targets_json"
 
   integration-tests:
-    # Not gated on test-fixtures-tests: prebuild produces the archive.
     needs: [ci-image, bedrock-node, integration-tests-prebuild]
     runs-on: ubuntu-latest
     timeout-minutes: 90
