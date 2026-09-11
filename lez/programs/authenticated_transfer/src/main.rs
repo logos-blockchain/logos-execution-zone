@@ -69,29 +69,21 @@ mod tests {
     }
 
     #[test]
-    fn transfer_moves_the_amount_to_a_recipient_that_did_not_authorize() {
-        let mut recipient = holder(1, 0);
-        recipient.is_authorized = false;
-
-        let diffs = transfer(holder(0, 100), recipient, 30);
-
-        assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Sub(30));
-        assert_eq!(diffs[1].post_balance_diff, BalanceDiff::Add(30));
-    }
-
-    #[test]
-    fn transfer_writes_no_data_whatever_shard_a_shard_selector_names() {
-        let program = AccountId::new([9; 32]);
+    fn transfer_moves_the_amount_and_writes_no_data_to_a_recipient_that_did_not_authorize() {
         let sender = AccountInput::with_shard(
             AccountId::new([0; 32]),
             true,
             100,
-            program,
+            AccountId::new([9; 32]),
             b"record".to_vec().try_into().unwrap(),
         );
+        let mut recipient = holder(1, 0);
+        recipient.is_authorized = false;
 
-        let diffs = transfer(sender, holder(1, 0), 30);
+        let diffs = transfer(sender, recipient, 30);
 
+        assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Sub(30));
+        assert_eq!(diffs[1].post_balance_diff, BalanceDiff::Add(30));
         assert!(diffs.iter().all(|diff| diff.post_data.is_none()));
     }
 

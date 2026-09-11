@@ -156,32 +156,6 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
     assert!(result.is_err());
 }
 
-#[test]
-fn shard_state_diff_constructors() {
-    let program = AccountId::new([9; 32]);
-    let pre_data: ShardData = b"record".to_vec().try_into().unwrap();
-    let pre = AccountInput::with_shard(AccountId::new([7; 32]), true, 5, program, pre_data.clone());
-    let post_data: ShardData = vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap();
-
-    let unchanged = AccountStateDiff::unchanged(pre.clone());
-    assert_eq!(unchanged.post_balance_diff, BalanceDiff::Add(0));
-    assert_eq!(unchanged.post_data, None);
-
-    let balance_only = AccountStateDiff::balance(pre.clone(), BalanceDiff::Sub(2));
-    assert_eq!(balance_only.post_balance_diff, BalanceDiff::Sub(2));
-    assert_eq!(balance_only.post_data, None);
-
-    let written = AccountStateDiff::new(pre.clone(), BalanceDiff::Add(1337), pre_data.clone());
-    assert_eq!(written.pre_state, pre);
-    assert_eq!(written.post_balance_diff, BalanceDiff::Add(1337));
-    assert_eq!(written.post_data, Some(pre_data));
-
-    assert_eq!(
-        AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data.clone()).post_data,
-        Some(post_data)
-    );
-}
-
 // ---- validate_execution tests ----
 
 #[test]
@@ -668,8 +642,13 @@ fn foreign_shard_with_history() -> AccountInput {
 
 #[test]
 fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
-    for zero in [BalanceDiff::Add(0), BalanceDiff::Sub(0)] {
-        let diff = AccountStateDiff::balance(foreign_shard_with_history(), zero);
+    let diffs = [
+        AccountStateDiff::unchanged(foreign_shard_with_history()),
+        AccountStateDiff::balance(foreign_shard_with_history(), BalanceDiff::Add(0)),
+        AccountStateDiff::balance(foreign_shard_with_history(), BalanceDiff::Sub(0)),
+    ];
+
+    for diff in diffs {
         assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
     }
 }

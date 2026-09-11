@@ -56,28 +56,6 @@ fn header_pre(account_id: AccountId, header: &ProgramHeader, is_authorized: bool
 #[test]
 fn write_segment_writes_the_loader_shard() {
     let target_id = AccountId::new([1; 32]);
-    let pre_states = [empty_target(target_id, false)];
-
-    let diffs = write_segment(&pre_states, vec![1, 2, 3], None);
-
-    assert_eq!(diffs.len(), 1);
-    assert_eq!(diffs[0].pre_state.account_id, target_id);
-    assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Add(0));
-    let segment = ProgramSegment::from_bytes(
-        diffs[0]
-            .post_data
-            .as_ref()
-            .expect("the loader shard was written")
-            .as_ref(),
-    )
-    .expect("valid segment");
-    assert_eq!(segment.bytecode, vec![1, 2, 3]);
-    assert_eq!(segment.next_segment, None);
-}
-
-#[test]
-fn write_segment_accepts_a_target_holding_balance() {
-    let target_id = AccountId::new([1; 32]);
     let pre_states = [AccountInput::with_shard(
         target_id,
         false,
@@ -89,8 +67,19 @@ fn write_segment_accepts_a_target_holding_balance() {
     let diffs = write_segment(&pre_states, vec![1, 2, 3], None);
 
     assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].pre_state.account_id, target_id);
     assert_eq!(diffs[0].pre_state.balance, 5);
     assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Add(0));
+    let segment = ProgramSegment::from_bytes(
+        diffs[0]
+            .post_data
+            .as_ref()
+            .expect("the loader shard was written")
+            .as_ref(),
+    )
+    .expect("valid segment");
+    assert_eq!(segment.bytecode, vec![1, 2, 3]);
+    assert_eq!(segment.next_segment, None);
 }
 
 #[test]

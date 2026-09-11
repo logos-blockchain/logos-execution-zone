@@ -459,7 +459,6 @@ impl ExecutionState {
     #[cfg(test)]
     pub(crate) fn from_post_states(
         public: Vec<(AccountId, bool, AccountData, AccountData)>,
-        private: Vec<(AccountId, AccountData)>,
     ) -> Self {
         let mut state = Self {
             witness_by_account: HashMap::new(),
@@ -477,10 +476,6 @@ impl ExecutionState {
             state
                 .public_pre_states
                 .insert(account_id, (is_authorized, pre));
-        }
-        for (index, (account_id, post_state)) in private.into_iter().enumerate() {
-            state.post_states.insert(account_id, post_state);
-            state.witness_by_account.insert(account_id, index);
         }
         state
     }

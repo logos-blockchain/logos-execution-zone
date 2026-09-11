@@ -1,4 +1,4 @@
-use lee_core::{EncryptionScheme, EphemeralSecretKey, SharedSecretKey};
+use lee_core::{EncryptionScheme, SharedSecretKey, program::PrivateAccountKind};
 
 use super::*;
 
@@ -40,12 +40,15 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let program_id: AccountId = program.id().into();
     let stranger = AccountId::new([9; 32]);
     let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let replaced: ShardData = b"replaced".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let keys = test_private_account_keys_1();
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
     let pre_account = Account {
         nonce: Nonce(9),
-        ..Account::funded(42).with_shard(stranger, stranger_data.clone())
+        ..Account::funded(42)
+            .with_shard(stranger, stranger_data.clone())
+            .with_shard(program_id, replaced)
     };
     let state = V03State::new().with_private_account(&keys, &pre_account);
     let membership_proof = state
@@ -68,28 +71,29 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     )
     .unwrap();
 
-    assert_eq!(output.private_actions.len(), 1);
-    let new_nonce = pre_account
-        .nonce
-        .private_account_nonce_increment(&keys.nsk());
-    let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &new_nonce);
-    let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
-    let (_kind, post) = EncryptionScheme::decrypt(
-        &output.private_actions[0].encrypted_post_state.ciphertext,
-        &shared_secret,
-        &output.private_actions[0].nullifier,
-    )
-    .unwrap();
+    let [action] = <[_; 1]>::try_from(output.private_actions).unwrap();
+    let expected = Account {
+        nonce: pre_account
+            .nonce
+            .private_account_nonce_increment(&keys.nsk()),
+        ..Account::funded(42)
+            .with_shard(stranger, stranger_data)
+            .with_shard(program_id, written.try_into().unwrap())
+    };
+    let shared_secret =
+        SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
+            .expect("the emitted epk is a well-formed ML-KEM ciphertext");
 
     assert_eq!(
-        post,
-        Account {
-            nonce: new_nonce,
-            ..Account::funded(42)
-                .with_shard(stranger, stranger_data)
-                .with_shard(program_id, written.try_into().unwrap())
-        }
+        EncryptionScheme::decrypt(
+            &action.encrypted_post_state.ciphertext,
+            &shared_secret,
+            &action.nullifier,
+        )
+        .unwrap(),
+        (PrivateAccountKind::Regular(0), expected.clone())
     );
+    assert_eq!(action.commitment, Commitment::new(&account_id, &expected));
 }
 
 #[test]

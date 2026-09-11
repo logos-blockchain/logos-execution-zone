@@ -1126,33 +1126,57 @@ fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_
 }
 
 #[test]
-fn resolving_an_empty_shard_matches_not_resolving_at_all() {
+fn an_empty_resolution_is_asked_once_and_matches_not_resolving_at_all() {
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
-    let write = vec![3; 16];
-
+    let first = vec![0xC1; 12];
+    let second = vec![0xC2; 12];
     let sparse =
         Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
+    let instruction = forwarder_instruction(
+        None,
+        &calls_at(
+            account_id,
+            &[
+                (callee_id, data_changer_instruction(&first)),
+                (callee_id, data_changer_instruction(&second)),
+            ],
+        ),
+    );
 
     let (unresolved_output, _) = execute_and_prove(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse.clone(), &write),
+        input_with(
+            account_id,
+            forwarder_id,
+            sparse.clone(),
+            instruction.clone(),
+        ),
         &program,
     )
     .unwrap();
 
-    let mut asked = 0_u32;
+    let mut asked: Vec<ProgramShardSelector> = Vec::new();
     let (resolved_output, _) = execute_and_prove_with(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse, &write),
+        input_with(account_id, forwarder_id, sparse, instruction),
         &program,
-        &mut |_| {
-            asked += 1;
+        &mut |shard_selector| {
+            asked.push(shard_selector);
             Ok(Some(ShardData::empty()))
         },
     )
     .unwrap();
 
-    assert_eq!(asked, 1);
+    assert_eq!(
+        asked,
+        vec![ProgramShardSelector::new(account_id, callee_id)]
+    );
     assert_eq!(resolved_output, unresolved_output);
+
+    let [action] = <[_; 1]>::try_from(resolved_output.public_actions).unwrap();
+    assert_eq!(
+        action.post.shards[&callee_id],
+        ShardData::try_from(second).unwrap()
+    );
 }
 
 #[test]
@@ -1233,47 +1257,6 @@ fn a_top_level_shard_selector_is_never_resolved_for() {
     assert_eq!(
         action.post.shards[&forwarder_id], supplied,
         "the chained call must have run against the supplied value, not the resolver's"
-    );
-}
-
-#[test]
-fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-    let first = vec![0xC1; 12];
-    let second = vec![0xC2; 12];
-
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[
-                (callee_id, data_changer_instruction(&first)),
-                (callee_id, data_changer_instruction(&second)),
-            ],
-        ),
-    );
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, _proof) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, Account::default(), instruction),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::empty()))
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
-
-    let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(second).unwrap()
     );
 }
 

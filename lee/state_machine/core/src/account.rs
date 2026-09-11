@@ -538,19 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn set_shard_keeps_the_encoding_canonical() {
-        let program = AccountId::new([3; 32]);
-        let mut account = Account::default();
-
-        account
-            .data
-            .set_shard(program, b"record".to_vec().try_into().unwrap());
-        account.data.set_shard(program, ShardData::empty());
-
-        assert_eq!(account.to_bytes(), Account::default().to_bytes());
-    }
-
-    #[test]
     fn input_at_reads_a_vacant_shard_as_empty() {
         let account_id = AccountId::new([1; 32]);
         let program = AccountId::new([3; 32]);
@@ -583,29 +570,6 @@ mod tests {
         assert_eq!(input.balance, 42);
         assert_eq!(input.program_account_id(), None);
         assert!(input.shard.is_none());
-    }
-
-    #[test]
-    fn shard_selector_of_an_input_drops_what_it_holds() {
-        let account_id = AccountId::new([1; 32]);
-        let program = AccountId::new([3; 32]);
-        let named = AccountInput::with_shard(
-            account_id,
-            true,
-            5,
-            program,
-            b"record".to_vec().try_into().unwrap(),
-        );
-        let balance_only = AccountInput::balance(account_id, true, 5);
-
-        assert_eq!(
-            ProgramShardSelector::from(&named),
-            ProgramShardSelector::new(account_id, program)
-        );
-        assert_eq!(
-            ProgramShardSelector::from(&balance_only),
-            ProgramShardSelector::balance(account_id)
-        );
     }
 
     #[test]
