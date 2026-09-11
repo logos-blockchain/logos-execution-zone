@@ -2,9 +2,9 @@
   description = "Logos Execution Zone";
 
   inputs = {
-    logos-liblogos.url = "github:logos-co/logos-liblogos";
+    logos-nix.url = "github:logos-co/logos-nix";
 
-    nixpkgs.follows = "logos-liblogos/nixpkgs";
+    nixpkgs.follows = "logos-nix/nixpkgs";
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -28,6 +28,7 @@
     {
       self,
       nixpkgs,
+      logos-nix,
       rust-overlay,
       crane,
       logos-blockchain-circuits,
@@ -48,7 +49,7 @@
         system:
         import nixpkgs {
           inherit system;
-          overlays = [ rust-overlay.overlays.default ];
+          overlays = logos-nix.lib.nativeOverlays ++ [ rust-overlay.overlays.default ];
         };
     in
     {

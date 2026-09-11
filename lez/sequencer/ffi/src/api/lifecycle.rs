@@ -3,11 +3,10 @@ use std::{ffi::c_char, path::PathBuf};
 use anyhow::Context as _;
 use kameo::actor::{ActorRef, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
-use sequencer_core::{
-    block_publisher::ZoneSdkPublisher, config::SequencerConfig, gossip::GossipNetwork,
-    load_or_create_signing_key,
-};
+use sequencer_core::{block_publisher::ZoneSdkPublisher, config::SequencerConfig};
 use sequencer_executor_actor::ExecutorActor;
+use sequencer_service::{Gossip, setup_gossip};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 
 use crate::{Runtime, SequencerServiceFFI, api::PointerResult, errors::OperationStatus};
@@ -53,9 +52,10 @@ async fn make_sequencer_compoments(
 ) -> Result<
     (
         ActorRef<StorageActor>,
+        ActorRef<SlasherActor>,
         ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>,
-        Option<GossipNetwork>,
         ActorRef<Scheduler>,
+        Option<Gossip>,
     ),
     OperationStatus,
 > {
@@ -75,57 +75,11 @@ async fn make_sequencer_compoments(
     log::info!("Storage Actor spawned");
 
     let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+    let slasher_ref = executor.slasher_ref();
+    // The core has already read a committee by the time this returns.
+    let accredited_keys_rx = executor.accredited_keys_watch();
     let executor_ref = ExecutorActor::spawn(executor);
     log::info!("Executor Actor spawned");
-
-    // ToDo: Replace with actor after gossip actor is merged
-    let gossip_network = match gossip_config {
-        None => None,
-        Some(gossip_config) => {
-            // The node's L1 bedrock signing key is deliberately reused as the
-            // libp2p identity; `GossipNetwork::start` derives the keypair.
-            let signing_key = load_or_create_signing_key(
-                &sequencer_home.join("bedrock_signing_key"),
-            )
-            .map_err(|e| {
-                log::error!("Could not load signing key: {e}");
-                OperationStatus::InitializationError
-            })?;
-            let channel_id = *bedrock_config.channel_id.as_ref();
-            // Gossiped transactions enter through the executor's admission
-            // door (fee screen + mempool push), same as RPC submissions —
-            // gossip never touches the mempool directly.
-            let submit_ref = executor_ref.clone();
-            let submit: sequencer_core::gossip::IngestSubmit =
-                std::sync::Arc::new(move |transaction| {
-                    let executor_submit_ref = submit_ref.clone();
-                    Box::pin(async move {
-                        use sequencer_executor_actor::protocol::{Transaction, TransactionOrigin};
-                        let message = Transaction {
-                            transaction,
-                            origin: TransactionOrigin::Gossip,
-                        };
-                        executor_submit_ref.ask(message).await.map_err(Into::into)
-                    })
-                });
-
-            let network = sequencer_core::gossip::GossipNetwork::start(
-                gossip_config,
-                channel_id,
-                signing_key,
-                max_block_size.as_u64(),
-                submit,
-            )
-            .await
-            .context("Failed to start sequencer gossip network")
-            .map_err(|e| {
-                log::error!("Could not start gossip network: {e}");
-                OperationStatus::InitializationError
-            })?;
-            log::info!("Gossip network started as {}", network.local_peer_id());
-            Some(network)
-        }
-    };
 
     let scheduler_ref = Scheduler::spawn(Scheduler::new());
     scheduler_ref
@@ -145,7 +99,35 @@ async fn make_sequencer_compoments(
         })?;
     log::info!("Block production scheduler started");
 
-    Ok((storage_ref, executor_ref, gossip_network, scheduler_ref))
+    let (gossip, _) = match gossip_config {
+        None => None,
+        Some(gossip_config) => Some(
+            setup_gossip(
+                gossip_config,
+                *bedrock_config.channel_id.as_ref(),
+                &sequencer_home,
+                max_block_size.as_u64(),
+                accredited_keys_rx,
+                &executor_ref,
+                &slasher_ref,
+                &scheduler_ref,
+            )
+            .await
+            .map_err(|e| {
+                log::error!("Could not setup gossip: {e}");
+                OperationStatus::InitializationError
+            })?,
+        ),
+    }
+    .unzip();
+
+    Ok((
+        storage_ref,
+        slasher_ref,
+        executor_ref,
+        scheduler_ref,
+        gossip,
+    ))
 }
 
 /// Initializes and starts an sequencer based on the provided
@@ -201,14 +183,15 @@ unsafe fn setup_sequencer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let (storage_ref, executor_ref, gossip_network, scheduler_ref) =
+    let (storage_ref, slasher_ref, executor_ref, scheduler_ref, gossip) =
         runtime.block_on(make_sequencer_compoments(config))?;
 
     Ok(SequencerServiceFFI::new(
         storage_ref,
+        slasher_ref,
         executor_ref,
-        gossip_network,
         scheduler_ref,
+        gossip,
         runtime,
     ))
 }

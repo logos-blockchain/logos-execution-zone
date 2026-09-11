@@ -58,17 +58,19 @@ typedef struct Runtime {
  * FFI-owned sequencer.
  *
  * - A [`ActorRef<StorageActor>`] used to get acess to db.
+ * - A [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial shutdown.
  * - An [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query the node.
- * - A [`Option<GossipNetwork>`] right now is unused and exists only to pin gossip.
  * - A [`ActorRef<Scheduler>`] right now is unused and exists only for gracial shutdown.
+ * - A [`Option<Gossip>`] right now is unused and exists only to pin gossip.
  * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
  *   already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
   void *storage_ref;
+  void *slasher_ref;
   void *executor_ref;
-  void *gossip;
   void *scheduler_ref;
+  void *gossip;
   struct Runtime runtime;
 } SequencerServiceFFI;
 
