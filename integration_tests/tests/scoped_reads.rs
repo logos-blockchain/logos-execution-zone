@@ -25,7 +25,11 @@ use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_account
 use tokio::test;
 use wallet::{
     AccountIdentity,
-    cli::{Command, account::AccountSubcommand, execute_subcommand},
+    cli::{
+        Command,
+        account::{AccountSubcommand, ReadScope},
+        execute_subcommand,
+    },
     program_facades::program_loader::ProgramLoader,
 };
 
@@ -190,28 +194,31 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     assert!(balance_only.data.shards.is_empty());
 
     let last_writer = writers[BLOAT_WRITERS - 1];
-    let scoped_get = |program_account_id: Option<AccountId>, all_shards: bool, raw: bool| {
+    let scoped_get = |scope: ReadScope, raw: bool| {
         Command::Account(AccountSubcommand::Get {
             raw,
             keys: false,
             account_id: public_mention(victim),
-            program_account_id,
-            all_shards,
+            scope,
         })
     };
-    execute_subcommand(ctx.wallet_mut(), scoped_get(None, false, false)).await?;
+    execute_subcommand(ctx.wallet_mut(), scoped_get(ReadScope::Balance, false)).await?;
     execute_subcommand(
         ctx.wallet_mut(),
-        scoped_get(Some(last_writer), false, false),
+        scoped_get(ReadScope::Shard(last_writer), false),
     )
     .await?;
-    execute_subcommand(ctx.wallet_mut(), scoped_get(Some(last_writer), false, true)).await?;
-    let cli_error = execute_subcommand(ctx.wallet_mut(), scoped_get(None, true, false))
+    execute_subcommand(
+        ctx.wallet_mut(),
+        scoped_get(ReadScope::Shard(last_writer), true),
+    )
+    .await?;
+    let cli_error = execute_subcommand(ctx.wallet_mut(), scoped_get(ReadScope::All, false))
         .await
-        .expect_err("--all-shards must stay a whole-account read");
+        .expect_err("--scope all must stay a whole-account read");
     assert!(
         is_oversized_response(&cli_error),
-        "--all-shards must fail on response size specifically: {cli_error:?}"
+        "--scope all must fail on response size specifically: {cli_error:?}"
     );
 
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;

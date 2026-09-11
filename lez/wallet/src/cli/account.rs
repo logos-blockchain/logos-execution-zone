@@ -1,9 +1,11 @@
+use std::str::FromStr;
+
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
-use lee_core::Identifier;
+use lee_core::{Identifier, account::AccountIdError};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -11,6 +13,25 @@ use crate::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
 };
+
+#[derive(Debug, Clone)]
+pub enum ReadScope {
+    Balance,
+    Shard(AccountId),
+    All,
+}
+
+impl FromStr for ReadScope {
+    type Err = AccountIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "balance" => Ok(Self::Balance),
+            "all" => Ok(Self::All),
+            _ => AccountId::from_str(s).map(Self::Shard),
+        }
+    }
+}
 
 /// Represents generic chain CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
@@ -34,16 +55,10 @@ pub enum AccountSubcommand {
         account_id: CliAccountMention,
         #[arg(
             long,
-            conflicts_with = "all_shards",
-            help = "Read only this program's shard instead of the balance-only view"
+            default_value = "balance",
+            help = "Read scope: balance, all, or a program account id"
         )]
-        program_account_id: Option<AccountId>,
-        #[arg(
-            long,
-            conflicts_with = "program_account_id",
-            help = "Read the full account across all shards"
-        )]
-        all_shards: bool,
+        scope: ReadScope,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -338,8 +353,7 @@ impl AccountSubcommand {
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
-        program_account_id: Option<AccountId>,
-        all_shards: bool,
+        scope: ReadScope,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
@@ -351,25 +365,29 @@ impl AccountSubcommand {
             });
 
         let account = match resolved {
-            AccountIdWithPrivacy::Public(id) => {
-                if all_shards {
-                    wallet_core.get_account_public(id).await?
-                } else {
-                    let selector = program_account_id.map_or_else(
-                        || ProgramShardSelector::balance(id),
-                        |program| ProgramShardSelector::new(id, program),
-                    );
-                    wallet_core.get_account_view(selector).await?
+            AccountIdWithPrivacy::Public(id) => match &scope {
+                ReadScope::All => wallet_core.get_account_public(id).await?,
+                ReadScope::Balance => {
+                    wallet_core
+                        .get_account_view(ProgramShardSelector::balance(id))
+                        .await?
                 }
-            }
+                ReadScope::Shard(program) => {
+                    wallet_core
+                        .get_account_view(ProgramShardSelector::new(id, *program))
+                        .await?
+                }
+            },
             AccountIdWithPrivacy::Private(id) => {
                 let Some(found) = wallet_core.storage().key_chain().private_account(id) else {
                     anyhow::bail!("Private account with id {id} not found in storage");
                 };
-                if all_shards {
-                    found.account.clone()
-                } else {
-                    project_private_account(found.account, program_account_id)
+                match &scope {
+                    ReadScope::All => found.account.clone(),
+                    ReadScope::Balance => project_private_account(found.account, None),
+                    ReadScope::Shard(program) => {
+                        project_private_account(found.account, Some(*program))
+                    }
                 }
             }
         };
@@ -404,7 +422,7 @@ impl AccountSubcommand {
             Ok(())
         };
 
-        if all_shards && account == Account::default() {
+        if matches!(scope, ReadScope::All) && account == Account::default() {
             println!("Account is Uninitialized");
 
             if keys {
@@ -576,19 +594,8 @@ impl WalletSubcommand for AccountSubcommand {
                 raw,
                 keys,
                 account_id,
-                program_account_id,
-                all_shards,
-            } => {
-                Self::handle_get(
-                    raw,
-                    keys,
-                    account_id,
-                    program_account_id,
-                    all_shards,
-                    wallet_core,
-                )
-                .await
-            }
+                scope,
+            } => Self::handle_get(raw, keys, account_id, scope, wallet_core).await,
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
                 let curr_last_block = wallet_core.sync_to_latest_block().await?;
