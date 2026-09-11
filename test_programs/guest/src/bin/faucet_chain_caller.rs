@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (ProgramId, u128);
@@ -30,7 +33,7 @@ fn main() {
     assert_eq!(pre_states.len(), 2);
 
     let chained_calls = vec![ChainedCall {
-        program_account_id: faucet_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(faucet_program_id),
         instruction_data: to_vec(&faucet_core::Instruction::GenesisTransfer { amount }).unwrap(),
         pre_state_ids: vec![pre_states[0].account_id, pre_states[1].account_id],
         pda_seeds: vec![],

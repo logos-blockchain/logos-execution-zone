@@ -15,7 +15,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         witness_set,
     } = tx;
     let PublicMessage {
-        program_id,
+        program_account_id,
         account_ids,
         nonces,
         instruction_data,
@@ -26,7 +26,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         proof,
     } = witness_set;
 
-    let program_id_str = program_id.to_string();
+    let program_account_id_str = program_account_id.to_string();
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
     let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
@@ -44,8 +44,8 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
             <h2>"Public Transaction Details"</h2>
             <div class="info-grid">
                 <div class="info-row">
-                    <span class="info-label">"Program ID:"</span>
-                    <span class="info-value hash">{program_id_str}</span>
+                    <span class="info-label">"Program Account:"</span>
+                    <span class="info-value hash">{program_account_id_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Instruction Data:"</span>

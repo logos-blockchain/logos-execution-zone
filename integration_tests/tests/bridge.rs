@@ -12,7 +12,8 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
+    AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
+    public_transaction,
 };
 use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
@@ -25,11 +26,13 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
+        AccountId::from_builtin_program(programs::bridge().id()),
         vec![bridge_account_id, recipient_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -72,11 +75,13 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
+        AccountId::from_builtin_program(programs::bridge().id()),
         vec![bridge_account_id, recipient_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -131,8 +136,10 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     // Get pre-state of bridge and recipient accounts; the receipt is unminted (a
     // default account), so the program would create it on a first mint.
@@ -150,9 +157,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let program_with_deps =
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
-            programs::bridge().id().into(),
+            AccountId::from_builtin_program(programs::bridge().id()),
             [(
-                programs::authenticated_transfer().id().into(),
+                AccountId::from_builtin_program(programs::authenticated_transfer().id()),
                 programs::authenticated_transfer(),
             )]
             .into(),
@@ -414,7 +421,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //     let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 //     let recipient_id = ctx.existing_public_accounts()[0];
 //     let amount = 1_u64;
-//     let vault_program_id: AccountId = programs::vault().id().into();
+//     let vault_program_id = AccountId::from_builtin_program(programs::vault().id());
 //     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id,
 // recipient_id);
 

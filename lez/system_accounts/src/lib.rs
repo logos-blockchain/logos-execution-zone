@@ -24,13 +24,13 @@ pub type Slots = u32;
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id().into())
+    faucet_core::compute_faucet_account_id(AccountId::from_builtin_program(programs::faucet().id()))
 }
 
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::authenticated_transfer().id()),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -38,30 +38,30 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id().into())
+    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(programs::bridge().id()))
 }
 
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::authenticated_transfer().id()),
         ..Account::default()
     }
 }
 
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
-    fee_core::compute_fee_state_account_id(programs::fee().id().into())
+    fee_core::compute_fee_state_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 #[must_use]
 pub fn fee_escrow_account_id() -> AccountId {
-    fee_core::compute_fee_escrow_account_id(programs::fee().id().into())
+    fee_core::compute_fee_escrow_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 #[must_use]
 pub fn fee_inbox_account_id() -> AccountId {
-    fee_core::compute_fee_inbox_account_id(programs::fee().id().into())
+    fee_core::compute_fee_inbox_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 /// Fee program account IDs in the order expected by the fee program.
@@ -77,7 +77,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn fee_account() -> Account {
     Account {
-        program_owner: programs::fee().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::fee().id()),
         ..Account::default()
     }
 }
@@ -87,7 +87,7 @@ pub fn fee_account() -> Account {
 #[must_use]
 pub fn fee_state_account() -> Account {
     Account {
-        program_owner: programs::fee().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::fee().id()),
         data: fee_core::state::FeeState::genesis()
             .to_bytes()
             .try_into()
@@ -103,13 +103,15 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id().into())
+    sequencer_stake_core::sequencer_stake_config_account_id(AccountId::from_builtin_program(
+        programs::sequencer_stake().id(),
+    ))
 }
 
 #[must_use]
 pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
     sequencer_stake_core::stake_funds_account_id(
-        programs::sequencer_stake().id().into(),
+        AccountId::from_builtin_program(programs::sequencer_stake().id()),
         ownership_id,
     )
 }
@@ -127,7 +129,7 @@ pub fn sequencer_stake_config_account(
     channel_id: Option<[u8; 32]>,
 ) -> Account {
     Account {
-        program_owner: programs::sequencer_stake().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::sequencer_stake().id()),
         data: sequencer_stake_core::SequencerStakeConfig {
             channel_params,
             channel_id,
@@ -143,7 +145,7 @@ pub fn sequencer_stake_config_account(
 #[must_use]
 pub fn clock_account() -> Account {
     Account {
-        program_owner: programs::clock().id().into(),
+        program_owner: AccountId::from_builtin_program(programs::clock().id()),
         data: ClockAccountData {
             block_id: 0,
             timestamp: 0,

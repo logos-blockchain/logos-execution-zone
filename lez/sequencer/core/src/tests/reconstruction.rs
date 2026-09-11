@@ -982,7 +982,9 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     // The delivery landed exactly once, and the next turn does not re-emit it.
-    let record_id = ping_record_pda(programs::ping_receiver().id().into());
+    let record_id = ping_record_pda(AccountId::from_builtin_program(
+        programs::ping_receiver().id(),
+    ));
     assert_eq!(
         seq_b
             .with_state(|state| state.get_account_by_id(record_id).data.into_inner())

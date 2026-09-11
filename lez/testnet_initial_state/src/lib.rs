@@ -156,7 +156,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner = programs::authenticated_transfer().id().into();
+            acc.program_owner =
+                AccountId::from_builtin_program(programs::authenticated_transfer().id());
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -192,7 +193,9 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: AccountId::from_builtin_program(
+                        programs::authenticated_transfer().id(),
+                    ),
                     balance: acc_data.balance,
                     ..Default::default()
                 },
@@ -278,6 +281,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use key_protocol::key_management::secret_holders::ViewingSecretKey;
+    use lee_core::program::get_program_via;
 
     use super::*;
 
@@ -430,7 +434,10 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.program_owner, fee_program_id.into());
+            assert_eq!(
+                account.program_owner,
+                AccountId::from_builtin_program(fee_program_id)
+            );
             assert_eq!(account.balance, 0);
         }
 
@@ -500,12 +507,25 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                get_program_via(AccountId::from_builtin_program(id), |acc| with
+                    .get_account_by_id(acc))
+                .is_some(),
+                "registered when declared"
+            );
+            assert!(
+                get_program_via(AccountId::from_builtin_program(id), |acc| without
+                    .get_account_by_id(acc))
+                .is_none(),
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
+        assert!(
+            get_program_via(
+                AccountId::from_builtin_program(programs::faucet().id()),
+                |acc| without.get_account_by_id(acc)
+            )
+            .is_some()
+        );
     }
 }

@@ -38,7 +38,7 @@ fn program_execution() {
 
     let (program_output, _cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -79,7 +79,7 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let mut env_builder = ExecutorEnv::builder();
     program
         .write_inputs(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -108,7 +108,7 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &[],
             &Vec::new(),
@@ -130,7 +130,7 @@ fn execute_reports_cycles_within_budget() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let (_, cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -147,7 +147,7 @@ fn execute_reports_cycles_within_budget() {
 fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let result = program.execute(
-        AccountId::from(program.id()),
+        AccountId::from_builtin_program(program.id()),
         None,
         &pre_states,
         &instruction_data,
@@ -179,7 +179,7 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     // Stands in for a call kind a future protocol upgrade defines.
     env_builder.write_slice(&to_borsh_frame(&CallKind::Unknown(77)));
     let input = ProgramInput {
-        self_account_id: program.id().into(),
+        self_account_id: AccountId::from_builtin_program(program.id()),
         caller_account_id: None,
         pre_states: pre_states.clone(),
         instruction: instruction_data.clone(),
@@ -221,7 +221,7 @@ fn nonzero_exit_is_rejected_with_its_cycles() {
     let program = crate::test_methods::exits_nonzero();
     let err = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &[],
             &Vec::new(),

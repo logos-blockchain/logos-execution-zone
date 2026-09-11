@@ -1,7 +1,7 @@
 use indexer_service_protocol::EventRecord;
 
 use crate::api::types::{
-    FfiBlockId, FfiHashType, FfiProgramId, FfiSelector, FfiVec, vectors::FfiVecU8,
+    FfiAccountId, FfiBlockId, FfiHashType, FfiSelector, FfiVec, vectors::FfiVecU8,
 };
 
 #[repr(C)]
@@ -9,7 +9,7 @@ pub struct FfiEventRecord {
     pub block_id: FfiBlockId,
     pub tx_index: u32,
     pub tx_hash: FfiHashType,
-    pub program_id: FfiProgramId,
+    pub program_account_id: FfiAccountId,
     pub selector: FfiSelector,
     pub data: FfiVecU8,
 }
@@ -20,7 +20,7 @@ impl From<EventRecord> for FfiEventRecord {
             block_id,
             tx_index,
             tx_hash,
-            program_id,
+            program_account_id,
             selector,
             data,
         } = value;
@@ -29,7 +29,7 @@ impl From<EventRecord> for FfiEventRecord {
             block_id,
             tx_index,
             tx_hash: tx_hash.into(),
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             selector: selector.into(),
             data: data.into(),
         }

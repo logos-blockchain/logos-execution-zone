@@ -1,6 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
     Timestamp,
+    account::AccountId,
     program::{
         AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -33,7 +34,7 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_account_id: clock_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(clock_program_id),
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],

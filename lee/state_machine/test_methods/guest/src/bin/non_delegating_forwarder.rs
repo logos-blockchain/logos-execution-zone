@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool, Vec<PdaSeed>);
@@ -41,7 +44,7 @@ fn main() {
         output_state_diffs,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
         pre_state_ids,
         pda_seeds,

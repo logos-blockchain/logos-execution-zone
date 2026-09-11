@@ -3,7 +3,7 @@
 //! that a live deploy (or a hand-assembled one, here) must decode back out of.
 
 use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment,
+    MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramSegment, get_program_via,
 };
 use program_loader_core::Instruction;
 
@@ -73,9 +73,9 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         },
     );
 
-    let (found_image_id, reconstructed_binary) = state
-        .get_program(header_account_id.into())
-        .expect("a fully-landed multi-segment program must be found");
+    let (found_image_id, reconstructed_binary) =
+        get_program_via(header_account_id, |id| state.get_account_by_id(id))
+            .expect("a fully-landed multi-segment program must be found");
     assert_eq!(
         found_image_id,
         program.id(),
@@ -175,7 +175,7 @@ fn program_with_more_than_max_segments_is_rejected() {
     );
 
     assert!(
-        state.get_program(header_account_id.into()).is_none(),
+        get_program_via(header_account_id, |id| state.get_account_by_id(id)).is_none(),
         "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
         MAX_PROGRAM_SEGMENTS + 1
     );
@@ -249,31 +249,52 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
 fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let mut state = V03State::new();
     let program = crate::test_methods::noop();
+    let elf = program.elf();
+    let chunks: Vec<&[u8]> = elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
 
-    let segment_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let write_segment_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        vec![segment_account_id],
-        vec![Nonce(0)],
-        Instruction::WriteSegment {
-            bytecode: program.elf().to_vec(),
-            next_segment: None,
-        },
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let write_segment_witness =
-        public_transaction::WitnessSet::for_message(&write_segment_message, &[&segment_key]);
-    let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
-    state
-        .transition_from_public_transaction(&write_segment_tx, 1, 0)
-        .expect("WriteSegment should succeed against a fresh account");
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([u8::try_from(i + 1).unwrap(); 32]).unwrap())
+        .collect();
+    let segment_account_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
 
-    let header_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+    // Linked tail-to-head: write the last segment first, each earlier one naming the
+    // already-written next segment.
+    for i in (0..chunks.len()).rev() {
+        let mut write_segment_account_ids = vec![segment_account_ids[i]];
+        write_segment_account_ids.extend(segment_account_ids.get(i + 1).copied());
+        let write_segment_message = public_transaction::Message::try_new(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            write_segment_account_ids,
+            vec![Nonce(0)],
+            Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_account_ids.get(i + 1).copied(),
+            },
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let write_segment_witness = public_transaction::WitnessSet::for_message(
+            &write_segment_message,
+            &[&segment_keys[i]],
+        );
+        let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
+        state
+            .transition_from_public_transaction(&write_segment_tx, 1, 0)
+            .expect("WriteSegment should succeed against a fresh account");
+    }
+    let segment_account_id = segment_account_ids[0];
+
+    let header_key = PrivateKey::try_new([0xAA_u8; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let mut create_header_account_ids = vec![header_account_id];
+    create_header_account_ids.extend(&segment_account_ids);
     let create_header_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![header_account_id, segment_account_id],
+        create_header_account_ids,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_id,
@@ -288,8 +309,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .transition_from_public_transaction(&create_header_tx, 2, 0)
         .expect("CreateHeader should succeed once the segment it names already exists");
 
-    let (image_id, elf) = state
-        .get_program(header_account_id.into())
+    let (image_id, elf) = get_program_via(header_account_id, |id| state.get_account_by_id(id))
         .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(elf, program.elf().to_vec());
