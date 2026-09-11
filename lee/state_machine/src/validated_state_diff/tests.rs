@@ -1,13 +1,272 @@
 use std::collections::HashMap;
 
-use lee_core::account::{Account, AccountId, Nonce};
+use lee_core::{
+    DeferredResolution,
+    account::{Account, AccountId, BalanceDiff, Nonce},
+};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
     error::LeeError,
+    privacy_preserving_transaction::message::PublicActionWithID,
     public_transaction::{Message, WitnessSet},
     validated_state_diff::ValidatedStateDiff,
 };
+
+// Host-side mirror of `stripped_token`'s `Instruction`/`TokenAccountData`/`TokenDiff` — the
+// guest crate isn't a host dependency, so these can't be imported directly, only match the
+// borsh layout.
+#[derive(borsh::BorshSerialize)]
+enum StrippedTokenInstruction {
+    Initialize { balance: u128 },
+    Transfer { amount: u128 },
+}
+
+#[derive(borsh::BorshDeserialize)]
+struct TokenAccountData {
+    balance: u128,
+}
+
+#[derive(borsh::BorshSerialize)]
+enum TokenDiff {
+    #[expect(dead_code, reason = "mirrors stripped_token's own TokenDiff shape exactly")]
+    Add(u128),
+    Sub(u128),
+}
+
+fn token_balance(state: &V03State, account_id: AccountId) -> u128 {
+    let data: TokenAccountData =
+        borsh::from_slice(state.get_account_by_id(account_id).data.as_ref())
+            .expect("account data must decode as TokenAccountData");
+    data.balance
+}
+
+fn initialize_stripped_token_account(
+    state: &mut V03State,
+    program_id: AccountId,
+    account_id: AccountId,
+    balance: u128,
+    block_id: u64,
+) {
+    let message = Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![],
+        StrippedTokenInstruction::Initialize { balance },
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[]);
+    state
+        .transition_from_public_transaction(
+            &crate::PublicTransaction::new(message, witness_set),
+            block_id,
+            0,
+        )
+        .unwrap();
+}
+
+/// Moves `amount` from `sender` to `receiver` via a real public transaction — the competing
+/// activity a `Deferred` payload can be stale against by the time settlement replays it.
+fn transfer_stripped_token(
+    state: &mut V03State,
+    program_id: AccountId,
+    sender: AccountId,
+    receiver: AccountId,
+    amount: u128,
+    block_id: u64,
+) {
+    let message = Message::try_new(
+        program_id,
+        vec![sender, receiver],
+        vec![],
+        StrippedTokenInstruction::Transfer { amount },
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[]);
+    state
+        .transition_from_public_transaction(
+            &crate::PublicTransaction::new(message, witness_set),
+            block_id,
+            0,
+        )
+        .unwrap();
+}
+
+/// A `Deferred` action carrying a `TokenDiff::Sub(amount)` delta for `stripped_token` — as if
+/// this had been the payload a privacy-preserving proof committed to, unresolved, for
+/// settlement to replay.
+fn deferred_sub_action(account_id: AccountId, program_id: AccountId, amount: u128) -> PublicActionWithID {
+    PublicActionWithID::Deferred {
+        account_id,
+        resolutions: vec![DeferredResolution {
+            executing_account_id: program_id,
+            caller_account_id: None,
+            post_balance_diff: BalanceDiff::Add(0),
+            post_data: Some(
+                borsh::to_vec(&TokenDiff::Sub(amount))
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
+        }],
+    }
+}
+
+/// End-to-end proof that `resolve_public_action` actually invokes `Incremental` and resolves a
+/// `Deferred` action's `TokenDiff` delta into a real balance, host-side and unproven — the
+/// settlement-time counterpart to `resolve_diff`'s own role in `execute_authorized`.
+#[test]
+fn resolve_public_action_replays_a_deferred_action_against_live_state() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+
+    let mut state = V03State::new().with_test_programs();
+    initialize_stripped_token_account(&mut state, program_id, account_id, 100, 1);
+    assert_eq!(token_balance(&state, account_id), 100);
+
+    let action = deferred_sub_action(account_id, program_id, 30);
+    let mut cycles_used = 0;
+    let (resolved_account_id, resolved) = super::resolve_public_action(
+        &action,
+        &state,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        &mut cycles_used,
+    )
+    .expect("resolves");
+
+    assert_eq!(resolved_account_id, account_id);
+    let data: TokenAccountData = borsh::from_slice(resolved.data.as_ref())
+        .expect("resolved data must decode as TokenAccountData: did Incremental resolution run?");
+    assert_eq!(data.balance, 70);
+}
+
+/// The actual point of `Deferred`: the resolved value reflects whatever the account holds at
+/// settlement time, not whatever it held when the (now-stale) deferred payload was built.
+#[test]
+fn resolve_public_action_reflects_live_state_not_stale_state() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+
+    let mut state = V03State::new().with_test_programs();
+    initialize_stripped_token_account(&mut state, program_id, account_id, 100, 1);
+
+    // Fixed "at proof-generation time" — a Sub(30) delta computed against balance 100.
+    let action = deferred_sub_action(account_id, program_id, 30);
+
+    // The account changes before settlement actually resolves the deferred delta (`Initialize`
+    // is itself a delta — this adds 500 on top of the existing 100).
+    initialize_stripped_token_account(&mut state, program_id, account_id, 500, 2);
+    assert_eq!(token_balance(&state, account_id), 600);
+
+    let mut cycles_used = 0;
+    let (_, resolved) = super::resolve_public_action(
+        &action,
+        &state,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        &mut cycles_used,
+    )
+    .expect("resolves");
+
+    // 600 - 30, not 100 - 30: resolution used live state at settlement, not the balance that
+    // existed when the deferred payload was built.
+    let data: TokenAccountData = borsh::from_slice(resolved.data.as_ref()).unwrap();
+    assert_eq!(data.balance, 570);
+}
+
+/// The flip side of live-state resolution: if the account can no longer cover a stale `Deferred`
+/// debit — e.g. a competing transfer spent the balance away between proof generation and
+/// settlement — `Incremental` underflows and resolution fails outright. There's no partial
+/// application: `from_privacy_preserving_transaction`'s `.collect::<Result<...>>()` means one
+/// failing resolution rejects the whole transaction, the same as any other invalid diff would.
+#[test]
+fn resolve_public_action_fails_when_live_balance_cannot_cover_a_stale_deferred_debit() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+    let other_account_id = AccountId::new([2; 32]);
+
+    let mut state = V03State::new().with_test_programs();
+    initialize_stripped_token_account(&mut state, program_id, account_id, 100, 1);
+
+    // Fixed "at proof-generation time" — a Sub(80) delta computed against balance 100.
+    let action = deferred_sub_action(account_id, program_id, 80);
+
+    // Before settlement, a competing public transfer spends most of the balance away.
+    transfer_stripped_token(&mut state, program_id, account_id, other_account_id, 60, 2);
+    assert_eq!(token_balance(&state, account_id), 40);
+
+    let mut cycles_used = 0;
+    let result = super::resolve_public_action(
+        &action,
+        &state,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        &mut cycles_used,
+    );
+
+    assert!(
+        result.is_err(),
+        "a deferred Sub(80) against a live balance of 40 must fail, not underflow silently"
+    );
+}
+
+/// A program that never implemented `Incremental` (predates it entirely) falls back to
+/// copy/replace — the deferred payload applies verbatim, exactly like a `Bound` action would.
+#[test]
+fn resolve_public_action_falls_back_to_copy_replace_when_incremental_is_unsupported() {
+    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let account_id = AccountId::new([1; 32]);
+    let state = V03State::new().with_test_programs();
+
+    let action = PublicActionWithID::Deferred {
+        account_id,
+        resolutions: vec![DeferredResolution {
+            executing_account_id: program_id,
+            caller_account_id: None,
+            post_balance_diff: BalanceDiff::Add(42),
+            post_data: Some(vec![1, 2, 3].try_into().unwrap()),
+        }],
+    };
+    let mut cycles_used = 0;
+    let (_, resolved) = super::resolve_public_action(
+        &action,
+        &state,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        &mut cycles_used,
+    )
+    .expect("resolves");
+
+    assert_eq!(resolved.balance, 42);
+    assert_eq!(resolved.data.as_ref(), &[1, 2, 3]);
+}
+
+/// A `Bound` action (`deferred: None`) passes through unchanged — regression guard against
+/// `resolve_public_action` disturbing today's only real code path.
+#[test]
+fn resolve_public_action_passes_a_bound_action_through_unchanged() {
+    let account_id = AccountId::new([1; 32]);
+    let state = V03State::new();
+    let post_state = Account {
+        balance: 555,
+        ..Account::default()
+    };
+    let action = PublicActionWithID::Bound {
+        account_id,
+        post_state: post_state.clone(),
+    };
+    let mut cycles_used = 0;
+    let (resolved_account_id, resolved) = super::resolve_public_action(
+        &action,
+        &state,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        &mut cycles_used,
+    )
+    .expect("resolves");
+
+    assert_eq!(resolved_account_id, account_id);
+    assert_eq!(resolved, post_state);
+}
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
     initial_data

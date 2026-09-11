@@ -242,10 +242,45 @@ pub struct FeeDeclaration {
 
 pub type InstructionData = Vec<u8>;
 
+/// Mirrors `lee_core::account::BalanceDiff`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BalanceDiff {
+    Add(u128),
+    Sub(u128),
+}
+
+/// Mirrors `lee_core::DeferredResolution` — one pending, unresolved update to a `Deferred`
+/// account's `data`, to be replayed by the sequencer at settlement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub post_state: Account,
+pub struct DeferredResolution {
+    pub executing_account_id: AccountId,
+    pub caller_account_id: Option<AccountId>,
+    pub post_balance_diff: BalanceDiff,
+    pub post_data: Option<Data>,
+}
+
+/// Mirrors `lee::privacy_preserving_transaction::message::PublicActionWithID` — `Bound` carries
+/// the account's fully resolved post-state; `Deferred` carries its pending, unresolved
+/// resolutions for the sequencer to replay at settlement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum PublicActionWithID {
+    Bound {
+        account_id: AccountId,
+        post_state: Account,
+    },
+    Deferred {
+        account_id: AccountId,
+        resolutions: Vec<DeferredResolution>,
+    },
+}
+
+impl PublicActionWithID {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Bound { account_id, .. } | Self::Deferred { account_id, .. } => *account_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

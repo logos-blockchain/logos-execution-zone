@@ -692,8 +692,11 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while the
     // journal exports the credential view: a seed grant is not a signer-backed claim.
     assert_eq!(output.public_actions.len(), 1);
-    assert_eq!(output.public_actions[0].pre.account_id, account_id);
-    assert!(!output.public_actions[0].pre.is_authorized);
+    let PublicAction::Bound { pre, .. } = &output.public_actions[0] else {
+        panic!("auth_asserting_noop does not support Incremental: expected Bound");
+    };
+    assert_eq!(pre.account_id, account_id);
+    assert!(!pre.is_authorized);
 }
 
 /// A delegated seed that doesn't match the account's real derivation can't be distinguished
@@ -732,7 +735,10 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
 
     // In-circuit this is indistinguishable from a signer's claim; the exported `true` is
     // what the verifier audits (and rejects, since the id is not actually a signer's).
-    assert!(output.public_actions[0].pre.is_authorized);
+    let PublicAction::Bound { pre, .. } = &output.public_actions[0] else {
+        panic!("auth_asserting_noop does not support Incremental: expected Bound");
+    };
+    assert!(pre.is_authorized);
 }
 
 #[test]

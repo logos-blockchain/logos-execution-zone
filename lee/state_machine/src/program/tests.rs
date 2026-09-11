@@ -278,11 +278,11 @@ enum BalanceTransferDelta {
     Sub(u128),
 }
 
-/// `Execute` never reads `pre_state`, so it can compute both sides' `BalanceDiff` outright —
-/// but it still owes `Incremental` a delta to resolve, so `post_data` carries a
-/// `BalanceTransferDelta` rather than coming back unchanged.
+/// `BalanceDiff` already composes safely against any `pre_state`, so `Execute` computes both
+/// sides' final `BalanceDiff` outright and never touches `data` — `post_data` comes back
+/// unchanged.
 #[test]
-fn incremental_balance_transfer_produces_a_delta_on_execute() {
+fn incremental_balance_transfer_moves_the_balance_directly_on_execute() {
     let program = crate::test_methods::incremental_balance_transfer();
     let balance_to_move: u128 = 42;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
@@ -314,24 +314,12 @@ fn incremental_balance_transfer_produces_a_delta_on_execute() {
         sender_post.post_balance_diff,
         BalanceDiff::Sub(balance_to_move)
     );
-    assert_eq!(
-        sender_post.post_data.unwrap(),
-        borsh::to_vec(&BalanceTransferDelta::Sub(balance_to_move))
-            .unwrap()
-            .try_into()
-            .unwrap()
-    );
+    assert_eq!(sender_post.post_data, None);
     assert_eq!(
         recipient_post.post_balance_diff,
         BalanceDiff::Add(balance_to_move)
     );
-    assert_eq!(
-        recipient_post.post_data.unwrap(),
-        borsh::to_vec(&BalanceTransferDelta::Add(balance_to_move))
-            .unwrap()
-            .try_into()
-            .unwrap()
-    );
+    assert_eq!(recipient_post.post_data, None);
 
     assert!(
         output
@@ -342,13 +330,20 @@ fn incremental_balance_transfer_produces_a_delta_on_execute() {
 }
 
 /// `Incremental`'s contract is one account at a time: fed a single account's real `pre_state`
-/// and the `BalanceTransferDelta` `Execute` emitted for it, it must decode that delta and
-/// re-express it as a resolved `BalanceDiff`.
+/// and a `BalanceTransferDelta`, it must decode that delta and re-express it as a resolved
+/// `BalanceDiff` in either direction.
 #[test]
-fn incremental_balance_transfer_resolves_the_delta_on_incremental_call_kind() {
+fn incremental_balance_transfer_resolves_a_sub_delta_on_incremental_call_kind() {
+    assert_incremental_resolves(BalanceTransferDelta::Sub(42), BalanceDiff::Sub(42));
+}
+
+#[test]
+fn incremental_balance_transfer_resolves_an_add_delta_on_incremental_call_kind() {
+    assert_incremental_resolves(BalanceTransferDelta::Add(42), BalanceDiff::Add(42));
+}
+
+fn assert_incremental_resolves(delta: BalanceTransferDelta, expected: BalanceDiff) {
     let program = crate::test_methods::incremental_balance_transfer();
-    let balance_to_move: u128 = 42;
-    let delta = borsh::to_vec(&BalanceTransferDelta::Sub(balance_to_move)).unwrap();
     let pre_state = AccountWithMetadata::new(
         Account {
             balance: 100,
@@ -364,7 +359,7 @@ fn incremental_balance_transfer_resolves_the_delta_on_incremental_call_kind() {
         self_account_id: program.id().into(),
         caller_account_id: None,
         pre_states: vec![pre_state],
-        instruction: delta,
+        instruction: borsh::to_vec(&delta).unwrap(),
     };
     env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
 
@@ -377,10 +372,7 @@ fn incremental_balance_transfer_resolves_the_delta_on_incremental_call_kind() {
 
     assert_eq!(output.call_kind, CallKind::Incremental);
     let [resolved] = output.state_diffs.try_into().unwrap();
-    assert_eq!(
-        resolved.post_balance_diff,
-        BalanceDiff::Sub(balance_to_move)
-    );
+    assert_eq!(resolved.post_balance_diff, expected);
     // Data was never touched, so it comes back as no change, not a value equal to the input.
     assert_eq!(resolved.post_data, None);
 

@@ -118,9 +118,10 @@ fn robinhood_message(
 
 /// `stripped_token_robinhood` reads both accounts' real balances to pick a route, but its own
 /// diffs are always unchanged — the actual movement happens in the chained `stripped_token`
-/// call. This is the scenario `ExecutionMode` mode-locking exists for: robinhood's read is
-/// inherently `Bound` (it needs live values now), while the chained `Transfer` on the same
-/// accounts would otherwise be free to defer.
+/// call. This is the scenario `Bound`/`Deferred` inference exists for: robinhood forces both
+/// accounts it touches to `Bound` (it needs live values now, and doesn't support
+/// `CallKind::Incremental`), even though the chained `Transfer` on the same accounts would
+/// otherwise be `Deferred`-eligible on its own.
 #[test]
 fn stripped_token_robinhood_moves_one_unit_from_the_larger_account_to_the_smaller() {
     let mut state = V03State::new().with_test_programs();

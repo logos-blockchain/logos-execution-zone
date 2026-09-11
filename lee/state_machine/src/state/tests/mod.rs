@@ -9,13 +9,13 @@ use std::collections::HashMap;
 use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateWitness, Timestamp, WitnessKind,
+    PrivateWitness, PublicAction, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader, ProgramId, ProgramSegment,
-        TimestampValidityWindow, TransactionEvent,
+        BlockValidityWindow, ExecutionValidationError, InstructionData,
+        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
+        ProgramId, ProgramSegment, TimestampValidityWindow, TransactionEvent,
     },
 };
 

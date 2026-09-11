@@ -4,15 +4,15 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, ProgramImageClaim,
-    WitnessKind,
+    DeferredResolution, Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness,
+    ProgramImageClaim, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
         AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall,
         DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, is_ownership_settled, post_state, pre_states_match_accounts,
-        validate_execution,
+        TimestampValidityWindow, UnsupportedCallKind, is_ownership_settled, post_state,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -20,7 +20,24 @@ use risc0_zkvm::guest::env;
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
+    /// Every touched account's real, genuinely resolved value so far — always run through
+    /// `Incremental` in-circuit when a diff has `post_data`, regardless of whether the touch
+    /// ends up `Bound` or `Deferred`. This is what a downstream chained call's own claimed
+    /// pre-state is checked against, and it's exactly right for that purpose even for a
+    /// currently-`Deferred` account, since `Deferred` only affects what gets *emitted* at the
+    /// end (see `deferred`/`bound_accounts`), never what's tracked internally.
     post_states: HashMap<AccountId, Account>,
+    /// Public accounts still accumulating unresolved deltas, one per touch by a program that
+    /// implements `Incremental`, in order — these are what actually get emitted as
+    /// `PublicAction::Deferred` at the end, in place of `post_states`' resolved value. An
+    /// account leaves this map (folds into `Bound`) the moment any touch of it is produced by a
+    /// program that doesn't implement `Incremental` — see `bound_accounts`.
+    deferred: HashMap<AccountId, Vec<DeferredResolution>>,
+    /// Public accounts that have had at least one touch forced `Bound` (produced by a program
+    /// without `Incremental` support) or folded in from `deferred` for that reason. Once here,
+    /// an account stays `Bound` for the rest of the execution — a later `Incremental`-eligible
+    /// touch on it resolves immediately rather than re-entering `deferred`.
+    bound_accounts: HashSet<AccountId>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
@@ -122,6 +139,8 @@ impl ExecutionState {
         let mut execution_state = Self {
             pre_states: Vec::new(),
             post_states: HashMap::new(),
+            deferred: HashMap::new(),
+            bound_accounts: HashSet::new(),
             block_validity_window,
             timestamp_validity_window,
             private_pda_bound_positions: HashMap::new(),
@@ -244,6 +263,8 @@ impl ExecutionState {
                 caller_data,
                 &chained_call.pda_seeds,
                 program_output.state_diffs,
+                &image_id_by_account_id,
+                &mut program_outputs_iter,
             );
 
             for next_call in program_output.chained_calls.into_iter().rev() {
@@ -282,11 +303,16 @@ impl ExecutionState {
         }
 
         // Backstop over every account that entered the transaction unowned and changed; see
-        // `is_ownership_settled`.
+        // `is_ownership_settled`. Only checkable for accounts resolved in-circuit (`Bound`, or
+        // nothing to resolve) — a `Deferred` account has no final value here to check yet; its
+        // ownership is settled the same way its value is, host-side at settlement, where
+        // `post_state()` (called by `resolve_public_action`) already performs
+        // `acquire_ownership_on_data_write` as part of computing the final `Account`.
         for (account_id, post) in execution_state
             .pre_states
             .iter()
             .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_OWNER)
+            .filter(|a| !execution_state.deferred.contains_key(&a.account_id))
             .map(|a| {
                 let post = execution_state
                     .post_states
@@ -324,6 +350,12 @@ impl ExecutionState {
     ///
     /// Return the set of authorized accounts as the result of the processed
     /// call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct concern (identities, caller context, the diffs \
+                  themselves, and what's needed to verify an Incremental resolution); bundling \
+                  them into a struct would only rename the same eight values"
+    )]
     fn validate_and_sync_states(
         &mut self,
         account_identities: &[InputAccountIdentity],
@@ -331,43 +363,81 @@ impl ExecutionState {
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
         output_state_diffs: Vec<AccountStateDiff>,
+        image_id_by_account_id: &HashMap<AccountId, ProgramId>,
+        program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
         for state_diff in output_state_diffs {
-            let post = post_state(&state_diff, program_account_id)
-                .expect("balance diff must be valid; validate_execution already checked it");
-            let mut pre = state_diff.pre_state;
+            let mut pre = state_diff.pre_state.clone();
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            let post_states_entry = self.post_states.entry(pre.account_id);
+
+            // Known the moment we know whether this account has been seen before: existing
+            // accounts keep the position assigned at first sight, new ones take the next slot.
+            let pre_state_position = self
+                .pre_states
+                .iter()
+                .position(|acc| acc.account_id == pre_account_id)
+                .unwrap_or(self.pre_states.len());
+            let is_public = matches!(
+                account_identities.get(pre_state_position),
+                Some(InputAccountIdentity::Public)
+            );
+
+            // Captured before resolution: `DeferredResolution` needs the raw, unresolved delta,
+            // never the resolved one.
+            let raw_post_data = state_diff.post_data.clone();
+            let raw_post_balance_diff = state_diff.post_balance_diff;
+
+            // Always run, regardless of eventual Bound/Deferred classification — the *result*
+            // (whether the program implements `Incremental`) is itself what drives that
+            // classification, and the resolved value is always needed for chain continuity.
+            let (resolved_diff, incremental_supported) = resolve_diff_in_circuit(
+                state_diff,
+                program_account_id,
+                caller.account_id,
+                image_id_by_account_id,
+                program_outputs_iter,
+            );
+            let post = post_state(&resolved_diff, program_account_id)
+                .expect("balance diff must be valid; validate_execution already checked it");
+
+            if is_public
+                && let Some(post_data) = raw_post_data
+            {
+                if incremental_supported {
+                    // Deferred-eligible — but only actually deferred if this account hasn't
+                    // already been forced `Bound` by some other touch; otherwise this touch
+                    // just resolves now too (already done above) and joins the Bound value.
+                    if !self.bound_accounts.contains(&pre_account_id) {
+                        self.deferred
+                            .entry(pre_account_id)
+                            .or_default()
+                            .push(DeferredResolution {
+                                executing_account_id: program_account_id,
+                                caller_account_id: caller.account_id,
+                                post_balance_diff: raw_post_balance_diff,
+                                post_data: Some(post_data),
+                            });
+                    }
+                } else {
+                    // Bound-forced: fold in and discard any pending deferred entries — their
+                    // effects are already reflected in `post`/`post_states`, since every touch
+                    // has always been genuinely resolved regardless of classification.
+                    self.bound_accounts.insert(pre_account_id);
+                    self.deferred.remove(&pre_account_id);
+                }
+            }
+
+            let post_states_entry = self.post_states.entry(pre_account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
-                    #[expect(
-                        clippy::shadow_unrelated,
-                        reason = "Shadowing is intentional to use all fields"
-                    )]
-                    let AccountWithMetadata {
-                        account: pre_account,
-                        account_id: pre_account_id,
-                        is_authorized: pre_is_authorized,
-                    } = pre;
-
                     // Ensure that new pre state is the same as known post state
                     assert_eq!(
                         occupied.get(),
-                        &pre_account,
+                        &pre.account,
                         "Inconsistent pre state for account {pre_account_id}",
                     );
-
-                    let pre_state_position = self
-                        .pre_states
-                        .iter()
-                        .position(|acc| acc.account_id == pre_account_id)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "Pre state must exist in execution state for account {pre_account_id}",
-                            )
-                        });
 
                     assert_authorization_and_record_bindings(
                         &mut self.pda_family_binding,
@@ -383,7 +453,6 @@ impl ExecutionState {
                 }
                 Entry::Vacant(_) => {
                     // Pre state for the initial call
-                    let pre_state_position = self.pre_states.len();
                     let external_seed = match account_identities.get(pre_state_position) {
                         Some(InputAccountIdentity::Private(PrivateWitness {
                             vpk,
@@ -483,6 +552,11 @@ impl ExecutionState {
     /// (recorded during `derive_from_outputs`), and an iterator over pre and post states of each
     /// account involved in the execution. Returning everything together keeps the
     /// fields module-private rather than forcing them visible to downstream consumers.
+    ///
+    /// The third element is `Some` for an account still `Deferred` at the end — its list of
+    /// pending, unresolved updates, which is what actually gets emitted; the second element is
+    /// then just this execution's own (genuinely resolved, but not the real settled) value,
+    /// unused for output. `None` means the account is `Bound`, and the second element is final.
     #[expect(
         clippy::type_complexity,
         reason = "tuple bundles four exit values from one consuming call so all fields stay private; a struct would only rename it"
@@ -493,17 +567,19 @@ impl ExecutionState {
         BlockValidityWindow,
         TimestampValidityWindow,
         HashMap<usize, (AccountId, PdaSeed)>,
-        impl ExactSizeIterator<Item = (AccountWithMetadata, Account)>,
+        impl ExactSizeIterator<Item = (AccountWithMetadata, Account, Option<Vec<DeferredResolution>>)>,
     ) {
         let block_validity_window = self.block_validity_window;
         let timestamp_validity_window = self.timestamp_validity_window;
         let pda_seed_by_position = std::mem::take(&mut self.private_pda_bound_positions);
+        let mut deferred = std::mem::take(&mut self.deferred);
         let states_iter = self.pre_states.into_iter().map(move |pre| {
             let post = self
                 .post_states
                 .remove(&pre.account_id)
                 .expect("Account from pre states should exist in state diff");
-            (pre, post)
+            let resolutions = deferred.remove(&pre.account_id);
+            (pre, post, resolutions)
         });
         (
             block_validity_window,
@@ -512,6 +588,86 @@ impl ExecutionState {
             states_iter,
         )
     }
+}
+
+/// Verifies a program's `CallKind::Incremental` receipt for one account and returns its resolved
+/// diff, plus whether the program actually implements `Incremental` — the in-circuit analog of
+/// the host's `resolve_diff`/`Program::execute_incremental`, enforced via recursive proof
+/// composition (`env::verify`) instead of a live re-execution, and the caller's signal for
+/// whether this account is even eligible to be `Deferred`. A diff with no `post_data` has
+/// nothing to resolve — returned unchanged, with `false` (mode-irrelevant either way). If the
+/// program hasn't implemented `Incremental` (signaled by an `UnsupportedCallKind` event on the
+/// verified receipt), falls back to the original diff verbatim, same as the host version, also
+/// with `false` — it could never be resolved later either, so it can't be `Deferred`.
+fn resolve_diff_in_circuit(
+    diff: AccountStateDiff,
+    executing_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    image_id_by_account_id: &HashMap<AccountId, ProgramId>,
+    program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
+) -> (AccountStateDiff, bool) {
+    if diff.post_data.is_none() {
+        return (diff, false);
+    }
+    let account_id = diff.pre_state.account_id;
+    let expected_pre_account = diff.pre_state.account.clone();
+
+    let incremental_output = program_outputs_iter
+        .next()
+        .expect("prover must supply an Incremental resolution output for this account");
+
+    assert_eq!(
+        incremental_output.call_kind,
+        CallKind::Incremental,
+        "expected an Incremental resolution output for account {account_id}"
+    );
+    assert_eq!(
+        incremental_output.self_account_id, executing_account_id,
+        "Incremental resolution output for account {account_id} was produced by the wrong program"
+    );
+    assert_eq!(
+        incremental_output.caller_account_id, caller_account_id,
+        "Incremental resolution output for account {account_id} has the wrong caller"
+    );
+
+    let image_id = image_id_by_account_id
+        .get(&executing_account_id)
+        .copied()
+        .expect("no image_id claim supplied for invoked program account");
+    let output_frame = lee_core::to_borsh_frame(&incremental_output);
+    env::verify(image_id, &output_frame)
+        .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+
+    // The program may not have implemented `Incremental` at all — signaled by this event,
+    // exactly like the host's own `resolve_diff` — in which case the original diff applies
+    // verbatim, same as copy/replace, and this account can never be `Deferred` (there would be
+    // nothing for a later `Incremental` call to resolve).
+    let unsupported = incremental_output
+        .events
+        .iter()
+        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
+    if unsupported {
+        return (diff, false);
+    }
+
+    let [resolved]: [AccountStateDiff; 1] = incremental_output
+        .state_diffs
+        .try_into()
+        .unwrap_or_else(|diffs: Vec<AccountStateDiff>| {
+            panic!(
+                "Incremental resolution for account {account_id} returned {} diffs, expected 1",
+                diffs.len()
+            )
+        });
+    assert_eq!(
+        resolved.pre_state.account_id, account_id,
+        "Incremental resolution returned a diff for the wrong account"
+    );
+    assert_eq!(
+        resolved.pre_state.account, expected_pre_account,
+        "Incremental resolution for account {account_id} was run against the wrong pre_state"
+    );
+    (resolved, true)
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the

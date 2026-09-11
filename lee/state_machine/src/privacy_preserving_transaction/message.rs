@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
-    ProgramImageClaim,
+    Commitment, CommitmentSetDigest, DeferredResolution, Nullifier, PrivacyPreservingCircuitOutput,
+    PrivateAction, ProgramImageClaim, PublicAction,
     account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
@@ -12,10 +12,29 @@ use crate::AccountId;
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
+/// Mirrors `lee_core::PublicAction`, minus `pre`.
+///
+/// Settlement reconstructs `pre` from live state for `Bound`, and `Deferred` never had one to
+/// carry in the first place (see `PublicAction`'s own doc for why).
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub post_state: Account,
+pub enum PublicActionWithID {
+    Bound {
+        account_id: AccountId,
+        post_state: Account,
+    },
+    Deferred {
+        account_id: AccountId,
+        resolutions: Vec<DeferredResolution>,
+    },
+}
+
+impl PublicActionWithID {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Bound { account_id, .. } | Self::Deferred { account_id, .. } => *account_id,
+        }
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -67,9 +86,18 @@ impl Message {
         let public_actions = output
             .public_actions
             .into_iter()
-            .map(|action| PublicActionWithID {
-                account_id: action.pre.account_id,
-                post_state: action.post,
+            .map(|action| match action {
+                PublicAction::Bound { pre, post } => PublicActionWithID::Bound {
+                    account_id: pre.account_id,
+                    post_state: post,
+                },
+                PublicAction::Deferred {
+                    account_id,
+                    resolutions,
+                } => PublicActionWithID::Deferred {
+                    account_id,
+                    resolutions,
+                },
             })
             .collect();
         Self {
@@ -102,7 +130,7 @@ impl Message {
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.public_actions
             .iter()
-            .map(|action| action.account_id)
+            .map(PublicActionWithID::account_id)
             .collect()
     }
 
@@ -157,7 +185,7 @@ pub mod tests {
         let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
         Message {
-            public_actions: vec![PublicActionWithID {
+            public_actions: vec![PublicActionWithID::Bound {
                 account_id: AccountId::new([1; 32]),
                 post_state: Account::default(),
             }],

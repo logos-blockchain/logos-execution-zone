@@ -7,15 +7,11 @@ use lee_core::{
     },
 };
 
-/// The resolved, on-chain shape of a token account: no mint/definition, just a balance.
 #[derive(BorshSerialize, BorshDeserialize)]
 struct TokenAccountData {
     balance: u128,
 }
 
-/// A delta to a token account's balance, carried as `post_data` in `Execute`'s output —
-/// `Account.data` has no protocol-level delta mechanism, so this program defines its own, the
-/// way `BalanceDiff` does for `Account.balance`.
 #[derive(BorshSerialize, BorshDeserialize)]
 enum TokenDiff {
     Add(u128),
@@ -25,7 +21,7 @@ enum TokenDiff {
 #[derive(BorshSerialize, BorshDeserialize)]
 enum Instruction {
     /// Sets the account's token balance directly, with no ownership/access check — a test-only
-    /// backdoor for seeding state, not something a real token program would expose.
+    /// backdoor for seeding state.
     Initialize { balance: u128 },
     /// Moves `amount` from the first `pre_state`'s token balance to the second's.
     Transfer { amount: u128 },
@@ -43,9 +39,6 @@ fn main() {
             },
             instruction_data,
         ) => {
-            // Neither arm reads `pre_state.data`, so the diff never depends on which `pre_state`
-            // it's applied against — insufficient-balance enforcement belongs to `Incremental`
-            // instead, the only place that sees the real current balance.
             let state_diffs = match instruction {
                 Instruction::Initialize { balance } => {
                     let [pre]: [_; 1] = pre_states
