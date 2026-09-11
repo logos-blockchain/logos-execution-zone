@@ -53,7 +53,7 @@ async fn main() {
         ProgramWithDependencies::new(simple_tail_call, simple_tail_call_id, dependencies);
 
     // The caller only needs the account ID; the callee selects its shard.
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id).balance_only()];
+    let accounts = vec![AccountIdentity::PrivateOwned(account_id).balance()];
 
     // Construct and submit the privacy-preserving transaction
     let instruction = ();

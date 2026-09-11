@@ -33,8 +33,8 @@ fn public_chained_call() {
         program.id().into(),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance_only(to),
-            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance(to),
+            ProgramShardSelector::balance(from),
         ],
         vec![Nonce(0)],
         instruction,
@@ -75,8 +75,8 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         program.id().into(),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance_only(to),
-            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance(to),
+            ProgramShardSelector::balance(from),
         ],
         vec![Nonce(0)],
         instruction,
@@ -115,8 +115,8 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         chain_caller.id().into(),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance_only(to),
-            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance(to),
+            ProgramShardSelector::balance(from),
         ],
         vec![],
         instruction,
@@ -166,8 +166,8 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
         chain_caller.id().into(),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance_only(to),
-            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance(to),
+            ProgramShardSelector::balance(from),
         ],
         vec![Nonce(0), Nonce(0)],
         instruction,
@@ -249,8 +249,8 @@ fn private_chained_call(number_of_calls: u32) {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(to_account_id),
-                ProgramShardSelector::balance_only(from_account_id),
+                ProgramShardSelector::balance(to_account_id),
+                ProgramShardSelector::balance(from_account_id),
             ],
             private_witnesses: vec![
                 update_witness(

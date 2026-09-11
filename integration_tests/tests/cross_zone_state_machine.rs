@@ -274,7 +274,7 @@ fn dispatch_accounts(
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
             inbox_id,
         ),
-        ProgramShardSelector::balance_only(inbox_source_marker_account_id(
+        ProgramShardSelector::balance(inbox_source_marker_account_id(
             inbox_id,
             &msg.src_zone,
             msg.src_account_id,
@@ -330,7 +330,7 @@ fn via_proxy(
         proxy_id,
         vec![
             ProgramShardSelector::new(config, target),
-            ProgramShardSelector::balance_only(authority),
+            ProgramShardSelector::balance(authority),
         ],
         vec![],
         (target, instruction_data, delegated),
@@ -365,7 +365,7 @@ fn chained_via_inbox(
             &msg,
             vec![
                 ProgramShardSelector::new(config_id, target),
-                ProgramShardSelector::balance_only(authority),
+                ProgramShardSelector::balance(authority),
             ],
         ),
         vec![],
@@ -564,7 +564,7 @@ fn update_sources_tx(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
             ),
-            ProgramShardSelector::balance_only(authority),
+            ProgramShardSelector::balance(authority),
         ],
         nonce,
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
@@ -986,15 +986,10 @@ fn lock_tx_to(
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance_only(holder_id),
-            ProgramShardSelector::balance_only(holding_id_of(holder_id)),
-            ProgramShardSelector::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance_only(outbox_pda(
-                outbox_id,
-                bridge_lock_id,
-                &zone_b,
-                ordinal,
-            )),
+            ProgramShardSelector::balance(holder_id),
+            ProgramShardSelector::balance(holding_id_of(holder_id)),
+            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::balance(outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal)),
         ],
         vec![nonce.into()],
         lock,
@@ -1077,7 +1072,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance_only(send_slot),
+            ProgramShardSelector::balance(send_slot),
         ],
         zone_b,
         ordinal,
@@ -1125,7 +1120,7 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance_only(foreign_slot),
+            ProgramShardSelector::balance(foreign_slot),
         ],
         zone_b,
         ordinal,
@@ -1275,15 +1270,10 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         bridge_lock_id,
         vec![
             ProgramShardSelector::new(decoy_id, bridge_lock_id),
-            ProgramShardSelector::balance_only(holder_id),
-            ProgramShardSelector::balance_only(holding_id_of(holder_id)),
-            ProgramShardSelector::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance_only(outbox_pda(
-                outbox_id,
-                bridge_lock_id,
-                &zone_b,
-                ordinal,
-            )),
+            ProgramShardSelector::balance(holder_id),
+            ProgramShardSelector::balance(holding_id_of(holder_id)),
+            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::balance(outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal)),
         ],
         vec![0_u128.into()],
         lock,
@@ -1314,8 +1304,8 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     let message = Message::try_new(
         programs::authenticated_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(holding_id_of(holder_id)),
-            ProgramShardSelector::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::balance(holding_id_of(holder_id)),
+            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
         ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer {
@@ -1398,10 +1388,10 @@ fn a_zero_amount_lock_is_refused() {
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance_only(holder_id),
-            ProgramShardSelector::balance_only(holding_id_of(holder_id)),
-            ProgramShardSelector::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance_only(outbox_pda(
+            ProgramShardSelector::balance(holder_id),
+            ProgramShardSelector::balance(holding_id_of(holder_id)),
+            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::balance(outbox_pda(
                 programs::cross_zone_outbox().id().into(),
                 bridge_lock_id,
                 &zone_b,
@@ -1448,10 +1438,10 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance_only(attacker_id),
-            ProgramShardSelector::balance_only(holding_id_of(victim_id)),
-            ProgramShardSelector::balance_only(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance_only(outbox_pda(
+            ProgramShardSelector::balance(attacker_id),
+            ProgramShardSelector::balance(holding_id_of(victim_id)),
+            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::balance(outbox_pda(
                 programs::cross_zone_outbox().id().into(),
                 bridge_lock_id,
                 &zone_b,
@@ -1577,7 +1567,7 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance_only(slot),
+            ProgramShardSelector::balance(slot),
         ],
         zone_b,
         ordinal,
@@ -1608,7 +1598,7 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(ping_record_pda(sender_id), sender_id),
-            ProgramShardSelector::balance_only(slot),
+            ProgramShardSelector::balance(slot),
         ],
         zone_b,
         ordinal,
@@ -1699,7 +1689,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::balance_only(account),
+                ProgramShardSelector::balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
@@ -1713,7 +1703,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::balance_only(account),
+                ProgramShardSelector::balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
@@ -1774,7 +1764,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(ping_record_pda(wrapped_token_id), wrapped_token_id),
-                ProgramShardSelector::balance_only(authority),
+                ProgramShardSelector::balance(authority),
             ],
             0,
             instruction_data,
@@ -1969,7 +1959,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
                 inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
                 inbox_id,
             ),
-            ProgramShardSelector::balance_only(inbox_source_marker_account_id(
+            ProgramShardSelector::balance(inbox_source_marker_account_id(
                 inbox_id,
                 &src_zone,
                 programs::bridge_lock().id().into(),
@@ -2011,7 +2001,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![
                 ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::balance_only(account),
+                ProgramShardSelector::balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
@@ -2025,7 +2015,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![
                 ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::balance_only(account),
+                ProgramShardSelector::balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
@@ -2476,7 +2466,7 @@ fn the_remaining_authority_guards_hold() {
                 receiver_id,
                 vec![
                     ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
-                    ProgramShardSelector::balance_only(authority),
+                    ProgramShardSelector::balance(authority),
                 ],
                 0,
                 instruction_data,
@@ -2594,7 +2584,7 @@ fn a_top_level_mint_is_refused() {
     let message = Message::try_new(
         wrapped_token_id,
         vec![
-            ProgramShardSelector::balance_only(marker_id),
+            ProgramShardSelector::balance(marker_id),
             ProgramShardSelector::new(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,

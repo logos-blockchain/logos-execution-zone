@@ -313,8 +313,8 @@ fn create_charged_bridge_deposit(
     let message = lee::public_transaction::Message::try_new_with_fees(
         bridge_program_id,
         vec![
-            ProgramShardSelector::balance_only(system_accounts::bridge_account_id()),
-            ProgramShardSelector::balance_only(recipient_id),
+            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::balance(recipient_id),
             ProgramShardSelector::new(
                 bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
                 bridge_program_id,
@@ -2146,8 +2146,8 @@ fn time_locked_transfer_transaction(
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
             ProgramShardSelector::new(clock_account_id, clock_program_id),
         ],
         vec![Nonce(from_nonce)],
@@ -2347,7 +2347,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
             programs::bridge().id().into(),
-            vec![ProgramShardSelector::balance_only(
+            vec![ProgramShardSelector::balance(
                 system_accounts::bridge_account_id(),
             )],
             vec![],
@@ -3850,11 +3850,9 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::balance_only(funding_id),
+            ProgramShardSelector::balance(funding_id),
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance_only(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
             ProgramShardSelector::new(config_id, sequencer_stake_program_id),
         ],
         vec![Nonce(0), Nonce(0)],
@@ -3918,11 +3916,9 @@ fn stake_transaction(
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::balance_only(funding_id),
+            ProgramShardSelector::balance(funding_id),
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance_only(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
@@ -4046,8 +4042,8 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(funding_id),
-            ProgramShardSelector::balance_only(funds_id),
+            ProgramShardSelector::balance(funding_id),
+            ProgramShardSelector::balance(funds_id),
         ],
         vec![state.get_account_by_id(funding_id).nonce],
         authenticated_transfer_core::Instruction::Transfer { amount: donation },
@@ -4444,9 +4440,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::balance_only(funding_id),
+            ProgramShardSelector::balance(funding_id),
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance_only(funds_id),
+            ProgramShardSelector::balance(funds_id),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,

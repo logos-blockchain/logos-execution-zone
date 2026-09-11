@@ -233,7 +233,7 @@ impl ProgramShardSelector {
     }
 
     #[must_use]
-    pub const fn balance_only(account_id: AccountId) -> Self {
+    pub const fn balance(account_id: AccountId) -> Self {
         Self {
             account_id,
             program_account_id: None,
@@ -268,11 +268,7 @@ impl AccountInput {
     }
 
     #[must_use]
-    pub const fn balance_only(
-        account_id: AccountId,
-        is_authorized: bool,
-        balance: Balance,
-    ) -> Self {
+    pub const fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
         Self {
             account_id,
             is_authorized,
@@ -659,7 +655,7 @@ mod tests {
             b"record".to_vec().try_into().unwrap(),
         );
 
-        let input = AccountInput::at(ProgramShardSelector::balance_only(account_id), false, &data);
+        let input = AccountInput::at(ProgramShardSelector::balance(account_id), false, &data);
 
         assert_eq!(input.balance, 42);
         assert_eq!(input.program_account_id(), None);
@@ -677,7 +673,7 @@ mod tests {
             program,
             b"record".to_vec().try_into().unwrap(),
         );
-        let balance_only = AccountInput::balance_only(account_id, true, 5);
+        let balance_only = AccountInput::balance(account_id, true, 5);
 
         assert_eq!(
             ProgramShardSelector::from(&named),
@@ -685,7 +681,7 @@ mod tests {
         );
         assert_eq!(
             ProgramShardSelector::from(&balance_only),
-            ProgramShardSelector::balance_only(account_id)
+            ProgramShardSelector::balance(account_id)
         );
     }
 

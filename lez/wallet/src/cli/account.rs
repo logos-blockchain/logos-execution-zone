@@ -356,7 +356,7 @@ impl AccountSubcommand {
                     wallet_core.get_account_public(id).await?
                 } else {
                     let selector = program_account_id.map_or_else(
-                        || ProgramShardSelector::balance_only(id),
+                        || ProgramShardSelector::balance(id),
                         |program| ProgramShardSelector::new(id, program),
                     );
                     wallet_core.get_account_view(selector).await?
@@ -487,7 +487,7 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::balance_only(id))
+                .get_account_view(ProgramShardSelector::balance(id))
                 .await
             {
                 Ok(account) => print_account_details(&account, "  "),

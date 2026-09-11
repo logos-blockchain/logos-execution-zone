@@ -29,8 +29,8 @@ fn main() {
         return;
     };
 
-    let recipient_diff = AccountStateDiff::balance_only(recipient, BalanceDiff::Add(amount));
-    let source_diff = AccountStateDiff::balance_only(source, BalanceDiff::Sub(amount));
+    let recipient_diff = AccountStateDiff::balance(recipient, BalanceDiff::Add(amount));
+    let source_diff = AccountStateDiff::balance(source, BalanceDiff::Sub(amount));
 
     ProgramOutput::new(
         self_account_id,

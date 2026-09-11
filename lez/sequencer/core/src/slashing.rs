@@ -166,12 +166,8 @@ pub(crate) fn build_slash_tx(
         program_id,
         vec![
             ProgramShardSelector::new(ownership_id, program_id),
-            ProgramShardSelector::balance_only(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::balance_only(sequencer_stake_core::slash_sink_account_id(
-                program_id,
-            )),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::balance(sequencer_stake_core::slash_sink_account_id(program_id)),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 program_id,

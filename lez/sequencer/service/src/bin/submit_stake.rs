@@ -98,13 +98,13 @@ async fn main() -> Result<()> {
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(funding_account).balance_only(),
+                        AccountIdentity::Public(funding_account).balance(),
                         AccountIdentity::Public(ownership_account)
                             .select_program_shard(sequencer_stake_program_id),
                         AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
                             &ownership_account,
                         ))
-                        .balance_only(),
+                        .balance(),
                         AccountIdentity::PublicNoSign(config_id)
                             .select_program_shard(sequencer_stake_program_id),
                     ],

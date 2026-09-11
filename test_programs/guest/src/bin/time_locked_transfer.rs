@@ -61,8 +61,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::balance_only(sender_pre, BalanceDiff::Sub(amount)),
-            AccountStateDiff::balance_only(receiver_pre, BalanceDiff::Add(amount)),
+            AccountStateDiff::balance(sender_pre, BalanceDiff::Sub(amount)),
+            AccountStateDiff::balance(receiver_pre, BalanceDiff::Add(amount)),
             // Clock account is read-only: post state equals pre state.
             AccountStateDiff::unchanged(clock_pre),
         ],

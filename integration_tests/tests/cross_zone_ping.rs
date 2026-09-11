@@ -141,7 +141,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         sender_id,
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance_only(outbox_account),
+            ProgramShardSelector::balance(outbox_account),
         ],
         vec![],
         send,

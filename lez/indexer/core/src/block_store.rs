@@ -638,7 +638,7 @@ mod tests {
         let payer = &initial_pub_accounts_private_keys()[0];
         let message = lee::public_transaction::Message::try_new_with_fees(
             emitter_header_account_id(),
-            vec![ProgramShardSelector::balance_only(AccountId::new([42; 32]))],
+            vec![ProgramShardSelector::balance(AccountId::new([42; 32]))],
             vec![2_u128.into()],
             EmitterInstruction {
                 events,
@@ -1642,8 +1642,8 @@ mod accept_tests {
             let message = lee::public_transaction::Message::try_new(
                 programs::bridge().id().into(),
                 vec![
-                    ProgramShardSelector::balance_only(lee::AccountId::new([1_u8; 32])),
-                    ProgramShardSelector::balance_only(lee::AccountId::new([2_u8; 32])),
+                    ProgramShardSelector::balance(lee::AccountId::new([1_u8; 32])),
+                    ProgramShardSelector::balance(lee::AccountId::new([2_u8; 32])),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {

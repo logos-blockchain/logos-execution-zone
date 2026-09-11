@@ -251,8 +251,8 @@ fn stake(
     let mover_call = ChainedCall {
         program_account_id: mover_account_id,
         shard_selectors: vec![
-            ProgramShardSelector::balance_only(funding_id),
-            ProgramShardSelector::balance_only(funds_id),
+            ProgramShardSelector::balance(funding_id),
+            ProgramShardSelector::balance(funds_id),
         ],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
@@ -260,7 +260,7 @@ fn stake(
 
     let confirm_call = ChainedCall::new(
         self_account_id,
-        vec![ProgramShardSelector::balance_only(funds_id)],
+        vec![ProgramShardSelector::balance(funds_id)],
         &Instruction::ConfirmStake {
             expected_balance_after,
         },

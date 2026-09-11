@@ -186,7 +186,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         assert_eq!(view.data.shards[writer].as_ref().len(), BLOAT_SHARD_BYTES);
     }
 
-    let balance_only = get_account_view(&ctx, ProgramShardSelector::balance_only(victim)).await?;
+    let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
     assert!(balance_only.data.shards.is_empty());
 
     let last_writer = writers[BLOAT_WRITERS - 1];
@@ -262,7 +262,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
-        ProgramShardSelector::balance_only(AccountId::new([0x5A; 32])).into(),
+        ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
     assert_eq!(missing.data.balance, 0);

@@ -338,7 +338,7 @@ impl AccountStateDiff {
     }
 
     #[must_use]
-    pub const fn balance_only(pre_state: AccountInput, post_balance_diff: BalanceDiff) -> Self {
+    pub const fn balance(pre_state: AccountInput, post_balance_diff: BalanceDiff) -> Self {
         Self {
             pre_state,
             post_balance_diff,

@@ -152,8 +152,8 @@ fn transfer_transaction(
     balance: u128,
 ) -> PublicTransaction {
     let shard_selectors = vec![
-        ProgramShardSelector::balance_only(from),
-        ProgramShardSelector::balance_only(to),
+        ProgramShardSelector::balance(from),
+        ProgramShardSelector::balance(to),
     ];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
@@ -172,8 +172,8 @@ fn build_flash_swap_tx(
     let message = public_transaction::Message::try_new(
         initiator.id().into(),
         vec![
-            ProgramShardSelector::balance_only(vault_id),
-            ProgramShardSelector::balance_only(receiver_id),
+            ProgramShardSelector::balance(vault_id),
+            ProgramShardSelector::balance(receiver_id),
         ],
         vec![], // no signers — vault is PDA-authorised
         instruction,
@@ -309,8 +309,8 @@ fn shielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
             ],
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
@@ -345,8 +345,8 @@ fn private_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
             ],
             private_witnesses: vec![
                 update_witness(
@@ -388,8 +388,8 @@ fn deshielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(*recipient_account_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(*recipient_account_id),
             ],
             public_accounts: [(
                 *recipient_account_id,

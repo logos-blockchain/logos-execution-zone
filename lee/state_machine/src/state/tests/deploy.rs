@@ -91,11 +91,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "the reconstructed binary must recompute to the same image_id"
     );
 
-    let pre_states = vec![AccountInput::balance_only(
-        AccountId::new([21; 32]),
-        true,
-        0,
-    )];
+    let pre_states = vec![AccountInput::balance(AccountId::new([21; 32]), true, 0)];
     let instruction_data = Program::serialize_instruction(()).unwrap();
 
     let direct_output = program
@@ -305,7 +301,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let target_id = AccountId::new([9; 32]);
     let call_message = public_transaction::Message::try_new(
         header_account_id,
-        vec![ProgramShardSelector::balance_only(target_id)],
+        vec![ProgramShardSelector::balance(target_id)],
         vec![],
         (),
     )

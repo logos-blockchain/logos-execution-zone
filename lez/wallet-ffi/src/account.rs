@@ -500,7 +500,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
     let shard_selector = if program_account_id.is_null() {
-        ProgramShardSelector::balance_only(account_id)
+        ProgramShardSelector::balance(account_id)
     } else {
         ProgramShardSelector::new(
             account_id,

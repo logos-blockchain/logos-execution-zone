@@ -15,8 +15,8 @@ fn transfer_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, u128) {
     let program = crate::test_methods::simple_balance_transfer();
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
-    let sender = AccountInput::balance_only(AccountId::new([0; 32]), true, 77_665_544_332_211);
-    let recipient = AccountInput::balance_only(AccountId::new([1; 32]), false, 0);
+    let sender = AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211);
+    let recipient = AccountInput::balance(AccountId::new([1; 32]), false, 0);
     (
         program,
         vec![sender, recipient],
@@ -58,8 +58,8 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = [
-        AccountInput::balance_only(AccountId::new([0; 32]), true, 10),
-        AccountInput::balance_only(AccountId::new([1; 32]), false, 0),
+        AccountInput::balance(AccountId::new([0; 32]), true, 10),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ];
 
     let mut env_builder = ExecutorEnv::builder();
@@ -150,8 +150,8 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = vec![
-        AccountInput::balance_only(AccountId::new([0; 32]), true, 10),
-        AccountInput::balance_only(AccountId::new([1; 32]), false, 0),
+        AccountInput::balance(AccountId::new([0; 32]), true, 10),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ];
 
     let mut env_builder = ExecutorEnv::builder();

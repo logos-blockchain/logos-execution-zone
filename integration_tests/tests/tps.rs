@@ -91,8 +91,8 @@ impl TpsTestManager {
                 let message = putx::Message::try_new_with_fees(
                     program.id().into(),
                     vec![
-                        ProgramShardSelector::balance_only(pair[0].1),
-                        ProgramShardSelector::balance_only(pair[1].1),
+                        ProgramShardSelector::balance(pair[0].1),
+                        ProgramShardSelector::balance(pair[1].1),
                     ],
                     [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
@@ -265,8 +265,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
             ],
             private_witnesses: vec![
                 PrivateWitness {

@@ -61,8 +61,8 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     Ok(execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
             ],
             signers: [sender_id, recipient_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
@@ -119,8 +119,8 @@ fn prove_chain_caller(
     };
     // chain_caller expects shard selectors = [recipient, sender].
     let shard_selectors = vec![
-        ProgramShardSelector::balance_only(recipient_id),
-        ProgramShardSelector::balance_only(sender_id),
+        ProgramShardSelector::balance(recipient_id),
+        ProgramShardSelector::balance(sender_id),
     ];
 
     let balance: u128 = 1;

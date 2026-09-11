@@ -94,8 +94,8 @@ pub mod tests {
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,
@@ -175,8 +175,8 @@ pub mod tests {
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr1),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr1),
             ],
             nonces,
             instruction,
@@ -198,8 +198,8 @@ pub mod tests {
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,
@@ -221,8 +221,8 @@ pub mod tests {
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,
@@ -245,8 +245,8 @@ pub mod tests {
         let message = Message::try_new(
             crate::test_methods::simple_balance_transfer().id().into(),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,
@@ -285,8 +285,8 @@ pub mod tests {
         let message = Message::try_new(
             unknown_program_id,
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,

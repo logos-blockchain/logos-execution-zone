@@ -156,8 +156,8 @@ pub fn create_transaction_native_token_transfer_with_fees(
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
     let shard_selectors = vec![
-        ProgramShardSelector::balance_only(from),
-        ProgramShardSelector::balance_only(to),
+        ProgramShardSelector::balance(from),
+        ProgramShardSelector::balance(to),
     ];
     let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id().into();
@@ -193,8 +193,8 @@ pub fn create_transaction_native_token_transfer_without_fee(
     let message = lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![nonce.into()],
         authenticated_transfer_core::Instruction::Transfer {

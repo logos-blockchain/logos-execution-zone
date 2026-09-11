@@ -165,7 +165,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let message = public_transaction::Message::try_new(
         initiator.id().into(),
-        vec![ProgramShardSelector::balance_only(vault_id)],
+        vec![ProgramShardSelector::balance(vault_id)],
         vec![],
         instruction,
     )
@@ -191,7 +191,7 @@ fn malicious_self_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         program.id().into(),
-        vec![ProgramShardSelector::balance_only(acc_id)],
+        vec![ProgramShardSelector::balance(acc_id)],
         vec![],
         (),
     )
@@ -217,7 +217,7 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         program.id().into(),
-        vec![ProgramShardSelector::balance_only(acc_id)],
+        vec![ProgramShardSelector::balance(acc_id)],
         vec![],
         (),
     )

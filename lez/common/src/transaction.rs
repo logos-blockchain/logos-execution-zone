@@ -296,9 +296,9 @@ pub fn fee_invocation(
     // Select the fee state shard and balances for the escrow, inbox, and producer.
     let shard_selectors = vec![
         ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
-        ProgramShardSelector::balance_only(system_accounts::fee_escrow_account_id()),
-        ProgramShardSelector::balance_only(system_accounts::fee_inbox_account_id()),
-        ProgramShardSelector::balance_only(producer),
+        ProgramShardSelector::balance(system_accounts::fee_escrow_account_id()),
+        ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+        ProgramShardSelector::balance(producer),
     ];
     let message = lee::public_transaction::Message::try_new(
         fee_program_id,
@@ -357,8 +357,8 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(payer),
-            ProgramShardSelector::balance_only(system_accounts::fee_inbox_account_id()),
+            ProgramShardSelector::balance(payer),
+            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
         ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -372,8 +372,8 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
     lee::public_transaction::Message::try_new(
         programs::fee().id().into(),
         vec![
-            ProgramShardSelector::balance_only(system_accounts::fee_inbox_account_id()),
-            ProgramShardSelector::balance_only(payer),
+            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+            ProgramShardSelector::balance(payer),
         ],
         vec![],
         fee_core::Instruction::Refund { amount },

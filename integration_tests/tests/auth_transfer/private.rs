@@ -607,8 +607,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let res = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(faucet_account_id),
-                ProgramShardSelector::balance_only(attacker_private_id),
+                ProgramShardSelector::balance(faucet_account_id),
+                ProgramShardSelector::balance(attacker_private_id),
             ],
             public_accounts: HashMap::from([(faucet_account_id, faucet_account)]),
             private_witnesses: vec![PrivateWitness {
@@ -650,8 +650,8 @@ async fn prove_init_with_commitment_root(
     let (output, _) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_account_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
             public_accounts: HashMap::from([(sender_id, sender_account)]),

@@ -135,9 +135,9 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     send_stake_tx(
         &ctx,
         vec![
-            AccountIdentity::Public(settlement).balance_only(),
+            AccountIdentity::Public(settlement).balance(),
             AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(funds_b).balance_only(),
+            AccountIdentity::PublicNoSign(funds_b).balance(),
             AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
         ],
         &sequencer_stake_core::Instruction::Stake {

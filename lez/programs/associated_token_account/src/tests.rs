@@ -31,11 +31,11 @@ fn token_input(account_id: AccountId, shard: ShardData) -> AccountInput {
 }
 
 fn owner_account() -> AccountInput {
-    AccountInput::balance_only(owner_id(), true, 0)
+    AccountInput::balance(owner_id(), true, 0)
 }
 
 fn unauthorized_owner_account() -> AccountInput {
-    AccountInput::balance_only(owner_id(), false, 0)
+    AccountInput::balance(owner_id(), false, 0)
 }
 
 fn definition_account() -> AccountInput {

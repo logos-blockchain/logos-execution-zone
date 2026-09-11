@@ -27,7 +27,7 @@ fn main() {
         return;
     };
 
-    let diff = AccountStateDiff::balance_only(pre, BalanceDiff::Add(1));
+    let diff = AccountStateDiff::balance(pre, BalanceDiff::Add(1));
 
     ProgramOutput::new(
         self_account_id,

@@ -28,7 +28,7 @@ fn program_transaction<T: borsh::BorshSerialize>(
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         program_account_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         vec![],
         instruction,
     )
@@ -259,7 +259,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             private_witnesses: vec![init_witness(&keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(EmitterInstruction {
                 events: vec![emitted(0), emitted(1)],

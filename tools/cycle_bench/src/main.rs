@@ -287,8 +287,8 @@ impl Case {
 }
 
 fn authenticated_transfer_transfer() -> Vec<AccountInput> {
-    let sender = AccountInput::balance_only(AccountId::new([1; 32]), true, 1_000_000);
-    let recipient = AccountInput::balance_only(AccountId::new([2; 32]), false, 0);
+    let sender = AccountInput::balance(AccountId::new([1; 32]), true, 1_000_000);
+    let recipient = AccountInput::balance(AccountId::new([2; 32]), false, 0);
     vec![sender, recipient]
 }
 
@@ -449,7 +449,7 @@ fn ata_create_pre_states() -> Vec<AccountInput> {
     let owner_id = AccountId::new([91; 32]);
     let definition_id = AccountId::new([15; 32]);
     let token_program_id: AccountId = programs::token().id().into();
-    let owner = AccountInput::balance_only(owner_id, true, 0);
+    let owner = AccountInput::balance(owner_id, true, 0);
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
     let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);

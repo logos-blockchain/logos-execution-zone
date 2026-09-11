@@ -167,7 +167,7 @@ fn shard_state_diff_constructors() {
     assert_eq!(unchanged.post_balance_diff, BalanceDiff::Add(0));
     assert_eq!(unchanged.post_data, None);
 
-    let balance_only = AccountStateDiff::balance_only(pre.clone(), BalanceDiff::Sub(2));
+    let balance_only = AccountStateDiff::balance(pre.clone(), BalanceDiff::Sub(2));
     assert_eq!(balance_only.post_balance_diff, BalanceDiff::Sub(2));
     assert_eq!(balance_only.post_data, None);
 
@@ -195,7 +195,7 @@ fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() 
         executing_program_id,
         ShardData::empty(),
     );
-    let state_diffs = [AccountStateDiff::balance_only(pre, BalanceDiff::Sub(10))];
+    let state_diffs = [AccountStateDiff::balance(pre, BalanceDiff::Sub(10))];
 
     let result = validate_execution(&state_diffs, executing_program_id);
 
@@ -216,7 +216,7 @@ fn validate_execution_rejects_add_overflow() {
         executing_program_id,
         ShardData::empty(),
     );
-    let state_diffs = [AccountStateDiff::balance_only(pre, BalanceDiff::Add(1))];
+    let state_diffs = [AccountStateDiff::balance(pre, BalanceDiff::Add(1))];
 
     let result = validate_execution(&state_diffs, executing_program_id);
 
@@ -277,7 +277,7 @@ fn a_data_write_on_the_executing_shard_is_accepted() {
 fn a_balance_only_shard_selector_cannot_carry_data() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::balance_only(account_id, true, 5);
+    let pre = AccountInput::balance(account_id, true, 5);
     let state_diffs = [AccountStateDiff::new(
         pre,
         BalanceDiff::Add(0),
@@ -304,7 +304,7 @@ fn two_shard_selectors_of_one_account_in_a_call_are_rejected() {
             executing_account_id,
             ShardData::empty(),
         )),
-        AccountStateDiff::unchanged(AccountInput::balance_only(account_id, true, 5)),
+        AccountStateDiff::unchanged(AccountInput::balance(account_id, true, 5)),
     ];
 
     let result = validate_execution(&state_diffs, executing_account_id);
@@ -339,7 +339,7 @@ fn pre_states_match_shard_selectors_compares_program_account_ids() {
         &diffs
     ));
     assert!(!pre_states_match_shard_selectors(
-        &[ProgramShardSelector::balance_only(account_id)],
+        &[ProgramShardSelector::balance(account_id)],
         &diffs
     ));
 }
@@ -353,7 +353,7 @@ fn apply_diff_keeps_the_pre_shard_when_nothing_is_written() {
 
     account
         .data
-        .apply_diff(&AccountStateDiff::balance_only(pre, BalanceDiff::Sub(2)))
+        .apply_diff(&AccountStateDiff::balance(pre, BalanceDiff::Sub(2)))
         .unwrap();
 
     assert_eq!(account.data.balance, 3);
@@ -362,12 +362,12 @@ fn apply_diff_keeps_the_pre_shard_when_nothing_is_written() {
 
 #[test]
 fn apply_diff_of_a_balance_only_shard_selector_carries_no_shard() {
-    let pre = AccountInput::balance_only(AccountId::new([7; 32]), true, 5);
+    let pre = AccountInput::balance(AccountId::new([7; 32]), true, 5);
     let mut account = Account::default();
 
     account
         .data
-        .apply_diff(&AccountStateDiff::balance_only(pre, BalanceDiff::Add(2)))
+        .apply_diff(&AccountStateDiff::balance(pre, BalanceDiff::Add(2)))
         .unwrap();
 
     assert_eq!(account.data.balance, 7);
@@ -669,7 +669,7 @@ fn foreign_shard_with_history() -> AccountInput {
 #[test]
 fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
     for zero in [BalanceDiff::Add(0), BalanceDiff::Sub(0)] {
-        let diff = AccountStateDiff::balance_only(foreign_shard_with_history(), zero);
+        let diff = AccountStateDiff::balance(foreign_shard_with_history(), zero);
         assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
     }
 }

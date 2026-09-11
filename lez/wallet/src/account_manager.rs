@@ -150,7 +150,7 @@ impl AccountIdentity {
 
     /// Selects this account without a program shard.
     #[must_use]
-    pub const fn balance_only(self) -> AccountMention {
+    pub const fn balance(self) -> AccountMention {
         AccountMention {
             identity: self,
             program_account_id: None,
@@ -241,7 +241,7 @@ impl AccountManager {
         {
             let shard_selector = |account_id| {
                 program_account_id.map_or_else(
-                    || ProgramShardSelector::balance_only(account_id),
+                    || ProgramShardSelector::balance(account_id),
                     |program| ProgramShardSelector::new(account_id, program),
                 )
             };
@@ -829,7 +829,7 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
         let pre_state = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance_only(account_id),
+            shard_selector: ProgramShardSelector::balance(account_id),
             account: Account::default(),
         };
         State::Private(Box::new(AccountPreparedData {
@@ -849,7 +849,7 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
         let account = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance_only(account_id),
+            shard_selector: ProgramShardSelector::balance(account_id),
             account: Account::default(),
         };
         State::Public { account, sk: None }
@@ -860,7 +860,7 @@ mod tests {
         let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
         let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
         let account = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance_only(account_id),
+            shard_selector: ProgramShardSelector::balance(account_id),
             account: Account {
                 data: AccountData {
                     balance,
@@ -944,7 +944,7 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
         let pre = private_foreign_acc_preparation(
-            ProgramShardSelector::balance_only(account_id),
+            ProgramShardSelector::balance(account_id),
             npk,
             vpk,
             &PrivateAccountKind::Regular(0),
@@ -1000,7 +1000,7 @@ mod tests {
         );
 
         let pre = private_foreign_acc_preparation(
-            ProgramShardSelector::balance_only(account_id),
+            ProgramShardSelector::balance(account_id),
             npk,
             vpk,
             &kind,

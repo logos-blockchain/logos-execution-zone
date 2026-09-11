@@ -29,7 +29,7 @@ fn main() {
         .map(AccountStateDiff::unchanged)
         .collect();
 
-    state_diffs.push(AccountStateDiff::unchanged(AccountInput::balance_only(
+    state_diffs.push(AccountStateDiff::unchanged(AccountInput::balance(
         fabricated_account_id,
         false,
         0,

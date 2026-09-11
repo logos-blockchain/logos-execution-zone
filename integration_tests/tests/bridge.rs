@@ -31,8 +31,8 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = public_transaction::Message::try_new(
         programs::bridge().id().into(),
         vec![
-            ProgramShardSelector::balance_only(bridge_account_id),
-            ProgramShardSelector::balance_only(recipient_id),
+            ProgramShardSelector::balance(bridge_account_id),
+            ProgramShardSelector::balance(recipient_id),
             ProgramShardSelector::new(receipt_id, programs::bridge().id().into()),
         ],
         vec![],
@@ -82,8 +82,8 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let message = public_transaction::Message::try_new(
         programs::bridge().id().into(),
         vec![
-            ProgramShardSelector::balance_only(bridge_account_id),
-            ProgramShardSelector::balance_only(recipient_id),
+            ProgramShardSelector::balance(bridge_account_id),
+            ProgramShardSelector::balance(recipient_id),
             ProgramShardSelector::new(receipt_id, programs::bridge().id().into()),
         ],
         vec![],
@@ -169,8 +169,8 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     .context("Failed to serialize bridge deposit instruction")?;
 
     let shard_selectors = vec![
-        ProgramShardSelector::balance_only(bridge_account_id),
-        ProgramShardSelector::balance_only(recipient_id),
+        ProgramShardSelector::balance(bridge_account_id),
+        ProgramShardSelector::balance(recipient_id),
         ProgramShardSelector::new(receipt_id, programs::bridge().id().into()),
     ];
     let nonces = vec![

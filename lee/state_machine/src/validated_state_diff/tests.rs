@@ -26,8 +26,8 @@ fn public_diff_reflects_a_successful_transfer() {
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
         5_u128,
@@ -125,8 +125,8 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
         5_u128,
@@ -189,8 +189,8 @@ fn chained_calls_share_one_budget() {
     let message = Message::try_new(
         chain_caller.id().into(),
         vec![
-            ProgramShardSelector::balance_only(to),
-            ProgramShardSelector::balance_only(from),
+            ProgramShardSelector::balance(to),
+            ProgramShardSelector::balance(from),
         ],
         vec![Nonce(0)],
         instruction,
@@ -250,8 +250,8 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
         1_000_u128,

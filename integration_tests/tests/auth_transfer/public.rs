@@ -372,8 +372,8 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let message = public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(faucet_account_id),
-            ProgramShardSelector::balance_only(recipient),
+            ProgramShardSelector::balance(faucet_account_id),
+            ProgramShardSelector::balance(recipient),
         ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -417,8 +417,8 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let message = public_transaction::Message::try_new(
         programs::faucet().id().into(),
         vec![
-            ProgramShardSelector::balance_only(faucet_account_id),
-            ProgramShardSelector::balance_only(recipient),
+            ProgramShardSelector::balance(faucet_account_id),
+            ProgramShardSelector::balance(recipient),
         ],
         vec![],
         faucet_core::Instruction::GenesisTransfer { amount },
@@ -528,8 +528,8 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let message = public_transaction::Message::try_new(
         faucet_chain_caller_id,
         vec![
-            ProgramShardSelector::balance_only(faucet_account_id),
-            ProgramShardSelector::balance_only(attacker),
+            ProgramShardSelector::balance(faucet_account_id),
+            ProgramShardSelector::balance(attacker),
         ],
         vec![],
         (faucet_program_id, amount),

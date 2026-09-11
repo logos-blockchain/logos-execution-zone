@@ -48,7 +48,7 @@ impl ProgramLoader<'_> {
 
         let payer_account = self
             .0
-            .get_account_view(ProgramShardSelector::balance_only(payer))
+            .get_account_view(ProgramShardSelector::balance(payer))
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
         let payer_key = self

@@ -2345,11 +2345,9 @@ fn genesis_stake_message(
     Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::balance_only(genesis_stake_funding_account()),
+            ProgramShardSelector::balance(genesis_stake_funding_account()),
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance_only(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
@@ -2427,8 +2425,8 @@ fn build_stake_genesis_transactions(
     let fund_message = Message::try_new(
         programs::faucet().id().into(),
         vec![
-            ProgramShardSelector::balance_only(system_accounts::faucet_account_id()),
-            ProgramShardSelector::balance_only(genesis_stake_funding_account()),
+            ProgramShardSelector::balance(system_accounts::faucet_account_id()),
+            ProgramShardSelector::balance(genesis_stake_funding_account()),
         ],
         vec![lee_core::account::Nonce(0)],
         faucet_core::Instruction::GenesisTransfer { amount: total },
@@ -2499,8 +2497,8 @@ fn build_supply_account_genesis_transaction(
     let message = Message::try_new(
         faucet_program_id,
         vec![
-            ProgramShardSelector::balance_only(system_accounts::faucet_account_id()),
-            ProgramShardSelector::balance_only(*account_id),
+            ProgramShardSelector::balance(system_accounts::faucet_account_id()),
+            ProgramShardSelector::balance(*account_id),
         ],
         Vec::new(),
         faucet_core::Instruction::GenesisTransfer { amount: balance },
@@ -2533,8 +2531,8 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::balance_only(system_accounts::bridge_account_id()),
-            ProgramShardSelector::balance_only(metadata.recipient_id),
+            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::balance(metadata.recipient_id),
             ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
@@ -2612,10 +2610,8 @@ fn build_finalize_unstake_tx(
         sequencer_stake_program_id,
         vec![
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance_only(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::balance_only(pending.destination),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::balance(pending.destination),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,

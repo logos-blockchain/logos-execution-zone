@@ -128,7 +128,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     let definition_selector = ProgramShardSelector::new(INTENDED_DEFINITION_ID, token_program_id());
     let ata_selector = ProgramShardSelector::new(ata_id, token_program_id());
     let repair_selectors = vec![
-        ProgramShardSelector::balance_only(owner_id),
+        ProgramShardSelector::balance(owner_id),
         definition_selector,
         ata_selector,
     ];

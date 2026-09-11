@@ -34,7 +34,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner.balance_only(),
+                    owner.balance(),
                     AccountIdentity::PublicNoSign(definition_id)
                         .select_program_shard(token_program_id),
                     AccountIdentity::PublicNoSign(ata_id).select_program_shard(token_program_id),
@@ -72,7 +72,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner.balance_only(),
+                    owner.balance(),
                     AccountIdentity::PublicNoSign(sender_ata_id)
                         .select_program_shard(token_program_id),
                     AccountIdentity::PublicNoSign(recipient_id)
@@ -110,7 +110,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner.balance_only(),
+                    owner.balance(),
                     AccountIdentity::PublicNoSign(holder_ata_id)
                         .select_program_shard(token_program_id),
                     AccountIdentity::PublicNoSign(definition_id)
@@ -142,7 +142,7 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance_only(),
+                .balance(),
             AccountIdentity::Public(definition_id).select_program_shard(token_program_id),
             AccountIdentity::Public(ata_id).select_program_shard(token_program_id),
         ];
@@ -181,7 +181,7 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance_only(),
+                .balance(),
             AccountIdentity::Public(sender_ata_id).select_program_shard(token_program_id),
             AccountIdentity::Public(recipient_id).select_program_shard(token_program_id),
         ];
@@ -219,7 +219,7 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                .balance_only(),
+                .balance(),
             AccountIdentity::Public(holder_ata_id).select_program_shard(token_program_id),
             AccountIdentity::Public(definition_id).select_program_shard(token_program_id),
         ];

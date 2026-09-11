@@ -132,10 +132,10 @@ mod inner {
             let message = public_transaction::Message::try_new(
                 bridge().id().into(),
                 vec![
-                    ProgramShardSelector::balance_only(bridge_core::compute_bridge_account_id(
+                    ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
                         bridge().id().into(),
                     )),
-                    ProgramShardSelector::balance_only(recipient_id),
+                    ProgramShardSelector::balance(recipient_id),
                     ProgramShardSelector::new(
                         bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
                         bridge().id().into(),

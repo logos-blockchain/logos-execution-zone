@@ -17,7 +17,7 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_pub_tx_with_pre_check(
-                vec![from.balance_only(), to.balance_only()],
+                vec![from.balance(), to.balance()],
                 instruction_data,
                 program.id().into(),
                 tx_pre_check,

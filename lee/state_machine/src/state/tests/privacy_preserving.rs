@@ -248,7 +248,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             signers: [account_id].into(),
             public_accounts: [(account_id, Account::funded(100))].into(),
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
@@ -267,7 +267,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             signers: [account_id].into(),
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -289,7 +289,7 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
         ProvingInput {
             shard_selectors: vec![
                 ProgramShardSelector::new(target_id, foreign_program_account_id),
-                ProgramShardSelector::balance_only(other_id),
+                ProgramShardSelector::balance(other_id),
             ],
             instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
             ..Default::default()
@@ -336,8 +336,8 @@ fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender_id),
-                ProgramShardSelector::balance_only(recipient_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
             ],
             signers: [recipient_id].into(),
             public_accounts: [(sender_id, Account::funded(100))].into(),

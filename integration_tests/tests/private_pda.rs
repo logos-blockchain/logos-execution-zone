@@ -63,8 +63,8 @@ async fn fund_private_pda(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance_only(sender),
-                ProgramShardSelector::balance_only(pda_account_id),
+                ProgramShardSelector::balance(sender),
+                ProgramShardSelector::balance(pda_account_id),
             ],
             signers: [sender].into(),
             public_accounts: HashMap::from([(sender, sender_account.clone())]),
@@ -122,13 +122,13 @@ async fn spend_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                AccountIdentity::PrivateOwned(pda_account_id).balance_only(),
+                AccountIdentity::PrivateOwned(pda_account_id).balance(),
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
                     kind: PrivateAccountKind::Regular(0),
                 }
-                .balance_only(),
+                .balance(),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,

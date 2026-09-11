@@ -15,8 +15,8 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         ])
         .with_test_programs();
     let shard_selectors = vec![
-        ProgramShardSelector::balance_only(AccountId::new([1; 32])),
-        ProgramShardSelector::balance_only(AccountId::new([2; 32])),
+        ProgramShardSelector::balance(AccountId::new([1; 32])),
+        ProgramShardSelector::balance(AccountId::new([2; 32])),
     ];
     let program_id: AccountId = crate::test_methods::dropped_account().id().into();
     let message =
@@ -49,8 +49,8 @@ fn program_should_fail_if_it_debits_an_unauthorized_account() {
     let message = public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(sender_account_id),
-            ProgramShardSelector::balance_only(receiver_account_id),
+            ProgramShardSelector::balance(sender_account_id),
+            ProgramShardSelector::balance(receiver_account_id),
         ],
         vec![],
         balance_to_move,
@@ -81,8 +81,8 @@ fn program_should_transfer_balance_from_an_authorized_account() {
     let message = public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance_only(sender_account_id),
-            ProgramShardSelector::balance_only(receiver_account_id),
+            ProgramShardSelector::balance(sender_account_id),
+            ProgramShardSelector::balance(receiver_account_id),
         ],
         vec![Nonce(0)],
         1_u128,
@@ -109,7 +109,7 @@ fn a_data_write_on_a_foreign_shard_is_rejected_publicly() {
         program_id,
         vec![
             ProgramShardSelector::new(target_id, foreign_program_account_id),
-            ProgramShardSelector::balance_only(other_id),
+            ProgramShardSelector::balance(other_id),
         ],
         vec![],
         vec![7_u8; 4],
@@ -140,7 +140,7 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
         program_id,
         vec![
             ProgramShardSelector::new(target_id, program_id),
-            ProgramShardSelector::balance_only(other_id),
+            ProgramShardSelector::balance(other_id),
         ],
         vec![],
         written.clone(),
@@ -166,7 +166,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         vec![],
         (),
     )
@@ -204,7 +204,7 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
     );
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         vec![],
         instruction,
     )
@@ -238,7 +238,7 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
         .into();
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         vec![],
         fabricated_account_id,
     )
@@ -275,7 +275,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         vec![Nonce(0)],
         balance_to_burn,
     )
@@ -307,8 +307,8 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
     let message = public_transaction::Message::try_new(
         crate::test_methods::non_delegating_forwarder().id().into(),
         vec![
-            ProgramShardSelector::balance_only(AccountId::new([1; 32])),
-            ProgramShardSelector::balance_only(AccountId::new([2; 32])),
+            ProgramShardSelector::balance(AccountId::new([1; 32])),
+            ProgramShardSelector::balance(AccountId::new([2; 32])),
         ],
         vec![],
         (owner, Vec::<u8>::new(), true, Vec::<PdaSeed>::new()),
@@ -350,8 +350,8 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     let message = public_transaction::Message::try_new(
         program.id().into(),
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
         amount,
@@ -395,8 +395,8 @@ fn reordered_state_diffs_still_succeed() {
     let message = public_transaction::Message::try_new(
         program.id().into(),
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
         amount,

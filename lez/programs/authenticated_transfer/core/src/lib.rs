@@ -34,8 +34,8 @@ pub fn custody_transfer(
     ChainedCall::new(
         AUTHENTICATED_TRANSFER_IMAGE_ID.into(),
         vec![
-            ProgramShardSelector::balance_only(from),
-            ProgramShardSelector::balance_only(to),
+            ProgramShardSelector::balance(from),
+            ProgramShardSelector::balance(to),
         ],
         &Instruction::Transfer { amount },
     )

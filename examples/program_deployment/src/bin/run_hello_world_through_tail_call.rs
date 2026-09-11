@@ -51,7 +51,7 @@ async fn main() {
     // The caller only needs the account ID; the callee selects its shard.
     let message = Message::try_new(
         program.id().into(),
-        vec![ProgramShardSelector::balance_only(account_id)],
+        vec![ProgramShardSelector::balance(account_id)],
         nonces,
         instruction_data,
     )

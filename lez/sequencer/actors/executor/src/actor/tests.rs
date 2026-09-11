@@ -73,8 +73,8 @@ fn test_transaction() -> LeeTransaction {
     let message = Message::try_new_with_fees(
         test_programs::simple_balance_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(payer),
-            ProgramShardSelector::balance_only(acc2),
+            ProgramShardSelector::balance(payer),
+            ProgramShardSelector::balance(acc2),
         ],
         nonces,
         instruction,
@@ -415,8 +415,8 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let message = Message::try_new_with_fees(
         test_programs::simple_balance_transfer().id().into(),
         vec![
-            ProgramShardSelector::balance_only(payer),
-            ProgramShardSelector::balance_only(acc2),
+            ProgramShardSelector::balance(payer),
+            ProgramShardSelector::balance(acc2),
         ],
         vec![0_u128.into(), 0_u128.into()],
         1337,

@@ -40,8 +40,8 @@ fn main() {
         return;
     };
 
-    let sender_diff = AccountStateDiff::balance_only(sender_pre, BalanceDiff::Sub(balance));
-    let receiver_diff = AccountStateDiff::balance_only(receiver_pre, BalanceDiff::Add(balance));
+    let sender_diff = AccountStateDiff::balance(sender_pre, BalanceDiff::Sub(balance));
+    let receiver_diff = AccountStateDiff::balance(receiver_pre, BalanceDiff::Add(balance));
 
     ProgramOutput::new(
         self_account_id,

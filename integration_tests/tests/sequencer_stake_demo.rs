@@ -109,9 +109,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id).balance_only(),
+                AccountIdentity::Public(funding_id).balance(),
                 AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
-                AccountIdentity::PublicNoSign(funds_id).balance_only(),
+                AccountIdentity::PublicNoSign(funds_id).balance(),
                 AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
             ],
             stake_instruction_data,

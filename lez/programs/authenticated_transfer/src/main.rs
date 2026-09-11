@@ -16,11 +16,10 @@ fn transfer(
     // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    let sender_diff_output =
-        AccountStateDiff::balance_only(sender, BalanceDiff::Sub(balance_to_move));
+    let sender_diff_output = AccountStateDiff::balance(sender, BalanceDiff::Sub(balance_to_move));
 
     let recipient_diff_output =
-        AccountStateDiff::balance_only(recipient, BalanceDiff::Add(balance_to_move));
+        AccountStateDiff::balance(recipient, BalanceDiff::Add(balance_to_move));
 
     vec![sender_diff_output, recipient_diff_output]
 }
@@ -66,7 +65,7 @@ mod tests {
     use super::*;
 
     fn holder(seed: u8, balance: u128) -> AccountInput {
-        AccountInput::balance_only(AccountId::new([seed; 32]), true, balance)
+        AccountInput::balance(AccountId::new([seed; 32]), true, balance)
     }
 
     #[test]

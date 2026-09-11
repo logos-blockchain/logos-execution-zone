@@ -149,7 +149,7 @@ fn dispatch(
         let call_instruction_data = msg.payload.clone();
 
         // Put the source marker first, followed by the requested shard selectors.
-        let mut shard_selectors = vec![ProgramShardSelector::balance_only(marker.account_id)];
+        let mut shard_selectors = vec![ProgramShardSelector::balance(marker.account_id)];
         shard_selectors.extend(target_accounts.iter().map(ProgramShardSelector::from));
         let call = ChainedCall {
             program_account_id: msg.target_account_id,

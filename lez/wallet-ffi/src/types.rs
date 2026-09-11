@@ -330,7 +330,7 @@ impl TryFrom<&FfiAccountMention> for AccountMention {
         Ok(if value.has_program_account_id {
             identity.select_program_shard(value.program_account_id.into())
         } else {
-            identity.balance_only()
+            identity.balance()
         })
     }
 }

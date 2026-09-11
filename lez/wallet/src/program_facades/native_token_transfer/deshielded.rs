@@ -19,8 +19,8 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .balance_only(),
-                    AccountIdentity::PublicNoSign(to).balance_only(),
+                        .balance(),
+                    AccountIdentity::PublicNoSign(to).balance(),
                 ],
                 instruction_data,
                 &program.into(),

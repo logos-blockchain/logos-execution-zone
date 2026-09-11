@@ -18,8 +18,8 @@ use crate::{
 
 fn transfer_pre_states() -> Vec<AccountInput> {
     vec![
-        AccountInput::balance_only(AccountId::new([0; 32]), true, 77_665_544_332_211),
-        AccountInput::balance_only(AccountId::new([1; 32]), false, 0),
+        AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ]
 }
 

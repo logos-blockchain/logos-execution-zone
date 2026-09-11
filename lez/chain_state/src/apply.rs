@@ -834,8 +834,8 @@ mod tests {
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_program_id,
             vec![
-                lee::ProgramShardSelector::balance_only(system_accounts::fee_inbox_account_id()),
-                lee::ProgramShardSelector::balance_only(attacker),
+                lee::ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+                lee::ProgramShardSelector::balance(attacker),
             ],
             vec![state.get_account_by_id(attacker).nonce],
             fee_core::Instruction::Refund {

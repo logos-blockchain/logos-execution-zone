@@ -74,8 +74,8 @@ mod tests {
         let message = Message::try_new(
             AccountId::from([0; 8]),
             vec![
-                ProgramShardSelector::balance_only(addr1),
-                ProgramShardSelector::balance_only(addr2),
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
             ],
             nonces,
             instruction,

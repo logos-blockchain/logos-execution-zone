@@ -128,7 +128,7 @@ fn build_inbox_dispatch_tx(
     // Declared here rather than derived by the guest, since a guest cannot
     // conjure an account. Both the watcher and the verifier build it through this
     // one function, so they cannot disagree about the source a target will see.
-    shard_selectors.push(ProgramShardSelector::balance_only(
+    shard_selectors.push(ProgramShardSelector::balance(
         inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_account_id),
     ));
     shard_selectors.extend(target_shard_selectors);
