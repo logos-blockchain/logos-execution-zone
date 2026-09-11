@@ -473,10 +473,8 @@ impl ValidatedStateDiff {
                 );
             }
 
-            // Resolve each diff to what should actually be applied before validating anything:
-            // via `Incremental` against the real current account if the program supports it, or
-            // verbatim (copy/replace) if it doesn't. `validate_execution` below must see what's
-            // really being committed, not an intermediate delta a diff-carrying program emitted.
+            // Resolve each diff to what should actually be applied — via `Incremental` if the
+            // program supports it, or verbatim otherwise — before `validate_execution` sees it.
             let resolved_diffs = program_output
                 .state_diffs
                 .iter()
@@ -771,19 +769,14 @@ fn execute_program_loader(
     ))
 }
 
-/// Resolves one `Execute`-produced diff to what should actually be applied.
+/// Resolves one `Execute`-produced diff to what should actually be applied. A diff with no
+/// `post_data` has nothing to resolve — used as-is. Otherwise, probes the same program with
+/// `CallKind::Incremental` against the account's real current state; if the program hasn't
+/// implemented `Incremental` (signaled by an `UnsupportedCallKind` event), falls back to `diff`
+/// verbatim.
 ///
-/// A diff that never touched `post_data` has nothing to resolve — used as-is. Otherwise, probes
-/// the same program with `CallKind::Incremental`, feeding it the diff against the *real* current
-/// account (not necessarily the one `Execute` used, which may have gone stale by now). A program
-/// that never implemented `Incremental` responds with a no-op plus an `UnsupportedCallKind`
-/// event; that event is the signal to fall back to copy/replace — use `diff` verbatim, exactly
-/// as if `Incremental` didn't exist.
-///
-/// `program_loader` is exempt: it's a native pseudo-program with no guest ELF at all (dispatched
-/// via `execute_program_loader`, never `get_program_via`), so there's nothing to probe — it
-/// always goes through copy/replace, the same outcome a real program that skipped `Incremental`
-/// would reach, just without the wasted round trip.
+/// `program_loader` is exempt — a native pseudo-program with no guest ELF to probe, so it always
+/// falls back to verbatim directly.
 fn resolve_diff(
     diff: &AccountStateDiff,
     executing_account_id: AccountId,

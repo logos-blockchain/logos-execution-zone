@@ -177,15 +177,11 @@ impl Program {
         Ok(())
     }
 
-    /// Asks the program to apply a previously-computed diff (`diff_data`) against `pre_state` as
-    /// it stands right now — not necessarily the `pre_state` the diff was originally computed
-    /// against. Per-account, unlike [`Self::execute`]: `CallKind::Incremental`'s contract is one
-    /// account at a time (see [`lee_core::program::ProgramCall::Incremental`]).
-    ///
-    /// A program that never implemented this call kind responds with a no-op plus an
-    /// `UnsupportedCallKind` diagnostic event, rather than an error — the caller distinguishes
-    /// "applied for real" from "fall back to copy/replace" by checking for that event, not by
-    /// matching on `Err`.
+    /// Invokes a program's `Incremental` handler for one account, feeding it `diff_data` — bytes
+    /// it previously emitted for that account — against `pre_state` as it stands right now, not
+    /// necessarily the one that produced `diff_data`. A program that hasn't implemented
+    /// `Incremental` responds with a no-op plus an `UnsupportedCallKind` event instead of an
+    /// error; the caller checks for that event to fall back to copy/replace.
     pub(crate) fn execute_incremental(
         &self,
         self_account_id: AccountId,

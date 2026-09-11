@@ -3,8 +3,8 @@ use lee_core::program::{
     read_lee_call, respond_unsupported_call,
 };
 
-// Guest-side mirror of `stripped_token`'s own `TokenAccountData`/`Instruction` types — a
-// different guest binary can't import them directly, only match their borsh layout.
+// Guest-side mirror of `stripped_token`'s `TokenAccountData`/`Instruction` — this binary can't
+// import them directly, only match their borsh layout.
 #[derive(borsh::BorshDeserialize)]
 struct TokenAccountData {
     balance: u128,
@@ -24,9 +24,7 @@ enum StrippedTokenInstruction {
     },
 }
 
-/// The `ProgramId` supplied in the instruction must be `stripped_token`'s own — this program
-/// never reads or writes a token balance itself, it only compares the two and, if they differ,
-/// chain-calls `stripped_token` to move one unit from the larger balance to the smaller.
+/// The `ProgramId` of the `stripped_token` instance whose accounts this reads and compares.
 type Instruction = ProgramId;
 
 fn token_balance(data: &lee_core::account::Data) -> u128 {
@@ -39,10 +37,8 @@ fn token_balance(data: &lee_core::account::Data) -> u128 {
     }
 }
 
-/// Never touches either account's balance or data itself — regardless of which route it takes,
-/// its own diffs are always `Add(0)`/unchanged for both. All actual balance changes happen
-/// exclusively in the chained `stripped_token` call this program emits, never here. This program
-/// only opts into `Execute`; it doesn't implement `Incremental` at all.
+/// Its own diffs are always unchanged — every balance change happens in the chained
+/// `stripped_token` call this emits, never here. Opts into `Execute` only.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
