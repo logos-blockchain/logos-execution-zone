@@ -661,10 +661,6 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
 
 /**
  * Query the transactions range by account id from sequencer.
- *  
- * Not supporded yet.
- *
- * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -683,9 +679,9 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
-                                                                                                           FfiAccountId _account_id,
-                                                                                                           uint64_t _offset,
-                                                                                                           uint64_t _limit);
+                                                                                                           FfiAccountId account_id,
+                                                                                                           uint64_t offset,
+                                                                                                           uint64_t limit);
 
 /**
  * Frees the resources associated with the given ffi account.

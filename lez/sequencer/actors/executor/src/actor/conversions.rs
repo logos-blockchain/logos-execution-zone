@@ -34,3 +34,15 @@ impl From<protocol::GetBlockHashToBlockIdMapItem>
         }
     }
 }
+
+impl From<protocol::GetAccountIdToAffectingTxMapItemUptoLimit>
+    for sequencer_storage_actor::protocol::GetAccountIdToAffectingTxMapItemUptoLimit
+{
+    fn from(value: protocol::GetAccountIdToAffectingTxMapItemUptoLimit) -> Self {
+        Self {
+            account_id: value.account_id,
+            offset: value.offset,
+            limit: value.limit,
+        }
+    }
+}

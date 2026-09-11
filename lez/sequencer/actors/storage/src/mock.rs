@@ -21,16 +21,17 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
-        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
+        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
+        ZoneAnchorRecord,
     },
 };
 
@@ -251,6 +252,12 @@ mockall::mock! {
             msg: GetBlockHashToBlockIdMapItem,
             ctx: &mut Context<Self, Result<Option<u64>>>
         ) -> Result<Option<u64>>;
+
+        pub fn handle_get_account_id_to_block_id_map_item_uo_to_a_limit(
+            &mut self,
+            msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+            ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
+        ) -> Result<Option<Vec<LeeTransaction>>>;
     }
 }
 
@@ -726,5 +733,17 @@ impl Message<GetBlockHashToBlockIdMapItem> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_block_hash_to_block_id_map_item(msg, ctx)
+    }
+}
+
+impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for MockStorageActor {
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_account_id_to_block_id_map_item_uo_to_a_limit(msg, ctx)
     }
 }

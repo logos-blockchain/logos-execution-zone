@@ -1,8 +1,9 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetBlock, GetBlockHashToBlockIdMapItem, GetBlockRange,
-    GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
+    BoundedRangeInclusive, GetAccount, GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock,
+    GetBlockHashToBlockIdMapItem, GetBlockRange, GetLastBlockId, GetTransaction,
+    MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
 };
 
 use crate::{
@@ -492,10 +493,6 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
 }
 
 /// Query the transactions range by account id from sequencer.
-///  
-/// Not supporded yet.
-///
-/// `ToDo`: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -515,18 +512,48 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     sequencer: *const SequencerServiceFFI,
-    _account_id: FfiAccountId,
-    _offset: u64,
-    _limit: u64,
+    account_id: FfiAccountId,
+    offset: u64,
+    limit: u64,
 ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus> {
     if sequencer.is_null() {
         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
-    log::error!("Not supported yet");
+    let sequencer = unsafe { &*sequencer };
 
-    PointerResult::from_error(OperationStatus::NotSupported)
+    let tx_range_resp = sequencer.runtime().block_on(
+        sequencer
+            .executor_ref()
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: account_id.into(),
+                offset,
+                limit,
+            })
+            .send(),
+    );
+
+    match tx_range_resp {
+        Ok(tx_range_opt) => {
+            if let Some(tx_range) = tx_range_opt {
+                PointerResult::from_value(
+                    tx_range
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<_>>()
+                        .into(),
+                )
+            } else {
+                log::error!("Account not found for account to block id map");
+                PointerResult::from_error(OperationStatus::ClientError)
+            }
+        }
+        Err(err) => {
+            log::error!("Failed to query account to block map: {err:#}");
+            PointerResult::from_error(OperationStatus::ClientError)
+        }
+    }
 }
 
 // ToDo: Current sequenсer does not know about events yet. Also needs database updates.

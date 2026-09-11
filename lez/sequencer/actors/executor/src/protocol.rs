@@ -146,3 +146,9 @@ pub struct RequeueCrossZoneDeadLetterReply {
 pub struct GetBlockHashToBlockIdMapItem {
     pub block_hash: HashType,
 }
+
+pub struct GetAccountIdToAffectingTxMapItemUptoLimit {
+    pub account_id: AccountId,
+    pub offset: u64,
+    pub limit: u64,
+}
