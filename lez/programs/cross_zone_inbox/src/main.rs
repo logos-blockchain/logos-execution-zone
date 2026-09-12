@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{BalanceDiff, ProgramShardSelector},
+    account::ProgramShardSelector,
     program::{
         AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -138,7 +138,6 @@ fn dispatch(
         shard.insert(msg.src_block_hash, msg.src_tx_index);
         let seen_post = AccountStateDiff::new(
             seen,
-            BalanceDiff::Add(0),
             shard
                 .to_bytes()
                 .try_into()
@@ -207,7 +206,6 @@ fn init_config(
 
     let config_post = AccountStateDiff::new(
         config_meta,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()

@@ -20,7 +20,7 @@ cargo run --release -p cycle_bench --features ppe -- --prove --ppe
 The verifier microbenchmark (`G_verify`) lives in a criterion bench under `benches/verify.rs`:
 
 ```sh
-# Generates one PPE receipt for auth_transfer Transfer (~minutes of setup),
+# Generates one PPE receipt for a native Transfer (~minutes of setup),
 # then times Receipt::verify under criterion's statistical sampler.
 cargo bench -p cycle_bench --features ppe --bench verify
 ```
@@ -32,7 +32,7 @@ cargo bench -p cycle_bench --features ppe --bench verify
 - Per-program executor cycles and segments, plus exec wall time as `best / mean ± stdev (n=N)`.
 - With `--prove`: prover total cycles, paging cycles, segments, and wall time.
 - With `--ppe`: end-to-end `execute_and_prove` wall time and `S_agg` (the borsh-serialized InnerReceipt length) for one auth-transfer-in-PPE case and a chain-caller depth sweep.
-- From the `verify` criterion bench: `ppe/verify_auth_transfer` slope-regression point estimate with 95% CI bounds.
+- From the `verify` criterion bench: `ppe/verify_native_transfer` slope-regression point estimate with 95% CI bounds.
 
 ## Baseline comparison (verify bench)
 

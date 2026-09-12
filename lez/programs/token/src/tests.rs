@@ -6,7 +6,7 @@
 )]
 
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
+    account::{AccountId, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
 use token_core::{
@@ -37,7 +37,6 @@ impl AccountForTests {
         AccountInput::with_shard(
             account_id,
             is_authorized,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::from(holding),
         )
@@ -51,7 +50,6 @@ impl AccountForTests {
         AccountInput::with_shard(
             account_id,
             is_authorized,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::from(definition),
         )
@@ -152,7 +150,6 @@ impl AccountForTests {
         AccountInput::with_shard(
             IdForTests::holding_id_2(),
             false,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::empty(),
         )
@@ -219,7 +216,6 @@ impl AccountForTests {
         AccountInput::with_shard(
             IdForTests::pool_definition_id(),
             false,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::empty(),
         )
@@ -414,7 +410,6 @@ impl IdForTests {
 
 /// Asserts the diff leaves the native balance untouched and sets data to exactly `expected`'s.
 fn assert_data_diff(diff_output: &AccountStateDiff, expected: &AccountInput) {
-    assert_eq!(diff_output.post_balance_diff, BalanceDiff::Add(0));
     let effective_data = diff_output
         .post_data
         .clone()
@@ -428,7 +423,6 @@ fn new_definition_data_bearing_first_account_should_fail() {
     let definition_account = AccountInput::with_shard(
         AccountId::new([1; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::from(&TokenDefinition::Fungible {
             name: String::from("taken"),
@@ -439,7 +433,6 @@ fn new_definition_data_bearing_first_account_should_fail() {
     let holding_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
@@ -458,14 +451,12 @@ fn new_definition_data_bearing_second_account_should_fail() {
     let definition_account = AccountInput::with_shard(
         AccountId::new([1; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::from(&TokenHolding::Fungible {
             definition_id: AccountId::new([1; 32]),
@@ -478,37 +469,6 @@ fn new_definition_data_bearing_second_account_should_fail() {
         TOKEN_PROGRAM_ID,
         String::from("test"),
         10,
-    );
-}
-
-/// A definition address is derivable, and anyone may credit an unowned account.
-/// Creation must therefore turn on whether the address already holds data, not on
-/// whether it is pristine — otherwise one unit of balance bricks the address for ever.
-#[test]
-fn new_definition_succeeds_on_an_address_someone_credited() {
-    let mut definition_account = AccountForTests::definition_account_uninit();
-    definition_account.balance = 1;
-    let holding_account = AccountForTests::holding_account_uninit();
-
-    let post_diffs = new_fungible_definition(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        String::from("test"),
-        BalanceForTests::init_supply(),
-    );
-
-    let [definition_post, _holding_post] = post_diffs.try_into().unwrap();
-    assert_eq!(
-        definition_post.post_balance_diff,
-        BalanceDiff::Add(0),
-        "the credit is left alone"
-    );
-    assert!(
-        definition_post
-            .post_data
-            .is_some_and(|data| !data.is_empty()),
-        "the definition is written"
     );
 }
 
@@ -860,14 +820,12 @@ fn call_new_definition_metadata_with_init_definition() {
     let metadata_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([3; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
@@ -896,14 +854,12 @@ fn call_new_definition_metadata_with_init_metadata() {
     let definition_account = AccountInput::with_shard(
         AccountId::new([1; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
     let holding_account = AccountInput::with_shard(
         AccountId::new([3; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
@@ -933,14 +889,12 @@ fn call_new_definition_metadata_with_init_holding() {
     let definition_account = AccountInput::with_shard(
         AccountId::new([1; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
     let metadata_account = AccountInput::with_shard(
         AccountId::new([2; 32]),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::empty(),
     );
@@ -1038,7 +992,6 @@ fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() 
         AccountInput::with_shard(
             IdForTests::holding_id_2(),
             true,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::from(&TokenHolding::Fungible {
                 definition_id: IdForTests::pool_definition_id_diff(),
@@ -1048,7 +1001,6 @@ fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() 
         AccountInput::with_shard(
             IdForTests::holding_id_2(),
             true,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::try_from(vec![0xFF; 4]).unwrap(),
         ),

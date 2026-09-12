@@ -10,6 +10,7 @@ pub use lee_core::{
         Account, AccountData, AccountId, Balance, Cycles, Fee, Gas, ProgramShardSelector, ShardData,
     },
     encryption::EphemeralPublicKey,
+    native_token,
     program::{AccountInput, ProgramId},
 };
 pub use privacy_preserving_circuit::{
@@ -49,14 +50,6 @@ mod test_methods {
     use std::borrow::Cow;
 
     use crate::program::Program;
-
-    #[must_use]
-    pub const fn simple_balance_transfer() -> Program {
-        Program::new_unchecked(
-            test_methods::SIMPLE_BALANCE_TRANSFER_ID,
-            Cow::Borrowed(test_methods::SIMPLE_BALANCE_TRANSFER_ELF),
-        )
-    }
 
     #[cfg(feature = "prove")]
     #[must_use]
@@ -105,22 +98,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::FOREIGN_SHARD_WRITER_ID,
             Cow::Borrowed(test_methods::FOREIGN_SHARD_WRITER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn minter() -> Program {
-        Program::new_unchecked(
-            test_methods::MINTER_ID,
-            Cow::Borrowed(test_methods::MINTER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn burner() -> Program {
-        Program::new_unchecked(
-            test_methods::BURNER_ID,
-            Cow::Borrowed(test_methods::BURNER_ELF),
         )
     }
 
@@ -242,15 +219,6 @@ mod test_methods {
     }
 
     #[must_use]
-    #[inline]
-    pub const fn simple_transfer_proxy() -> Program {
-        Program::new_unchecked(
-            test_methods::SIMPLE_TRANSFER_PROXY_ID,
-            Cow::Borrowed(test_methods::SIMPLE_TRANSFER_PROXY_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn references_undeclared_account() -> Program {
         Program::new_unchecked(
             test_methods::REFERENCES_UNDECLARED_ACCOUNT_ID,
@@ -283,10 +251,10 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn reordering_transfer() -> Program {
+    pub const fn reordering_writer() -> Program {
         Program::new_unchecked(
-            test_methods::REORDERING_TRANSFER_ID,
-            Cow::Borrowed(test_methods::REORDERING_TRANSFER_ELF),
+            test_methods::REORDERING_WRITER_ID,
+            Cow::Borrowed(test_methods::REORDERING_WRITER_ELF),
         )
     }
 }

@@ -1,6 +1,6 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
+    account::{AccountId, ProgramShardSelector, ShardData},
     program::{AccountInput, AccountStateDiff, ChainedCall},
 };
 
@@ -84,11 +84,7 @@ fn create_swap_post_diffs(
     };
 
     vec![
-        AccountStateDiff::new(
-            pool,
-            BalanceDiff::Add(0),
-            ShardData::from(&pool_post_definition),
-        ),
+        AccountStateDiff::new(pool, ShardData::from(&pool_post_definition)),
         AccountStateDiff::unchanged(vault_a),
         AccountStateDiff::unchanged(vault_b),
         AccountStateDiff::unchanged(user_holding_a),

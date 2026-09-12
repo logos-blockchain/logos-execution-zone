@@ -1,13 +1,15 @@
 use lee_core::{
-    account::BalanceDiff,
+    account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
 
 type Instruction = u128;
 
+/// Requests a native transfer of `balance` from the first account to the second.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -40,14 +42,24 @@ fn main() {
         return;
     };
 
+    let transfer = ChainedCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::from(&sender_pre),
+            ProgramShardSelector::from(&receiver_pre),
+        ],
+        &NativeInstruction::Transfer { amount: balance },
+    );
+
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::balance(sender_pre, BalanceDiff::Sub(balance)),
-            AccountStateDiff::balance(receiver_pre, BalanceDiff::Add(balance)),
+            AccountStateDiff::unchanged(sender_pre),
+            AccountStateDiff::unchanged(receiver_pre),
         ],
     )
+    .with_chained_calls(vec![transfer])
     .write();
 }

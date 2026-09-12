@@ -1,10 +1,7 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
@@ -128,7 +125,6 @@ fn mint(
         .expect("wrapped-token balance overflow");
     let holding_post = AccountStateDiff::new(
         holding,
-        BalanceDiff::Add(0),
         balance_bytes(new_balance)
             .to_vec()
             .try_into()
@@ -138,7 +134,6 @@ fn mint(
     // re-derivation alike: it is state, not host memory.
     let config_post = AccountStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -201,7 +196,6 @@ fn renounce_authority(
     cfg.authority = None;
     let config_post = AccountStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -288,7 +282,6 @@ fn update_sources(
         .collect();
     let config_post = AccountStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -340,7 +333,6 @@ fn init_config(
 
     let config_post = AccountStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         config_value
             .to_bytes()
             .try_into()

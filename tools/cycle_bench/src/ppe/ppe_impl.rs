@@ -1,26 +1,27 @@
 //! Feature-gated implementation of PPE composition benches.
 //!
-//! `prove_auth_transfer_in_ppe` is reused by the `verify` criterion bench under
-//! `benches/verify.rs` (re-exported via `super::prove_auth_transfer_in_ppe`).
+//! `prove_native_transfer_in_ppe` is reused by the `verify` criterion bench under
+//! `benches/verify.rs` (re-exported via `super::prove_native_transfer_in_ppe`).
 
 use std::{collections::HashMap, time::Instant};
 
 use borsh::to_vec;
 use lee::{
-    AccountData, execute_and_prove,
+    execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof, ProvingInput},
 };
 use lee_core::{
     PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, ProgramShardSelector},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
 };
 
 use super::PpeBenchResult;
 
-pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
-    let label = "auth_transfer Transfer in PPE".to_owned();
+pub fn run_native_transfer_in_ppe() -> PpeBenchResult {
+    let label = "native Transfer in PPE".to_owned();
     let started = Instant::now();
-    match prove_auth_transfer_in_ppe() {
+    match prove_native_transfer_in_ppe() {
         Ok((_out, proof)) => {
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             PpeBenchResult {
@@ -41,21 +42,14 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
     }
 }
 
-pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let auth_transfer = programs::authenticated_transfer();
-    let pwd = ProgramWithDependencies::from(auth_transfer);
+pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+    let pwd = ProgramWithDependencies::native();
 
     let sender_id = AccountId::new([1; 32]);
     let recipient_id = AccountId::new([2; 32]);
-    let sender_account = Account {
-        data: AccountData {
-            balance: 1_000_000,
-            ..AccountData::default()
-        },
-        ..Account::default()
-    };
+    let sender_account = Account::funded(1_000_000);
 
-    let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
+    let instruction = lee_core::native_token::Instruction::Transfer { amount: 5_000 };
     let instruction_data = to_vec(&instruction)?;
 
     Ok(execute_and_prove(
@@ -102,21 +96,11 @@ fn prove_chain_caller(
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let chain_caller = test_programs::chain_caller();
     let chain_caller_id = chain_caller.id();
-    let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
-    let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id().into(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
+    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), HashMap::new());
 
     let recipient_id = AccountId::new([2; 32]);
     let sender_id = AccountId::new([1; 32]);
-    let sender_account = Account {
-        data: AccountData {
-            balance: 1_000_000,
-            ..AccountData::default()
-        },
-        ..Account::default()
-    };
+    let sender_account = Account::funded(1_000_000);
     // chain_caller expects shard selectors = [recipient, sender].
     let shard_selectors = vec![
         ProgramShardSelector::balance(recipient_id),
@@ -125,7 +109,12 @@ fn prove_chain_caller(
 
     let balance: u128 = 1;
     let pda_seed: Option<lee_core::program::PdaSeed> = None;
-    let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
+    let instruction = (
+        balance,
+        lee_core::program::ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
+        num_chain_calls,
+        pda_seed,
+    );
     let instruction_data = to_vec(&instruction)?;
 
     Ok(execute_and_prove(

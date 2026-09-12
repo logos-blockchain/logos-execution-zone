@@ -159,61 +159,17 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 // ---- validate_execution tests ----
 
 #[test]
-fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() {
-    let executing_program_id: AccountId = AccountId::from([1; 8]);
-    let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::with_shard(
-        account_id,
-        true,
-        5,
-        executing_program_id,
-        ShardData::empty(),
-    );
-    let state_diffs = [AccountStateDiff::balance(pre, BalanceDiff::Sub(10))];
-
-    let result = validate_execution(&state_diffs, executing_program_id);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
-    ));
-}
-
-#[test]
-fn validate_execution_rejects_add_overflow() {
-    let executing_program_id: AccountId = AccountId::from([1; 8]);
-    let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::with_shard(
-        account_id,
-        false,
-        u128::MAX,
-        executing_program_id,
-        ShardData::empty(),
-    );
-    let state_diffs = [AccountStateDiff::balance(pre, BalanceDiff::Add(1))];
-
-    let result = validate_execution(&state_diffs, executing_program_id);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::InvalidBalanceDiff { account_id: id, .. }) if id == account_id
-    ));
-}
-
-#[test]
 fn a_data_write_on_a_foreign_shard_is_rejected() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
     let pre = AccountInput::with_shard(
         account_id,
         true,
-        5,
         AccountId::new([1; 32]),
         ShardData::empty(),
     );
     let state_diffs = [AccountStateDiff::new(
         pre,
-        BalanceDiff::Add(0),
         b"record".to_vec().try_into().unwrap(),
     )];
 
@@ -234,13 +190,11 @@ fn a_data_write_on_the_executing_shard_is_accepted() {
     let pre = AccountInput::with_shard(
         AccountId::new([7; 32]),
         true,
-        5,
         executing_account_id,
         ShardData::empty(),
     );
     let state_diffs = [AccountStateDiff::new(
         pre,
-        BalanceDiff::Add(0),
         b"record".to_vec().try_into().unwrap(),
     )];
 
@@ -248,14 +202,13 @@ fn a_data_write_on_the_executing_shard_is_accepted() {
 }
 
 #[test]
-fn a_balance_only_shard_selector_cannot_carry_data() {
+fn a_guest_cannot_write_the_native_balance_shard() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
     let pre = AccountInput::balance(account_id, true, 5);
     let state_diffs = [AccountStateDiff::new(
         pre,
-        BalanceDiff::Add(0),
-        b"record".to_vec().try_into().unwrap(),
+        crate::native_token::encode_balance(50),
     )];
 
     let result = validate_execution(&state_diffs, executing_account_id);
@@ -267,26 +220,20 @@ fn a_balance_only_shard_selector_cannot_carry_data() {
 }
 
 #[test]
-fn two_shard_selectors_of_one_account_in_a_call_are_rejected() {
+fn two_shard_selectors_of_one_account_in_a_call_are_accepted() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
     let state_diffs = [
         AccountStateDiff::unchanged(AccountInput::with_shard(
             account_id,
             true,
-            5,
             executing_account_id,
             ShardData::empty(),
         )),
         AccountStateDiff::unchanged(AccountInput::balance(account_id, true, 5)),
     ];
 
-    let result = validate_execution(&state_diffs, executing_account_id);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::PreStateAccountIdsNotUnique)
-    ));
+    assert!(validate_execution(&state_diffs, executing_account_id).is_ok());
 }
 
 #[test]
@@ -296,7 +243,6 @@ fn pre_states_match_shard_selectors_compares_program_account_ids() {
     let diffs = [AccountStateDiff::unchanged(AccountInput::with_shard(
         account_id,
         true,
-        5,
         program,
         ShardData::empty(),
     ))];
@@ -319,32 +265,14 @@ fn pre_states_match_shard_selectors_compares_program_account_ids() {
 }
 
 #[test]
-fn apply_diff_keeps_the_pre_shard_when_nothing_is_written() {
+fn apply_diff_leaves_the_shard_untouched_when_nothing_is_written() {
     let program = AccountId::new([2; 32]);
     let data: ShardData = b"record".to_vec().try_into().unwrap();
-    let pre = AccountInput::with_shard(AccountId::new([7; 32]), true, 5, program, data.clone());
+    let pre = AccountInput::with_shard(AccountId::new([7; 32]), true, program, data);
     let mut account = Account::default();
 
-    account
-        .data
-        .apply_diff(&AccountStateDiff::balance(pre, BalanceDiff::Sub(2)))
-        .unwrap();
+    account.data.apply_diff(&AccountStateDiff::unchanged(pre));
 
-    assert_eq!(account.data.balance, 3);
-    assert_eq!(account.data.shard(program), &data);
-}
-
-#[test]
-fn apply_diff_of_a_balance_only_shard_selector_carries_no_shard() {
-    let pre = AccountInput::balance(AccountId::new([7; 32]), true, 5);
-    let mut account = Account::default();
-
-    account
-        .data
-        .apply_diff(&AccountStateDiff::balance(pre, BalanceDiff::Add(2)))
-        .unwrap();
-
-    assert_eq!(account.data.balance, 7);
     assert!(account.data.shards.is_empty());
 }
 
@@ -354,7 +282,6 @@ fn apply_diff_replaces_the_written_shard() {
     let pre = AccountInput::with_shard(
         AccountId::new([7; 32]),
         true,
-        5,
         program,
         b"old".to_vec().try_into().unwrap(),
     );
@@ -363,12 +290,7 @@ fn apply_diff_replaces_the_written_shard() {
 
     account
         .data
-        .apply_diff(&AccountStateDiff::new(
-            pre,
-            BalanceDiff::Add(0),
-            written.clone(),
-        ))
-        .unwrap();
+        .apply_diff(&AccountStateDiff::new(pre, written.clone()));
 
     assert_eq!(account.data.shard(program), &written);
 }
@@ -634,7 +556,6 @@ fn foreign_shard_with_history() -> AccountInput {
     AccountInput::with_shard(
         AccountId::new([7; 32]),
         true,
-        55,
         AccountId::new([2; 32]),
         b"record".to_vec().try_into().unwrap(),
     )
@@ -642,13 +563,7 @@ fn foreign_shard_with_history() -> AccountInput {
 
 #[test]
 fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
-    let diffs = [
-        AccountStateDiff::unchanged(foreign_shard_with_history()),
-        AccountStateDiff::balance(foreign_shard_with_history(), BalanceDiff::Add(0)),
-        AccountStateDiff::balance(foreign_shard_with_history(), BalanceDiff::Sub(0)),
-    ];
+    let diff = AccountStateDiff::unchanged(foreign_shard_with_history());
 
-    for diff in diffs {
-        assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
-    }
+    assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }

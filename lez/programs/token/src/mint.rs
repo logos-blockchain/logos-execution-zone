@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
+    account::{AccountId, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -60,17 +60,11 @@ pub fn mint(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let definition_diff = AccountStateDiff::new(
-        definition_account.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&definition),
-    );
+    let definition_diff =
+        AccountStateDiff::new(definition_account.clone(), ShardData::from(&definition));
 
-    let holding_diff = AccountStateDiff::new(
-        user_holding_account.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&holding),
-    );
+    let holding_diff =
+        AccountStateDiff::new(user_holding_account.clone(), ShardData::from(&holding));
 
     vec![definition_diff, holding_diff]
 }

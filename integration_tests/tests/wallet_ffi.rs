@@ -25,10 +25,7 @@ use integration_tests::{
     BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
-use lee::{
-    Account, AccountId, PrivateKey, PublicKey,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-};
+use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
@@ -620,7 +617,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(account.data.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
+    assert_eq!(
+        account.data.balance().unwrap(),
+        INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
+    );
     assert!(account.data.shards.is_empty());
     assert_eq!(account.nonce.0, 2);
 
@@ -638,7 +638,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     };
 
     assert_eq!(
-        balance_only.data.balance,
+        balance_only.data.balance().unwrap(),
         INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
     );
     assert_eq!(balance_only.nonce.0, 2);
@@ -676,7 +676,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         program_view.data.shards.is_empty(),
         "a null program pointer must not select a shard the account actually holds"
     );
-    assert_eq!(program_view.data.balance, program_full.data.balance);
+    assert_eq!(
+        program_view.data.balance().unwrap(),
+        program_full.data.balance().unwrap()
+    );
 
     let mut out_named_shard = FfiAccount::default();
     let named_shard: Account = unsafe {
@@ -697,7 +700,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         named_shard.data.shards[&PROGRAM_LOADER_ACCOUNT_ID],
         expected_shard
     );
-    assert_eq!(named_shard.data.balance, program_full.data.balance);
+    assert_eq!(
+        named_shard.data.balance().unwrap(),
+        program_full.data.balance().unwrap()
+    );
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_balance_only);
@@ -738,7 +744,10 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
     // A private account: private balances stay small (fee-exempt under the
     // interim policy), so this asserts against the private constant, not the
     // LGO-scaled public one.
-    assert_eq!(account.data.balance, INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]);
+    assert_eq!(
+        account.data.balance().unwrap(),
+        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]
+    );
     assert!(account.data.shards.is_empty());
 
     unsafe {
@@ -1600,11 +1609,12 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 //     Ok(())
 // }
 
-fn balance_only_mention(identity: FfiAccountIdentity) -> FfiAccountMention {
+const fn balance_mention(identity: FfiAccountIdentity) -> FfiAccountMention {
     FfiAccountMention {
         identity,
-        program_account_id: FfiBytes32::default(),
-        has_program_account_id: false,
+        program_account_id: FfiBytes32::from_account_id(
+            lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        ),
     }
 }
 
@@ -1637,21 +1647,20 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     }
 
     let ffi_accs = vec![
-        balance_only_mention(from_account_identity),
-        balance_only_mention(to_account_identity),
+        balance_mention(from_account_identity),
+        balance_mention(to_account_identity),
     ];
     let account_mentions_size = ffi_accs.len();
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     let instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount,
-        })
-        .unwrap();
+        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
+            .unwrap();
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_id = programs::authenticated_transfer().id();
+    let program_id =
+        lee_core::program::ProgramId::from(lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID);
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
@@ -1733,22 +1742,21 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     }
 
     let ffi_accs = vec![
-        balance_only_mention(from_account_identity),
-        balance_only_mention(to_account_identity),
+        balance_mention(from_account_identity),
+        balance_mention(to_account_identity),
     ];
     let account_mentions_size = ffi_accs.len();
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
-    let instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount,
-        })
-        .unwrap();
+    let instruction_data = Program::serialize_instruction(amount).unwrap();
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program: ProgramWithDependencies = programs::authenticated_transfer().into();
-    let program_with_dependencies: FfiProgramWithDependencies = program.into();
+    let program_with_dependencies = FfiProgramWithDependencies {
+        program: test_programs::simple_balance_transfer().into(),
+        deps: std::ptr::null(),
+        deps_size: 0,
+    };
 
     unsafe {
         wallet_ffi_send_generic_private_transaction(

@@ -7,10 +7,10 @@ use lee_core::{
     },
 };
 
-/// Proxy for spending from a private PDA via `auth_transfer`.
+/// Proxy for spending from a private PDA via the native token program.
 ///
 /// `pre_states = [pda, recipient]`. Debits the PDA and credits the recipient.
-/// The PDA-to-npk binding is established via `pda_seeds` in the chained call to `auth_transfer`.
+/// The PDA-to-npk binding is established via `pda_seeds` in the chained transfer.
 type Instruction = (PdaSeed, u128, ProgramId);
 
 fn main() {
@@ -20,7 +20,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (seed, amount, auth_transfer_id),
+            instruction: (seed, amount, transfer_program_id),
         },
         instruction_data,
     ) = call
@@ -36,8 +36,8 @@ fn main() {
     let second_post = AccountStateDiff::unchanged(second.clone());
 
     let chained_call = ChainedCall {
-        program_account_id: auth_transfer_id.into(),
-        instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
+        program_account_id: transfer_program_id.into(),
+        instruction_data: to_vec(&lee_core::native_token::Instruction::Transfer { amount })
             .unwrap(),
         shard_selectors: vec![
             ProgramShardSelector::from(&first),

@@ -39,6 +39,7 @@
 
 use lee_core::{
     account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
     program::{
         AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -95,13 +96,15 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            let min_vault_balance = vault_pre.balance;
+            let min_vault_balance = decode_balance(vault_pre.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+                .expect("the vault selects its native balance shard");
 
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
             // the PDA seed to authorize the token program to debit the vault on our behalf.
             let transfer_instruction =
-                borsh::to_vec(&amount_out).expect("transfer instruction serialization");
+                borsh::to_vec(&NativeInstruction::Transfer { amount: amount_out })
+                    .expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_account_id: token_program_id,
                 shard_selectors: vec![
@@ -175,11 +178,12 @@ fn main() {
             // The core invariant: vault balance must not have decreased.
             // If the callback returned funds, this passes. If not, this panics and
             // the entire transaction (including the prior token transfer) rolls back.
+            let vault_balance = decode_balance(vault.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+                .expect("the vault selects its native balance shard");
             assert!(
-                vault.balance >= min_vault_balance,
-                "Flash swap invariant violated: vault balance {} < minimum {}",
-                vault.balance,
-                min_vault_balance
+                vault_balance >= min_vault_balance,
+                "Flash swap invariant violated: vault balance {vault_balance} < minimum \
+                 {min_vault_balance}"
             );
 
             // Pass-through: no state changes in the invariant check step.

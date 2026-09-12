@@ -1,7 +1,6 @@
-use authenticated_transfer_core::custody_transfer;
 use bridge_core::Instruction;
 use lee_core::{
-    account::BalanceDiff,
+    native_token::custody_transfer,
     program::{
         AccountStateDiff, ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -82,7 +81,6 @@ fn main() {
                     AccountStateDiff::unchanged(recipient),
                     AccountStateDiff::new(
                         receipt,
-                        BalanceDiff::Add(0),
                         vec![1].try_into().expect("1 byte fits in account data"),
                     ),
                 ];

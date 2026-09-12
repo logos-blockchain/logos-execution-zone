@@ -1,8 +1,8 @@
 use std::collections::btree_map::Entry;
 
-use authenticated_transfer_core::custody_transfer;
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
+    account::{AccountId, ProgramShardSelector, ShardData},
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
         AccountInput, AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramInput,
         ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -166,7 +166,7 @@ fn stake(
     let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
 
-    let balance_before = funds_account.balance;
+    let balance_before = native_balance(&funds_account);
     let expected_balance_after = balance_before
         .checked_add(amount)
         .expect("stake amount overflow");
@@ -231,17 +231,12 @@ fn stake(
     .to_bytes()
     .try_into()
     .expect("StakeRecord should fit in account data");
-    let ownership_account_post = AccountStateDiff::new(
-        ownership_account,
-        BalanceDiff::Add(0),
-        new_stake_record_data,
-    );
+    let ownership_account_post = AccountStateDiff::new(ownership_account, new_stake_record_data);
 
     let funds_account_post = AccountStateDiff::unchanged(funds_account);
 
     let config_account_post = AccountStateDiff::new(
         config_account,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()
@@ -277,6 +272,11 @@ fn stake(
     )
 }
 
+fn native_balance(account: &AccountInput) -> u128 {
+    decode_balance(account.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+        .expect("a stake funds account selects its native balance shard")
+}
+
 fn confirm_stake(
     pre_states: Vec<AccountInput>,
     expected_balance_after: u128,
@@ -285,7 +285,8 @@ fn confirm_stake(
         .expect("ConfirmStake requires exactly the stake funds account");
 
     assert_eq!(
-        funds_account.balance, expected_balance_after,
+        native_balance(&funds_account),
+        expected_balance_after,
         "mover call did not deposit the expected amount into the stake funds account"
     );
 
@@ -344,7 +345,6 @@ fn unstake_request(
     // only data changes here; transfer happens in FinalizeUnstake
     let ownership_post = AccountStateDiff::new(
         ownership_account,
-        BalanceDiff::Add(0),
         record
             .to_bytes()
             .try_into()
@@ -353,7 +353,6 @@ fn unstake_request(
 
     let config_post = AccountStateDiff::new(
         config_account,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()
@@ -443,7 +442,6 @@ fn init_channel_params(
 
     let config_post = AccountStateDiff::new(
         config_account,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()
@@ -497,7 +495,6 @@ fn slash(
     record.pending_unstake = None;
     let ownership_post = AccountStateDiff::new(
         ownership_account,
-        BalanceDiff::Add(0),
         record
             .to_bytes()
             .try_into()
@@ -506,14 +503,13 @@ fn slash(
 
     let config_post = AccountStateDiff::new(
         config_account,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()
             .expect("SequencerStakeConfig should fit in account data"),
     );
 
-    // The burn happens in a chained authenticated_transfer call.
+    // The burn happens in a chained native transfer.
     let burn_call = custody_transfer(
         funds_account.account_id,
         stake_funds_seed(&ownership_id),
@@ -558,7 +554,6 @@ fn finalize_unstake(
     // no signature check: already authorized back in UnstakeRequest
     let ownership_post = AccountStateDiff::new(
         ownership_account,
-        BalanceDiff::Add(0),
         record
             .to_bytes()
             .try_into()
@@ -589,7 +584,6 @@ fn finalize_unstake(
 
     let config_post = AccountStateDiff::new(
         config_account,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()

@@ -11,12 +11,9 @@
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = ();
@@ -67,11 +64,7 @@ fn main() {
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let (_, clock_bytes) = clock_pre
-        .shard
-        .as_ref()
-        .expect("the clock shard selector must name a record");
-    let clock_data = ClockAccountData::from_bytes(clock_bytes);
+    let clock_data = ClockAccountData::from_bytes(&clock_pre.shard.1);
     let current_timestamp = clock_data.timestamp;
 
     let cooldown_state = CooldownState::from_bytes(state.shard_of(self_account_id));
@@ -91,7 +84,6 @@ fn main() {
     };
     let state_diff = AccountStateDiff::new(
         state,
-        BalanceDiff::Add(0),
         updated_state
             .to_bytes()
             .try_into()

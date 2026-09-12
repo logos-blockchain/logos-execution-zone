@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountId, BalanceDiff},
+    account::AccountId,
     program::{
         AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -94,7 +94,7 @@ fn record(
     );
 
     let record_data = payload.try_into().expect("payload fits in account data");
-    let post = AccountStateDiff::new(record, BalanceDiff::Add(0), record_data);
+    let post = AccountStateDiff::new(record, record_data);
 
     ProgramOutput::new(
         self_account_id,
@@ -161,7 +161,7 @@ fn renounce_authority(
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::new(config, config_data),
             AccountStateDiff::unchanged(authority),
         ],
     )
@@ -222,7 +222,7 @@ fn update_sources(
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(config, BalanceDiff::Add(0), config_data),
+            AccountStateDiff::new(config, config_data),
             AccountStateDiff::unchanged(authority),
         ],
     )
@@ -267,7 +267,7 @@ fn init_config(
         .to_bytes()
         .try_into()
         .expect("receiver config fits in account data");
-    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
+    let config_post = AccountStateDiff::new(config, config_data);
 
     ProgramOutput::new(
         self_account_id,

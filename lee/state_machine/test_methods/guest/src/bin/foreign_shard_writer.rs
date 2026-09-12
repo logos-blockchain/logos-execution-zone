@@ -1,9 +1,6 @@
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = Vec<u8>;
@@ -29,7 +26,6 @@ fn main() {
 
     let target_diff = AccountStateDiff::new(
         target,
-        BalanceDiff::Add(0),
         data.try_into()
             .expect("provided data should fit into data limit"),
     );

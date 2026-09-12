@@ -9,9 +9,8 @@ mod inner {
     use std::borrow::Cow;
 
     use guests::{
-        AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
-        BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
+        AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID, BRIDGE_ELF,
+        BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
         FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
         SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF,
@@ -21,15 +20,6 @@ mod inner {
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn authenticated_transfer() -> Program {
-        Program::new_unchecked(
-            AUTHENTICATED_TRANSFER_ID,
-            Cow::Borrowed(AUTHENTICATED_TRANSFER_ELF),
-        )
     }
 
     #[must_use]
@@ -166,7 +156,7 @@ mod inner {
                     bridge_core::compute_bridge_account_id(bridge().id().into()),
                     Account::funded(u128::from(amount)),
                 )])
-                .with_programs([bridge(), authenticated_transfer()]);
+                .with_programs([bridge()]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
@@ -193,14 +183,11 @@ mod inner {
 
         #[test]
         fn builtin_programs() {
-            let auth_transfer_program = authenticated_transfer();
             let token_program = token();
             let faucet_program = faucet();
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
-            assert_eq!(auth_transfer_program.id(), AUTHENTICATED_TRANSFER_ID);
-            assert_eq!(auth_transfer_program.elf(), AUTHENTICATED_TRANSFER_ELF);
             assert_eq!(token_program.id(), TOKEN_ID);
             assert_eq!(token_program.elf(), TOKEN_ELF);
             assert_eq!(faucet_program.id(), FAUCET_ID);
@@ -215,7 +202,6 @@ mod inner {
         fn builtin_program_ids_match_elfs() {
             let cases: &[(&[u8], [u32; 8])] = &[
                 (AMM_ELF, AMM_ID),
-                (AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID),
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
                 (FAUCET_ELF, FAUCET_ID),

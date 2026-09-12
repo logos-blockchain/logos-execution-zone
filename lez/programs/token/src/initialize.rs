@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
+    account::{AccountId, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
@@ -21,11 +21,8 @@ pub fn initialize_account(
     let holding =
         TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
 
-    let holding_diff = AccountStateDiff::new(
-        account_to_initialize.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&holding),
-    );
+    let holding_diff =
+        AccountStateDiff::new(account_to_initialize.clone(), ShardData::from(&holding));
 
     vec![
         AccountStateDiff::unchanged(definition_account.clone()),

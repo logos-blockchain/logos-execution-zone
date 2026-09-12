@@ -137,7 +137,7 @@ Without `--raw`, the wallet prints each shard separately and decodes recognized 
 let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
 bytes.extend_from_slice(&greeting);
 let new_data = bytes.try_into().expect("Data should fit within the allowed limits");
-let post_state = AccountStateDiff::new(pre_state, BalanceDiff::Add(0), new_data);
+let post_state = AccountStateDiff::new(pre_state, new_data);
 ```
 
 It returns the proposed change with:

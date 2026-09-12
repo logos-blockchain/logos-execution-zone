@@ -7,7 +7,7 @@
 //!
 //! `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` timings (the `G_verify` fee-model
 //! parameter) are measured by the `verify` criterion bench under `benches/verify.rs`,
-//! which reuses the `prove_auth_transfer_in_ppe` setup helper re-exported below.
+//! which reuses the `prove_native_transfer_in_ppe` setup helper re-exported below.
 
 #![allow(
     dead_code,
@@ -20,7 +20,7 @@ use serde::Serialize;
 mod ppe_impl;
 
 #[cfg(feature = "ppe")]
-pub use ppe_impl::prove_auth_transfer_in_ppe;
+pub use ppe_impl::prove_native_transfer_in_ppe;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct PpeBenchResult {
@@ -43,8 +43,8 @@ pub const fn run_all() -> Vec<PpeBenchResult> {
 pub fn run_all() -> Vec<PpeBenchResult> {
     let mut results = Vec::new();
 
-    eprintln!("PPE: running composition cost (auth_transfer Transfer in PPE)");
-    results.push(ppe_impl::run_auth_transfer_in_ppe());
+    eprintln!("PPE: running composition cost (native Transfer in PPE)");
+    results.push(ppe_impl::run_native_transfer_in_ppe());
 
     for depth in [1_u32, 3, 5, 9] {
         eprintln!("PPE: running chain_caller depth={depth}");

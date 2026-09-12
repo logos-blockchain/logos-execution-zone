@@ -370,13 +370,13 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(faucet_account_id),
             ProgramShardSelector::balance(recipient),
         ],
         vec![],
-        authenticated_transfer_core::Instruction::Transfer { amount },
+        lee_core::native_token::Instruction::Transfer { amount },
     )?;
     let tx = lee::PublicTransaction::new(
         message,

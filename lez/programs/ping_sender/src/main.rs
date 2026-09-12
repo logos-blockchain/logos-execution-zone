@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector},
+    account::{AccountId, ProgramShardSelector},
     program::{
         AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -145,7 +145,7 @@ fn init_config(
         .to_vec()
         .try_into()
         .expect("outbox id fits in account data");
-    let config_post = AccountStateDiff::new(config, BalanceDiff::Add(0), config_data);
+    let config_post = AccountStateDiff::new(config, config_data);
 
     ProgramOutput::new(
         self_account_id,

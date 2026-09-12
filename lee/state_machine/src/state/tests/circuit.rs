@@ -98,7 +98,6 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 
 #[test]
 fn circuit_fails_if_invalid_auth_keys_are_provided() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_id =
@@ -129,10 +128,13 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 },
                 init_witness(&recipient_keys, 0, Account::default()),
             ],
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -140,7 +142,6 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
 
 #[test]
 fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provided() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_id =
@@ -158,10 +159,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 update_witness(&sender_keys, 0, Account::funded(100), (0, vec![])),
                 init_witness(&recipient_keys, 0, Account::funded(1)),
             ],
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -169,7 +173,6 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
 
 #[test]
 fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_id =
@@ -194,10 +197,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                     ),
                 ),
             ],
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -205,7 +211,6 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
 
 #[test]
 fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_id =
@@ -230,10 +235,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                     },
                 ),
             ],
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -932,7 +940,6 @@ fn private_accounts_can_only_be_initialized_once() {
     let recipient_keys = test_private_account_keys_2();
 
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
     let balance_to_move_2 = 30;
@@ -974,20 +981,20 @@ fn private_accounts_can_only_be_initialized_once() {
 
 #[test]
 fn circuit_should_fail_if_there_are_repeated_ids() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let sender_id =
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let witness = update_witness(&sender_keys, 0, Account::funded(100), (1, vec![]));
 
+    let program = crate::test_methods::noop();
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
                 ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::new(sender_id, program.id().into()),
             ],
             private_witnesses: vec![witness.clone(), witness],
-            instruction_data: Program::serialize_instruction(100_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
         &program.into(),
@@ -1005,17 +1012,15 @@ fn private_authorized_uninitialized_account() {
     let account_id =
         AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
 
-    let program = crate::test_methods::simple_balance_transfer();
-
     // Execute and prove the circuit with the authorized account but no commitment proof
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             private_witnesses: vec![init_witness(&private_keys, 0, Account::default())],
-            instruction_data: Program::serialize_instruction(0_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &crate::test_methods::noop().into(),
     )
     .unwrap();
 
@@ -1097,17 +1102,11 @@ fn two_private_pda_family_members_receive_and_spend() {
     let alice_keys = test_private_account_keys_1();
 
     let proxy = crate::test_methods::pda_spend_proxy();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
     let proxy_id: AccountId = proxy.id().into();
-    let simple_transfer_id: AccountId = simple_transfer.id().into();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let spend_with_deps = ProgramWithDependencies::new(
-        proxy.clone(),
-        proxy_id,
-        [(simple_transfer_id, simple_transfer.clone())].into(),
-    );
+    let spend_with_deps = ProgramWithDependencies::new(proxy.clone(), proxy_id, HashMap::new());
 
     let funder_id = funder_keys.account_id();
     let alice_pda_0_id =
@@ -1118,7 +1117,6 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
     let mut state = V03State::new().with_public_account_balances([(funder_id, 500)]);
-    state.insert_program(&simple_transfer);
     state.insert_program(&proxy);
 
     let alice_pda_0_account = Account {
@@ -1130,7 +1128,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         ..Account::funded(amount)
     };
 
-    // Fund alice_pda_0 via a plain balance transfer directly.
+    // Fund alice_pda_0 via a plain native transfer directly.
     {
         let funder_account = state.get_account_by_id(funder_id);
         let funder_nonce = funder_account.nonce;
@@ -1148,10 +1146,13 @@ fn two_private_pda_family_members_receive_and_spend() {
                     (proxy_id, seed),
                     Account::default(),
                 )],
-                instruction_data: Program::serialize_instruction(amount).unwrap(),
+                instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                    amount,
+                })
+                .unwrap(),
                 ..Default::default()
             },
-            &simple_transfer.clone().into(),
+            &ProgramWithDependencies::native(),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1183,10 +1184,13 @@ fn two_private_pda_family_members_receive_and_spend() {
                     (proxy_id, seed),
                     Account::default(),
                 )],
-                instruction_data: Program::serialize_instruction(amount).unwrap(),
+                instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                    amount,
+                })
+                .unwrap(),
                 ..Default::default()
             },
-            &simple_transfer.into(),
+            &ProgramWithDependencies::native(),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1229,7 +1233,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 instruction_data: Program::serialize_instruction((
                     seed,
                     amount,
-                    simple_transfer_id,
+                    NATIVE_TOKEN_PROGRAM_ID,
                 ))
                 .unwrap(),
                 ..Default::default()
@@ -1270,7 +1274,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 instruction_data: Program::serialize_instruction((
                     seed,
                     amount,
-                    simple_transfer_id,
+                    NATIVE_TOKEN_PROGRAM_ID,
                 ))
                 .unwrap(),
                 ..Default::default()
@@ -1290,11 +1294,11 @@ fn two_private_pda_family_members_receive_and_spend() {
     }
 
     assert_eq!(
-        state.get_account_by_id(recipient_id).data.balance,
-        2 * amount
+        state.get_account_by_id(recipient_id).data.balance(),
+        Ok(2 * amount)
     );
 
-    // Re-fund alice_pda_1 top-level via simple_transfer using a private-PDA update.
+    // Re-fund alice_pda_1 top-level via a native transfer using a private-PDA update.
     let alice_pda_1_account_after_spend = Account {
         nonce: alice_pda_1_account
             .nonce
@@ -1323,10 +1327,13 @@ fn two_private_pda_family_members_receive_and_spend() {
                         .get_proof_for_commitment(&commitment_pda_1_after_spend)
                         .expect("pda_1 after spend must be in state"),
                 )],
-                instruction_data: Program::serialize_instruction(amount).unwrap(),
+                instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                    amount,
+                })
+                .unwrap(),
                 ..Default::default()
             },
-            &crate::test_methods::simple_balance_transfer().into(),
+            &ProgramWithDependencies::native(),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![recipient_nonce], output);
@@ -1340,13 +1347,15 @@ fn two_private_pda_family_members_receive_and_spend() {
             .unwrap();
     }
 
-    assert_eq!(state.get_account_by_id(recipient_id).data.balance, amount);
+    assert_eq!(
+        state.get_account_by_id(recipient_id).data.balance(),
+        Ok(amount)
+    );
 }
 
 /// Unauthorized balance decrease is refused.
 #[test]
 fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_account = Account::funded(100);
@@ -1390,10 +1399,13 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
                     },
                 },
             ],
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     let Err(err) = result else {
@@ -1402,8 +1414,9 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
     assert!(
         matches!(
             &err,
-            LeeError::CircuitProvingError(msg)
-                if msg.contains("Trying to decrease balance of unauthorized account")
+            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender { .. }
+            ))
         ),
         "refused for the wrong reason: {err:?}"
     );

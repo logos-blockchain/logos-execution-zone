@@ -13,7 +13,6 @@ borsh.workspace = true
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["test_utils"] }
 lee.workspace = true
-authenticated_transfer_core.workspace = true
 sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true

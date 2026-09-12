@@ -236,7 +236,10 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         "the indexer view must carry only the selected shard"
     );
     assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
-    assert_eq!(current.data.balance, balance_only.data.balance);
+    assert_eq!(
+        current.data.balance().unwrap(),
+        balance_only.data.balance().unwrap()
+    );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
     let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -250,7 +253,8 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         "the historical view must predate the shard, not mirror current state"
     );
     assert_eq!(
-        before_population.data.balance, balance_only.data.balance,
+        before_population.data.balance().unwrap(),
+        balance_only.data.balance().unwrap(),
         "the historical view must be the real account at that height, not a default"
     );
 
@@ -264,7 +268,10 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         after_population.data.shards[&last_writer_key].0, expected_shard,
         "the historical view must serve real shard data, not always empty"
     );
-    assert_eq!(after_population.data.balance, balance_only.data.balance);
+    assert_eq!(
+        after_population.data.balance().unwrap(),
+        balance_only.data.balance().unwrap()
+    );
     assert_eq!(after_population.nonce, balance_only.nonce.0);
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
@@ -272,7 +279,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
-    assert_eq!(missing.data.balance, 0);
+    assert_eq!(missing.data.balance().unwrap(), 0);
     assert_eq!(missing.nonce, 0);
     assert!(missing.data.shards.is_empty());
 

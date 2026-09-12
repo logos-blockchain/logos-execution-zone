@@ -1,8 +1,10 @@
-use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
-use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-    respond_unsupported_call,
+use lee_core::{
+    native_token::custody_transfer,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn main() {

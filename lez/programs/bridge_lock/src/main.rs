@@ -1,11 +1,11 @@
-use authenticated_transfer_core::custody_transfer;
 use bridge_lock_core::{
     Instruction, config_account_id, config_bytes, escrow_account_id, holding_account_id,
     holding_seed, read_config,
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector},
+    account::{AccountId, ProgramShardSelector},
+    native_token::custody_transfer,
     program::{
         AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -154,7 +154,7 @@ fn lock(
         "fourth account must be the escrow PDA"
     );
 
-    // The balance moves in a chained authenticated_transfer call.
+    // The balance moves in a chained native transfer.
     let move_call = custody_transfer(
         holding.account_id,
         holding_seed(&holder.account_id.into_value()),
@@ -228,7 +228,6 @@ fn init_config(
 
     let config_post = AccountStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         config_bytes(outbox_account_id, target_account_id)
             .to_vec()
             .try_into()

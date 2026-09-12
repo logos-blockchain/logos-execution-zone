@@ -84,7 +84,7 @@ pub mod tests {
         let initial_data = [(addr1, 10000), (addr2, 20000)];
         V03State::new()
             .with_public_account_balances(initial_data)
-            .with_programs([crate::test_methods::simple_balance_transfer()])
+            .with_programs([crate::test_methods::data_changer()])
     }
 
     fn transaction_for_tests() -> PublicTransaction {
@@ -92,7 +92,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -173,7 +173,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr1),
@@ -196,7 +196,7 @@ pub mod tests {
         let nonces = vec![0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -219,7 +219,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -243,7 +243,7 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 1_u128.into()];
         let instruction = 1337;
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -263,7 +263,7 @@ pub mod tests {
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
         let message = Message::new_preserialized(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            crate::test_methods::data_changer().id().into(),
             vec![],
             vec![],
             vec![0; 4],

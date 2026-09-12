@@ -82,20 +82,19 @@ impl TpsTestManager {
     /// Build a batch of public transactions to submit to the node.
     pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
         // Create valid public transactions
-        let program = programs::authenticated_transfer();
         let public_txs: Vec<PublicTransaction> = self
             .public_keypairs
             .windows(2)
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new_with_fees(
-                    program.id().into(),
+                    lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
                     vec![
                         ProgramShardSelector::balance(pair[0].1),
                         ProgramShardSelector::balance(pair[1].1),
                     ],
                     [Nonce(0_u128)].to_vec(),
-                    authenticated_transfer_core::Instruction::Transfer { amount },
+                    lee_core::native_token::Instruction::Transfer { amount },
                     // A generous max_fee (a ceiling, not the fee paid) so the
                     // base-fee rise this test's own sustained load causes cannot
                     // push the reserve past it and drop later txs.
@@ -238,7 +237,6 @@ pub async fn tps_test() -> Result<()> {
 /// multiple times with the purpose of testing the node's processing performance.
 #[expect(dead_code, reason = "No idea if we need this, should we remove it?")]
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
-    let program = programs::authenticated_transfer();
     let sender_ask = AuthorizationSecretKey([1; 32]);
     let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
@@ -298,14 +296,14 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 },
             ],
             instruction_data: Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer {
+                lee_core::native_token::Instruction::Transfer {
                     amount: balance_to_move,
                 },
             )
             .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::native(),
     )
     .unwrap();
     let message = pptx::message::Message::from_circuit_output(vec![], output);

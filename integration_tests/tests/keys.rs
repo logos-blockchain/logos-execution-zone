@@ -81,7 +81,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.data.balance, 100);
+    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
 
     log::info!("Successfully transferred");
 
@@ -158,8 +158,8 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert!(acc1.account.data.shards.is_empty());
     assert!(acc2.account.data.shards.is_empty());
 
-    assert_eq!(acc1.account.data.balance, 100);
-    assert_eq!(acc2.account.data.balance, 101);
+    assert_eq!(acc1.account.data.balance().unwrap(), 100);
+    assert_eq!(acc2.account.data.balance().unwrap(), 101);
 
     log::info!("Tree checks passed, testing restored accounts can transact");
 

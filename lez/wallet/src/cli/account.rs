@@ -5,7 +5,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
-use lee_core::{Identifier, account::AccountIdError};
+use lee_core::{Identifier, account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -384,10 +384,8 @@ impl AccountSubcommand {
                 };
                 match &scope {
                     ReadScope::All => found.account.clone(),
-                    ReadScope::Balance => project_private_account(found.account, None),
-                    ReadScope::Shard(program) => {
-                        project_private_account(found.account, Some(*program))
-                    }
+                    ReadScope::Balance => found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
+                    ReadScope::Shard(program) => found.account.project([*program]),
                 }
             }
         };
@@ -439,7 +437,11 @@ impl AccountSubcommand {
             return Ok(SubcommandReturnValue::Empty);
         }
 
-        print_account_details(&account, "");
+        let balance_read = match &scope {
+            ReadScope::All | ReadScope::Balance => true,
+            ReadScope::Shard(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
+        };
+        print_account_details(&account, "", balance_read);
 
         if keys {
             display_keys(wallet_core)?;
@@ -508,7 +510,7 @@ impl AccountSubcommand {
                 .get_account_view(ProgramShardSelector::balance(id))
                 .await
             {
-                Ok(account) => print_account_details(&account, "  "),
+                Ok(account) => print_account_details(&account, "  ", true),
                 Err(e) => println!("  Error fetching account: {e}"),
             }
         }
@@ -525,7 +527,11 @@ impl AccountSubcommand {
             );
             match wallet_core.storage().key_chain().private_account(id) {
                 Some(found) => {
-                    print_account_details(&project_private_account(found.account, None), "  ");
+                    print_account_details(
+                        &found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
+                        "  ",
+                        true,
+                    );
                 }
                 None => println!("  Not found in local storage"),
             }
@@ -689,23 +695,23 @@ impl WalletSubcommand for ImportSubcommand {
     }
 }
 
-fn project_private_account(account: &Account, program_account_id: Option<AccountId>) -> Account {
-    let mut data = account.data.project(program_account_id);
-    data.shards.retain(|_, shard| !shard.is_empty());
-    Account {
-        nonce: account.nonce,
-        data,
+fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
+    if balance_read {
+        let balance = account.data.balance().map_or_else(
+            |_error| "<malformed>".to_owned(),
+            |balance| balance.to_string(),
+        );
+        println!("{indent}Balance {balance}, nonce {}", account.nonce.0);
+    } else {
+        println!("{indent}Balance not read, nonce {}", account.nonce.0);
     }
-}
-
-/// Prints an account's balance, nonce, and program shards.
-fn print_account_details(account: &Account, indent: &str) {
-    println!(
-        "{indent}Balance {}, nonce {}",
-        account.data.balance, account.nonce.0
-    );
     let token_prog_id: AccountId = programs::token().id().into();
-    for (program, data) in &account.data.shards {
+    for (program, data) in account
+        .data
+        .shards
+        .iter()
+        .filter(|(program, data)| **program != NATIVE_TOKEN_PROGRAM_ID && !data.is_empty())
+    {
         let (description, json_view) = if *program == token_prog_id {
             TokenDefinition::try_from(data)
                 .map(|token_def| {

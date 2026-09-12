@@ -5,7 +5,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
+    account::{AccountId, ShardData},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{AccountInput, AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
 };
 
@@ -73,7 +74,6 @@ pub fn write_segment(
 
     let mut diffs = vec![AccountStateDiff::new(
         target.clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramSegment {
                 bytecode,
@@ -99,6 +99,13 @@ pub fn write_segment(
     diffs
 }
 
+fn reject_reserved_target(account_id: AccountId) {
+    assert_ne!(
+        account_id, NATIVE_TOKEN_PROGRAM_ID,
+        "the native token program has no deployable bytecode"
+    );
+}
+
 /// Executes `CreateHeader`.
 #[must_use]
 pub fn create_header(
@@ -110,6 +117,7 @@ pub fn create_header(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
     );
+    reject_reserved_target(pre_states[0].account_id);
     assert!(
         pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "header target already deployed"
@@ -124,7 +132,6 @@ pub fn create_header(
 
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramHeader {
                 image_id,
@@ -154,6 +161,7 @@ pub fn update_header(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
     );
+    reject_reserved_target(pre_states[0].account_id);
     let old_header =
         ProgramHeader::from_bytes(pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID)).expect(
         "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
@@ -176,7 +184,6 @@ pub fn update_header(
 
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramHeader {
                 image_id,

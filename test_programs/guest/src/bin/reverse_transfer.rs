@@ -1,7 +1,8 @@
 use lee_core::{
-    account::BalanceDiff,
+    account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -29,14 +30,24 @@ fn main() {
         return;
     };
 
-    let recipient_diff = AccountStateDiff::balance(recipient, BalanceDiff::Add(amount));
-    let source_diff = AccountStateDiff::balance(source, BalanceDiff::Sub(amount));
+    let transfer = ChainedCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::from(&source),
+            ProgramShardSelector::from(&recipient),
+        ],
+        &NativeInstruction::Transfer { amount },
+    );
 
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![recipient_diff, source_diff],
+        vec![
+            AccountStateDiff::unchanged(recipient),
+            AccountStateDiff::unchanged(source),
+        ],
     )
+    .with_chained_calls(vec![transfer])
     .write();
 }

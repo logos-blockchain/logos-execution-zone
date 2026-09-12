@@ -1200,10 +1200,7 @@ mod tests {
 
         let new_account = lee_core::account::Account {
             nonce: account.nonce,
-            data: lee_core::account::AccountData {
-                balance: 100,
-                ..account.data
-            },
+            ..lee_core::account::Account::funded(100)
         };
 
         user_data
@@ -1212,7 +1209,7 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.data.balance, 100);
+        assert_eq!(retrieved_account.account.data.balance().unwrap(), 100);
     }
 
     #[test]
@@ -1230,7 +1227,7 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.data.balance, 100);
+        assert_eq!(retrieved_account.account.data.balance().unwrap(), 100);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
+    account::{AccountId, ShardData},
     program::{
         AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
@@ -34,7 +34,7 @@ fn write(
             .expect("ShardData should fit within the allowed limits")
     };
 
-    AccountStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
+    AccountStateDiff::new(pre_state.clone(), new_data)
 }
 
 fn move_data(
@@ -45,8 +45,7 @@ fn move_data(
     // Construct the new data values.
     let from_data: Vec<u8> = from_pre.shard_of(self_account_id).clone().into_inner();
 
-    let from_post =
-        AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), ShardData::default());
+    let from_post = AccountStateDiff::new(from_pre.clone(), ShardData::default());
 
     let to_post = {
         let mut bytes = to_pre.shard_of(self_account_id).clone().into_inner();
@@ -54,7 +53,7 @@ fn move_data(
         let new_data: ShardData = bytes
             .try_into()
             .expect("ShardData should fit within the allowed limits");
-        AccountStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
+        AccountStateDiff::new(to_pre.clone(), new_data)
     };
 
     vec![from_post, to_post]

@@ -16,7 +16,6 @@ ppe = ["prove"]
 [dependencies]
 lee = { workspace = true }
 lee_core = { workspace = true, features = ["host"] }
-authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true

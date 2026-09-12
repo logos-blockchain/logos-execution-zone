@@ -6,7 +6,6 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result};
-use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, utils::sync_private,
@@ -24,14 +23,18 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
-    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey, program::PdaSeed,
+    PrivateWitness, WitnessKind,
+    account::Account,
+    encryption::ViewingPublicKey,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+    program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
 
-/// Funds a private PDA by calling `auth_transfer` directly.
+/// Funds a private PDA by calling the native token program directly.
 #[expect(
     clippy::too_many_arguments,
     reason = "test helper — grouping args would obscure intent"
@@ -45,7 +48,6 @@ async fn fund_private_pda(
     seed: PdaSeed,
     authority_program_id: AccountId,
     amount: u128,
-    auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
     let pda_account_id =
         AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
@@ -57,8 +59,8 @@ async fn fund_private_pda(
         .get_account_public_signing_key(sender)
         .context("sender signing key not found")?;
 
-    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
-        .context("failed to serialize auth_transfer instruction")?;
+    let instruction = Program::serialize_instruction(NativeInstruction::Transfer { amount })
+        .context("failed to serialize the native transfer instruction")?;
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -84,7 +86,7 @@ async fn fund_private_pda(
             instruction_data: instruction,
             ..Default::default()
         },
-        auth_transfer,
+        &ProgramWithDependencies::native(),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
@@ -117,7 +119,7 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    auth_transfer_id: ProgramId,
+    transfer_program_id: ProgramId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
@@ -130,7 +132,7 @@ async fn spend_private_pda(
                 }
                 .balance(),
             ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id))
+            Program::serialize_instruction((seed, amount, transfer_program_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
         )
@@ -162,12 +164,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     };
 
     let proxy = test_programs::pda_spend_proxy();
-    let auth_transfer = programs::authenticated_transfer();
     let proxy_id: AccountId = proxy.id().into();
     // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
-    // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
-    let auth_transfer_id: ProgramId = auth_transfer.id();
-    let auth_transfer_account_id: AccountId = auth_transfer_id.into();
+    // identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
+    let transfer_program_id: ProgramId = ProgramId::from(NATIVE_TOKEN_PROGRAM_ID);
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -230,13 +230,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let auth_transfer_program =
-        ProgramWithDependencies::new(auth_transfer.clone(), auth_transfer_account_id, [].into());
-    let spend_program = ProgramWithDependencies::new(
-        proxy,
-        proxy_id,
-        [(auth_transfer_account_id, auth_transfer)].into(),
-    );
+    let spend_program = ProgramWithDependencies::new(proxy, proxy_id, HashMap::new());
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
@@ -258,7 +252,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         proxy_id,
         amount,
-        &auth_transfer_program,
     )
     .await?;
 
@@ -272,7 +265,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         proxy_id,
         amount,
-        &auth_transfer_program,
     )
     .await?;
 
@@ -287,13 +279,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after sync")?;
-    assert_eq!(pda_0_account.data.balance, amount);
+    assert_eq!(pda_0_account.data.balance().unwrap(), amount);
 
     let pda_1_account = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after sync")?;
-    assert_eq!(pda_1_account.data.balance, amount);
+    assert_eq!(pda_1_account.data.balance().unwrap(), amount);
 
     // Commitments for both PDAs must be in the sequencer's state.
     let commitment_0 = ctx
@@ -339,7 +331,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_0,
         &spend_program,
-        auth_transfer_id,
+        transfer_program_id,
     )
     .await?;
 
@@ -352,7 +344,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_1,
         &spend_program,
-        auth_transfer_id,
+        transfer_program_id,
     )
     .await?;
 
@@ -366,13 +358,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after spend sync")?;
-    assert_eq!(pda_0_spent.data.balance, amount - amount_spend_0);
+    assert_eq!(pda_0_spent.data.balance().unwrap(), amount - amount_spend_0);
 
     let pda_1_spent = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after spend sync")?;
-    assert_eq!(pda_1_spent.data.balance, amount - amount_spend_1);
+    assert_eq!(pda_1_spent.data.balance().unwrap(), amount - amount_spend_1);
 
     // Post-spend commitments must be in state.
     let post_spend_commitment_0 = ctx

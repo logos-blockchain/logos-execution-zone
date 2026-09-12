@@ -1,9 +1,8 @@
-use authenticated_transfer_core::custody_transfer;
 use fee_core::{
     BlockFeeSummary, Instruction, fee_escrow_seed, fee_inbox_seed, market, state::FeeState,
 };
 use lee_core::{
-    account::BalanceDiff,
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
         AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -71,7 +70,9 @@ fn distribute(
         .checked_add(summary.revenue_tip)
         .expect("block revenue fits u128");
     assert!(
-        pre_inbox.balance == revenue_total,
+        decode_balance(pre_inbox.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+            .expect("the inbox selects its native balance shard")
+            == revenue_total,
         "inbox balance must equal the block's revenue"
     );
 
@@ -97,7 +98,7 @@ fn distribute(
     .collect();
 
     let state_diffs = vec![
-        AccountStateDiff::new(pre_state, BalanceDiff::Add(0), post_state_data),
+        AccountStateDiff::new(pre_state, post_state_data),
         AccountStateDiff::unchanged(pre_escrow),
         AccountStateDiff::unchanged(pre_inbox),
         AccountStateDiff::unchanged(pre_producer),

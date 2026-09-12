@@ -155,15 +155,37 @@ pub struct Account {
 /// An account's balance and program shards.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
-    pub balance: u128,
     pub shards: BTreeMap<AccountId, ShardData>,
 }
 
-/// Selects an account's balance and optionally one program shard.
+impl AccountData {
+    #[must_use]
+    pub fn balance(&self) -> Option<u128> {
+        let Some(ShardData(data)) = self.shards.get(&AccountId::native_token_program()) else {
+            return Some(0);
+        };
+        if data.is_empty() {
+            return Some(0);
+        }
+        match u128::from_le_bytes(<[u8; 16]>::try_from(data.as_slice()).ok()?) {
+            0 => None,
+            balance => Some(balance),
+        }
+    }
+}
+
+impl AccountId {
+    #[must_use]
+    pub const fn native_token_program() -> Self {
+        Self { value: [0; 32] }
+    }
+}
+
+/// Selects one of an account's program shards.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProgramShardSelector {
     pub account_id: AccountId,
-    pub program_account_id: Option<AccountId>,
+    pub program_account_id: AccountId,
 }
 
 pub type BlockId = u64;

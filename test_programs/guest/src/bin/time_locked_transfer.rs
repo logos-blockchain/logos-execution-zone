@@ -11,9 +11,10 @@
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
-    account::BalanceDiff,
+    account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -44,11 +45,7 @@ fn main() {
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
     // Read the current timestamp from the clock account.
-    let (_, clock_bytes) = clock_pre
-        .shard
-        .as_ref()
-        .expect("the clock shard selector must name a record");
-    let clock_data = ClockAccountData::from_bytes(clock_bytes);
+    let clock_data = ClockAccountData::from_bytes(&clock_pre.shard.1);
 
     assert!(
         clock_data.timestamp >= deadline,
@@ -56,16 +53,26 @@ fn main() {
         clock_data.timestamp,
     );
 
+    let transfer = ChainedCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::from(&sender_pre),
+            ProgramShardSelector::from(&receiver_pre),
+        ],
+        &NativeInstruction::Transfer { amount },
+    );
+
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::balance(sender_pre, BalanceDiff::Sub(amount)),
-            AccountStateDiff::balance(receiver_pre, BalanceDiff::Add(amount)),
+            AccountStateDiff::unchanged(sender_pre),
+            AccountStateDiff::unchanged(receiver_pre),
             // Clock account is read-only: post state equals pre state.
             AccountStateDiff::unchanged(clock_pre),
         ],
     )
+    .with_chained_calls(vec![transfer])
     .write();
 }

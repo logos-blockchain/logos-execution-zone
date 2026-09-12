@@ -26,6 +26,7 @@
 
 use lee_core::{
     account::ProgramShardSelector,
+    native_token::Instruction as NativeInstruction,
     program::{
         AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -66,8 +67,10 @@ fn main() {
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
         // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        let transfer_instruction =
-            borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
+        let transfer_instruction = borsh::to_vec(&NativeInstruction::Transfer {
+            amount: instruction.amount,
+        })
+        .expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
             program_account_id: instruction.token_program_id,
