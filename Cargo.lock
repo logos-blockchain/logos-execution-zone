@@ -4388,9 +4388,11 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2 0.5.10",
+ "system-configuration 0.7.0",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]
@@ -4836,12 +4838,14 @@ dependencies = [
  "lee_core",
  "log",
  "logos-blockchain-core",
+ "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
  "program_loader_core",
  "programs",
+ "reqwest 0.12.28",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -10098,6 +10102,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "encoding_rs",
  "futures-channel",
  "futures-core",
  "futures-util",
@@ -10111,6 +10116,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -11088,6 +11094,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_channel_config_actor"
+version = "0.1.0"
+dependencies = [
+ "kameo",
+ "log",
+ "logos-blockchain-codec",
+ "logos-blockchain-core",
+ "logos-blockchain-key-management-system-service",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
@@ -11121,6 +11140,7 @@ dependencies = [
  "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "sequencer_channel_config_actor",
  "sequencer_core_metrics",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -11202,8 +11222,10 @@ dependencies = [
  "lee",
  "libp2p",
  "log",
+ "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "mempool",
+ "sequencer_channel_config_actor",
  "sequencer_core",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -11256,6 +11278,7 @@ dependencies = [
  "log",
  "metrics-exporter-prometheus",
  "programs",
+ "sequencer_channel_config_actor",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_gossip_actor",

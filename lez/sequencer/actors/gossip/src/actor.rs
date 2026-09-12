@@ -25,12 +25,13 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use sequencer_channel_config_actor::Wire;
 use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
 use sequencer_slasher_actor::Approval;
 use tokio::select;
 
 use self::seen_cache::SeenCache;
-use crate::protocol::{GetConnectedPeers, PublishTransaction, RetryBootstrap};
+use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap};
 
 mod seen_cache;
 #[cfg(test)]
@@ -83,6 +84,14 @@ pub struct GossipActor {
     approval_sink: Recipient<Approval>,
     /// The committee the follow path last read; `None` filters nothing.
     accredited_keys_rx: AccreditedKeysReceiver,
+    /// Keys with stake on record at head; `None` filters nothing.
+    staked_keys_rx: AccreditedKeysReceiver,
+    /// Channel-config candidates and signatures ride their own topic, so the
+    /// transaction wire format is untouched.
+    config_topic: gossipsub::IdentTopic,
+    /// Where inbound channel-config messages go; the actor decides what to
+    /// keep, since only it knows the candidate a signature belongs to.
+    config_sink: Recipient<Wire>,
     seen: SeenCache,
     max_block_size: u64,
     submit: IngestSubmit,
@@ -93,6 +102,8 @@ pub struct GossipActor {
     pending_publish: BoundedVecDeque<LeeTransaction>,
     /// Same, for this node's own slash approvals.
     pending_approvals: BoundedVecDeque<Approval>,
+    /// Same, for this node's own channel-config messages.
+    pending_config: BoundedVecDeque<Wire>,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
 }
@@ -112,6 +123,10 @@ pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
 impl GossipActor {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
     /// bootstrap peers.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each topic's inbound sink is a separate wiring point"
+    )]
     pub async fn new(
         config: GossipConfig,
         channel_id: [u8; 32],
@@ -120,6 +135,8 @@ impl GossipActor {
         max_block_size: u64,
         submit: IngestSubmit,
         accredited_keys_rx: AccreditedKeysReceiver,
+        staked_keys_rx: AccreditedKeysReceiver,
+        config_sink: Recipient<Wire>,
     ) -> Result<Self> {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -135,11 +152,13 @@ impl GossipActor {
         let listen_addr = config.listen_addr;
         let bootstrap = config.bootstrap_peers;
 
-        // An approval is re-announced verbatim, so a content digest would make
-        // every re-announcement a duplicate the sender itself drops.
+        // An approval and a channel-config message are both re-announced
+        // verbatim, so a content digest would make every re-announcement a
+        // duplicate the sender itself drops.
         let approvals_topic_hash = Self::get_approvals_topic_for_channel(channel_id).hash();
+        let config_topic_hash = Self::get_config_topic_for_channel(channel_id).hash();
         let message_id_fn = move |msg: &gossipsub::Message| {
-            if msg.topic == approvals_topic_hash {
+            if msg.topic == approvals_topic_hash || msg.topic == config_topic_hash {
                 return default_message_id(msg);
             }
             // Undecodable messages still need a message-id, but it must be a
@@ -214,6 +233,13 @@ impl GossipActor {
             .subscribe(&approvals_topic)
             .context("Failed to subscribe to gossip slash approval topic")?;
 
+        let config_topic = Self::get_config_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&config_topic)
+            .context("Failed to subscribe to gossip channel-config topic")?;
+
         swarm
             .listen_on(listen_addr)
             .context("Failed to listen on gossip address")?;
@@ -254,15 +280,27 @@ impl GossipActor {
             approvals_topic,
             approval_sink,
             accredited_keys_rx,
+            staked_keys_rx,
+            config_topic,
+            config_sink,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            pending_config: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
         })
+    }
+
+    #[must_use]
+    fn get_config_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/channel-config",
+            hex::encode(channel_id)
+        ))
     }
 
     #[must_use]
@@ -351,6 +389,13 @@ impl GossipActor {
             }) => {
                 if message.topic == self.approvals_topic.hash() {
                     self.on_approval_message(propagation_source, &message_id, &message.data);
+                } else if message.topic == self.config_topic.hash() {
+                    self.on_config_message(
+                        propagation_source,
+                        message.source.as_ref(),
+                        &message_id,
+                        &message.data,
+                    );
                 } else {
                     self.on_gossip_message(propagation_source, &message_id, &message.data)
                         .await;
@@ -365,6 +410,11 @@ impl GossipActor {
                 if topic == self.approvals_topic.hash() =>
             {
                 self.flush_pending_approvals();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.config_topic.hash() =>
+            {
+                self.flush_pending_configs();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(pubkey) = info.public_key.try_into_ed25519()
@@ -501,6 +551,75 @@ impl GossipActor {
         }
     }
 
+    /// Screens an inbound channel-config message by its originator and hands
+    /// it to the actor, which is the only thing that can judge the rest: a
+    /// signature means nothing without the candidate it was signed over.
+    fn on_config_message(
+        &mut self,
+        source: PeerId,
+        origin: Option<&PeerId>,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use self::validation::{ConfigEvaluation, evaluate_config_message};
+
+        let evaluation = {
+            let staked_keys = self.staked_keys_rx.borrow();
+            evaluate_config_message(
+                data,
+                origin.and_then(inlined_ed25519_key),
+                staked_keys.as_ref(),
+            )
+        };
+        let acceptance = match evaluation {
+            ConfigEvaluation::Reject(reason) => {
+                log::debug!("Rejecting a channel-config message from {source}: {reason}");
+                gossipsub::MessageAcceptance::Reject
+            }
+            ConfigEvaluation::Ignore(reason) => {
+                log::debug!("Ignoring a channel-config message from {source}: {reason}");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            ConfigEvaluation::Accept(message) => {
+                if let Err(err) = self.config_sink.tell(message).try_send() {
+                    log::debug!("Dropping an inbound channel-config message: {err}");
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes one of this node's own channel-config messages, queued and
+    /// retried like a transaction: a candidate has to reach every peer that
+    /// might sign it.
+    fn publish_config(&mut self, message: Wire) {
+        let config_topic = self.config_topic.clone();
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(config_topic, message.encode())
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                log::debug!("Queueing a channel-config publish for retry: {err}");
+                _ = self.pending_config.push_back(message);
+            }
+        }
+    }
+
+    fn flush_pending_configs(&mut self) {
+        for message in self.pending_config.drain_all() {
+            self.publish_config(message);
+        }
+    }
+
     /// Publishes a locally-submitted transaction to the mesh. Marked seen
     /// only once actually published; a failed publish (e.g.
     /// `InsufficientPeers` while the mesh is still forming) is queued and
@@ -624,6 +743,19 @@ impl Message<Approval> for GossipActor {
     }
 }
 
+impl Message<PublishConfig> for GossipActor {
+    type Reply = ();
+
+    /// Publish this node's own channel-config draft or signature.
+    async fn handle(
+        &mut self,
+        PublishConfig(message): PublishConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_config(message);
+    }
+}
+
 impl Message<PublishTransaction> for GossipActor {
     type Reply = ();
 
@@ -690,6 +822,24 @@ pub(crate) fn peer_id_from_ed25519(
 ) -> Result<PeerId, libp2p::identity::DecodingError> {
     libp2p::identity::ed25519::PublicKey::try_from_bytes(pubkey)
         .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
+}
+
+/// The Ed25519 key an Ed25519 peer id carries inline, so an originator several
+/// hops away needs no Identify exchange.
+fn inlined_ed25519_key(peer_id: &PeerId) -> Option<[u8; 32]> {
+    /// The identity multihash, which keeps the encoded key verbatim.
+    const IDENTITY: u64 = 0;
+
+    let multihash: &libp2p::multihash::Multihash<64> = peer_id.as_ref();
+    if multihash.code() != IDENTITY {
+        return None;
+    }
+
+    libp2p::identity::PublicKey::try_decode_protobuf(multihash.digest())
+        .ok()?
+        .try_into_ed25519()
+        .ok()
+        .map(|key| key.to_bytes())
 }
 
 /// Warns operators periodically while the gossip actor is down.

@@ -5,10 +5,14 @@ use futures::never::Never;
 use kameo::actor::{ActorRef, Recipient, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
 use log::info;
+use sequencer_channel_config_actor::{ChannelConfigActor, SetPublisher};
 pub use sequencer_core::config::*;
 use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
-use sequencer_gossip_actor::{GossipActor, protocol::PublishTransaction};
+use sequencer_gossip_actor::{
+    GossipActor,
+    protocol::{PublishConfig, PublishTransaction},
+};
 use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
@@ -20,6 +24,8 @@ mod actor_handle;
 
 /// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
 const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
+/// Depth of the channel-config-actor-to-gossip channel; it only absorbs bursts.
+const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(not(feature = "standalone"))]
 type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
@@ -198,8 +204,10 @@ pub fn run(
 
         let executor = ExecutorActor::new(config, storage_ref.clone()).await;
         let slasher_ref = executor.slasher_ref();
+        let config_manager_ref = executor.config_manager_ref();
         // The core has already read a committee by the time this returns.
         let accredited_keys_rx = executor.accredited_keys_watch();
+        let staked_keys_rx = executor.staked_keys_watch();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
 
@@ -214,8 +222,10 @@ pub fn run(
                     &sequencer_home,
                     max_block_size.as_u64(),
                     accredited_keys_rx,
+                    staked_keys_rx,
                     &executor_ref,
                     &slasher_ref,
+                    &config_manager_ref,
                     &scheduler_ref,
                 )
                 .await?,
@@ -266,7 +276,8 @@ pub fn run(
 #[expect(
     clippy::too_many_arguments,
     reason = "The gossip actor is wired to most of the node: its config and identity, the \
-              executor's admission door, the slasher's approval flow, and the scheduler"
+              executor's admission door, the slasher's approval flow, the channel-config \
+              actor's signature collection, and the scheduler"
 )]
 async fn setup_gossip(
     gossip_config: GossipConfig,
@@ -274,8 +285,10 @@ async fn setup_gossip(
     sequencer_home: &Path,
     max_block_size: u64,
     accredited_keys_rx: AccreditedKeysReceiver,
+    staked_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor<StorageActor, BlockPublisher>>,
     slasher_ref: &ActorRef<SlasherActor>,
+    config_manager_ref: &ActorRef<ChannelConfigActor>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 bedrock signing key is deliberately reused as the
@@ -310,6 +323,9 @@ async fn setup_gossip(
         max_block_size,
         submit,
         accredited_keys_rx,
+        staked_keys_rx,
+        // Screened inbound channel-config messages go straight to the actor.
+        config_manager_ref.clone().recipient(),
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
@@ -332,6 +348,27 @@ async fn setup_gossip(
     tokio::spawn(async move {
         while let Some(approval) = approval_rx.recv().await {
             if approval_gossip_ref.tell(approval).send().await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Without gossip the actor publishes nowhere, so a channel whose threshold
+    // is above one can never collect the signatures it needs.
+    let (outbound_config_tx, mut outbound_config_rx) =
+        tokio::sync::mpsc::channel(OUTBOUND_CONFIG_CHANNEL_CAPACITY);
+    config_manager_ref
+        .tell(SetPublisher(outbound_config_tx))
+        .await?;
+    let config_gossip_ref = gossip_ref.clone();
+    tokio::spawn(async move {
+        while let Some(message) = outbound_config_rx.recv().await {
+            if config_gossip_ref
+                .tell(PublishConfig(message))
+                .send()
+                .await
+                .is_err()
+            {
                 break;
             }
         }
