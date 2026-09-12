@@ -1,12 +1,16 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, ShardData};
+use lee_core::{
+    account::{AccountId, AccountIdData, ShardData},
+    program::{AccountInput, PdaSeed},
+};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
 ///
-/// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
+/// Holding, definition and metadata inputs select this program's shard; owner inputs are
+/// balance-only. "Empty" and "initialized" refer to that shard.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfer tokens from sender to recipient.
@@ -128,7 +132,39 @@ pub enum TokenHolding {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum HoldingKind {
+    Fungible,
+    NftMaster,
+    NftPrintedCopy,
+}
+
+impl HoldingKind {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Fungible => 0,
+            Self::NftMaster => 1,
+            Self::NftPrintedCopy => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct HoldingTarget {
+    pub owner_id: AccountId,
+    pub account_id_data: AccountIdData,
+}
+
 impl TokenHolding {
+    #[must_use]
+    pub const fn kind(&self) -> HoldingKind {
+        match self {
+            Self::Fungible { .. } => HoldingKind::Fungible,
+            Self::NftMaster { .. } => HoldingKind::NftMaster,
+            Self::NftPrintedCopy { .. } => HoldingKind::NftPrintedCopy,
+        }
+    }
+
     #[must_use]
     pub const fn zeroized_clone_from(other: &Self) -> Self {
         match other {
@@ -243,4 +279,49 @@ impl From<&TokenMetadata> for ShardData {
 
         Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
     }
+}
+
+#[must_use]
+pub fn holding_seed(owner_id: AccountId, definition_id: AccountId, kind: HoldingKind) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    const PREFIX: &[u8; 32] = b"/LEE/TokenHolding/v1/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+    let mut bytes = [0; 97];
+    bytes[..32].copy_from_slice(PREFIX);
+    bytes[32] = kind.tag();
+    bytes[33..65].copy_from_slice(owner_id.as_ref());
+    bytes[65..].copy_from_slice(definition_id.as_ref());
+    PdaSeed::new(
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Hash output must be exactly 32 bytes long"),
+    )
+}
+
+#[must_use]
+pub fn holding_id(
+    holder: &HoldingTarget,
+    token_program_id: AccountId,
+    definition_id: AccountId,
+    kind: HoldingKind,
+) -> AccountId {
+    holder.account_id_data.derive_pda_id(
+        token_program_id,
+        &holding_seed(holder.owner_id, definition_id, kind),
+    )
+}
+
+pub fn verify_holding(
+    holder: &HoldingTarget,
+    holding: &AccountInput,
+    token_program_id: AccountId,
+    definition_id: AccountId,
+    kind: HoldingKind,
+) {
+    assert_eq!(
+        holding.account_id,
+        holding_id(holder, token_program_id, definition_id, kind),
+        "Holding account ID does not match its derivation"
+    );
 }
