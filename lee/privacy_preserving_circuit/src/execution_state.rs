@@ -665,4 +665,132 @@ mod tests {
             None
         );
     }
+
+    fn native_row(seed: u8, is_authorized: bool, balance: u128) -> AccountInput {
+        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+    }
+
+    fn native_selectors() -> Vec<ProgramShardSelector> {
+        vec![
+            ProgramShardSelector::balance(AccountId::new([1; 32])),
+            ProgramShardSelector::balance(AccountId::new([2; 32])),
+        ]
+    }
+
+    fn tampered_native_report(amount: u128) -> ProgramOutput {
+        let instruction = borsh::to_vec(&native_token::Instruction::Transfer { amount })
+            .expect("the instruction serializes");
+        let forged_credit = native_token::encode_balance(9_999);
+        ProgramOutput {
+            self_account_id: AccountId::new([0xAA; 32]),
+            caller_account_id: Some(AccountId::new([0xBB; 32])),
+            call_kind: CallKind::Unknown(7),
+            instruction_data: instruction,
+            state_diffs: vec![
+                AccountStateDiff::new(native_row(1, true, 100), forged_credit.clone()),
+                AccountStateDiff::new(native_row(2, false, 0), forged_credit),
+            ],
+            chained_calls: vec![ChainedCall {
+                program_account_id: AccountId::new([0xCC; 32]),
+                shard_selectors: Vec::new(),
+                instruction_data: Vec::new(),
+                pda_seeds: Vec::new(),
+            }],
+            block_validity_window: (Some(1), Some(2)).try_into().expect("a valid window"),
+            timestamp_validity_window: (Some(3), Some(4)).try_into().expect("a valid window"),
+            events: vec![lee_core::program::ProgramEvent {
+                selector: [1; 8],
+                data: vec![2; 4],
+            }],
+        }
+    }
+
+    fn derive_native_root(
+        report: ProgramOutput,
+        selectors: &[ProgramShardSelector],
+    ) -> ExecutionState {
+        ExecutionState::derive_from_outputs(
+            &[],
+            native_token::NATIVE_TOKEN_PROGRAM_ID,
+            vec![report],
+            selectors,
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_native_call_takes_only_its_rows_from_the_report() {
+        let (block_window, timestamp_window, public_actions, _private) =
+            derive_native_root(tampered_native_report(30), &native_selectors()).into_parts();
+
+        let balances: Vec<_> = public_actions
+            .iter()
+            .map(|action| action.post.balance())
+            .collect();
+        assert_eq!(balances, vec![Ok(70), Ok(30)]);
+        assert_eq!(block_window.start(), None);
+        assert_eq!(block_window.end(), None);
+        assert_eq!(timestamp_window.start(), None);
+        assert_eq!(timestamp_window.end(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Call ran on shard selectors it was not handed")]
+    fn a_native_root_must_report_the_scheduled_selectors_in_order() {
+        let mut selectors = native_selectors();
+        selectors.reverse();
+
+        drop(derive_native_root(tampered_native_report(30), &selectors));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be authorized exactly by its supplied credential")]
+    fn a_native_call_refuses_authorization_the_witness_does_not_carry() {
+        let witness = witness_with(WitnessKind::Regular { ask: None });
+        let sender = witness.account_id();
+        let recipient = AccountId::new([2; 32]);
+        let mut report = tampered_native_report(30);
+        report.state_diffs[0].pre_state = AccountInput::balance(sender, true, 100);
+        report.state_diffs[1].pre_state = AccountInput::balance(recipient, false, 0);
+
+        drop(ExecutionState::derive_from_outputs(
+            &[witness],
+            native_token::NATIVE_TOKEN_PROGRAM_ID,
+            vec![report],
+            &[
+                ProgramShardSelector::balance(sender),
+                ProgramShardSelector::balance(recipient),
+            ],
+            &[],
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "never the same one twice")]
+    fn a_root_may_not_be_handed_the_same_shard_twice() {
+        let selector = ProgramShardSelector::balance(AccountId::new([1; 32]));
+
+        drop(ExecutionState::derive_from_outputs(
+            &[],
+            AccountId::new([0xD0; 32]),
+            vec![tampered_native_report(30)],
+            &[selector, selector],
+            &[],
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "The native token program has no deployable bytecode to claim")]
+    fn a_guest_image_claim_for_the_reserved_id_is_refused() {
+        drop(ExecutionState::derive_from_outputs(
+            &[],
+            native_token::NATIVE_TOKEN_PROGRAM_ID,
+            vec![tampered_native_report(30)],
+            &native_selectors(),
+            &[ProgramImageClaim {
+                account_id: native_token::NATIVE_TOKEN_PROGRAM_ID,
+                image_id: [7; 8],
+            }],
+        ));
+    }
 }

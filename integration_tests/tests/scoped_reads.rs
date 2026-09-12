@@ -10,7 +10,7 @@ use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     utils::{
-        account_balance, get_account, get_account_view, new_account, send,
+        account_balance, create_token, get_account, get_account_view, new_account, send,
         wait_for_indexer_to_catch_up,
     },
 };
@@ -335,6 +335,51 @@ async fn public_transfer_survives_a_bloated_account() -> Result<()> {
         account_balance(&ctx, victim).await?,
         victim_before_return + 100,
         "the return transfer must have credited the victim, not merely been included"
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let supply = ctx.existing_public_accounts()[0];
+    let definition = new_account(&mut ctx, false, None).await?;
+
+    assert_eq!(
+        account_balance(&ctx, definition).await?,
+        0,
+        "the definition account must start unfunded for this to exercise payer selection"
+    );
+    let supply_before = account_balance(&ctx, supply).await?;
+
+    create_token(
+        &mut ctx,
+        public_mention(definition),
+        public_mention(supply),
+        "ScopedPayer",
+        1_000,
+    )
+    .await?;
+
+    let token_program_id: AccountId = programs::token().id().into();
+    let definition_view = get_account_view(
+        &ctx,
+        ProgramShardSelector::new(definition, token_program_id),
+    )
+    .await?;
+    assert!(
+        !definition_view.data.shard(token_program_id).is_empty(),
+        "the definition must have been written, so the transaction was admitted and settled"
+    );
+    assert!(
+        account_balance(&ctx, supply).await? < supply_before,
+        "the funded signer paid the fee, not the empty definition account"
+    );
+    assert_eq!(
+        account_balance(&ctx, definition).await?,
+        0,
+        "the unfunded signer was never selected as payer"
     );
 
     Ok(())

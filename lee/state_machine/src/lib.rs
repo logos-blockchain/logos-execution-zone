@@ -251,6 +251,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn native_spender() -> Program {
+        Program::new_unchecked(
+            test_methods::NATIVE_SPENDER_ID,
+            Cow::Borrowed(test_methods::NATIVE_SPENDER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn reordering_writer() -> Program {
         Program::new_unchecked(
             test_methods::REORDERING_WRITER_ID,

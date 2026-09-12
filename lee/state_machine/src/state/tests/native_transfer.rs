@@ -74,3 +74,143 @@ fn transition_from_sequence_of_native_transfer_invocations() {
     assert_eq!(state.get_account_by_id(account_id2).nonce, Nonce(2));
     assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(1));
 }
+
+#[test]
+fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
+    let program = crate::test_methods::native_spender();
+    let program_id: AccountId = program.id().into();
+    let stranger = AccountId::new([9; 32]);
+    let stranger_record: ShardData = b"untouched".to_vec().try_into().unwrap();
+
+    let sender_key = PrivateKey::try_new([11; 32]).unwrap();
+    let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let recipient = AccountId::new([12; 32]);
+    let written: Vec<u8> = vec![7; 4];
+    let amount: u128 = 30;
+
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            sender,
+            Account::funded(100).with_shard(stranger, stranger_record.clone()),
+        )])
+        .with_test_programs();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![
+            ProgramShardSelector::new(sender, program_id),
+            ProgramShardSelector::balance(sender),
+            ProgramShardSelector::balance(recipient),
+        ],
+        vec![Nonce(0)],
+        (written.clone(), amount),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
+
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
+        .unwrap();
+
+    let sender_post = state.get_account_by_id(sender);
+    assert_eq!(sender_post.data.shard(program_id).as_ref(), written);
+    assert_eq!(sender_post.data.balance(), Ok(70));
+    assert_eq!(sender_post.data.shard(stranger), &stranger_record);
+    assert_eq!(sender_post.nonce, Nonce(1));
+    assert_eq!(state.get_account_by_id(recipient).data.balance(), Ok(30));
+}
+
+#[test]
+fn a_repeated_shard_selector_is_rejected() {
+    let account_id = AccountId::new([4; 32]);
+    let mut state = V03State::new();
+
+    let message = public_transaction::Message::try_new(
+        NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::balance(account_id),
+            ProgramShardSelector::balance(account_id),
+        ],
+        vec![],
+        NativeInstruction::Transfer { amount: 0 },
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+
+    let result = state.transition_from_public_transaction(
+        &PublicTransaction::new(message, witness_set),
+        1,
+        0,
+    );
+
+    let Err(LeeError::InvalidInput(message)) = result else {
+        panic!("a duplicate pair was accepted: {result:?}");
+    };
+    assert!(message.contains("Duplicate shard selectors"), "{message}");
+}
+
+#[test]
+fn a_guest_cannot_write_the_native_shard_publicly() {
+    let target_id = AccountId::new([1; 32]);
+    let other_id = AccountId::new([2; 32]);
+    let mut state = V03State::new().with_test_programs();
+    let program_id: AccountId = crate::test_methods::foreign_shard_writer().id().into();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![
+            ProgramShardSelector::balance(target_id),
+            ProgramShardSelector::balance(other_id),
+        ],
+        vec![],
+        encode_balance(500).to_vec(),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+
+    let result = state.transition_from_public_transaction(
+        &PublicTransaction::new(message, witness_set),
+        1,
+        0,
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ForeignShardWrite { account_id, .. }
+                )
+            )) if account_id == target_id
+        ),
+        "a guest wrote the native shard: {result:?}"
+    );
+    assert_eq!(state.get_account_by_id(target_id), Account::default());
+}
+
+#[test]
+fn an_application_shard_write_leaves_the_native_balance_alone() {
+    let program = crate::test_methods::data_changer();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([5; 32]);
+    let mut state = V03State::new()
+        .with_public_accounts([(account_id, Account::funded(250))])
+        .with_test_programs();
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![ProgramShardSelector::new(account_id, program_id)],
+        vec![],
+        vec![3_u8; 8],
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
+        .unwrap();
+
+    let post = state.get_account_by_id(account_id);
+    assert_eq!(post.data.shard(program_id).as_ref(), vec![3_u8; 8]);
+    assert_eq!(post.data.balance(), Ok(250));
+}

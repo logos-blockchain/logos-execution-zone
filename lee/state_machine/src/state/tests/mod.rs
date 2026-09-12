@@ -70,6 +70,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self.insert_program(&crate::test_methods::reordering_writer());
+        self.insert_program(&crate::test_methods::native_spender());
         self
     }
 

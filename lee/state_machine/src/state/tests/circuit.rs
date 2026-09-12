@@ -97,6 +97,76 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 }
 
 #[test]
+fn a_private_account_may_be_read_under_two_shards_in_one_call() {
+    let program = crate::test_methods::native_spender();
+    let program_id: AccountId = program.id().into();
+    let stranger = AccountId::new([9; 32]);
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let written = vec![7; 4];
+    let amount: u128 = 30;
+    let keys = test_private_account_keys_1();
+    let sender_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let recipient_id = AccountId::new([88; 32]);
+    let pre_account = Account {
+        nonce: Nonce(9),
+        ..Account::funded(100).with_shard(stranger, stranger_data.clone())
+    };
+    let state = V03State::new().with_private_account(&keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .expect("the account's commitment must be in state");
+
+    let (output, _proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::new(sender_id, program_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
+            ],
+            public_accounts: [(recipient_id, Account::default())].into(),
+            private_witnesses: vec![update_witness(
+                &keys,
+                0,
+                pre_account.clone(),
+                membership_proof,
+            )],
+            instruction_data: Program::serialize_instruction((written.clone(), amount)).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    )
+    .unwrap();
+
+    let [action] = <[_; 1]>::try_from(output.private_actions).unwrap();
+    let expected = Account {
+        nonce: pre_account
+            .nonce
+            .private_account_nonce_increment(&keys.nsk()),
+        ..Account::funded(100 - amount)
+            .with_shard(stranger, stranger_data)
+            .with_shard(program_id, written.try_into().unwrap())
+    };
+    let shared_secret =
+        SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
+            .expect("the emitted epk is a well-formed ML-KEM ciphertext");
+
+    assert_eq!(
+        EncryptionScheme::decrypt(
+            &action.encrypted_post_state.ciphertext,
+            &shared_secret,
+            &action.nullifier,
+        )
+        .unwrap(),
+        (PrivateAccountKind::Regular(0), expected.clone())
+    );
+    assert_eq!(action.commitment, Commitment::new(&sender_id, &expected));
+
+    let [recipient_action] = <[_; 1]>::try_from(output.public_actions).unwrap();
+    assert_eq!(recipient_action.account_id, recipient_id);
+    assert_eq!(recipient_action.post.balance(), Ok(amount));
+}
+
+#[test]
 fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();

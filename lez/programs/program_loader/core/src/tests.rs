@@ -247,3 +247,32 @@ fn update_header_rejects_an_unauthorized_caller() {
         false,
     );
 }
+
+#[test]
+#[should_panic(expected = "the native token program has no deployable bytecode")]
+fn a_header_may_not_be_created_for_the_native_token_program() {
+    let segment_id = AccountId::new([2; 32]);
+    let pre_states = [
+        AccountInput::with_shard(
+            NATIVE_TOKEN_PROGRAM_ID,
+            true,
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::empty(),
+        ),
+        AccountInput::with_shard(
+            segment_id,
+            false,
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::try_from(
+                ProgramSegment {
+                    bytecode: vec![1, 2, 3],
+                    next_segment: None,
+                }
+                .to_bytes(),
+            )
+            .unwrap(),
+        ),
+    ];
+
+    drop(create_header(&pre_states, segment_id, false));
+}

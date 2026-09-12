@@ -124,3 +124,191 @@ pub fn custody_transfer(
     )
     .with_pda_seeds(vec![seed])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::CallKind;
+
+    fn row(seed: u8, is_authorized: bool, balance: Balance) -> AccountInput {
+        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+    }
+
+    fn transfer(amount: Balance) -> InstructionData {
+        borsh::to_vec(&Instruction::Transfer { amount }).expect("the instruction serializes")
+    }
+
+    fn post_balances(output: &ProgramOutput) -> Vec<Balance> {
+        output
+            .state_diffs
+            .iter()
+            .map(|diff| {
+                decode_balance(
+                    diff.post_data
+                        .as_ref()
+                        .expect("the handler writes both rows"),
+                )
+                .expect("the handler writes canonical balances")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_balance_round_trips_through_the_codec() {
+        for balance in [1, 42, u128::from(u64::MAX), Balance::MAX] {
+            assert_eq!(decode_balance(&encode_balance(balance)), Ok(balance));
+        }
+        assert!(encode_balance(0).is_empty());
+        assert_eq!(decode_balance(&ShardData::empty()), Ok(0));
+    }
+
+    #[test]
+    fn non_canonical_encodings_are_rejected() {
+        for bytes in [vec![0; 16], vec![1], vec![1; 15], vec![1; 17], vec![0; 32]] {
+            let data = ShardData::try_from(bytes.clone()).expect("fits the shard limit");
+            assert_eq!(
+                decode_balance(&data),
+                Err(InvalidBalanceEncoding),
+                "{bytes:?} decoded as a balance"
+            );
+        }
+    }
+
+    #[test]
+    fn a_transfer_moves_the_amount_to_an_unauthorized_recipient() {
+        let caller = AccountId::new([9; 32]);
+        let instruction = transfer(30);
+        let output = execute(
+            Some(caller),
+            &[row(1, true, 100), row(2, false, 5)],
+            &instruction,
+        )
+        .expect("the transfer succeeds");
+
+        assert_eq!(post_balances(&output), vec![70, 35]);
+        assert_eq!(output.self_account_id, NATIVE_TOKEN_PROGRAM_ID);
+        assert_eq!(output.caller_account_id, Some(caller));
+        assert_eq!(output.call_kind, CallKind::Execute);
+        assert_eq!(output.instruction_data, instruction);
+        assert!(output.chained_calls.is_empty());
+        assert!(output.events.is_empty());
+        assert_eq!(output.block_validity_window.start(), None);
+        assert_eq!(output.block_validity_window.end(), None);
+        assert_eq!(output.timestamp_validity_window.start(), None);
+        assert_eq!(output.timestamp_validity_window.end(), None);
+    }
+
+    #[test]
+    fn exact_depletion_prunes_the_sender_shard() {
+        let output = execute(None, &[row(1, true, 100), row(2, false, 0)], &transfer(100))
+            .expect("the transfer succeeds");
+
+        assert!(
+            output.state_diffs[0]
+                .post_data
+                .as_ref()
+                .expect("the sender row is written")
+                .is_empty()
+        );
+        assert_eq!(post_balances(&output), vec![0, 100]);
+    }
+
+    #[test]
+    fn a_zero_amount_leaves_both_balances() {
+        let output = execute(None, &[row(1, true, 100), row(2, false, 5)], &transfer(0))
+            .expect("the transfer succeeds");
+
+        assert_eq!(post_balances(&output), vec![100, 5]);
+    }
+
+    #[test]
+    fn an_unauthorized_sender_is_rejected_even_for_a_zero_amount() {
+        for amount in [0, 30] {
+            assert_eq!(
+                execute(
+                    None,
+                    &[row(1, false, 100), row(2, false, 0)],
+                    &transfer(amount)
+                ),
+                Err(TransferError::UnauthorizedSender {
+                    account_id: AccountId::new([1; 32])
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_transfer_beyond_the_senders_balance_is_rejected() {
+        assert_eq!(
+            execute(None, &[row(1, true, 100), row(2, false, 0)], &transfer(101)),
+            Err(TransferError::InsufficientBalance {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_transfer_that_overflows_the_recipient_is_rejected() {
+        assert_eq!(
+            execute(
+                None,
+                &[row(1, true, 2), row(2, false, Balance::MAX - 1)],
+                &transfer(2)
+            ),
+            Err(TransferError::BalanceOverflow {
+                account_id: AccountId::new([2; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_pre_state_is_rejected() {
+        let malformed = AccountInput::with_shard(
+            AccountId::new([1; 32]),
+            true,
+            NATIVE_TOKEN_PROGRAM_ID,
+            ShardData::try_from(vec![0; 16]).expect("fits the shard limit"),
+        );
+
+        assert_eq!(
+            execute(None, &[malformed, row(2, false, 0)], &transfer(0)),
+            Err(TransferError::InvalidBalance(InvalidBalanceEncoding))
+        );
+    }
+
+    #[test]
+    fn inputs_that_are_not_an_ordered_pair_of_native_rows_are_rejected() {
+        let application_row = AccountInput::with_shard(
+            AccountId::new([1; 32]),
+            true,
+            AccountId::new([7; 32]),
+            ShardData::empty(),
+        );
+        let cases = vec![
+            vec![],
+            vec![row(1, true, 100)],
+            vec![row(1, true, 100), row(2, false, 0), row(3, false, 0)],
+            vec![row(1, true, 100), row(1, true, 100)],
+            vec![application_row.clone(), row(2, false, 0)],
+            vec![row(1, true, 100), application_row],
+        ];
+
+        for pre_states in cases {
+            assert_eq!(
+                execute(None, &pre_states, &transfer(0)),
+                Err(TransferError::InvalidInputs),
+                "{pre_states:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undecodable_instruction_is_rejected() {
+        for instruction in [vec![], vec![0xFF], transfer(1)[..3].to_vec()] {
+            assert_eq!(
+                execute(None, &[row(1, true, 100), row(2, false, 0)], &instruction),
+                Err(TransferError::InvalidInstruction)
+            );
+        }
+    }
+}

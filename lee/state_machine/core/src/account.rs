@@ -307,6 +307,19 @@ mod tests {
     use crate::program::AccountInput;
 
     #[test]
+    fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
+        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
+            .expect("the stored shape loads");
+        assert_eq!(current.nonce, Nonce(7));
+        assert_eq!(current.data.balance(), Ok(0));
+
+        let legacy =
+            serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
+
+        assert!(legacy.is_err(), "a legacy balance field was accepted");
+    }
+
+    #[test]
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
