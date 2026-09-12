@@ -19,7 +19,6 @@ sequencer_storage_actor.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
-faucet_core.workspace = true
 authenticated_transfer_core.workspace = true
 fee_core.workspace = true
 bridge_core.workspace = true
@@ -59,8 +58,6 @@ default = []
 prove = ["lee/prove", "chain_state/prove"]
 # Generate mock external clients implementations for testing
 mock = []
-# Enable mDNS-based local peer discovery for gossip.
-mdns = []
 # Expose hooks integration tests need to provoke misbehaviour. Never in a release build.
 test-utils = []
 

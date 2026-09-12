@@ -71,7 +71,7 @@ impl LeeTransaction {
     }
 
     /// Validates the transaction against the current state and returns the resulting diff
-    /// without applying it. Rejects transactions that modify clock, faucet or bridge accounts,
+    /// without applying it. Rejects transactions that modify clock, fee or bridge accounts,
     /// whether directly or indirectly via chain calls.
     ///
     /// This check is required for all user transactions. Only sequencer transactions may bypass
@@ -323,10 +323,7 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
     let is_restricted = system_accounts::clock_account_ids()
         .into_iter()
         .chain(system_accounts::fee_account_ids())
-        .chain([
-            system_accounts::faucet_account_id(),
-            system_accounts::bridge_account_id(),
-        ])
+        .chain(std::iter::once(system_accounts::bridge_account_id()))
         .any(|id| id == target);
     if is_restricted {
         Err(format!(
@@ -371,7 +368,7 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
 }
 
 /// Rejects a diff that modifies any always-restricted system account (the clock
-/// accounts, the faucet, or the fee subsystem's accounts).
+/// accounts or the fee subsystem's accounts).
 ///
 /// These are written only by their sequencer-forced invocations, never by a user
 /// transaction. Enforcing this on the apply/settlement path as well as the
@@ -385,7 +382,6 @@ pub fn validate_no_restricted_account_modification(
 ) -> Result<(), lee::error::LeeError> {
     let restricted_modification_accounts = system_accounts::clock_account_ids()
         .into_iter()
-        .chain(std::iter::once(system_accounts::faucet_account_id()))
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
         validate_doesnt_modify_account(state, diff, account_id)?;
@@ -472,8 +468,6 @@ mod tests {
         // The restricted system accounts are rejected.
         validate_reward_target(system_accounts::bridge_account_id())
             .expect_err("the bridge is not a valid reward target");
-        validate_reward_target(system_accounts::faucet_account_id())
-            .expect_err("the faucet is not a valid reward target");
         for fee_account in system_accounts::fee_account_ids() {
             validate_reward_target(fee_account)
                 .expect_err("a fee account is not a valid reward target");
@@ -623,11 +617,14 @@ mod tests {
 
     #[test]
     fn system_account_ids_are_distinct_and_non_default() {
-        let faucet = system_accounts::faucet_account_id();
         let bridge = system_accounts::bridge_account_id();
-        assert_ne!(faucet, AccountId::default());
+        let clock = system_accounts::clock_account_ids();
         assert_ne!(bridge, AccountId::default());
-        assert_ne!(faucet, bridge);
+        assert!(
+            clock
+                .iter()
+                .all(|id| *id != bridge && *id != AccountId::default())
+        );
     }
 
     #[test]

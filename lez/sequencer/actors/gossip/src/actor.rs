@@ -1,12 +1,20 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
+    convert::Infallible,
     sync::Arc,
     time::Duration,
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use common::transaction::LeeTransaction;
+use common::{bounded_vec_deque::BoundedVecDeque, transaction::LeeTransaction};
 use futures::{StreamExt as _, future::BoxFuture};
+use kameo::{
+    Actor,
+    actor::{ActorRef, Recipient, WeakActorRef},
+    error::ActorStopReason,
+    mailbox::{MailboxReceiver, Signal},
+    message::{Context, Message},
+};
 #[cfg(feature = "mdns")]
 use libp2p::mdns;
 use libp2p::{
@@ -16,40 +24,38 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-#[cfg(test)]
-use mempool::MemPoolHandle;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use sequencer_core::{config::GossipConfig, gossip::AccreditedKeysReceiver};
 use sequencer_slasher_actor::Approval;
-use tokio::sync::{mpsc, watch};
-use tokio_util::sync::CancellationToken;
+use tokio::select;
 
+use self::seen_cache::SeenCache;
+use crate::protocol::{GetConnectedPeers, PublishTransaction, RetryBootstrap};
+
+mod seen_cache;
 #[cfg(test)]
-use crate::TransactionOrigin;
-use crate::{
-    config::GossipConfig,
-    gossip::{AccreditedKeysReceiver, seen_cache::SeenCache},
-};
+mod tests;
+mod validation;
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
-/// How often the watchdog warns that the driver is down and the node is L1-only.
-const DRIVER_OUTAGE_WARN_INTERVAL: Duration = Duration::from_secs(300);
+/// How often the watchdog warns that gossip is down and the node is L1-only.
+const OUTAGE_WARN_INTERVAL: Duration = Duration::from_secs(300);
 /// Recently-seen gossiped transaction hashes kept for dedup.
 const SEEN_CACHE_CAPACITY: usize = 4096;
-/// Outbound local-publish channel depth; `try_send` drops on overflow.
-const TX_PUBLISH_CHANNEL_CAPACITY: usize = 1024;
+/// Mailbox depth to spawn the actor with; sized for local-publish bursts,
+/// `try_send` drops on overflow.
+pub const MAILBOX_CAPACITY: usize = 1024;
 /// Headroom over `max_block_size` for `GossipSub` protobuf framing (signature,
 /// source, seqno, topic) so a maximum-size transaction still fits the transmit
 /// limit instead of being dropped at the transport before validation.
 const GOSSIP_FRAME_MARGIN: u64 = 4096;
-/// How often to re-dial bootstrap peers while the node has no connected
-/// peers, so a node that starts before its bootstrap peer still joins.
-const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+/// How often to send [`RetryBootstrap`], so a node that starts before its
+/// bootstrap peer still joins once that peer is up.
+pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
-/// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
-const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -60,14 +66,35 @@ struct GossipBehaviour {
     mdns: mdns::tokio::Behaviour,
 }
 
-/// Handle to the running gossip network. Dropping it stops the drive task.
-pub struct GossipNetwork {
-    connected_rx: watch::Receiver<Vec<[u8; 32]>>,
-    shutdown: CancellationToken,
+/// The gossip actor. Manages the libp2p swarm.
+pub struct GossipActor {
+    /// `Some` while the actor runs; released in `on_stop` so the sockets are
+    /// freed as soon as the actor is stopped, not when it is dropped.
+    swarm: Option<Swarm<GossipBehaviour>>,
+    connected: HashSet<PeerId>,
+    /// This node's channel, which an inbound approval must be signed over.
+    channel_id: [u8; 32],
+    /// Ed25519 public keys of peers seen via Identify, keyed by `PeerId`.
+    pubkeys: HashMap<PeerId, Ed25519PublicKey>,
+    topic: gossipsub::IdentTopic,
+    /// Slash approvals ride their own topic so the tx wire format is untouched.
+    approvals_topic: gossipsub::IdentTopic,
+    /// Where verified inbound approvals go; the slasher decides what to keep.
+    approval_sink: Recipient<Approval>,
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys_rx: AccreditedKeysReceiver,
+    seen: SeenCache,
+    max_block_size: u64,
+    submit: IngestSubmit,
+    /// Configured bootstrap peers, re-dialed while the node is isolated.
+    bootstrap: Vec<Multiaddr>,
+    /// Local transactions whose publish failed, retried when a peer
+    /// subscribes to the topic; the oldest is dropped on overflow.
+    pending_publish: BoundedVecDeque<LeeTransaction>,
+    /// Same, for this node's own slash approvals.
+    pending_approvals: BoundedVecDeque<Approval>,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
-    tx_tx: mpsc::Sender<LeeTransaction>,
-    approval_tx: mpsc::Sender<Approval>,
 }
 
 /// Submits a gossiped transaction to the node's admission door (fee screen +
@@ -78,28 +105,18 @@ pub struct GossipNetwork {
 pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
-/// Handle for publishing locally-submitted transactions to the gossip mesh.
-/// `publish` is non-blocking: a full channel drops the transaction rather
-/// than back-pressuring the caller.
-#[derive(Clone)]
-pub struct GossipTxPublisher(mpsc::Sender<LeeTransaction>);
+/// Aborts the watchdog task when dropped, silencing the L1-only warning on
+/// node shutdown.
+pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
 
-impl GossipTxPublisher {
-    pub fn publish(&self, tx: LeeTransaction) {
-        if let Err(err) = self.0.try_send(tx) {
-            log::debug!("Dropping local tx publish: outbound gossip channel full or closed: {err}");
-        }
-    }
-}
-
-impl GossipNetwork {
+impl GossipActor {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
-    /// bootstrap peers, and spawns the drive task.
-    pub async fn start(
+    /// bootstrap peers.
+    pub async fn new(
         config: GossipConfig,
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
-        approval_sink: mpsc::Sender<Approval>,
+        approval_sink: Recipient<Approval>,
         max_block_size: u64,
         submit: IngestSubmit,
         accredited_keys_rx: AccreditedKeysReceiver,
@@ -228,41 +245,23 @@ impl GossipNetwork {
             log::debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
         }
 
-        let (connected_tx, connected_rx) = watch::channel(Vec::new());
-        let shutdown = CancellationToken::new();
-        let (tx_tx, tx_rx) = mpsc::channel::<LeeTransaction>(TX_PUBLISH_CHANNEL_CAPACITY);
-        let (approval_tx, approval_rx) =
-            mpsc::channel::<Approval>(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
-
-        let driver = tokio::spawn(run_drive_task(DriveTask {
-            swarm,
+        Ok(Self {
+            swarm: Some(swarm),
             connected: HashSet::new(),
+            channel_id,
             pubkeys: HashMap::new(),
-            connected_tx,
-            shutdown: shutdown.clone(),
             topic,
             approvals_topic,
             approval_sink,
-            channel_id,
             accredited_keys_rx,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             submit,
-            tx_rx,
-            approval_rx,
             bootstrap,
-            pending_publish: VecDeque::new(),
-            pending_approvals: VecDeque::new(),
-        }));
-        spawn_driver_watchdog(driver, shutdown.clone());
-
-        Ok(Self {
-            connected_rx,
-            shutdown,
+            pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
-            tx_tx,
-            approval_tx,
         })
     }
 
@@ -299,69 +298,23 @@ impl GossipNetwork {
         self.local_peer_id
     }
 
-    /// Handle for publishing locally-submitted transactions to the mesh.
-    #[must_use]
-    pub fn tx_publisher(&self) -> GossipTxPublisher {
-        GossipTxPublisher(self.tx_tx.clone())
+    const fn swarm_mut(&mut self) -> &mut Swarm<GossipBehaviour> {
+        self.swarm
+            .as_mut()
+            .expect("swarm is present until the actor stops")
     }
 
-    /// Sink the slasher publishes its own approvals into.
-    #[must_use]
-    pub fn approval_publisher(&self) -> mpsc::Sender<Approval> {
-        self.approval_tx.clone()
+    /// Sorted Ed25519 public keys of currently connected, identified peers.
+    fn connected_pubkeys(&self) -> Vec<Ed25519PublicKey> {
+        let mut peers: Vec<Ed25519PublicKey> = self
+            .connected
+            .iter()
+            .filter_map(|peer_id| self.pubkeys.get(peer_id).copied())
+            .collect();
+        peers.sort_unstable_by_key(Ed25519PublicKey::to_bytes);
+        peers
     }
 
-    /// Ed25519 public keys of currently connected peers.
-    #[must_use]
-    pub fn connected_peers(&self) -> Vec<[u8; 32]> {
-        self.connected_rx.borrow().clone()
-    }
-
-    /// Cancelled when a graceful shutdown is requested (the handle is dropped).
-    /// Observers must NOT halt the node on it.
-    #[must_use]
-    pub fn shutdown_token(&self) -> CancellationToken {
-        self.shutdown.clone()
-    }
-}
-
-impl Drop for GossipNetwork {
-    fn drop(&mut self) {
-        self.shutdown.cancel();
-    }
-}
-
-/// Everything the drive task owns.
-struct DriveTask {
-    swarm: Swarm<GossipBehaviour>,
-    connected: HashSet<PeerId>,
-    /// Ed25519 public keys of peers seen via Identify, keyed by `PeerId`.
-    pubkeys: HashMap<PeerId, [u8; 32]>,
-    connected_tx: watch::Sender<Vec<[u8; 32]>>,
-    shutdown: CancellationToken,
-    topic: gossipsub::IdentTopic,
-    approvals_topic: gossipsub::IdentTopic,
-    /// Where verified inbound approvals go; the slasher decides what to keep.
-    approval_sink: mpsc::Sender<Approval>,
-    /// This node's channel, which an inbound approval must be signed over.
-    channel_id: [u8; 32],
-    /// The committee the follow path last read; `None` filters nothing.
-    accredited_keys_rx: AccreditedKeysReceiver,
-    seen: SeenCache,
-    max_block_size: u64,
-    submit: IngestSubmit,
-    tx_rx: mpsc::Receiver<LeeTransaction>,
-    approval_rx: mpsc::Receiver<Approval>,
-    /// Configured bootstrap peers, re-dialed while the node is isolated.
-    bootstrap: Vec<Multiaddr>,
-    /// Local transactions whose publish failed, retried when a peer
-    /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
-    pending_publish: VecDeque<LeeTransaction>,
-    /// Same, for approvals whose publish failed.
-    pending_approvals: VecDeque<Approval>,
-}
-
-impl DriveTask {
     #[expect(
         clippy::wildcard_enum_match_arm,
         reason = "SwarmEvent is non_exhaustive; only connection and behaviour events are handled"
@@ -370,7 +323,6 @@ impl DriveTask {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 self.connected.insert(peer_id);
-                self.update_connected_watch();
             }
             SwarmEvent::ConnectionClosed {
                 peer_id,
@@ -379,7 +331,6 @@ impl DriveTask {
             } => {
                 self.connected.remove(&peer_id);
                 self.pubkeys.remove(&peer_id);
-                self.update_connected_watch();
             }
             SwarmEvent::Behaviour(behaviour_event) => {
                 self.on_behaviour_event(behaviour_event).await;
@@ -416,16 +367,17 @@ impl DriveTask {
                 self.flush_pending_approvals();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                if let Ok(ed25519_pubkey) = info.public_key.try_into_ed25519() {
-                    self.pubkeys.insert(peer_id, ed25519_pubkey.to_bytes());
-                    self.update_connected_watch();
+                if let Ok(pubkey) = info.public_key.try_into_ed25519()
+                    && let Ok(pubkey) = Ed25519PublicKey::from_bytes(&pubkey.to_bytes())
+                {
+                    self.pubkeys.insert(peer_id, pubkey);
                 }
                 for addr in info
                     .listen_addrs
                     .into_iter()
                     .filter(|addr| !is_unspecified(addr))
                 {
-                    self.swarm
+                    self.swarm_mut()
                         .behaviour_mut()
                         .kademlia
                         .add_address(&peer_id, addr);
@@ -434,30 +386,13 @@ impl DriveTask {
             #[cfg(feature = "mdns")]
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 for (peer_id, addr) in peers {
-                    if let Err(err) = self.swarm.dial(addr) {
+                    if let Err(err) = self.swarm_mut().dial(addr) {
                         log::debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
                     }
                 }
             }
             _ => {}
         }
-    }
-
-    fn update_connected_watch(&self) {
-        let mut peers: Vec<[u8; 32]> = self
-            .connected
-            .iter()
-            .filter_map(|peer_id| self.pubkeys.get(peer_id).copied())
-            .collect();
-        peers.sort_unstable();
-        self.connected_tx.send_if_modified(|current| {
-            if *current == peers {
-                false
-            } else {
-                *current = peers;
-                true
-            }
-        });
     }
 
     /// Validates an inbound gossiped transaction and reports the mesh
@@ -468,7 +403,7 @@ impl DriveTask {
         message_id: &gossipsub::MessageId,
         data: &[u8],
     ) {
-        use crate::gossip::validation::{TxEvaluation, evaluate_transaction};
+        use self::validation::{TxEvaluation, evaluate_transaction};
 
         let acceptance = match evaluate_transaction(data, self.max_block_size) {
             TxEvaluation::Reject(reason) => {
@@ -499,7 +434,7 @@ impl DriveTask {
         };
 
         _ = self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
             .report_message_validation_result(message_id, &source, acceptance);
@@ -512,7 +447,7 @@ impl DriveTask {
         message_id: &gossipsub::MessageId,
         data: &[u8],
     ) {
-        use crate::gossip::validation::{ApprovalEvaluation, evaluate_approval};
+        use self::validation::{ApprovalEvaluation, evaluate_approval};
 
         let evaluation = {
             let accredited_keys = self.accredited_keys_rx.borrow();
@@ -528,7 +463,7 @@ impl DriveTask {
                 gossipsub::MessageAcceptance::Ignore
             }
             ApprovalEvaluation::Accept(approval) => {
-                if let Err(err) = self.approval_sink.try_send(approval) {
+                if let Err(err) = self.approval_sink.tell(approval).try_send() {
                     log::debug!("Dropping inbound slash approval: {err}");
                 }
                 gossipsub::MessageAcceptance::Accept
@@ -536,7 +471,7 @@ impl DriveTask {
         };
 
         _ = self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
             .report_message_validation_result(message_id, &source, acceptance);
@@ -545,25 +480,23 @@ impl DriveTask {
     /// Publishes this node's own approval, queued and retried like a transaction.
     fn publish_approval(&mut self, approval: Approval) {
         let bytes = borsh::to_vec(&approval).expect("approval borsh serialization should not fail");
+        let approvals_topic = self.approvals_topic.clone();
         match self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
-            .publish(self.approvals_topic.clone(), bytes)
+            .publish(approvals_topic, bytes)
         {
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
             Err(err) => {
                 log::debug!("Queueing slash approval publish for retry: {err}");
-                if self.pending_approvals.len() >= PENDING_PUBLISH_CAPACITY {
-                    self.pending_approvals.pop_front();
-                }
-                self.pending_approvals.push_back(approval);
+                _ = self.pending_approvals.push_back(approval);
             }
         }
     }
 
     fn flush_pending_approvals(&mut self) {
-        for approval in std::mem::take(&mut self.pending_approvals) {
+        for approval in self.pending_approvals.drain_all() {
             self.publish_approval(approval);
         }
     }
@@ -575,11 +508,12 @@ impl DriveTask {
     fn publish_transaction(&mut self, tx: LeeTransaction) {
         let hash = tx.hash();
         let bytes = borsh::to_vec(&tx).expect("tx borsh serialization should not fail");
+        let topic = self.topic.clone();
         match self
-            .swarm
+            .swarm_mut()
             .behaviour_mut()
             .gossipsub
-            .publish(self.topic.clone(), bytes)
+            .publish(topic, bytes)
         {
             // Duplicate means the mesh already carries this message.
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {
@@ -587,15 +521,12 @@ impl DriveTask {
             }
             Err(err) => {
                 log::debug!("Queueing local tx publish {hash:?} for retry: {err}");
-                if self.pending_publish.len() >= PENDING_PUBLISH_CAPACITY
-                    && let Some(dropped) = self.pending_publish.pop_front()
-                {
+                if let Some(dropped) = self.pending_publish.push_back(tx) {
                     log::debug!(
                         "Pending publish queue full; dropping oldest tx {:?}",
                         dropped.hash()
                     );
                 }
-                self.pending_publish.push_back(tx);
             }
         }
     }
@@ -603,7 +534,7 @@ impl DriveTask {
     /// Retries queued local publishes; still-failing ones are re-queued by
     /// `publish_transaction`.
     fn flush_pending_publishes(&mut self) {
-        for tx in std::mem::take(&mut self.pending_publish) {
+        for tx in self.pending_publish.drain_all() {
             self.publish_transaction(tx);
         }
     }
@@ -620,11 +551,106 @@ impl DriveTask {
             self.bootstrap.len()
         );
         for addr in self.bootstrap.clone() {
-            if let Err(err) = self.swarm.dial(addr.clone()) {
+            if let Err(err) = self.swarm_mut().dial(addr.clone()) {
                 log::debug!("Failed to dial gossip bootstrap peer {addr}: {err}");
             }
         }
-        _ = self.swarm.behaviour_mut().kademlia.bootstrap();
+        _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
+    }
+}
+
+impl Actor for GossipActor {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        Ok(args)
+    }
+
+    /// The swarm drive loop: swarm events are handled inline; a mailbox
+    /// signal (message or stop) is handed back to kameo.
+    #[expect(
+        clippy::integer_division_remainder_used,
+        reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+    )]
+    async fn next(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        mailbox_rx: &mut MailboxReceiver<Self>,
+    ) -> Result<Option<Signal<Self>>, Infallible> {
+        loop {
+            select! {
+                signal = mailbox_rx.recv() => return Ok(signal),
+                event = self.swarm_mut().select_next_some() => self.on_swarm_event(event).await,
+            }
+        }
+    }
+
+    async fn on_stop(
+        &mut self,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Infallible> {
+        // Free the sockets eagerly: kameo reports the actor as stopped before
+        // the struct itself is dropped, and an observer of that shutdown must
+        // be able to e.g. rebind the listen address immediately.
+        drop(self.swarm.take());
+        Ok(())
+    }
+}
+
+impl Message<GetConnectedPeers> for GossipActor {
+    type Reply = Vec<Ed25519PublicKey>;
+
+    async fn handle(
+        &mut self,
+        GetConnectedPeers: GetConnectedPeers,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.connected_pubkeys()
+    }
+}
+
+impl Message<Approval> for GossipActor {
+    type Reply = ();
+
+    /// Publish this node's own slash approval to the mesh.
+    async fn handle(
+        &mut self,
+        msg: Approval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_approval(msg);
+    }
+}
+
+impl Message<PublishTransaction> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        PublishTransaction(tx): PublishTransaction,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_transaction(tx);
+    }
+}
+
+impl Message<RetryBootstrap> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        RetryBootstrap: RetryBootstrap,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.retry_bootstrap();
+    }
+}
+
+impl Drop for WatchdogGuard {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -656,7 +682,7 @@ fn default_message_id(msg: &gossipsub::Message) -> gossipsub::MessageId {
     not(test),
     expect(
         dead_code,
-        reason = "unused by the mesh until a later gossip task; exercised by the identity test below"
+        reason = "unused by the mesh until a later gossip task; exercised by the identity test"
     )
 )]
 pub(crate) fn peer_id_from_ed25519(
@@ -666,21 +692,30 @@ pub(crate) fn peer_id_from_ed25519(
         .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
 }
 
-/// An [`IngestSubmit`] that pushes straight into `mempool` unscreened; for
-/// tests.
-#[cfg(test)]
+/// Warns operators periodically while the gossip actor is down.
+///
+/// If the actor stops for any reason other than a requested stop or kill,
+/// this logs every few minutes that the node is running L1-only — the actor
+/// is deliberately outside the service's failure aggregation, so nothing
+/// else reports it.
 #[must_use]
-pub fn unscreened_mempool_submit(
-    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-) -> IngestSubmit {
-    Arc::new(move |tx| {
-        let mempool = mempool.clone();
-        Box::pin(async move {
-            mempool
-                .try_push((TransactionOrigin::Gossip, tx))
-                .context("mempool is full")
-        })
-    })
+pub fn spawn_gossip_outage_watchdog(actor_ref: ActorRef<GossipActor>) -> WatchdogGuard {
+    WatchdogGuard(tokio::spawn(async move {
+        let stopped_cleanly = matches!(
+            actor_ref.wait_for_shutdown_result().await,
+            Ok(ActorStopReason::Normal | ActorStopReason::Killed)
+        );
+        if stopped_cleanly {
+            return;
+        }
+        loop {
+            log::error!(
+                "Sequencer gossip network is down; continuing L1-only. \
+                 Restart the node to restore p2p."
+            );
+            tokio::time::sleep(OUTAGE_WARN_INTERVAL).await;
+        }
+    }))
 }
 
 #[expect(
@@ -710,131 +745,5 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
                 anyhow::bail!("Timed out waiting for gossip listen address");
             }
         }
-    }
-}
-
-#[expect(
-    clippy::integer_division_remainder_used,
-    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
-)]
-async fn run_drive_task(mut task: DriveTask) {
-    // `interval_at`: startup already dialed the bootstrap peers, so the
-    // first tick waits a full interval instead of firing immediately.
-    let mut bootstrap_retry = tokio::time::interval_at(
-        tokio::time::Instant::now()
-            .checked_add(BOOTSTRAP_RETRY_INTERVAL)
-            .expect("bootstrap retry deadline within Instant range"),
-        BOOTSTRAP_RETRY_INTERVAL,
-    );
-    loop {
-        tokio::select! {
-            () = task.shutdown.cancelled() => break,
-            event = task.swarm.select_next_some() => task.on_swarm_event(event).await,
-            Some(tx) = task.tx_rx.recv() => task.publish_transaction(tx),
-            Some(approval) = task.approval_rx.recv() => task.publish_approval(approval),
-            _ = bootstrap_retry.tick() => task.retry_bootstrap(),
-        }
-    }
-}
-
-/// Owns the driver handle so it can detect the task ending. A graceful shutdown
-/// cancels `shutdown` first, so that path stays silent; a crash leaves it
-/// uncancelled, and operators are warned the node is running L1-only until the
-/// handle is dropped.
-#[expect(
-    clippy::integer_division_remainder_used,
-    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
-)]
-fn spawn_driver_watchdog(driver: tokio::task::JoinHandle<()>, shutdown: CancellationToken) {
-    tokio::spawn(async move {
-        _ = driver.await;
-        if shutdown.is_cancelled() {
-            return;
-        }
-        loop {
-            log::error!(
-                "Sequencer gossip network is down; continuing L1-only. \
-                 Restart the node to restore p2p."
-            );
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                () = tokio::time::sleep(DRIVER_OUTAGE_WARN_INTERVAL) => {}
-            }
-        }
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-
-    use super::*;
-    use crate::{config::GossipConfig, gossip::accredited_keys_channel};
-
-    const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
-
-    fn test_config() -> GossipConfig {
-        GossipConfig {
-            listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
-            bootstrap_peers: vec![],
-        }
-    }
-
-    fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-        mempool::MemPool::new(1000).1
-    }
-
-    #[test]
-    fn libp2p_identity_matches_kms_public_key() {
-        // The PeerId derived from an Ed25519 public key must equal the
-        // PeerId the same secret produces as a libp2p identity.
-        let secret = [9; 32];
-        let kms_pubkey = Ed25519Key::from_bytes(&secret).public_key().to_bytes();
-        let mut secret_for_libp2p = secret;
-        let keypair =
-            libp2p::identity::Keypair::ed25519_from_bytes(&mut secret_for_libp2p).unwrap();
-        assert_eq!(
-            peer_id_from_ed25519(&kms_pubkey).unwrap(),
-            keypair.public().to_peer_id()
-        );
-    }
-
-    #[tokio::test]
-    async fn start_binds_and_reports_listen_addr() {
-        let network = GossipNetwork::start(
-            test_config(),
-            [1; 32],
-            Ed25519Key::from_bytes(&[9; 32]),
-            mpsc::channel(1).0,
-            TEST_MAX_BLOCK_SIZE,
-            unscreened_mempool_submit(test_mempool_handle()),
-            accredited_keys_channel().1,
-        )
-        .await
-        .unwrap();
-        let addrs = network.listen_addrs();
-        assert!(!addrs.is_empty());
-        assert!(addrs[0].to_string().contains("/udp/"));
-        assert!(network.connected_peers().is_empty());
-    }
-
-    #[tokio::test]
-    async fn drop_cancels_driver() {
-        let network = GossipNetwork::start(
-            test_config(),
-            [1; 32],
-            Ed25519Key::from_bytes(&[9; 32]),
-            mpsc::channel(1).0,
-            TEST_MAX_BLOCK_SIZE,
-            unscreened_mempool_submit(test_mempool_handle()),
-            accredited_keys_channel().1,
-        )
-        .await
-        .unwrap();
-        let token = network.shutdown_token();
-        drop(network);
-        tokio::time::timeout(std::time::Duration::from_secs(5), token.cancelled())
-            .await
-            .expect("driver should stop when the handle is dropped");
     }
 }

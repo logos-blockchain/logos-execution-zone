@@ -276,11 +276,8 @@ pub fn genesis_from_accounts(
         .into_iter()
         .map(|(account_id, balance)| GenesisAction::SupplyAccount {
             account_id,
-            balance,
+            balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
-        .chain(std::iter::once(GenesisAction::SupplyBridgeAccount {
-            balance: 1_000_000,
-        }))
         .collect()
 }
 
@@ -485,7 +482,6 @@ mod tests {
                     balance,
                 } if *account_id == wanted => Some(*balance),
                 GenesisAction::SupplyAccount { .. }
-                | GenesisAction::SupplyBridgeAccount { .. }
                 | GenesisAction::SupplyBridgeLockHolding { .. }
                 | GenesisAction::StakeSequencer { .. } => None,
             })
@@ -493,7 +489,7 @@ mod tests {
 
         let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
         assert_eq!(
-            funder_supply.checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
+            u128::from(funder_supply).checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
             Some(private_total),
             "genesis must give the funder its own balance plus every private balance"
         );

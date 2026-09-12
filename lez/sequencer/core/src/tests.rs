@@ -47,8 +47,7 @@ use crate::{
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
     classify_settled_deliveries,
     config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
-        SequencerConfig,
+        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
@@ -343,10 +342,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     // guard in `settle_transaction` must reject it, so the builder drops it and
     // the produced block never includes it — proving the guard is wired on the
     // live settlement path, not only in the now-dead `validate_on_state`.
-    let mut config = setup_sequencer_config();
-    // The mint debits the bridge, so it must hold enough to execute; otherwise
-    // it underflows and we would be testing the wrong failure.
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -391,8 +387,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     // through that same path. Only the builder's origin-gated guard can drop a
     // *user*-submitted one. Without it the fee classification waves a forged
     // public deposit straight through (the consensus replay gap is #809).
-    let mut config = setup_sequencer_config();
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -604,9 +599,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 // TODO: Reimplement these tests
 // #[tokio::test]
 // async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
-//     let mut config = setup_sequencer_config();
-//     // The mint moves funds out of the bridge account, so it has to hold some.
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let deposit_op_id = [13_u8; 32];
 //     let expected_amount = 1_u64;
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -684,8 +677,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 
 // #[tokio::test]
 // async fn a_drained_deposit_is_not_minted_twice_across_turns() {
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let deposit_op_id = [17_u8; 32];
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
 
@@ -735,8 +727,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 //     // rests entirely on the receipt PDA reverting with the block — no requeue,
 //     // no bookkeeping of our own — so the still-pending record is drained again
 //     // on the next turn and the recipient is credited exactly once across the reorg.
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
 //     let deposit_op_id = [0x2c_u8; 32];
 //     let amount = 500_u64;
@@ -831,8 +822,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     // duplicates out before the program executes, so this is the only test that
     // reaches that branch; applying the same mint twice asserts the second is a
     // no-op (credited once) rather than an error.
-    let mut config = setup_sequencer_config();
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
     let recipient_id = initial_public_user_accounts()[0].account_id;
     let deposit_op_id = [0x5a_u8; 32];
     let amount = 500_u64;

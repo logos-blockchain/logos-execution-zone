@@ -71,8 +71,8 @@ fn main() -> Result<()> {
     let signing_keys: Vec<[u8; 32]> = std::iter::repeat_with(random_key).take(NODES).collect();
     let stakes = genesis_sequencer_stakes(&signing_keys, config.bedrock_config.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
-    // Ahead of the template's supplies: the stakes are funded from the faucet,
-    // and the accounts they credit are not the supplied ones.
+    // Ahead of the template's supplies: the stakes are funded by their own
+    // genesis deposit, and the accounts they credit are not the supplied ones.
     config.genesis = stakes.into_iter().chain(config.genesis).collect();
 
     write_config(&devnet_dir, &config)?;

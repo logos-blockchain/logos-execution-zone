@@ -38,7 +38,7 @@ use tokio::test;
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 // LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
 // wallet-like gas limits), so the bridgeable seed must dwarf it.
-const INITIAL_BALANCE: u128 = 10_000_000_000;
+const INITIAL_BALANCE: u64 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
@@ -139,7 +139,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .balance;
     assert_eq!(
         remaining,
-        INITIAL_BALANCE - LOCK_AMOUNT,
+        u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
         "zone A holding must be debited by the locked amount"
     );
 
@@ -153,7 +153,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
             programs::bridge_lock().id().into(),
             &holder_id.into_value(),
         ),
-        INITIAL_BALANCE - LOCK_AMOUNT,
+        u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
     )
     .await
     .context("zone A's indexer must reconstruct the holding from the genesis block")?;

@@ -2,10 +2,14 @@ use std::net::SocketAddr;
 
 use bytesize::ByteSize;
 use jsonrpsee::server::ServerHandle;
-use kameo::{Actor, actor::ActorRef, mailbox::Signal};
+use kameo::{
+    Actor,
+    actor::{ActorRef, Recipient},
+    mailbox::Signal,
+};
 use log::info;
-use sequencer_core::gossip::GossipTxPublisher;
 use sequencer_executor_actor::ExecutorActorTrait;
+use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 
@@ -25,7 +29,7 @@ impl RpcServerActor {
         listen_addr: SocketAddr,
         max_block_size: ByteSize,
         executor_ref: ActorRef<E>,
-        gossip_tx_publisher: Option<GossipTxPublisher>,
+        gossip: Option<Recipient<PublishTransaction>>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()
@@ -45,7 +49,7 @@ impl RpcServerActor {
 
         info!("Starting RPC Server on {addr}");
 
-        let service = service::Service::new(executor_ref, max_block_size, gossip_tx_publisher);
+        let service = service::Service::new(executor_ref, max_block_size, gossip);
         let server_handle = server.start(service.into_rpc());
 
         Ok(Self {

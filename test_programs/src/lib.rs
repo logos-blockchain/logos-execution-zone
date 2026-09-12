@@ -101,19 +101,6 @@ pub const fn cooldown() -> Program {
 
 #[must_use]
 #[inline]
-pub const fn faucet_chain_caller() -> Program {
-    use guests::{FAUCET_CHAIN_CALLER_ELF, FAUCET_CHAIN_CALLER_ID, FAUCET_CHAIN_CALLER_PATH};
-
-    let _unused = FAUCET_CHAIN_CALLER_PATH;
-
-    Program::new_unchecked(
-        FAUCET_CHAIN_CALLER_ID,
-        Cow::Borrowed(FAUCET_CHAIN_CALLER_ELF),
-    )
-}
-
-#[must_use]
-#[inline]
 pub const fn clock_chain_caller() -> Program {
     use guests::{CLOCK_CHAIN_CALLER_ELF, CLOCK_CHAIN_CALLER_ID, CLOCK_CHAIN_CALLER_PATH};
 

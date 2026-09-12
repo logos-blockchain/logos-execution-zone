@@ -37,7 +37,7 @@ use wallet::DEFAULT_MAX_FEE;
 
 /// Genesis supply per TPS account: enough to cover one transfer's fee reserve
 /// (`gas_limit x base_fee` ≈ 0.8M at genesis fees) with ample headroom.
-const TPS_ACCOUNT_SUPPLY: u128 = 10_000_000;
+const TPS_ACCOUNT_SUPPLY: u64 = 10_000_000;
 
 /// Declared execution gas per transfer. A metered native transfer runs
 /// ~82k cycles; the declared limit gates how many transfers the builder packs
@@ -219,7 +219,7 @@ pub async fn tps_test() -> Result<()> {
         .context("Failed to fetch last recipient balance")?;
     assert_eq!(
         last_recipient_balance,
-        TPS_ACCOUNT_SUPPLY + 1,
+        u128::from(TPS_ACCOUNT_SUPPLY) + 1,
         "Last recipient balance mismatch: transfers were included but did not execute \
          (revert-keeps-fee), so no funds actually moved"
     );
