@@ -198,16 +198,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 },
             )
         })
-        .chain([
-            (
-                system_accounts::faucet_account_id(),
-                system_accounts::faucet_account(),
-            ),
-            (
-                system_accounts::bridge_account_id(),
-                system_accounts::bridge_account(),
-            ),
-        ])
+        .chain([(
+            system_accounts::bridge_account_id(),
+            system_accounts::bridge_account(),
+        )])
         .chain(
             system_accounts::clock_account_ids()
                 .into_iter()
@@ -242,7 +236,6 @@ fn initial_programs(cross_zone: bool) -> Vec<Program> {
         programs::clock(),
         programs::fee(),
         programs::ata(),
-        programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),
     ];
@@ -460,26 +453,22 @@ mod tests {
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
         // System-account IDs must be distinct and non-default, and the genesis
-        // faucet/bridge accounts must carry their expected field values.  Catches
-        // mutations that replace `system_faucet_account`/`system_bridge_account`
-        // with `Default::default()`, delete their `balance`/`program_owner`
-        // fields, or replace `system_bridge_account_id` with `Default::default()`.
-        let faucet_id = system_accounts::faucet_account_id();
+        // bridge account must carry its expected field values.  Catches mutations
+        // that replace `system_bridge_account` with `Default::default()`, delete
+        // its `balance`/`program_owner` fields, or replace
+        // `system_bridge_account_id` with `Default::default()`.
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
-        assert_ne!(faucet_id, bridge_id);
 
         let state = initial_state(true);
         let default_owner = Account::default().program_owner;
 
-        let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
-        assert_ne!(
-            faucet.program_owner, default_owner,
-            "faucet must have a non-default program_owner"
-        );
-
         let bridge = state.get_account_by_id(bridge_id);
+        assert_eq!(
+            bridge.balance,
+            u128::MAX,
+            "the bridge holds the whole supply"
+        );
         assert_ne!(
             bridge.program_owner, default_owner,
             "bridge must have a non-default program_owner"
@@ -506,6 +495,5 @@ mod tests {
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
     }
 }

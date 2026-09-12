@@ -3287,23 +3287,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
-name = "faucet_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
-]
-
-[[package]]
-name = "faucet_program"
-version = "0.1.0"
-dependencies = [
- "authenticated_transfer_core",
- "faucet_core",
- "lee_core",
-]
-
-[[package]]
 name = "fd-lock"
 version = "4.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9541,7 +9524,6 @@ dependencies = [
  "cross_zone_inbox_core",
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
- "faucet_core",
  "fee_core",
  "lee",
  "lee_core",
@@ -11118,7 +11100,6 @@ dependencies = [
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
- "faucet_core",
  "fee_core",
  "futures",
  "hex",
@@ -11208,6 +11189,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sequencer_gossip_actor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "futures",
+ "hex",
+ "kameo",
+ "lee",
+ "libp2p",
+ "log",
+ "logos-blockchain-key-management-system-service",
+ "mempool",
+ "sequencer_core",
+ "sequencer_slasher_actor",
+ "sequencer_stake_core",
+ "testnet_initial_state",
+ "tokio",
+]
+
+[[package]]
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
@@ -11221,6 +11224,7 @@ dependencies = [
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
+ "sequencer_gossip_actor",
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
@@ -11253,6 +11257,7 @@ dependencies = [
  "programs",
  "sequencer_core",
  "sequencer_executor_actor",
+ "sequencer_gossip_actor",
  "sequencer_rpc_server_actor",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
@@ -12188,7 +12193,6 @@ version = "0.1.0"
 dependencies = [
  "bridge_core",
  "clock_core",
- "faucet_core",
  "fee_core",
  "lee_core",
  "programs",
@@ -12394,7 +12398,6 @@ dependencies = [
  "authenticated_transfer_core",
  "borsh",
  "clock_core",
- "faucet_core",
  "lee_core",
  "risc0-zkvm",
 ]

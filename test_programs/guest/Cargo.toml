@@ -12,7 +12,6 @@ borsh.workspace = true
 lee_core.workspace = true
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
-faucet_core.workspace = true
 
 risc0-zkvm.workspace = true
 

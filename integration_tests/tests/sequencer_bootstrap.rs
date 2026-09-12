@@ -105,7 +105,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// A `SupplyAccount` genesis action for a fresh account, returning the account
 /// id the funds land in, so tests can assert genesis state is present.
-fn supplied_account(balance: u128) -> (AccountId, GenesisAction) {
+fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::new_os_random(),
     ));
@@ -154,10 +154,7 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
 
     let (supplied_id, supply) = supplied_account(12_345);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let genesis = vec![supply];
 
     let handle = SequencerSetup::new(fast_blocks(), bedrock_addr)
         .with_genesis(genesis)
@@ -210,10 +207,7 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
         .context("Failed to build indexer client")?;
 
     let (supplied_id, supply) = supplied_account(7_777);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let genesis = vec![supply];
 
     // Sequencer A opens the channel and produces a few blocks.
     let home_a = tempfile::tempdir().context("Failed to create sequencer A home")?;
@@ -290,10 +284,7 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
         .context("Failed to setup Bedrock")?;
 
     let (_supplied_id, supply) = supplied_account(1);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let genesis = vec![supply];
 
     // A opens the channel and produces blocks. They land in its local store
     // immediately, so no need to wait for finalization.
@@ -391,10 +382,7 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .context("Failed to build indexer client")?;
 
     let (supplied_id, supply) = supplied_account(4_242);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let genesis = vec![supply];
 
     // A produces continuously (fast cadence) while Bedrock finalizes slowly, so
     // its local tip runs well ahead of the channel's finalized tip.
@@ -471,10 +459,7 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .context("Failed to build indexer client")?;
 
     let (supplied_id, supply) = supplied_account(5_005);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let genesis = vec![supply];
 
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
     let rocksdb = home.path().join(format!(
