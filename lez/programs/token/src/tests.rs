@@ -16,6 +16,7 @@ use token_core::{
 
 use crate::{
     burn::burn,
+    initialize::initialize_account,
     mint::mint,
     new_definition::{new_definition_with_metadata, new_fungible_definition},
     print_nft::print_nft,
@@ -1180,4 +1181,71 @@ fn print_nft_success() {
         &AccountForTests::holding_account_printed_nft(),
     );
     assert_eq!(owner_post.post_data, None);
+}
+
+#[test]
+fn initialize_account_writes_a_fresh_holding_without_authorization() {
+    let holder = HolderForTests::owner();
+    let target = AccountForTests::holding_account_uninit(&holder, HoldingKind::Fungible);
+    assert!(!target.is_authorized);
+
+    let post_diffs = initialize_account(
+        &AccountForTests::definition_account_auth(),
+        &target,
+        &holder,
+        TOKEN_PROGRAM_ID,
+    );
+    let [_, holding_post] = post_diffs.try_into().unwrap();
+
+    assert_data_diff(
+        &holding_post,
+        &AccountForTests::fungible_holding(&holder, 0),
+    );
+}
+
+#[test]
+fn initialize_account_preserves_a_matching_funded_holding() {
+    let holder = HolderForTests::owner();
+    let funded = AccountForTests::fungible_holding(&holder, BalanceForTests::holding_balance());
+
+    let post_diffs = initialize_account(
+        &AccountForTests::definition_account_auth(),
+        &funded,
+        &holder,
+        TOKEN_PROGRAM_ID,
+    );
+    let [_, holding_post] = post_diffs.try_into().unwrap();
+
+    assert_eq!(holding_post.post_data, None);
+    assert_eq!(holding_post.post_balance_diff, BalanceDiff::Add(0));
+    assert_data_diff(&holding_post, &funded);
+}
+
+#[should_panic(expected = "Initialized holding does not match the definition")]
+#[test]
+fn initialize_account_rejects_a_holding_of_another_definition() {
+    let holder = HolderForTests::owner();
+    let target =
+        AccountForTests::holding_different_definition(&holder, IdForTests::pool_definition_id());
+
+    let _post_diffs = initialize_account(
+        &AccountForTests::definition_account_auth(),
+        &target,
+        &holder,
+        TOKEN_PROGRAM_ID,
+    );
+}
+
+#[should_panic(expected = "Holding account ID does not match its derivation")]
+#[test]
+fn initialize_account_rejects_a_target_that_is_not_the_derived_holding() {
+    let stranger =
+        AccountForTests::holding_account_uninit(&HolderForTests::owner_2(), HoldingKind::Fungible);
+
+    let _post_diffs = initialize_account(
+        &AccountForTests::definition_account_auth(),
+        &stranger,
+        &HolderForTests::owner(),
+        TOKEN_PROGRAM_ID,
+    );
 }

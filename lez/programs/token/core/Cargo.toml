@@ -12,3 +12,6 @@ lee_core.workspace = true
 serde.workspace = true
 borsh.workspace = true
 risc0-zkvm.workspace = true
+
+[dev-dependencies]
+lee_core = { workspace = true, features = ["host"] }

@@ -346,3 +346,152 @@ pub fn verify_holding(
         "Holding account ID does not match its derivation"
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use lee_core::{
+        AuthorizationSecretKey, Identifier, NullifierPublicKey, NullifierSecretKey,
+        encryption::ViewingPublicKey,
+    };
+
+    use super::*;
+
+    const TOKEN_PROGRAM_ID: AccountId = AccountId::new([1; 32]);
+    const OWNER_ID: AccountId = AccountId::new([7; 32]);
+    const DEFINITION_ID: AccountId = AccountId::new([9; 32]);
+
+    fn private_target(ask: u8, viewing_seed: u8, identifier: Identifier) -> HoldingTarget {
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([ask; 32]));
+        HoldingTarget {
+            owner_id: OWNER_ID,
+            account_id_data: AccountIdData::from_private_parts(
+                NullifierPublicKey::from(&nsk),
+                ViewingPublicKey::from_seed(&[viewing_seed; 32], &[viewing_seed; 32]),
+                identifier,
+            ),
+        }
+    }
+
+    fn public_target(owner_id: AccountId) -> HoldingTarget {
+        HoldingTarget {
+            owner_id,
+            account_id_data: AccountIdData::public(),
+        }
+    }
+
+    #[test]
+    fn the_holding_seed_encoding_is_pinned() {
+        let seeds = [
+            HoldingKind::Fungible,
+            HoldingKind::NftMaster,
+            HoldingKind::NftPrintedCopy,
+        ]
+        .map(|kind| *holding_seed(OWNER_ID, DEFINITION_ID, kind).as_bytes());
+
+        assert_eq!(
+            seeds[0],
+            [
+                87, 150, 53, 199, 138, 228, 240, 111, 85, 115, 93, 49, 202, 205, 34, 173, 46, 224,
+                7, 185, 241, 52, 255, 97, 76, 186, 163, 116, 112, 13, 222, 244,
+            ]
+        );
+        assert_eq!(
+            seeds[1],
+            [
+                145, 254, 54, 212, 229, 228, 190, 182, 24, 31, 93, 203, 185, 42, 188, 161, 102,
+                200, 107, 35, 174, 111, 166, 28, 183, 30, 39, 130, 104, 178, 210, 155,
+            ]
+        );
+        assert_eq!(
+            seeds[2],
+            [
+                3, 41, 69, 26, 94, 144, 47, 255, 230, 202, 29, 91, 88, 106, 245, 33, 216, 239, 47,
+                101, 100, 198, 149, 115, 173, 75, 212, 92, 244, 38, 111, 58,
+            ]
+        );
+    }
+
+    #[test]
+    fn every_derivation_input_changes_the_holding_address() {
+        let public = public_target(OWNER_ID);
+        let private = private_target(13, 31, 5);
+        let holding = |target: &HoldingTarget| {
+            holding_id(
+                target,
+                TOKEN_PROGRAM_ID,
+                DEFINITION_ID,
+                HoldingKind::Fungible,
+            )
+        };
+        let addresses = [
+            holding(&public),
+            holding(&public_target(AccountId::new([8; 32]))),
+            holding_id(
+                &public,
+                TOKEN_PROGRAM_ID,
+                AccountId::new([10; 32]),
+                HoldingKind::Fungible,
+            ),
+            holding_id(
+                &public,
+                AccountId::new([2; 32]),
+                DEFINITION_ID,
+                HoldingKind::Fungible,
+            ),
+            holding_id(
+                &public,
+                TOKEN_PROGRAM_ID,
+                DEFINITION_ID,
+                HoldingKind::NftMaster,
+            ),
+            holding_id(
+                &public,
+                TOKEN_PROGRAM_ID,
+                DEFINITION_ID,
+                HoldingKind::NftPrintedCopy,
+            ),
+            holding(&private),
+            holding(&private_target(14, 31, 5)),
+            holding(&private_target(13, 41, 5)),
+            holding(&private_target(13, 31, 6)),
+        ];
+
+        assert_eq!(
+            addresses.iter().collect::<HashSet<_>>().len(),
+            addresses.len()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Holding account ID does not match its derivation")]
+    fn verify_holding_rejects_the_address_of_another_kind() {
+        let target = public_target(OWNER_ID);
+        let holding = AccountInput::balance(
+            holding_id(
+                &target,
+                TOKEN_PROGRAM_ID,
+                DEFINITION_ID,
+                HoldingKind::Fungible,
+            ),
+            false,
+            0,
+        );
+
+        verify_holding(
+            &target,
+            &holding,
+            TOKEN_PROGRAM_ID,
+            DEFINITION_ID,
+            HoldingKind::Fungible,
+        );
+        verify_holding(
+            &target,
+            &holding,
+            TOKEN_PROGRAM_ID,
+            DEFINITION_ID,
+            HoldingKind::NftMaster,
+        );
+    }
+}

@@ -13,6 +13,7 @@ pub mod new_definition;
 pub mod print_nft;
 pub mod transfer;
 
+mod execution_tests;
 mod tests;
 
 #[must_use]
