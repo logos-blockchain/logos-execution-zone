@@ -139,6 +139,41 @@ impl AccountIdentity {
         )
     }
 
+    /// The account ID this identity names, derived for private variants.
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        match self {
+            Self::Public(id) | Self::PublicNoSign(id) | Self::PrivateOwned(id) => *id,
+            Self::PublicKeycard { account_id, .. } => *account_id,
+            Self::PrivateForeign { npk, vpk, kind } => {
+                AccountId::for_private_account(npk, vpk, kind)
+            }
+            Self::PrivateShared {
+                ask,
+                vpk,
+                identifier,
+            } => {
+                let npk = NullifierPublicKey::from(&NullifierSecretKey::from(ask));
+                AccountId::from((&npk, vpk, *identifier))
+            }
+            Self::PrivatePdaShared {
+                authority,
+                seed,
+                nsk,
+                vpk,
+                identifier,
+            } => AccountId::for_private_account(
+                &NullifierPublicKey::from(nsk),
+                vpk,
+                &PrivateAccountKind::Pda {
+                    account_id: *authority,
+                    seed: *seed,
+                    identifier: *identifier,
+                },
+            ),
+        }
+    }
+
     /// Selects `program`'s shard on this account.
     #[must_use]
     pub const fn select_program_shard(self, program: AccountId) -> AccountMention {
@@ -169,8 +204,14 @@ pub struct PrivateAccountKeys {
 }
 
 struct PreparedAccount {
-    shard_selector: ProgramShardSelector,
+    account_id: AccountId,
     account: Account,
+}
+
+/// One ordered input row: the prepared account it reads and the shard it selects.
+struct Row {
+    account: usize,
+    program_account_id: Option<AccountId>,
 }
 
 /// An account's prepared state and credentials.
@@ -194,26 +235,31 @@ impl State {
         }
     }
 
-    fn shard_selector(&self) -> ProgramShardSelector {
-        self.account().shard_selector
+    fn account_id(&self) -> AccountId {
+        self.account().account_id
     }
 
-    /// Builds an input with authorization derived from the account's credentials.
-    fn input(&self) -> AccountInput {
-        let (account, is_authorized) = match self {
-            Self::Public { account, sk } => (account, sk.is_some()),
-            Self::PublicKeycard { account, .. } => (account, true),
-            Self::Private(pre) => (
-                &pre.pre_state,
-                matches!(pre.kind, WitnessKind::Regular { ask: Some(_) }),
-            ),
-        };
-        AccountInput::at(account.shard_selector, is_authorized, &account.account.data)
+    fn is_authorized(&self) -> bool {
+        match self {
+            Self::Public { sk, .. } => sk.is_some(),
+            Self::PublicKeycard { .. } => true,
+            Self::Private(pre) => matches!(pre.kind, WitnessKind::Regular { ask: Some(_) }),
+        }
+    }
+
+    /// Builds an input for one row, with authorization derived from the account's credentials.
+    fn input(&self, shard_selector: ProgramShardSelector) -> AccountInput {
+        AccountInput::at(
+            shard_selector,
+            self.is_authorized(),
+            &self.account().account.data,
+        )
     }
 }
 
 pub struct AccountManager {
     states: Vec<State>,
+    rows: Vec<Row>,
     pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
 }
@@ -231,7 +277,9 @@ impl AccountManager {
         wallet: &WalletCore,
         mentions: Vec<AccountMention>,
     ) -> Result<Self, ExecutionFailureKind> {
-        let mut states = Vec::with_capacity(mentions.len());
+        let mut states: Vec<State> = Vec::new();
+        let mut rows = Vec::with_capacity(mentions.len());
+        let mut prepared: HashMap<AccountId, (usize, AccountIdentity)> = HashMap::new();
         let mut pin = None;
 
         for AccountMention {
@@ -239,152 +287,70 @@ impl AccountManager {
             program_account_id,
         } in mentions
         {
-            let shard_selector = |account_id| {
-                program_account_id.map_or_else(
-                    || ProgramShardSelector::balance(account_id),
-                    |program| ProgramShardSelector::new(account_id, program),
-                )
-            };
+            let account_id = identity.account_id();
+            let shard_selector = shard_selector(account_id, program_account_id);
 
-            let state = match identity {
-                AccountIdentity::Public(account_id) => {
-                    let shard_selector = shard_selector(account_id);
-                    let account = wallet
-                        .get_account_view(shard_selector)
-                        .await
-                        .map_err(ExecutionFailureKind::SequencerError)?;
+            let known = prepared
+                .get(&account_id)
+                .map(|(index, prepared_identity)| (*index, *prepared_identity == identity));
 
-                    let sk = wallet.get_account_public_signing_key(account_id).cloned();
-                    let account = PreparedAccount {
-                        shard_selector,
-                        account,
-                    };
-
-                    State::Public { account, sk }
+            let index = match known {
+                Some((_, false)) => {
+                    return Err(ExecutionFailureKind::ConflictingAccountIdentity(account_id));
                 }
-                AccountIdentity::PublicNoSign(account_id) => {
-                    let shard_selector = shard_selector(account_id);
-                    let account = wallet
-                        .get_account_view(shard_selector)
-                        .await
-                        .map_err(ExecutionFailureKind::SequencerError)?;
-
-                    let account = PreparedAccount {
-                        shard_selector,
-                        account,
-                    };
-
-                    State::Public { account, sk: None }
-                }
-                AccountIdentity::PublicKeycard {
-                    account_id,
-                    key_path,
-                } => {
-                    let shard_selector = shard_selector(account_id);
-                    let account = wallet
-                        .get_account_view(shard_selector)
-                        .await
-                        .map_err(ExecutionFailureKind::SequencerError)?;
-
-                    let account = PreparedAccount {
-                        shard_selector,
-                        account,
-                    };
-
-                    if pin.is_none() {
-                        pin = Some(
-                            crate::helperfunctions::read_pin()
-                                .map_err(ExecutionFailureKind::SignError)?
-                                .as_str()
-                                .to_owned(),
-                        );
+                Some((index, true)) => {
+                    if let State::Public { account, .. } | State::PublicKeycard { account, .. } =
+                        &mut states[index]
+                    {
+                        let view = public_account_view(wallet, shard_selector).await?;
+                        merge_public_view(account, &view)?;
                     }
-
-                    State::PublicKeycard { account, key_path }
+                    index
                 }
-                AccountIdentity::PrivateOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, shard_selector(account_id))?;
-
-                    State::Private(Box::new(pre))
-                }
-                AccountIdentity::PrivateForeign { npk, vpk, kind } => {
-                    let account_id = AccountId::for_private_account(&npk, &vpk, &kind);
-                    State::Private(Box::new(private_foreign_acc_preparation(
-                        shard_selector(account_id),
-                        npk,
-                        vpk,
-                        &kind,
-                    )))
-                }
-                AccountIdentity::PrivateShared {
-                    ask,
-                    vpk,
-                    identifier,
-                } => {
-                    let nsk = NullifierSecretKey::from(&ask);
-                    let npk = NullifierPublicKey::from(&nsk);
-                    let account_id = lee::AccountId::from((&npk, &vpk, identifier));
-                    let pre = private_shared_acc_preparation(
-                        wallet,
-                        shard_selector(account_id),
-                        nsk,
-                        vpk,
-                        identifier,
-                        WitnessKind::Regular { ask: Some(ask) },
+                None => {
+                    let index = states.len();
+                    states.push(
+                        prepare_account(wallet, identity.clone(), shard_selector, &mut pin).await?,
                     );
-
-                    State::Private(Box::new(pre))
-                }
-                AccountIdentity::PrivatePdaShared {
-                    authority,
-                    seed,
-                    nsk,
-                    vpk,
-                    identifier,
-                } => {
-                    let kind = PrivateAccountKind::Pda {
-                        account_id: authority,
-                        seed,
-                        identifier,
-                    };
-                    let account_id = AccountId::for_private_account(
-                        &NullifierPublicKey::from(&nsk),
-                        &vpk,
-                        &kind,
-                    );
-                    let pre = private_shared_acc_preparation(
-                        wallet,
-                        shard_selector(account_id),
-                        nsk,
-                        vpk,
-                        identifier,
-                        witness_kind(&kind, None),
-                    );
-
-                    State::Private(Box::new(pre))
+                    prepared.insert(account_id, (index, identity));
+                    index
                 }
             };
 
-            states.push(state);
+            rows.push(Row {
+                account: index,
+                program_account_id,
+            });
         }
 
         let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
         Ok(Self {
             states,
+            rows,
             pin,
             dummy_commitment_root,
         })
     }
 
+    fn row_selector(&self, row: &Row) -> ProgramShardSelector {
+        shard_selector(
+            self.states[row.account].account_id(),
+            row.program_account_id,
+        )
+    }
+
     /// The selected account inputs, in declaration order.
     pub fn pre_states(&self) -> Vec<AccountInput> {
-        self.states.iter().map(State::input).collect()
+        self.rows
+            .iter()
+            .map(|row| self.states[row.account].input(self.row_selector(row)))
+            .collect()
     }
 
     /// The shard selectors, in declaration order.
     pub fn shard_selectors(&self) -> Vec<ProgramShardSelector> {
-        self.states.iter().map(State::shard_selector).collect()
+        self.rows.iter().map(|row| self.row_selector(row)).collect()
     }
 
     /// The public accounts whose signature this transaction carries.
@@ -396,7 +362,7 @@ impl AccountManager {
                     account,
                     sk: Some(_),
                 }
-                | State::PublicKeycard { account, .. } => Some(account.shard_selector.account_id),
+                | State::PublicKeycard { account, .. } => Some(account.account_id),
                 State::Public { sk: None, .. } | State::Private(_) => None,
             })
             .collect()
@@ -408,7 +374,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some((account.shard_selector.account_id, account.account.clone()))
+                    Some((account.account_id, account.account.clone()))
                 }
                 State::Private(_) => None,
             })
@@ -437,12 +403,10 @@ impl AccountManager {
                         pre.nsk.as_ref().expect("update variant must have nsk"),
                     )
                 } else {
-                    lee_core::account::Nonce::private_account_nonce_init(
-                        &pre.pre_state.shard_selector.account_id,
-                    )
+                    lee_core::account::Nonce::private_account_nonce_init(&pre.pre_state.account_id)
                 };
                 let esk = lee_core::EphemeralSecretKey::new(
-                    &pre.pre_state.shard_selector.account_id,
+                    &pre.pre_state.account_id,
                     &pre.random_seed,
                     &nonce,
                 );
@@ -541,7 +505,7 @@ impl AccountManager {
         signing()
             .find(|account| account.account.data.balance > 0)
             .or_else(|| signing().next())
-            .map(|account| account.shard_selector.account_id)
+            .map(|account| account.account_id)
     }
 
     pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
@@ -614,15 +578,136 @@ const fn witness_kind(
     }
 }
 
-fn private_key_tree_acc_preparation(
+const fn shard_selector(
+    account_id: AccountId,
+    program_account_id: Option<AccountId>,
+) -> ProgramShardSelector {
+    match program_account_id {
+        Some(program) => ProgramShardSelector::new(account_id, program),
+        None => ProgramShardSelector::balance(account_id),
+    }
+}
+
+async fn public_account_view(
     wallet: &WalletCore,
     shard_selector: ProgramShardSelector,
+) -> Result<Account, ExecutionFailureKind> {
+    wallet
+        .get_account_view(shard_selector)
+        .await
+        .map_err(ExecutionFailureKind::SequencerError)
+}
+
+/// Merges another scoped read of an already-prepared account, rejecting inconsistent snapshots.
+fn merge_public_view(
+    prepared: &mut PreparedAccount,
+    view: &Account,
+) -> Result<(), ExecutionFailureKind> {
+    if prepared.account.nonce != view.nonce {
+        return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+            "Account views of {} disagree on the nonce",
+            prepared.account_id,
+        )));
+    }
+    prepared.account.data.apply(&view.data);
+    Ok(())
+}
+
+/// Prepares one account's state and credentials, once per account.
+async fn prepare_account(
+    wallet: &WalletCore,
+    identity: AccountIdentity,
+    shard_selector: ProgramShardSelector,
+    pin: &mut Option<String>,
+) -> Result<State, ExecutionFailureKind> {
+    let account_id = shard_selector.account_id;
+    let state = match identity {
+        AccountIdentity::Public(_) => {
+            let account = PreparedAccount {
+                account_id,
+                account: public_account_view(wallet, shard_selector).await?,
+            };
+            let sk = wallet.get_account_public_signing_key(account_id).cloned();
+
+            State::Public { account, sk }
+        }
+        AccountIdentity::PublicNoSign(_) => {
+            let account = PreparedAccount {
+                account_id,
+                account: public_account_view(wallet, shard_selector).await?,
+            };
+
+            State::Public { account, sk: None }
+        }
+        AccountIdentity::PublicKeycard { key_path, .. } => {
+            let account = PreparedAccount {
+                account_id,
+                account: public_account_view(wallet, shard_selector).await?,
+            };
+
+            if pin.is_none() {
+                *pin = Some(
+                    crate::helperfunctions::read_pin()
+                        .map_err(ExecutionFailureKind::SignError)?
+                        .as_str()
+                        .to_owned(),
+                );
+            }
+
+            State::PublicKeycard { account, key_path }
+        }
+        AccountIdentity::PrivateOwned(_) => State::Private(Box::new(
+            private_key_tree_acc_preparation(wallet, account_id)?,
+        )),
+        AccountIdentity::PrivateForeign { npk, vpk, kind } => State::Private(Box::new(
+            private_foreign_acc_preparation(account_id, npk, vpk, &kind),
+        )),
+        AccountIdentity::PrivateShared {
+            ask,
+            vpk,
+            identifier,
+        } => {
+            let nsk = NullifierSecretKey::from(&ask);
+            State::Private(Box::new(private_shared_acc_preparation(
+                wallet,
+                account_id,
+                nsk,
+                vpk,
+                identifier,
+                WitnessKind::Regular { ask: Some(ask) },
+            )))
+        }
+        AccountIdentity::PrivatePdaShared {
+            authority,
+            seed,
+            nsk,
+            vpk,
+            identifier,
+        } => {
+            let kind = PrivateAccountKind::Pda {
+                account_id: authority,
+                seed,
+                identifier,
+            };
+            State::Private(Box::new(private_shared_acc_preparation(
+                wallet,
+                account_id,
+                nsk,
+                vpk,
+                identifier,
+                witness_kind(&kind, None),
+            )))
+        }
+    };
+
+    Ok(state)
+}
+
+fn private_key_tree_acc_preparation(
+    wallet: &WalletCore,
+    account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some(from_acc) = wallet
-        .storage
-        .key_chain()
-        .private_account(shard_selector.account_id)
-    else {
+    let Some(from_acc) = wallet.storage.key_chain().private_account(account_id) else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };
 
@@ -639,7 +724,7 @@ fn private_key_tree_acc_preparation(
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
     let sender_pre = PreparedAccount {
-        shard_selector,
+        account_id,
         account: from_acc.account.clone(),
     };
 
@@ -659,7 +744,7 @@ fn private_key_tree_acc_preparation(
 
 /// Prepare a private account with no secret key knowledge, i.e. for inits.
 fn private_foreign_acc_preparation(
-    shard_selector: ProgramShardSelector,
+    account_id: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
     kind: &PrivateAccountKind,
@@ -673,7 +758,7 @@ fn private_foreign_acc_preparation(
         identifier: kind.identifier(),
         vpk,
         pre_state: PreparedAccount {
-            shard_selector,
+            account_id,
             account: Account::default(),
         },
         proof: None,
@@ -683,7 +768,7 @@ fn private_foreign_acc_preparation(
 
 fn private_shared_acc_preparation(
     wallet: &WalletCore,
-    shard_selector: ProgramShardSelector,
+    account_id: AccountId,
     nsk: NullifierSecretKey,
     vpk: ViewingPublicKey,
     identifier: Identifier,
@@ -693,12 +778,12 @@ fn private_shared_acc_preparation(
     let account = wallet
         .storage()
         .key_chain()
-        .shared_private_account(shard_selector.account_id)
+        .shared_private_account(account_id)
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
     let pre_state = PreparedAccount {
-        shard_selector,
+        account_id,
         account,
     };
 
@@ -724,8 +809,7 @@ async fn fetch_private_proofs_and_root(
         .iter_mut()
         .filter_map(|state| match state {
             State::Private(pre) => {
-                let commitment = wallet
-                    .get_private_account_commitment(pre.pre_state.shard_selector.account_id)?;
+                let commitment = wallet.get_private_account_commitment(pre.pre_state.account_id)?;
                 Some((pre.as_mut(), commitment))
             }
             State::Public { .. } | State::PublicKeycard { .. } => None,
@@ -829,7 +913,7 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
         let pre_state = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance(account_id),
+            account_id,
             account: Account::default(),
         };
         State::Private(Box::new(AccountPreparedData {
@@ -849,7 +933,7 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
         let account = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance(account_id),
+            account_id,
             account: Account::default(),
         };
         State::Public { account, sk: None }
@@ -860,7 +944,7 @@ mod tests {
         let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
         let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
         let account = PreparedAccount {
-            shard_selector: ProgramShardSelector::balance(account_id),
+            account_id,
             account: Account {
                 data: AccountData {
                     balance,
@@ -876,8 +960,15 @@ mod tests {
     }
 
     fn manager(states: Vec<State>) -> AccountManager {
+        let rows = (0..states.len())
+            .map(|account| Row {
+                account,
+                program_account_id: None,
+            })
+            .collect();
         AccountManager {
             states,
+            rows,
             pin: None,
             dummy_commitment_root: [0; 32],
         }
@@ -886,7 +977,7 @@ mod tests {
     #[test]
     fn fee_payer_is_the_first_funded_public_signing_account() {
         let first_signing = public_signing_state(1, 1_000);
-        let expected = first_signing.account().shard_selector.account_id;
+        let expected = first_signing.account_id();
         let manager = manager(vec![
             private_state(),
             first_signing,
@@ -901,7 +992,7 @@ mod tests {
         // or definition PDA passed as a non-signing input) must not be
         // designated payer — the first funded signing account is chosen instead.
         let signing = public_signing_state(3, 1_000);
-        let signing_id = signing.account().shard_selector.account_id;
+        let signing_id = signing.account_id();
         let manager = manager(vec![public_state(), signing]);
         assert_eq!(manager.fee_payer_account_id(), Some(signing_id));
     }
@@ -910,7 +1001,7 @@ mod tests {
     fn fee_payer_skips_an_unfunded_signing_account_for_a_funded_one() {
         // An empty first signing account must not shadow a funded later one.
         let funded = public_signing_state(6, 1_000);
-        let funded_id = funded.account().shard_selector.account_id;
+        let funded_id = funded.account_id();
         let manager = manager(vec![public_signing_state(5, 0), funded]);
         assert_eq!(manager.fee_payer_account_id(), Some(funded_id));
     }
@@ -927,7 +1018,7 @@ mod tests {
         // payer id to fill: fall back to the first signing account rather than
         // refuse to build.
         let first = public_signing_state(7, 0);
-        let first_id = first.account().shard_selector.account_id;
+        let first_id = first.account_id();
         let manager = manager(vec![first, public_signing_state(8, 0)]);
         assert_eq!(manager.fee_payer_account_id(), Some(first_id));
     }
@@ -943,12 +1034,8 @@ mod tests {
         let npk = NullifierPublicKey([7; 32]);
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
         let account_id = lee::AccountId::from((&npk, &vpk, 0));
-        let pre = private_foreign_acc_preparation(
-            ProgramShardSelector::balance(account_id),
-            npk,
-            vpk,
-            &PrivateAccountKind::Regular(0),
-        );
+        let pre =
+            private_foreign_acc_preparation(account_id, npk, vpk, &PrivateAccountKind::Regular(0));
 
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
 
@@ -999,12 +1086,7 @@ mod tests {
             "the binding is part of the address, not decoration",
         );
 
-        let pre = private_foreign_acc_preparation(
-            ProgramShardSelector::balance(account_id),
-            npk,
-            vpk,
-            &kind,
-        );
+        let pre = private_foreign_acc_preparation(account_id, npk, vpk, &kind);
 
         assert_eq!(pre.identifier, 9);
 
