@@ -822,9 +822,38 @@ fn random_dummy_note() -> EncryptedAccountData {
 
 #[cfg(test)]
 mod tests {
+
     use lee::AccountData;
 
     use super::*;
+
+    #[test]
+    fn signs_reports_only_the_accounts_that_contribute_a_signature() {
+        let signing = public_signing_state(1, 10);
+        let signing_id = signing.account().shard_selector.account_id;
+        let unsigned = public_state();
+        let unsigned_id = unsigned.account().shard_selector.account_id;
+
+        let manager = manager(vec![signing, unsigned]);
+
+        assert!(manager.signs(signing_id));
+        assert!(!manager.signs(unsigned_id));
+    }
+
+    #[test]
+    fn nonces_and_signatures_stay_positionally_aligned() {
+        let manager = manager(vec![
+            public_signing_state(1, 10),
+            public_state(),
+            public_signing_state(2, 5),
+        ]);
+
+        let nonces = manager.public_account_nonces();
+        let signatures = manager.sign_message([7; 32]).unwrap();
+
+        assert_eq!(nonces.len(), 2);
+        assert_eq!(nonces.len(), signatures.len());
+    }
 
     #[test]
     fn private_shared_is_private() {

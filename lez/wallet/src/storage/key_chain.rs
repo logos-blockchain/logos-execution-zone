@@ -1018,6 +1018,67 @@ mod tests {
         assert!(index.account_for(&old_nullifier).is_none());
     }
 
+    #[test]
+    fn a_note_naming_another_account_leaves_the_shared_owner_untouched() {
+        let mut kc = UserKeyChain::default();
+
+        let label = Label::new("group");
+        let holder = GroupKeyHolder::new();
+        let identifier = 0;
+        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let nsk = keys.nullifier_secret_key();
+        let account_id =
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
+
+        kc.insert_group_key_holder(label.clone(), holder);
+        let old_account = Account::default();
+        kc.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                group_label: label,
+                identifier,
+                pda_seed: None,
+                authority_program_id: None,
+                account: old_account.clone(),
+            },
+        );
+
+        let old_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+        let mut index = kc.build_latest_nullifier_index();
+
+        let other_kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([6; 32]),
+            seed: lee_core::program::PdaSeed::new([7; 32]),
+            identifier,
+        };
+        let foreign_account = Account::funded(250);
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let ciphertext =
+            EncryptionScheme::encrypt(&foreign_account, &other_kind, &sender_ss, &old_nullifier);
+        let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
+        let message = Message {
+            private_actions: vec![PrivateAction {
+                nullifier: old_nullifier,
+                commitment: Commitment::new(&account_id, &foreign_account),
+                encrypted_post_state: note,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
+
+        assert!(handled.is_empty());
+        assert_eq!(
+            kc.shared_private_account(account_id).unwrap().account,
+            old_account
+        );
+        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
+    }
+
     // The genesis catch-up seeds only the init nullifier and lets the nullifier pass decode the
     // init note and every subsequent (randomly-tagged) update. Verify a shared account rolls from
     // default through its init to a later update purely by nullifier — the path the catch-up runs.
@@ -1214,6 +1275,89 @@ mod tests {
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
         assert_eq!(retrieved_account.account.data.balance, 100);
+    }
+
+    #[test]
+    fn insert_private_imported_pda_preserves_the_regular_owner() {
+        let mut user_data = UserKeyChain::default();
+        let key_chain = KeyChain::new_os_random();
+        let owner_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &PrivateAccountKind::Regular(7),
+        );
+        user_data.add_imported_private_account(
+            key_chain.clone(),
+            None,
+            7,
+            lee_core::account::Account::funded(5),
+        );
+
+        let pda_kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([3; 32]),
+            seed: lee_core::program::PdaSeed::new([9; 32]),
+            identifier: 7,
+        };
+        let holding_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &pda_kind,
+        );
+        user_data
+            .insert_private_account(holding_id, pda_kind, lee_core::account::Account::funded(11))
+            .unwrap();
+
+        assert_eq!(
+            user_data
+                .private_account(holding_id)
+                .unwrap()
+                .account
+                .data
+                .balance,
+            11
+        );
+        assert_eq!(
+            user_data
+                .private_account(owner_id)
+                .unwrap()
+                .account
+                .data
+                .balance,
+            5
+        );
+    }
+
+    #[test]
+    fn a_legacy_imported_record_reads_as_a_regular_kind() {
+        #[derive(serde::Serialize)]
+        struct Legacy {
+            account: lee_core::account::Account,
+            key_chain: KeyChain,
+            chain_index: Option<ChainIndex>,
+            identifier: Identifier,
+        }
+
+        let identifier = Identifier::from(u64::MAX) + 12_345;
+        let legacy = Legacy {
+            account: lee_core::account::Account::funded(3),
+            key_chain: KeyChain::new_os_random(),
+            chain_index: None,
+            identifier,
+        };
+        let json = format!(
+            "{{\"ImportedPrivate\":{}}}",
+            serde_json::to_string(&legacy).unwrap()
+        );
+
+        let parsed: PersistentAccountData = serde_json::from_str(&json).unwrap();
+        let PersistentAccountData::ImportedPrivate(data) = parsed else {
+            unreachable!("expected an imported private record")
+        };
+        assert_eq!(data.identifier, Some(identifier));
+        assert_eq!(
+            data.resolve_kind().unwrap(),
+            PrivateAccountKind::Regular(identifier)
+        );
     }
 
     #[test]

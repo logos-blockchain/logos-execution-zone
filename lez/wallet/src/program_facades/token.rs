@@ -338,3 +338,201 @@ pub(crate) fn missing_holding_owners(key_chain: &UserKeyChain) -> Vec<HoldingOwn
 fn token_program_id() -> AccountId {
     programs::token().id().into()
 }
+
+#[cfg(test)]
+mod tests {
+    use key_protocol::key_management::KeyChain;
+    use lee_core::account::AccountData;
+
+    use super::*;
+
+    const IDENTIFIER: lee_core::Identifier = 5;
+    const OTHER_IDENTIFIER: lee_core::Identifier = 999;
+
+    fn definition_id() -> AccountId {
+        AccountId::new([12; 32])
+    }
+
+    fn holding_account() -> Account {
+        Account {
+            nonce: lee_core::account::Nonce::default(),
+            data: AccountData::default(),
+        }
+        .with_shard(
+            token_program_id(),
+            ShardData::from(&TokenHolding::Fungible {
+                definition_id: definition_id(),
+                balance: 10,
+            }),
+        )
+    }
+
+    fn key_chain_with_holding(
+        seed_owner: Option<AccountId>,
+    ) -> (UserKeyChain, KeyChain, AccountId) {
+        let mut user = UserKeyChain::default();
+        let key_chain = KeyChain::new_os_random();
+        let npk = key_chain.nullifier_public_key;
+        let vpk = key_chain.viewing_public_key.clone();
+        let owner_id =
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(IDENTIFIER));
+        user.add_imported_private_account(
+            key_chain.clone(),
+            None,
+            OTHER_IDENTIFIER,
+            Account::default(),
+        );
+
+        let seed = token_core::holding_seed(
+            seed_owner.unwrap_or(owner_id),
+            definition_id(),
+            HoldingKind::Fungible,
+        );
+        let pda_kind = PrivateAccountKind::Pda {
+            account_id: token_program_id(),
+            seed,
+            identifier: IDENTIFIER,
+        };
+        let holding_id = AccountId::for_private_account(&npk, &vpk, &pda_kind);
+        user.insert_private_account(holding_id, pda_kind, holding_account())
+            .unwrap();
+        (user, key_chain, owner_id)
+    }
+
+    fn note_for(
+        key_chain: &KeyChain,
+        owner_id: AccountId,
+        kind: &PrivateAccountKind,
+        account: &Account,
+        nullifier: lee_core::Nullifier,
+    ) -> lee::privacy_preserving_transaction::message::Message {
+        use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
+
+        let npk = key_chain.nullifier_public_key;
+        let vpk = &key_chain.viewing_public_key;
+        let (sender_ss, epk) = lee_core::SharedSecretKey::encapsulate(vpk);
+        let ciphertext = EncryptionScheme::encrypt(account, kind, &sender_ss, &nullifier);
+        lee::privacy_preserving_transaction::message::Message {
+            private_actions: vec![PrivateAction {
+                nullifier,
+                commitment: lee_core::Commitment::new(&owner_id, account),
+                encrypted_post_state: EncryptedAccountData::new(ciphertext, &npk, vpk, epk),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_recovered_owner_replays_its_history_and_survives_a_restart() {
+        use std::collections::HashMap;
+
+        let (mut storage, _) = crate::storage::Storage::new("test_pass").unwrap();
+        let key_chain = KeyChain::new_os_random();
+        let npk = key_chain.nullifier_public_key;
+        let vpk = key_chain.viewing_public_key.clone();
+        let owner_kind = PrivateAccountKind::Regular(IDENTIFIER);
+        let owner_id = AccountId::for_private_account(&npk, &vpk, &owner_kind);
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
+
+        storage.key_chain_mut().add_imported_private_account(
+            key_chain.clone(),
+            None,
+            OTHER_IDENTIFIER,
+            Account::default(),
+        );
+        let pda_kind = PrivateAccountKind::Pda {
+            account_id: token_program_id(),
+            seed: token_core::holding_seed(owner_id, definition_id(), HoldingKind::Fungible),
+            identifier: IDENTIFIER,
+        };
+        let holding_id = AccountId::for_private_account(&npk, &vpk, &pda_kind);
+        storage
+            .key_chain_mut()
+            .insert_private_account(holding_id, pda_kind, holding_account())
+            .unwrap();
+
+        let initialized = Account::funded(60);
+        let updated = Account::funded(25);
+        let init_note = note_for(
+            &key_chain,
+            owner_id,
+            &owner_kind,
+            &initialized,
+            lee_core::Nullifier::for_account_initialization(&owner_id),
+        );
+        let update_note = note_for(
+            &key_chain,
+            owner_id,
+            &owner_kind,
+            &updated,
+            lee_core::Nullifier::for_account_update(
+                &lee_core::Commitment::new(&owner_id, &initialized),
+                &nsk,
+            ),
+        );
+
+        let recovered = {
+            let candidates = missing_holding_owners(storage.key_chain());
+            assert_eq!(candidates.len(), 1);
+            let mut awaited = HashMap::from([(
+                lee_core::Nullifier::for_account_initialization(&owner_id),
+                (&candidates[0], Account::default()),
+            )]);
+            crate::apply_owner_notes(&mut awaited, &init_note).unwrap();
+            crate::apply_owner_notes(&mut awaited, &update_note).unwrap();
+            let (_, account) = awaited.into_values().next().unwrap();
+            account
+        };
+        assert_eq!(recovered, updated);
+
+        storage
+            .key_chain_mut()
+            .insert_private_account(owner_id, owner_kind, recovered)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("storage.json");
+        storage.save_to_path(&path).unwrap();
+        let reloaded = crate::storage::Storage::from_path(&path).unwrap();
+
+        let found = reloaded.key_chain().private_account(owner_id).unwrap();
+        assert_eq!(found.account.data.balance, 25);
+        assert_eq!(found.kind, &PrivateAccountKind::Regular(IDENTIFIER));
+        assert!(reloaded.key_chain().private_account(holding_id).is_some());
+        assert!(missing_holding_owners(reloaded.key_chain()).is_empty());
+    }
+
+    #[test]
+    fn a_watched_note_that_is_not_the_owners_fails_recovery() {
+        use std::collections::HashMap;
+
+        let (user, key_chain, owner_id) = key_chain_with_holding(None);
+        let candidates = missing_holding_owners(&user);
+        assert_eq!(candidates.len(), 1);
+
+        let stranger_kind = PrivateAccountKind::Regular(OTHER_IDENTIFIER);
+        let watched = lee_core::Nullifier::for_account_initialization(&owner_id);
+        let note = note_for(
+            &key_chain,
+            owner_id,
+            &stranger_kind,
+            &Account::funded(9),
+            watched,
+        );
+
+        let mut awaited = HashMap::from([(watched, (&candidates[0], Account::default()))]);
+        let result = crate::apply_owner_notes(&mut awaited, &note);
+
+        assert!(result.is_err());
+        assert_eq!(awaited.len(), 1);
+        assert!(awaited.contains_key(&watched));
+    }
+
+    #[test]
+    fn a_holding_that_another_owner_seeds_yields_no_candidate() {
+        let (user, _key_chain, _owner_id) = key_chain_with_holding(Some(AccountId::new([77; 32])));
+
+        assert!(missing_holding_owners(&user).is_empty());
+    }
+}

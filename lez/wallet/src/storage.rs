@@ -215,7 +215,22 @@ mod tests {
         let account = lee::Account::default();
         storage
             .key_chain_mut()
-            .add_imported_private_account(key_chain, None, 0, account);
+            .add_imported_private_account(key_chain.clone(), None, 0, account);
+
+        let pda_kind = lee_core::PrivateAccountKind::Pda {
+            account_id: lee::AccountId::new([4; 32]),
+            seed: lee_core::program::PdaSeed::new([8; 32]),
+            identifier: 0,
+        };
+        let holding_id = lee::AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &pda_kind,
+        );
+        storage
+            .key_chain_mut()
+            .insert_private_account(holding_id, pda_kind, lee::Account::funded(77))
+            .unwrap();
 
         storage.set_last_synced_block(42);
 
