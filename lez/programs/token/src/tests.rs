@@ -218,7 +218,7 @@ impl AccountForTests {
     fn definition_account_uninit() -> AccountInput {
         AccountInput::with_shard(
             IdForTests::pool_definition_id(),
-            false,
+            true,
             0,
             TOKEN_PROGRAM_ID,
             ShardData::empty(),

@@ -15,6 +15,10 @@ pub fn new_fungible_definition(
     total_supply: u128,
 ) -> Vec<AccountStateDiff> {
     assert!(
+        definition_target_account.is_authorized,
+        "Definition target authorization is missing"
+    );
+    assert!(
         definition_target_account
             .shard_of(self_account_id)
             .is_empty(),
@@ -61,6 +65,10 @@ pub fn new_definition_with_metadata(
     metadata: NewTokenMetadata,
 ) -> Vec<AccountStateDiff> {
     assert!(
+        definition_target_account.is_authorized,
+        "Definition target authorization is missing"
+    );
+    assert!(
         definition_target_account
             .shard_of(self_account_id)
             .is_empty(),
@@ -72,6 +80,10 @@ pub fn new_definition_with_metadata(
         "Holding target account must not already hold data"
     );
 
+    assert!(
+        metadata_target_account.is_authorized,
+        "Metadata target authorization is missing"
+    );
     assert!(
         metadata_target_account.shard_of(self_account_id).is_empty(),
         "Metadata target account must not already hold data"
