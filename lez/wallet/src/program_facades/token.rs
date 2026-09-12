@@ -13,15 +13,32 @@ pub struct Token<'wallet>(pub &'wallet mut WalletCore);
 type SentTransaction = (HashType, Vec<AccDecodeData>);
 
 impl Token<'_> {
+    fn holding_target(
+        &self,
+        owner: &AccountIdentity,
+    ) -> Result<HoldingTarget, ExecutionFailureKind> {
+        if matches!(
+            owner,
+            AccountIdentity::PrivateShared { .. } | AccountIdentity::PrivatePdaShared { .. }
+        ) {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                lee::error::LeeError::InvalidInput(
+                    "Shared accounts are not supported as token holding owners".to_owned(),
+                ),
+            ));
+        }
+        Ok(HoldingTarget {
+            owner_id: owner.account_id(),
+            account_id_data: self.0.account_id_data(owner)?,
+        })
+    }
+
     pub fn holding_id(
         &self,
         owner: &AccountIdentity,
         definition_id: AccountId,
     ) -> Result<AccountId, ExecutionFailureKind> {
-        let target = HoldingTarget {
-            owner_id: owner.account_id(),
-            account_id_data: self.0.account_id_data(owner)?,
-        };
+        let target = self.holding_target(owner)?;
         Ok(token_core::holding_id(
             &target,
             token_program_id(),
@@ -64,10 +81,7 @@ impl Token<'_> {
         definition_id: AccountId,
     ) -> Result<(HoldingTarget, AccountMention), ExecutionFailureKind> {
         let token_program_id = token_program_id();
-        let target = HoldingTarget {
-            owner_id: owner.account_id(),
-            account_id_data: self.0.account_id_data(owner)?,
-        };
+        let target = self.holding_target(owner)?;
         let holding_id = token_core::holding_id(
             &target,
             token_program_id,

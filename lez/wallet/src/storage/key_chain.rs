@@ -418,15 +418,14 @@ impl UserKeyChain {
     ) -> Option<Nullifier> {
         let encrypted = &message.private_actions[i].encrypted_post_state;
 
-        let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
-        {
+        let (nsk, secret) = if let Some(entry) = self.shared_private_account(account_id) {
             let keys = self.derive_shared_account_keys(entry)?;
             let secret = SharedSecretKey::decapsulate(
                 &encrypted.epk,
                 &keys.viewing_secret_key.d,
                 &keys.viewing_secret_key.z,
             )?;
-            (keys.nullifier_secret_key(), secret, true)
+            (keys.nullifier_secret_key(), secret)
         } else {
             let found = self.private_account(account_id)?;
             let secret = found
@@ -435,19 +434,14 @@ impl UserKeyChain {
             (
                 found.key_chain.private_key_holder.nullifier_secret_key(),
                 secret,
-                false,
             )
         };
 
         let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
-        if is_shared {
-            self.update_shared_private_account_state(&account_id, new_account);
-        } else {
-            self.insert_private_account(account_id, kind, new_account)
-                .ok()?;
-        }
+        self.insert_private_account(account_id, kind, new_account)
+            .ok()?;
         Some(new_nullifier)
     }
 
@@ -529,9 +523,25 @@ impl UserKeyChain {
         account: lee_core::account::Account,
     ) -> Result<()> {
         // Try to find in shared accounts
-        if let Some(entry) = self.shared_private_accounts.get_mut(&account_id) {
+        if let Some(entry) = self.shared_private_accounts.get(&account_id) {
+            let keys = self
+                .derive_shared_account_keys(entry)
+                .ok_or_else(|| anyhow!("No derivable keys for shared account {account_id}"))?;
+            let derived = AccountId::for_private_account(
+                &keys.generate_nullifier_public_key(),
+                &keys.generate_viewing_public_key(),
+                &kind,
+            );
+            if derived != account_id {
+                return Err(anyhow!(
+                    "Note kind derives {derived}, not shared account {account_id}"
+                ));
+            }
             debug!("Updating shared private account {account_id}");
-            entry.account = account;
+            self.shared_private_accounts
+                .get_mut(&account_id)
+                .expect("Entry was just found")
+                .account = account;
             return Ok(());
         }
 
@@ -670,17 +680,6 @@ impl UserKeyChain {
         entry: SharedAccountEntry,
     ) {
         self.shared_private_accounts.insert(account_id, entry);
-    }
-
-    /// Updates the cached account state for a shared private account.
-    pub fn update_shared_private_account_state(
-        &mut self,
-        account_id: &lee::AccountId,
-        account: lee_core::account::Account,
-    ) {
-        if let Some(entry) = self.shared_private_accounts.get_mut(account_id) {
-            entry.account = account;
-        }
     }
 
     /// Inserts or replaces a `GroupKeyHolder` under the given label.

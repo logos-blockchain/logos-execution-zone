@@ -1156,12 +1156,15 @@ impl WalletCore {
                 else {
                     continue;
                 };
-                if let Some((_kind, new_acc)) = decrypt_note_at(message, ciph_id, &shared_secret) {
+                if let Some((kind, new_acc)) = decrypt_note_at(message, ciph_id, &shared_secret)
+                    && self
+                        .storage
+                        .key_chain_mut()
+                        .insert_private_account(account_id, kind, new_acc.clone())
+                        .is_ok()
+                {
                     log::info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
                     index.track(account_id, &new_acc, &nsk);
-                    self.storage
-                        .key_chain_mut()
-                        .update_shared_private_account_state(&account_id, new_acc);
                 }
             }
         }
