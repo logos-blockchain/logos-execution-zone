@@ -6,7 +6,16 @@ use lee_core::{
 };
 use token_core::{HoldingKind, HoldingTarget, Instruction, TokenHolding};
 
-use crate::{AccDecodeData, AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
+use crate::{
+    AccDecodeData, AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
+    storage::key_chain::UserKeyChain,
+};
+
+pub(crate) struct HoldingOwnerCandidate<'wallet> {
+    pub owner_id: AccountId,
+    pub identifier: lee_core::Identifier,
+    pub key_chain: &'wallet key_protocol::key_management::KeyChain,
+}
 
 pub struct Token<'wallet>(pub &'wallet mut WalletCore);
 
@@ -247,6 +256,65 @@ impl Token<'_> {
         )
         .await
     }
+}
+
+pub(crate) fn missing_holding_owners(key_chain: &UserKeyChain) -> Vec<HoldingOwnerCandidate<'_>> {
+    let token_program_id = token_program_id();
+    let derive = |found: &crate::storage::key_chain::FoundPrivateAccount<'_>| {
+        AccountId::for_private_account(
+            &found.key_chain.nullifier_public_key,
+            &found.key_chain.viewing_public_key,
+            found.kind,
+        )
+    };
+    let mut registered: std::collections::HashSet<AccountId> = key_chain
+        .private_accounts()
+        .map(|found| derive(&found))
+        .collect();
+    let mut candidates = Vec::new();
+
+    for holding in key_chain.private_accounts() {
+        let PrivateAccountKind::Pda {
+            account_id: authority,
+            seed,
+            identifier,
+        } = holding.kind
+        else {
+            continue;
+        };
+        if *authority != token_program_id {
+            continue;
+        }
+        let Ok(token_holding) =
+            TokenHolding::try_from(holding.account.data.shard(token_program_id))
+        else {
+            continue;
+        };
+
+        let owner_id = AccountId::for_private_account(
+            &holding.key_chain.nullifier_public_key,
+            &holding.key_chain.viewing_public_key,
+            &PrivateAccountKind::Regular(*identifier),
+        );
+        if token_core::holding_seed(
+            owner_id,
+            token_holding.definition_id(),
+            token_holding.kind(),
+        ) != *seed
+        {
+            continue;
+        }
+
+        if registered.insert(owner_id) {
+            candidates.push(HoldingOwnerCandidate {
+                owner_id,
+                identifier: *identifier,
+                key_chain: holding.key_chain,
+            });
+        }
+    }
+
+    candidates
 }
 
 fn token_program_id() -> AccountId {

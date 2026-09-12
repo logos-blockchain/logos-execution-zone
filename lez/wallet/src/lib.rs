@@ -1011,6 +1011,80 @@ impl WalletCore {
     }
 
     pub async fn sync_to_block(&mut self, block_id: u64) -> Result<()> {
+        self.sync_blocks_to_block(block_id).await?;
+        self.recover_holding_owners().await
+    }
+
+    async fn recover_holding_owners(&mut self) -> Result<()> {
+        let cursor = self.storage.last_synced_block();
+        let recovered = {
+            let candidates =
+                crate::program_facades::token::missing_holding_owners(self.storage.key_chain());
+            if candidates.is_empty() {
+                return Ok(());
+            }
+            self.replay_owner_states(&candidates, cursor).await?
+        };
+
+        for (owner_id, identifier, account) in recovered {
+            self.storage.key_chain_mut().insert_private_account(
+                owner_id,
+                PrivateAccountKind::Regular(identifier),
+                account,
+            )?;
+        }
+        self.store_persistent_data()?;
+        Ok(())
+    }
+
+    async fn replay_owner_states(
+        &self,
+        candidates: &[crate::program_facades::token::HoldingOwnerCandidate<'_>],
+        cursor: u64,
+    ) -> Result<Vec<(AccountId, lee_core::Identifier, Account)>> {
+        use futures::TryStreamExt as _;
+
+        let mut awaited: HashMap<lee_core::Nullifier, OwnerReplay<'_, '_>> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    lee_core::Nullifier::for_account_initialization(&candidate.owner_id),
+                    (candidate, Account::default()),
+                )
+            })
+            .collect();
+
+        if cursor > 0 {
+            let poller = self.poller_helm();
+            let mut blocks = std::pin::pin!(poller.poll_block_range(1..=cursor));
+            let mut expected = 1_u64;
+            while let Some(block) = blocks.try_next().await? {
+                anyhow::ensure!(
+                    block.header.block_id == expected,
+                    "Owner recovery needs contiguous history: expected block {expected}, got {}",
+                    block.header.block_id
+                );
+                expected = expected.saturating_add(1);
+                for tx in block.body.transactions {
+                    if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
+                        apply_owner_notes(&mut awaited, &pp_tx.message)?;
+                    }
+                }
+            }
+            anyhow::ensure!(
+                expected == cursor.saturating_add(1),
+                "Owner recovery stopped at block {} before the synced height {cursor}",
+                expected.saturating_sub(1)
+            );
+        }
+
+        Ok(awaited
+            .into_values()
+            .map(|(candidate, account)| (candidate.owner_id, candidate.identifier, account))
+            .collect())
+    }
+
+    async fn sync_blocks_to_block(&mut self, block_id: u64) -> Result<()> {
         use futures::TryStreamExt as _;
 
         let last_synced_block = self.storage.last_synced_block();
@@ -1186,6 +1260,11 @@ impl WalletCore {
     }
 }
 
+type OwnerReplay<'replay, 'wallet> = (
+    &'replay crate::program_facades::token::HoldingOwnerCandidate<'wallet>,
+    Account,
+);
+
 /// Collapses the per-sequencer send results into one outcome: the first
 /// success, or — when every sequencer refused — the first refusal, so the
 /// caller sees *why* (e.g. a fee-admission `PayerCannotFund`) instead of a
@@ -1218,6 +1297,44 @@ fn decrypt_note_at(
         secret,
         &message.private_actions[i].nullifier,
     )
+}
+
+pub(crate) fn apply_owner_notes(
+    awaited: &mut HashMap<lee_core::Nullifier, OwnerReplay<'_, '_>>,
+    message: &Message,
+) -> Result<()> {
+    for (index, action) in message.private_actions.iter().enumerate() {
+        let Some(&(candidate, _)) = awaited.get(&action.nullifier) else {
+            continue;
+        };
+        let secret = candidate
+            .key_chain
+            .calculate_shared_secret_receiver(&action.encrypted_post_state.epk)
+            .context("A watched note did not decapsulate under its owner's viewing key")?;
+        let (kind, account) = decrypt_note_at(message, index, &secret)
+            .context("A watched note did not decrypt under its owner's keys")?;
+        let derived = AccountId::for_private_account(
+            &candidate.key_chain.nullifier_public_key,
+            &candidate.key_chain.viewing_public_key,
+            &kind,
+        );
+        anyhow::ensure!(
+            derived == candidate.owner_id,
+            "A watched note names {derived}, not the recovered owner {}",
+            candidate.owner_id
+        );
+
+        let next = lee_core::Nullifier::for_account_update(
+            &Commitment::new(&candidate.owner_id, &account),
+            &candidate
+                .key_chain
+                .private_key_holder
+                .nullifier_secret_key(),
+        );
+        awaited.remove(&action.nullifier);
+        awaited.insert(next, (candidate, account));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
