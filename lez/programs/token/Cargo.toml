@@ -10,3 +10,9 @@ workspace = true
 [dependencies]
 lee_core.workspace = true
 token_core.workspace = true
+
+[dev-dependencies]
+borsh.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
+programs = { workspace = true }
+test_methods = { workspace = true }

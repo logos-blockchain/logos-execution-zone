@@ -1155,26 +1155,6 @@ enum WalletFfiError wallet_ffi_token_elf(struct FfiProgram *ffi_program);
 enum WalletFfiError wallet_ffi_amm_elf(struct FfiProgram *ffi_program);
 
 /**
- * Writes elf data of ata into buffer.
- *
- * WARNING: Result is not consisent and change between versions, use for testing purposes only.
- *
- * # Parameters
- * - `ffi_program`: Valid pointer to `FfiProgram`
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
- *
- * # Safety
- * - `ffi_program` must be a non-null pointer
- */
-enum WalletFfiError wallet_ffi_ata_elf(struct FfiProgram *ffi_program);
-
-/**
  * Free a ffi program returned by functions `wallet_ffi_*_elf`.
  *
  * # Safety

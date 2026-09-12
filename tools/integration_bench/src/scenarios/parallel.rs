@@ -12,7 +12,7 @@ use test_fixtures::{TestContext, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::token::TokenProgramAgnosticSubcommand,
+    programs::token::TokenSubcommand,
 };
 
 use crate::harness::{BlockSize, ScenarioOutput, StepResult};
@@ -47,9 +47,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "token_new_fungible", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(def_id),
-                    supply_account_id: public_mention(master_id),
+                Command::Token(TokenSubcommand::New {
+                    definition: public_mention(def_id),
+                    owner: public_mention(master_id),
                     name: "ParToken".to_owned(),
                     total_supply: total_mint,
                 }),
@@ -64,8 +64,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             .step(ctx, format!("fund_sender_{i:02}"), async |ctx| {
                 wallet::cli::execute_subcommand(
                     ctx.wallet_mut(),
-                    Command::Token(TokenProgramAgnosticSubcommand::Send {
+                    Command::Token(TokenSubcommand::Send {
                         from: public_mention(master_id),
+                        definition: def_id,
                         to: Some(public_mention(sender_id)),
                         to_npk: None,
                         to_vpk: None,
@@ -93,8 +94,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     for (sender_id, recipient_id) in senders.iter().zip(recipients.iter()) {
         wallet::cli::execute_subcommand(
             ctx.wallet_mut(),
-            Command::Token(TokenProgramAgnosticSubcommand::Send {
+            Command::Token(TokenSubcommand::Send {
                 from: public_mention(*sender_id),
+                definition: def_id,
                 to: Some(public_mention(*recipient_id)),
                 to_npk: None,
                 to_vpk: None,

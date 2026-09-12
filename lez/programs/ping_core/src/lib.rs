@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, AccountIdData, ProgramShardSelector},
     program::PdaSeed,
 };
 
@@ -104,7 +104,7 @@ pub enum SenderInstruction {
 /// The account a `ping_receiver` records the latest delivered payload into.
 #[must_use]
 pub fn ping_record_pda(receiver_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&receiver_id, &ping_record_seed())
+    AccountIdData::public().derive_pda_id(receiver_id, &ping_record_seed())
 }
 
 /// Seed of the record PDA.
@@ -117,7 +117,7 @@ const fn ping_record_seed() -> PdaSeed {
 /// program it chains into without importing the outbox image id.
 #[must_use]
 pub fn sender_config_account_id(sender_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&sender_id, &sender_config_seed())
+    AccountIdData::public().derive_pda_id(sender_id, &sender_config_seed())
 }
 
 #[must_use]
@@ -128,7 +128,7 @@ const fn sender_config_seed() -> PdaSeed {
 /// PDA holding the sources `ping_receiver` accepts a delivery from.
 #[must_use]
 pub fn receiver_config_account_id(receiver_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&receiver_id, &receiver_config_seed())
+    AccountIdData::public().derive_pda_id(receiver_id, &receiver_config_seed())
 }
 
 #[must_use]

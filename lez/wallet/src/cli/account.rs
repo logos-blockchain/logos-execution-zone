@@ -5,7 +5,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
-use lee_core::{Identifier, account::AccountIdError};
+use lee_core::{Identifier, PrivateAccountKind, account::AccountIdError};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -668,11 +668,11 @@ impl WalletSubcommand for ImportSubcommand {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let account_id = lee::AccountId::from((
+                let account_id = lee::AccountId::for_private_account(
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
-                    identifier,
-                ));
+                    &PrivateAccountKind::Regular(identifier),
+                );
 
                 wallet_core
                     .storage_mut()

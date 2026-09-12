@@ -5,6 +5,7 @@ use lee_core::{
     account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
     program::{AccountInput, AccountStateDiff, ChainedCall},
 };
+use token_core::HoldingTarget;
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
@@ -16,10 +17,12 @@ pub fn add_liquidity(
     user_holding_a: &AccountInput,
     user_holding_b: &AccountInput,
     user_holding_lp: &AccountInput,
+    user_owner: &AccountInput,
     min_amount_liquidity: NonZeroU128,
     max_amount_to_add_token_a: u128,
     max_amount_to_add_token_b: u128,
     self_account_id: AccountId,
+    user: &HoldingTarget,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // 1. Fetch Pool state
     let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
@@ -39,6 +42,11 @@ pub fn add_liquidity(
     assert_eq!(
         vault_b.account_id, pool_def_data.vault_b_id,
         "Vault B was not provided"
+    );
+
+    assert_eq!(
+        user_owner.account_id, user.owner_id,
+        "User owner was not provided"
     );
 
     assert!(
@@ -136,26 +144,22 @@ pub fn add_liquidity(
     };
 
     // Chain call for Token A (UserHoldingA -> Vault_A)
-    let call_token_a = ChainedCall::new(
+    let call_token_a = crate::deposit(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(user_holding_a),
-            ProgramShardSelector::from(vault_a),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: actual_amount_a,
-        },
+        user_holding_a,
+        vault_a,
+        user,
+        pool.account_id,
+        actual_amount_a,
     );
     // Chain call for Token B (UserHoldingB -> Vault_B)
-    let call_token_b = ChainedCall::new(
+    let call_token_b = crate::deposit(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(user_holding_b),
-            ProgramShardSelector::from(vault_b),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: actual_amount_b,
-        },
+        user_holding_b,
+        vault_b,
+        user,
+        pool.account_id,
+        actual_amount_b,
     );
     // Chain call for LP (mint new tokens for user_holding_lp)
     let call_token_lp = ChainedCall::new(
@@ -165,6 +169,7 @@ pub fn add_liquidity(
             ProgramShardSelector::from(user_holding_lp),
         ],
         &token_core::Instruction::Mint {
+            holder: user.clone(),
             amount_to_mint: delta_lp,
         },
     )
@@ -184,6 +189,7 @@ pub fn add_liquidity(
         AccountStateDiff::unchanged(user_holding_a.clone()),
         AccountStateDiff::unchanged(user_holding_b.clone()),
         AccountStateDiff::unchanged(user_holding_lp.clone()),
+        AccountStateDiff::unchanged(user_owner.clone()),
     ];
 
     (post_diffs, chained_calls)

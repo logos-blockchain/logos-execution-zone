@@ -2,21 +2,38 @@ use lee_core::{
     account::{AccountId, BalanceDiff, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
-use token_core::TokenHolding;
+use token_core::{HoldingTarget, TokenHolding};
 
 #[must_use]
 pub fn transfer(
-    sender: &AccountInput,
-    recipient: &AccountInput,
+    pre_states: Vec<AccountInput>,
+    sender: &HoldingTarget,
+    recipient: &HoldingTarget,
     self_account_id: AccountId,
     balance_to_move: u128,
 ) -> Vec<AccountStateDiff> {
-    assert!(sender.is_authorized, "Sender authorization is missing");
+    let ([sender_account, recipient_account], owner_row) =
+        crate::spend_rows(pre_states, sender.owner_id);
 
-    let mut sender_holding =
-        TokenHolding::try_from(sender.shard_of(self_account_id)).expect("Invalid sender data");
+    let mut sender_holding = TokenHolding::try_from(sender_account.shard_of(self_account_id))
+        .expect("Invalid sender data");
+    let (definition_id, kind) = (sender_holding.definition_id(), sender_holding.kind());
+    token_core::verify_holding(
+        sender,
+        &sender_account,
+        self_account_id,
+        definition_id,
+        kind,
+    );
+    token_core::verify_holding(
+        recipient,
+        &recipient_account,
+        self_account_id,
+        definition_id,
+        kind,
+    );
 
-    let recipient_shard = recipient.shard_of(self_account_id);
+    let recipient_shard = recipient_account.shard_of(self_account_id);
     let mut recipient_holding = if recipient_shard.is_empty() {
         TokenHolding::zeroized_clone_from(&sender_holding)
     } else {
@@ -101,16 +118,16 @@ pub fn transfer(
     }
 
     let sender_diff = AccountStateDiff::new(
-        sender.clone(),
+        sender_account,
         BalanceDiff::Add(0),
         ShardData::from(&sender_holding),
     );
 
     let recipient_diff = AccountStateDiff::new(
-        recipient.clone(),
+        recipient_account,
         BalanceDiff::Add(0),
         ShardData::from(&recipient_holding),
     );
 
-    vec![sender_diff, recipient_diff]
+    crate::with_owner_row(vec![sender_diff, recipient_diff], owner_row)
 }

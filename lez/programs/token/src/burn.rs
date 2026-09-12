@@ -2,24 +2,29 @@ use lee_core::{
     account::{AccountId, BalanceDiff, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{HoldingTarget, TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn burn(
-    definition_account: &AccountInput,
-    user_holding_account: &AccountInput,
+    pre_states: Vec<AccountInput>,
+    holder: &HoldingTarget,
     self_account_id: AccountId,
     amount_to_burn: u128,
 ) -> Vec<AccountStateDiff> {
-    assert!(
-        user_holding_account.is_authorized,
-        "Authorization is missing"
-    );
+    let ([definition_account, user_holding_account], owner_row) =
+        crate::spend_rows(pre_states, holder.owner_id);
 
     let mut definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
         .expect("Token Definition account must be valid");
     let mut holding = TokenHolding::try_from(user_holding_account.shard_of(self_account_id))
         .expect("Token Holding account must be valid");
+    token_core::verify_holding(
+        holder,
+        &user_holding_account,
+        self_account_id,
+        holding.definition_id(),
+        holding.kind(),
+    );
 
     assert_eq!(
         definition_account.account_id,
@@ -94,16 +99,16 @@ pub fn burn(
     }
 
     let definition_diff = AccountStateDiff::new(
-        definition_account.clone(),
+        definition_account,
         BalanceDiff::Add(0),
         ShardData::from(&definition),
     );
 
     let holding_diff = AccountStateDiff::new(
-        user_holding_account.clone(),
+        user_holding_account,
         BalanceDiff::Add(0),
         ShardData::from(&holding),
     );
 
-    vec![definition_diff, holding_diff]
+    crate::with_owner_row(vec![definition_diff, holding_diff], owner_row)
 }

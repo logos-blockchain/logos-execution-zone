@@ -5,7 +5,7 @@ use test_fixtures::{TestContext, private_mention, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::token::TokenProgramAgnosticSubcommand,
+    programs::token::TokenSubcommand,
 };
 
 use crate::harness::ScenarioOutput;
@@ -25,9 +25,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "token_new_fungible", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(def_id),
-                    supply_account_id: public_mention(supply_id),
+                Command::Token(TokenSubcommand::New {
+                    definition: public_mention(def_id),
+                    owner: public_mention(supply_id),
                     name: "PrivToken".to_owned(),
                     total_supply: 1_000_000,
                 }),
@@ -41,8 +41,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "shielded_transfer", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: public_mention(supply_id),
+                    definition: def_id,
                     to: Some(private_mention(private_a)),
                     to_npk: None,
                     to_vpk: None,
@@ -60,8 +61,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "deshielded_transfer", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: private_mention(private_a),
+                    definition: def_id,
                     to: Some(public_mention(public_recipient_id)),
                     to_npk: None,
                     to_vpk: None,
@@ -79,8 +81,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "private_to_private", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: private_mention(private_a),
+                    definition: def_id,
                     to: Some(private_mention(private_b)),
                     to_npk: None,
                     to_vpk: None,

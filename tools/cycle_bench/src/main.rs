@@ -22,9 +22,8 @@
 
 use std::{path::PathBuf, time::Instant};
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
+use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_id};
 use anyhow::Result;
-use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
@@ -34,12 +33,12 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     Timestamp,
-    account::{AccountId, ShardData},
+    account::{AccountId, AccountIdData, ShardData},
     program::{AccountInput, InstructionData},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{HoldingKind, HoldingTarget, TokenDefinition, TokenHolding};
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -328,18 +327,52 @@ fn token_definition(
     )
 }
 
-fn token_transfer_pre_states() -> Vec<AccountInput> {
-    let def = AccountId::new([15; 32]);
-    let sender = token_holding(def, AccountId::new([17; 32]), 100_000, true);
-    let recipient = token_holding(def, AccountId::new([42; 32]), 50_000, true);
-    vec![sender, recipient]
+fn holder(owner: u8) -> HoldingTarget {
+    HoldingTarget {
+        owner_id: AccountId::new([owner; 32]),
+        account_id_data: AccountIdData::public(),
+    }
 }
 
-fn token_definition_and_holding_pre_states() -> Vec<AccountInput> {
-    let def_id = AccountId::new([15; 32]);
-    let def = token_definition(def_id, 100_000, true);
-    let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
-    vec![def, holding]
+fn holding_of(holder: &HoldingTarget, definition_id: AccountId, balance: u128) -> AccountInput {
+    let holding_id = token_core::holding_id(
+        holder,
+        programs::token().id().into(),
+        definition_id,
+        HoldingKind::Fungible,
+    );
+    token_holding(definition_id, holding_id, balance, false)
+}
+
+fn owner_row(holder: &HoldingTarget) -> AccountInput {
+    AccountInput::balance(holder.owner_id, true, 0)
+}
+
+fn token_definition_id() -> AccountId {
+    AccountId::new([15; 32])
+}
+
+fn token_transfer_pre_states() -> Vec<AccountInput> {
+    vec![
+        holding_of(&holder(17), token_definition_id(), 100_000),
+        holding_of(&holder(42), token_definition_id(), 50_000),
+        owner_row(&holder(17)),
+    ]
+}
+
+fn token_mint_pre_states() -> Vec<AccountInput> {
+    vec![
+        token_definition(token_definition_id(), 100_000, true),
+        holding_of(&holder(17), token_definition_id(), 1_000),
+    ]
+}
+
+fn token_burn_pre_states() -> Vec<AccountInput> {
+    vec![
+        token_definition(token_definition_id(), 100_000, false),
+        holding_of(&holder(17), token_definition_id(), 1_000),
+        owner_row(&holder(17)),
+    ]
 }
 
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
@@ -381,18 +414,21 @@ fn amm_pool_id() -> AccountId {
     )
 }
 fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm().id().into(),
+    compute_vault_id(
+        programs::token().id().into(),
         amm_pool_id(),
         amm_token_a_def_id(),
     )
 }
 fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(
-        programs::amm().id().into(),
+    compute_vault_id(
+        programs::token().id().into(),
         amm_pool_id(),
         amm_token_b_def_id(),
     )
+}
+fn amm_user() -> HoldingTarget {
+    holder(45)
 }
 fn amm_lp_def_id() -> AccountId {
     compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
@@ -426,41 +462,39 @@ fn amm_pool_account() -> AccountInput {
 
 fn amm_swap_pre_states() -> Vec<AccountInput> {
     let pool = amm_pool_account();
-    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
-    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
-    let user_a = token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true);
-    let user_b = token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false);
-    vec![pool, vault_a, vault_b, user_a, user_b]
+    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, false);
+    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, false);
+    let user_a = holding_of(&amm_user(), amm_token_a_def_id(), 1_000);
+    let user_b = holding_of(&amm_user(), amm_token_b_def_id(), 500);
+    vec![
+        pool,
+        vault_a,
+        vault_b,
+        user_a,
+        user_b,
+        owner_row(&amm_user()),
+    ]
 }
 
 fn amm_add_liquidity_pre_states() -> Vec<AccountInput> {
     let pool = amm_pool_account();
-    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
-    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
+    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, false);
+    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, false);
     let lp_supply = (1_000_u128 * 500_u128).isqrt();
     let lp_def = token_definition(amm_lp_def_id(), lp_supply, true);
-    let user_a = token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true);
-    let user_b = token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true);
-    let user_lp = token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true);
-    vec![pool, vault_a, vault_b, lp_def, user_a, user_b, user_lp]
-}
-
-fn ata_create_pre_states() -> Vec<AccountInput> {
-    let owner_id = AccountId::new([91; 32]);
-    let definition_id = AccountId::new([15; 32]);
-    let token_program_id: AccountId = programs::token().id().into();
-    let owner = AccountInput::balance(owner_id, true, 0);
-    let token_def = token_definition(definition_id, 100_000, false);
-    let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
-    let ata_account = AccountInput::with_shard(
-        ata_id,
-        false,
-        0,
-        programs::token().id().into(),
-        ShardData::empty(),
-    );
-    vec![owner, token_def, ata_account]
+    let user_a = holding_of(&amm_user(), amm_token_a_def_id(), 1_000);
+    let user_b = holding_of(&amm_user(), amm_token_b_def_id(), 500);
+    let user_lp = holding_of(&amm_user(), amm_lp_def_id(), 0);
+    vec![
+        pool,
+        vault_a,
+        vault_b,
+        lp_def,
+        user_a,
+        user_b,
+        user_lp,
+        owner_row(&amm_user()),
+    ]
 }
 
 fn main() -> Result<()> {
@@ -485,6 +519,8 @@ fn main() -> Result<()> {
             programs::token(),
             token_transfer_pre_states(),
             &token_core::Instruction::Transfer {
+                sender: holder(17),
+                recipient: holder(42),
                 amount_to_transfer: 5_000,
             },
         )?,
@@ -492,8 +528,9 @@ fn main() -> Result<()> {
             "token",
             "Mint",
             programs::token(),
-            token_definition_and_holding_pre_states(),
+            token_mint_pre_states(),
             &token_core::Instruction::Mint {
+                holder: holder(17),
                 amount_to_mint: 5_000,
             },
         )?,
@@ -501,8 +538,9 @@ fn main() -> Result<()> {
             "token",
             "Burn",
             programs::token(),
-            token_definition_and_holding_pre_states(),
+            token_burn_pre_states(),
             &token_core::Instruction::Burn {
+                holder: holder(17),
                 amount_to_burn: 500,
             },
         )?,
@@ -522,6 +560,7 @@ fn main() -> Result<()> {
                 swap_amount_in: 200,
                 min_amount_out: 1,
                 token_definition_id_in: amm_token_a_def_id(),
+                user: amm_user(),
             },
         )?,
         Case::new(
@@ -533,15 +572,7 @@ fn main() -> Result<()> {
                 min_amount_liquidity: 1,
                 max_amount_to_add_token_a: 400,
                 max_amount_to_add_token_b: 200,
-            },
-        )?,
-        Case::new(
-            "ata",
-            "Create",
-            programs::ata(),
-            ata_create_pre_states(),
-            &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token().id().into(),
+                user: amm_user(),
             },
         )?,
     ];

@@ -40,7 +40,7 @@ pub enum AccountIdentity {
     },
     /// A shared regular private account with externally-provided keys (e.g. from GMS).
     /// Carries the authorization secret key: the `nsk` and `npk` behind
-    /// `AccountId = from((&npk, &vpk, identifier))` are derived from it.
+    /// `AccountId::for_private_account` are derived from it.
     /// Works with `authenticated_transfer` and all existing programs out of the box.
     PrivateShared {
         ask: AuthorizationSecretKey,
@@ -114,17 +114,39 @@ impl AccountIdentity {
         )
     }
 
-    /// Returns the `AccountId` for public variants. Used by facades that need the raw ID
-    /// for derived-address computation alongside the identity.
+    /// The account this identity names.
     #[must_use]
-    pub const fn public_account_id(&self) -> Option<lee::AccountId> {
+    pub fn account_id(&self) -> AccountId {
         match self {
-            Self::Public(id) | Self::PublicNoSign(id) => Some(*id),
-            Self::PublicKeycard { account_id, .. } => Some(*account_id),
-            Self::PrivateOwned(_)
-            | Self::PrivateForeign { .. }
-            | Self::PrivateShared { .. }
-            | Self::PrivatePdaShared { .. } => None,
+            Self::Public(id) | Self::PublicNoSign(id) | Self::PrivateOwned(id) => *id,
+            Self::PublicKeycard { account_id, .. } => *account_id,
+            Self::PrivateForeign { npk, vpk, kind } => {
+                AccountId::for_private_account(npk, vpk, kind)
+            }
+            Self::PrivateShared {
+                ask,
+                vpk,
+                identifier,
+            } => AccountId::for_private_account(
+                &NullifierPublicKey::from(&NullifierSecretKey::from(ask)),
+                vpk,
+                &PrivateAccountKind::Regular(*identifier),
+            ),
+            Self::PrivatePdaShared {
+                authority,
+                seed,
+                nsk,
+                vpk,
+                identifier,
+            } => AccountId::for_private_account(
+                &NullifierPublicKey::from(nsk),
+                vpk,
+                &PrivateAccountKind::Pda {
+                    account_id: *authority,
+                    seed: *seed,
+                    identifier: *identifier,
+                },
+            ),
         }
     }
 
@@ -239,16 +261,13 @@ impl AccountManager {
             program_account_id,
         } in mentions
         {
-            let shard_selector = |account_id| {
-                program_account_id.map_or_else(
-                    || ProgramShardSelector::balance(account_id),
-                    |program| ProgramShardSelector::new(account_id, program),
-                )
-            };
+            let shard_selector = program_account_id.map_or_else(
+                || ProgramShardSelector::balance(identity.account_id()),
+                |program| ProgramShardSelector::new(identity.account_id(), program),
+            );
 
             let state = match identity {
                 AccountIdentity::Public(account_id) => {
-                    let shard_selector = shard_selector(account_id);
                     let account = wallet
                         .get_account_view(shard_selector)
                         .await
@@ -262,8 +281,7 @@ impl AccountManager {
 
                     State::Public { account, sk }
                 }
-                AccountIdentity::PublicNoSign(account_id) => {
-                    let shard_selector = shard_selector(account_id);
+                AccountIdentity::PublicNoSign(_) => {
                     let account = wallet
                         .get_account_view(shard_selector)
                         .await
@@ -276,11 +294,7 @@ impl AccountManager {
 
                     State::Public { account, sk: None }
                 }
-                AccountIdentity::PublicKeycard {
-                    account_id,
-                    key_path,
-                } => {
-                    let shard_selector = shard_selector(account_id);
+                AccountIdentity::PublicKeycard { key_path, .. } => {
                     let account = wallet
                         .get_account_view(shard_selector)
                         .await
@@ -302,32 +316,23 @@ impl AccountManager {
 
                     State::PublicKeycard { account, key_path }
                 }
-                AccountIdentity::PrivateOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, shard_selector(account_id))?;
+                AccountIdentity::PrivateOwned(_) => {
+                    let pre = private_key_tree_acc_preparation(wallet, shard_selector)?;
 
                     State::Private(Box::new(pre))
                 }
-                AccountIdentity::PrivateForeign { npk, vpk, kind } => {
-                    let account_id = AccountId::for_private_account(&npk, &vpk, &kind);
-                    State::Private(Box::new(private_foreign_acc_preparation(
-                        shard_selector(account_id),
-                        npk,
-                        vpk,
-                        &kind,
-                    )))
-                }
+                AccountIdentity::PrivateForeign { npk, vpk, kind } => State::Private(Box::new(
+                    private_foreign_acc_preparation(shard_selector, npk, vpk, &kind),
+                )),
                 AccountIdentity::PrivateShared {
                     ask,
                     vpk,
                     identifier,
                 } => {
-                    let nsk = NullifierSecretKey::from(&ask);
-                    let npk = NullifierPublicKey::from(&nsk);
-                    let account_id = lee::AccountId::from((&npk, &vpk, identifier));
                     let pre = private_shared_acc_preparation(
                         wallet,
-                        shard_selector(account_id),
-                        nsk,
+                        shard_selector,
+                        NullifierSecretKey::from(&ask),
                         vpk,
                         identifier,
                         WitnessKind::Regular { ask: Some(ask) },
@@ -347,14 +352,9 @@ impl AccountManager {
                         seed,
                         identifier,
                     };
-                    let account_id = AccountId::for_private_account(
-                        &NullifierPublicKey::from(&nsk),
-                        &vpk,
-                        &kind,
-                    );
                     let pre = private_shared_acc_preparation(
                         wallet,
-                        shard_selector(account_id),
+                        shard_selector,
                         nsk,
                         vpk,
                         identifier,
@@ -827,7 +827,8 @@ mod tests {
     fn private_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id =
+            lee::AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(0));
         let pre_state = PreparedAccount {
             shard_selector: ProgramShardSelector::balance(account_id),
             account: Account::default(),
@@ -847,7 +848,8 @@ mod tests {
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id =
+            lee::AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(0));
         let account = PreparedAccount {
             shard_selector: ProgramShardSelector::balance(account_id),
             account: Account::default(),
@@ -942,7 +944,8 @@ mod tests {
     fn foreign_private_init_is_unauthorized() {
         let npk = NullifierPublicKey([7; 32]);
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id =
+            lee::AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(0));
         let pre = private_foreign_acc_preparation(
             ProgramShardSelector::balance(account_id),
             npk,

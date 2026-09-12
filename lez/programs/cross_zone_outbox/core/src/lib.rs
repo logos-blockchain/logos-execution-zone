@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, AccountIdData, ProgramShardSelector},
     program::PdaSeed,
 };
 
@@ -77,7 +77,8 @@ pub fn outbox_pda(
     target_zone: &ZoneId,
     ordinal: u32,
 ) -> AccountId {
-    AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
+    AccountIdData::public()
+        .derive_pda_id(outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
 }
 
 /// Seed of an outbox message PDA.

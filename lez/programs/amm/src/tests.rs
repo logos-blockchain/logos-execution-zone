@@ -2,14 +2,14 @@ use std::{num::NonZero, vec};
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_pool_pda_seed, compute_vault_id, vault_holder,
 };
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
-    account::{Account, AccountId, ProgramShardSelector, ShardData},
+    account::{Account, AccountId, AccountIdData, ProgramShardSelector, ShardData},
     program::{AccountInput, AccountStateDiff, ChainedCall},
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{HoldingKind, HoldingTarget, TokenDefinition, TokenHolding};
 
 use crate::{
     add::add_liquidity,
@@ -37,14 +37,6 @@ struct AccountsForExeTests;
 impl PrivateKeysForTests {
     fn user_token_a_key() -> PrivateKey {
         PrivateKey::try_new([31; 32]).expect("Keys constructor expects valid private key")
-    }
-
-    fn user_token_b_key() -> PrivateKey {
-        PrivateKey::try_new([32; 32]).expect("Keys constructor expects valid private key")
-    }
-
-    fn user_token_lp_key() -> PrivateKey {
-        PrivateKey::try_new([33; 32]).expect("Keys constructor expects valid private key")
     }
 }
 
@@ -184,173 +176,53 @@ impl BalanceForTests {
 }
 
 impl ChainedCallForTests {
-    fn cc_swap_token_a_test_1() -> ChainedCall {
+    fn deposit(user_holding: &AccountInput, vault: &AccountInput, amount: u128) -> ChainedCall {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
+                ProgramShardSelector::from(user_holding),
+                ProgramShardSelector::from(vault),
+                ProgramShardSelector::balance(IdForTests::user_owner_id()),
             ],
             &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_max_amount_a(),
+                sender: IdForTests::user_holder(),
+                recipient: vault_holder(IdForTests::pool_definition_id()),
+                amount_to_transfer: amount,
             },
         )
     }
 
-    fn cc_swap_token_b_test_1() -> ChainedCall {
-        let swap_amount: u128 = 166;
-
+    fn withdraw(vault: &AccountInput, user_holding: &AccountInput, amount: u128) -> ChainedCall {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
+                ProgramShardSelector::from(vault),
+                ProgramShardSelector::from(user_holding),
+                ProgramShardSelector::balance(IdForTests::pool_definition_id()),
             ],
             &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
+                sender: vault_holder(IdForTests::pool_definition_id()),
+                recipient: IdForTests::user_holder(),
+                amount_to_transfer: amount,
             },
         )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
-            IdForTests::token_b_definition_id(),
-        )])
-    }
-
-    fn cc_swap_token_a_test_2() -> ChainedCall {
-        let swap_amount: u128 = 285;
-
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
-            },
-        )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
+        .with_pda_seeds(vec![compute_pool_pda_seed(
             IdForTests::token_a_definition_id(),
-        )])
-    }
-
-    fn cc_swap_token_b_test_2() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_max_amount_b(),
-            },
-        )
-    }
-
-    fn cc_swap_exact_output_token_a_test_1() -> ChainedCall {
-        let swap_amount: u128 = 498;
-
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
-            },
-        )
-    }
-
-    fn cc_swap_exact_output_token_b_test_1() -> ChainedCall {
-        let swap_amount: u128 = 166;
-
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
-            },
-        )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
             IdForTests::token_b_definition_id(),
+            TOKEN_PROGRAM_ID,
         )])
     }
 
-    fn cc_swap_exact_output_token_a_test_2() -> ChainedCall {
-        let swap_amount: u128 = 285;
-
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
-            },
-        )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
-            IdForTests::token_a_definition_id(),
-        )])
-    }
-
-    fn cc_swap_exact_output_token_b_test_2() -> ChainedCall {
-        let swap_amount: u128 = 200;
-
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: swap_amount,
-            },
-        )
-    }
-
-    fn cc_add_token_a() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_successful_amount_a(),
-            },
-        )
-    }
-
-    fn cc_add_token_b() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_successful_amount_b(),
-            },
-        )
-    }
-
-    fn cc_add_pool_lp() -> ChainedCall {
+    fn mint_lp(user_holding_lp: &AccountInput, amount: u128) -> ChainedCall {
         ChainedCall::new(
             TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::from(&InputsForTests::pool_lp_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_lp_init()),
+                ProgramShardSelector::from(user_holding_lp),
             ],
             &token_core::Instruction::Mint {
-                amount_to_mint: 282,
+                holder: IdForTests::user_holder(),
+                amount_to_mint: amount,
             },
         )
         .with_pda_seeds(vec![compute_liquidity_token_pda_seed(
@@ -358,38 +230,104 @@ impl ChainedCallForTests {
         )])
     }
 
-    fn cc_remove_token_a() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::remove_actual_a_successful(),
-            },
+    fn cc_swap_token_a_test_1() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_a(),
+            &InputsForTests::vault_a_init(),
+            BalanceForTests::add_max_amount_a(),
         )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
-            IdForTests::token_a_definition_id(),
-        )])
+    }
+
+    fn cc_swap_token_b_test_1() -> ChainedCall {
+        Self::withdraw(
+            &InputsForTests::vault_b_init(),
+            &InputsForTests::user_holding_b(),
+            166,
+        )
+    }
+
+    fn cc_swap_token_a_test_2() -> ChainedCall {
+        Self::withdraw(
+            &InputsForTests::vault_a_init(),
+            &InputsForTests::user_holding_a(),
+            285,
+        )
+    }
+
+    fn cc_swap_token_b_test_2() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_b(),
+            &InputsForTests::vault_b_init(),
+            BalanceForTests::add_max_amount_b(),
+        )
+    }
+
+    fn cc_swap_exact_output_token_a_test_1() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_a(),
+            &InputsForTests::vault_a_init(),
+            498,
+        )
+    }
+
+    fn cc_swap_exact_output_token_b_test_1() -> ChainedCall {
+        Self::withdraw(
+            &InputsForTests::vault_b_init(),
+            &InputsForTests::user_holding_b(),
+            166,
+        )
+    }
+
+    fn cc_swap_exact_output_token_a_test_2() -> ChainedCall {
+        Self::withdraw(
+            &InputsForTests::vault_a_init(),
+            &InputsForTests::user_holding_a(),
+            285,
+        )
+    }
+
+    fn cc_swap_exact_output_token_b_test_2() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_b(),
+            &InputsForTests::vault_b_init(),
+            200,
+        )
+    }
+
+    fn cc_add_token_a() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_a(),
+            &InputsForTests::vault_a_init(),
+            BalanceForTests::add_successful_amount_a(),
+        )
+    }
+
+    fn cc_add_token_b() -> ChainedCall {
+        Self::deposit(
+            &InputsForTests::user_holding_b(),
+            &InputsForTests::vault_b_init(),
+            BalanceForTests::add_successful_amount_b(),
+        )
+    }
+
+    fn cc_add_pool_lp() -> ChainedCall {
+        Self::mint_lp(&InputsForTests::user_holding_lp_init(), 282)
+    }
+
+    fn cc_remove_token_a() -> ChainedCall {
+        Self::withdraw(
+            &InputsForTests::vault_a_init(),
+            &InputsForTests::user_holding_a(),
+            BalanceForTests::remove_actual_a_successful(),
+        )
     }
 
     fn cc_remove_token_b() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: 70,
-            },
+        Self::withdraw(
+            &InputsForTests::vault_b_init(),
+            &InputsForTests::user_holding_b(),
+            70,
         )
-        .with_pda_seeds(vec![compute_vault_pda_seed(
-            IdForTests::pool_definition_id(),
-            IdForTests::token_b_definition_id(),
-        )])
     }
 
     fn cc_remove_pool_lp() -> ChainedCall {
@@ -398,56 +336,36 @@ impl ChainedCallForTests {
             vec![
                 ProgramShardSelector::from(&InputsForTests::pool_lp_init()),
                 ProgramShardSelector::from(&InputsForTests::user_holding_lp_init()),
+                ProgramShardSelector::balance(IdForTests::user_owner_id()),
             ],
             &token_core::Instruction::Burn {
+                holder: IdForTests::user_holder(),
                 amount_to_burn: BalanceForTests::remove_amount_lp(),
             },
         )
-        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(
-            IdForTests::pool_definition_id(),
-        )])
     }
 
     fn cc_new_definition_token_a() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_a()),
-                ProgramShardSelector::from(&InputsForTests::vault_a_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_successful_amount_a(),
-            },
+        Self::deposit(
+            &InputsForTests::user_holding_a(),
+            &InputsForTests::vault_a_init(),
+            BalanceForTests::add_successful_amount_a(),
         )
     }
 
     fn cc_new_definition_token_b() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::user_holding_b()),
-                ProgramShardSelector::from(&InputsForTests::vault_b_init()),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: BalanceForTests::add_successful_amount_b(),
-            },
+        Self::deposit(
+            &InputsForTests::user_holding_b(),
+            &InputsForTests::vault_b_init(),
+            BalanceForTests::add_successful_amount_b(),
         )
     }
 
     fn cc_new_definition_token_lp() -> ChainedCall {
-        ChainedCall::new(
-            TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::from(&InputsForTests::pool_lp_init()),
-                ProgramShardSelector::from(&InputsForTests::user_holding_lp_uninit()),
-            ],
-            &token_core::Instruction::Mint {
-                amount_to_mint: BalanceForTests::lp_supply_init(),
-            },
+        Self::mint_lp(
+            &InputsForTests::user_holding_lp_uninit(),
+            BalanceForTests::lp_supply_init(),
         )
-        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(
-            IdForTests::pool_definition_id(),
-        )])
     }
 }
 
@@ -464,16 +382,36 @@ impl IdForTests {
         compute_liquidity_token_pda(AMM_PROGRAM_ID, Self::pool_definition_id())
     }
 
-    fn user_token_a_id() -> AccountId {
+    fn user_owner_id() -> AccountId {
         AccountId::new([45; 32])
     }
 
+    fn user_holder() -> HoldingTarget {
+        HoldingTarget {
+            owner_id: Self::user_owner_id(),
+            account_id_data: AccountIdData::public(),
+        }
+    }
+
+    fn user_holding_id(definition_id: AccountId) -> AccountId {
+        token_core::holding_id(
+            &Self::user_holder(),
+            TOKEN_PROGRAM_ID,
+            definition_id,
+            HoldingKind::Fungible,
+        )
+    }
+
+    fn user_token_a_id() -> AccountId {
+        Self::user_holding_id(Self::token_a_definition_id())
+    }
+
     fn user_token_b_id() -> AccountId {
-        AccountId::new([46; 32])
+        Self::user_holding_id(Self::token_b_definition_id())
     }
 
     fn user_token_lp_id() -> AccountId {
-        AccountId::new([47; 32])
+        Self::user_holding_id(Self::token_lp_definition_id())
     }
 
     fn pool_definition_id() -> AccountId {
@@ -486,16 +424,16 @@ impl IdForTests {
     }
 
     fn vault_a_id() -> AccountId {
-        compute_vault_pda(
-            AMM_PROGRAM_ID,
+        compute_vault_id(
+            TOKEN_PROGRAM_ID,
             Self::pool_definition_id(),
             Self::token_a_definition_id(),
         )
     }
 
     fn vault_b_id() -> AccountId {
-        compute_vault_pda(
-            AMM_PROGRAM_ID,
+        compute_vault_id(
+            TOKEN_PROGRAM_ID,
             Self::pool_definition_id(),
             Self::token_b_definition_id(),
         )
@@ -537,6 +475,10 @@ impl InputsForTests {
             fees: 0_u128,
             active: true,
         }
+    }
+
+    fn user_owner() -> AccountInput {
+        AccountInput::balance(IdForTests::user_owner_id(), true, 0)
     }
 
     fn user_holding_a() -> AccountInput {
@@ -1054,35 +996,51 @@ impl IdForExeTests {
         AccountId::new([4; 32])
     }
 
-    fn user_token_a_id() -> AccountId {
+    fn user_owner_id() -> AccountId {
         AccountId::from(&PublicKey::new_from_private_key(
             &PrivateKeysForTests::user_token_a_key(),
         ))
     }
 
+    fn user_holder() -> HoldingTarget {
+        HoldingTarget {
+            owner_id: Self::user_owner_id(),
+            account_id_data: AccountIdData::public(),
+        }
+    }
+
+    fn user_holding_id(definition_id: AccountId) -> AccountId {
+        token_core::holding_id(
+            &Self::user_holder(),
+            programs::token().id().into(),
+            definition_id,
+            HoldingKind::Fungible,
+        )
+    }
+
+    fn user_token_a_id() -> AccountId {
+        Self::user_holding_id(Self::token_a_definition_id())
+    }
+
     fn user_token_b_id() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(
-            &PrivateKeysForTests::user_token_b_key(),
-        ))
+        Self::user_holding_id(Self::token_b_definition_id())
     }
 
     fn user_token_lp_id() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(
-            &PrivateKeysForTests::user_token_lp_key(),
-        ))
+        Self::user_holding_id(Self::token_lp_definition_id())
     }
 
     fn vault_a_id() -> AccountId {
-        amm_core::compute_vault_pda(
-            programs::amm().id().into(),
+        amm_core::compute_vault_id(
+            programs::token().id().into(),
             Self::pool_definition_id(),
             Self::token_a_definition_id(),
         )
     }
 
     fn vault_b_id() -> AccountId {
-        amm_core::compute_vault_pda(
-            programs::amm().id().into(),
+        amm_core::compute_vault_id(
+            programs::token().id().into(),
             Self::pool_definition_id(),
             Self::token_b_definition_id(),
         )
@@ -1090,12 +1048,8 @@ impl IdForExeTests {
 }
 
 impl AccountsForExeTests {
-    fn holding(nonce: u128, holding: &TokenHolding) -> Account {
-        Account {
-            nonce: nonce.into(),
-            ..Account::default()
-        }
-        .with_shard(programs::token().id().into(), ShardData::from(holding))
+    fn holding(holding: &TokenHolding) -> Account {
+        Account::default().with_shard(programs::token().id().into(), ShardData::from(holding))
     }
 
     fn definition(definition: &TokenDefinition) -> Account {
@@ -1123,23 +1077,17 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_init(),
+        })
     }
 
     fn user_token_b_holding() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_init(),
+        })
     }
 
     fn pool_definition_init() -> Account {
@@ -1176,53 +1124,38 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_init() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::vault_a_balance_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_init(),
+        })
     }
 
     fn vault_b_init() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::vault_b_balance_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::vault_b_balance_init(),
+        })
     }
 
     fn user_token_lp_holding() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_lp_definition_id(),
-                balance: BalanceForExeTests::user_token_lp_holding_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_lp_definition_id(),
+            balance: BalanceForExeTests::user_token_lp_holding_init(),
+        })
     }
 
     fn vault_a_swap_1() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::vault_a_balance_swap_1(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_swap_1(),
+        })
     }
 
     fn vault_b_swap_1() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::vault_b_balance_swap_1(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::vault_b_balance_swap_1(),
+        })
     }
 
     fn pool_definition_swap_1() -> Account {
@@ -1235,43 +1168,31 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_swap_1() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_swap_1(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_swap_1(),
+        })
     }
 
     fn user_token_b_holding_swap_1() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_swap_1(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_swap_1(),
+        })
     }
 
     fn vault_a_swap_2() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::vault_a_balance_swap_2(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_swap_2(),
+        })
     }
 
     fn vault_b_swap_2() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::vault_b_balance_swap_2(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::vault_b_balance_swap_2(),
+        })
     }
 
     fn pool_definition_swap_2() -> Account {
@@ -1284,43 +1205,31 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_swap_2() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_swap_2(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_swap_2(),
+        })
     }
 
     fn user_token_b_holding_swap_2() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_swap_2(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_swap_2(),
+        })
     }
 
     fn vault_a_add() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::vault_a_balance_add(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_add(),
+        })
     }
 
     fn vault_b_add() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::vault_b_balance_add(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::vault_b_balance_add(),
+        })
     }
 
     fn pool_definition_add() -> Account {
@@ -1333,33 +1242,24 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_add() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_add(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_add(),
+        })
     }
 
     fn user_token_b_holding_add() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_add(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_add(),
+        })
     }
 
     fn user_token_lp_holding_add() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_lp_definition_id(),
-                balance: BalanceForExeTests::user_token_lp_holding_add(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_lp_definition_id(),
+            balance: BalanceForExeTests::user_token_lp_holding_add(),
+        })
     }
 
     fn token_lp_definition_add() -> Account {
@@ -1371,23 +1271,17 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_remove() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::vault_a_balance_remove(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_remove(),
+        })
     }
 
     fn vault_b_remove() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::vault_b_balance_remove(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::vault_b_balance_remove(),
+        })
     }
 
     fn pool_definition_remove() -> Account {
@@ -1400,33 +1294,24 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_remove() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_remove(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_remove(),
+        })
     }
 
     fn user_token_b_holding_remove() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_remove(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_remove(),
+        })
     }
 
     fn user_token_lp_holding_remove() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_lp_definition_id(),
-                balance: BalanceForExeTests::user_token_lp_holding_remove(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_lp_definition_id(),
+            balance: BalanceForExeTests::user_token_lp_holding_remove(),
+        })
     }
 
     fn token_lp_definition_remove() -> Account {
@@ -1446,23 +1331,17 @@ impl AccountsForExeTests {
     }
 
     fn vault_a_init_inactive() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: 0,
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: 0,
+        })
     }
 
     fn vault_b_init_inactive() -> Account {
-        Self::holding(
-            0,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: 0,
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: 0,
+        })
     }
 
     fn pool_definition_inactive() -> Account {
@@ -1476,33 +1355,24 @@ impl AccountsForExeTests {
     }
 
     fn user_token_a_holding_new_init() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_a_definition_id(),
-                balance: BalanceForExeTests::user_token_a_holding_new_definition(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::user_token_a_holding_new_definition(),
+        })
     }
 
     fn user_token_b_holding_new_init() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_b_definition_id(),
-                balance: BalanceForExeTests::user_token_b_holding_new_definition(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_b_definition_id(),
+            balance: BalanceForExeTests::user_token_b_holding_new_definition(),
+        })
     }
 
     fn user_token_lp_holding_new_init() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_lp_definition_id(),
-                balance: BalanceForExeTests::lp_supply_init(),
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_lp_definition_id(),
+            balance: BalanceForExeTests::lp_supply_init(),
+        })
     }
 
     fn token_lp_definition_new_init() -> Account {
@@ -1523,13 +1393,10 @@ impl AccountsForExeTests {
     }
 
     fn user_token_lp_holding_init_zero() -> Account {
-        Self::holding(
-            1,
-            &TokenHolding::Fungible {
-                definition_id: IdForExeTests::token_lp_definition_id(),
-                balance: 0,
-            },
-        )
+        Self::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_lp_definition_id(),
+            balance: 0,
+        })
     }
 }
 
@@ -1573,10 +1440,12 @@ fn call_add_liquidity_vault_a_omitted() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1591,10 +1460,12 @@ fn call_add_liquidity_vault_b_omitted() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1609,10 +1480,12 @@ fn call_add_liquidity_lp_definition_mismatch() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1627,10 +1500,12 @@ fn call_add_liquidity_zero_balance_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         0,
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1645,10 +1520,12 @@ fn call_add_liquidity_zero_balance_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         0,
         BalanceForTests::add_max_amount_a(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1663,10 +1540,12 @@ fn call_add_liquidity_vault_insufficient_balance_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_max_amount_a()).unwrap(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::add_min_amount_lp(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1681,10 +1560,12 @@ fn call_add_liquidity_vault_insufficient_balance_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_max_amount_a()).unwrap(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::add_min_amount_lp(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1699,10 +1580,12 @@ fn call_add_liquidity_actual_amount_zero_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1717,10 +1600,12 @@ fn call_add_liquidity_actual_amount_zero_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a_low(),
         BalanceForTests::add_max_amount_b_low(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1735,10 +1620,12 @@ fn call_add_liquidity_reserves_zero_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1753,10 +1640,12 @@ fn call_add_liquidity_reserves_zero_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1771,10 +1660,12 @@ fn call_add_liquidity_payable_lp_zero() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a_low(),
         BalanceForTests::add_max_amount_b_low(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1788,10 +1679,12 @@ fn call_add_liquidity_chained_call_successsful() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::add_min_amount_lp()).unwrap(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -1824,10 +1717,12 @@ fn call_remove_liquidity_vault_a_omitted() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1842,10 +1737,12 @@ fn call_remove_liquidity_vault_b_omitted() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1860,10 +1757,12 @@ fn call_remove_liquidity_lp_def_mismatch() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1880,10 +1779,12 @@ fn call_remove_liquidity_insufficient_liquidity_amount() {
         &InputsForTests::user_holding_a(), /* different token account than lp to
                                             * create desired
                                             * error */
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1900,10 +1801,12 @@ fn call_remove_liquidity_insufficient_balance_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp_1()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1920,10 +1823,12 @@ fn call_remove_liquidity_insufficient_balance_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1938,10 +1843,12 @@ fn call_remove_liquidity_min_bal_zero_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         0,
         BalanceForTests::remove_min_amount_b(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1956,10 +1863,12 @@ fn call_remove_liquidity_min_bal_zero_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         0,
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -1973,10 +1882,12 @@ fn call_remove_liquidity_chained_call_successful() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_init(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::remove_amount_lp()).unwrap(),
         BalanceForTests::remove_min_amount_a(),
         BalanceForTests::remove_min_amount_b_low(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2009,10 +1920,12 @@ fn call_new_definition_with_zero_balance_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(0).expect("Balances must be nonzero"),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2027,10 +1940,12 @@ fn call_new_definition_with_zero_balance_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(0).expect("Balances must be nonzero"),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2045,10 +1960,12 @@ fn call_new_definition_same_token_definition() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2063,10 +1980,12 @@ fn call_new_definition_wrong_liquidity_id() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2081,10 +2000,12 @@ fn call_new_definition_wrong_pool_id() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2099,10 +2020,12 @@ fn call_new_definition_wrong_vault_id_1() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2117,10 +2040,12 @@ fn call_new_definition_wrong_vault_id_2() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2135,10 +2060,12 @@ fn call_new_definition_cannot_initialize_active_pool() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2153,10 +2080,12 @@ fn call_new_definition_chained_call_successful() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2187,10 +2116,12 @@ fn call_swap_incorrect_token_type() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_lp_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2203,10 +2134,12 @@ fn call_swap_vault_a_omitted() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2219,10 +2152,12 @@ fn call_swap_vault_b_omitted() {
         InputsForTests::vault_b_with_wrong_id(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2235,10 +2170,12 @@ fn call_swap_reserves_vault_mismatch_1() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2251,10 +2188,12 @@ fn call_swap_reserves_vault_mismatch_2() {
         InputsForTests::vault_b_init_low(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2267,10 +2206,12 @@ fn call_swap_ianctive() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2283,10 +2224,12 @@ fn call_swap_below_min_out() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2298,10 +2241,12 @@ fn call_swap_chained_call_successful_1() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::add_max_amount_a_low(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2335,10 +2280,12 @@ fn call_swap_chained_call_successful_2() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_b(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_b_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2373,10 +2320,12 @@ fn call_swap_exact_output_incorrect_token_type() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_lp_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2389,10 +2338,12 @@ fn call_swap_exact_output_vault_a_omitted() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2405,10 +2356,12 @@ fn call_swap_exact_output_vault_b_omitted() {
         InputsForTests::vault_b_with_wrong_id(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2421,10 +2374,12 @@ fn call_swap_exact_output_reserves_vault_mismatch_1() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2437,10 +2392,12 @@ fn call_swap_exact_output_reserves_vault_mismatch_2() {
         InputsForTests::vault_b_init_low(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2453,10 +2410,12 @@ fn call_swap_exact_output_inactive() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2469,10 +2428,12 @@ fn call_swap_exact_output_exceeds_max_in() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         166_u128,
         100_u128,
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2485,10 +2446,12 @@ fn call_swap_exact_output_zero() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         0_u128,
         500_u128,
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2501,10 +2464,12 @@ fn call_swap_exact_output_exceeds_reserve() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::vault_b_reserve_init(),
         BalanceForTests::max_amount_in(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2516,10 +2481,12 @@ fn call_swap_exact_output_chained_call_successful() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         BalanceForTests::max_amount_in(),
         BalanceForTests::vault_b_reserve_init(),
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2553,10 +2520,12 @@ fn call_swap_exact_output_chained_call_successful_2() {
         InputsForTests::vault_b_init(),
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         285,
         300,
         IdForTests::token_b_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2641,11 +2610,13 @@ fn swap_exact_output_overflow_protection() {
         vault_b,
         InputsForTests::user_holding_a(),
         InputsForTests::user_holding_b(),
+        InputsForTests::user_owner(),
         2, // exact_amount_out: small, valid (< reserve_b)
         1, // max_amount_in: tiny — real deposit would be enormous, but
         // overflow wraps it to 0, making 0 <= 1 pass silently
         IdForTests::token_a_definition_id(),
         AMM_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 }
 
@@ -2659,10 +2630,12 @@ fn new_definition_lp_asymmetric_amounts() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(BalanceForTests::vault_a_reserve_init()).unwrap(),
         NonZero::new(BalanceForTests::vault_b_reserve_init()).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     // check the minted LP amount
@@ -2693,10 +2666,12 @@ fn new_definition_lp_symmetric_amounts() {
         &InputsForTests::user_holding_a(),
         &InputsForTests::user_holding_b(),
         &InputsForTests::user_holding_lp_uninit(),
+        &InputsForTests::user_owner(),
         NonZero::new(token_a_amount).unwrap(),
         NonZero::new(token_b_amount).unwrap(),
         AMM_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
+        &IdForTests::user_holder(),
     );
 
     let pool_post = post_diffs[0].clone();
@@ -2704,19 +2679,8 @@ fn new_definition_lp_symmetric_amounts() {
     assert_eq!(pool_def.liquidity_pool_supply, expected_lp);
 
     let chained_call_lp = chained_calls[0].clone();
-    let expected_lp_call = ChainedCall::new(
-        TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::from(&InputsForTests::pool_lp_init()),
-            ProgramShardSelector::from(&InputsForTests::user_holding_lp_uninit()),
-        ],
-        &token_core::Instruction::Mint {
-            amount_to_mint: expected_lp,
-        },
-    )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(
-        IdForTests::pool_definition_id(),
-    )]);
+    let expected_lp_call =
+        ChainedCallForTests::mint_lp(&InputsForTests::user_holding_lp_uninit(), expected_lp);
 
     assert_eq!(chained_call_lp, expected_lp_call);
 }
@@ -2799,6 +2763,7 @@ fn simple_amm_remove() {
         remove_liquidity_amount: BalanceForExeTests::remove_lp(),
         min_amount_to_remove_token_a: BalanceForExeTests::remove_min_amount_a(),
         min_amount_to_remove_token_b: BalanceForExeTests::remove_min_amount_b(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -2826,6 +2791,7 @@ fn simple_amm_remove() {
                 IdForExeTests::user_token_lp_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
         vec![0_u128.into()],
         instruction,
@@ -2834,7 +2800,7 @@ fn simple_amm_remove() {
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[&PrivateKeysForTests::user_token_lp_key()],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -2891,6 +2857,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
         token_program_id: programs::token().id().into(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -2918,19 +2885,16 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
                 IdForExeTests::user_token_lp_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
-        vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
+        vec![0_u128.into()],
         instruction,
     )
     .unwrap();
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[
-            &PrivateKeysForTests::user_token_a_key(),
-            &PrivateKeysForTests::user_token_b_key(),
-            &PrivateKeysForTests::user_token_lp_key(),
-        ],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -2991,6 +2955,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
         token_program_id: programs::token().id().into(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3018,18 +2983,16 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
                 IdForExeTests::user_token_lp_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
-        vec![0_u128.into(), 0_u128.into()],
+        vec![0_u128.into()],
         instruction,
     )
     .unwrap();
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[
-            &PrivateKeysForTests::user_token_a_key(),
-            &PrivateKeysForTests::user_token_b_key(),
-        ],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -3078,6 +3041,7 @@ fn simple_amm_new_definition_uninitialized_pool() {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
         token_program_id: programs::token().id().into(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3105,19 +3069,16 @@ fn simple_amm_new_definition_uninitialized_pool() {
                 IdForExeTests::user_token_lp_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
-        vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
+        vec![0_u128.into()],
         instruction,
     )
     .unwrap();
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[
-            &PrivateKeysForTests::user_token_a_key(),
-            &PrivateKeysForTests::user_token_b_key(),
-            &PrivateKeysForTests::user_token_lp_key(),
-        ],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -3156,6 +3117,7 @@ fn simple_amm_add() {
         min_amount_liquidity: BalanceForExeTests::add_min_amount_lp(),
         max_amount_to_add_token_a: BalanceForExeTests::add_max_amount_a(),
         max_amount_to_add_token_b: BalanceForExeTests::add_max_amount_b(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3183,18 +3145,16 @@ fn simple_amm_add() {
                 IdForExeTests::user_token_lp_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
-        vec![0_u128.into(), 0_u128.into()],
+        vec![0_u128.into()],
         instruction,
     )
     .unwrap();
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[
-            &PrivateKeysForTests::user_token_a_key(),
-            &PrivateKeysForTests::user_token_b_key(),
-        ],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -3233,6 +3193,7 @@ fn simple_amm_swap_1() {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_b_definition_id(),
+        user: IdForExeTests::user_holder(),
     };
 
     let message = public_transaction::Message::try_new(
@@ -3252,6 +3213,7 @@ fn simple_amm_swap_1() {
                 IdForExeTests::user_token_b_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
         vec![0_u128.into()],
         instruction,
@@ -3260,7 +3222,7 @@ fn simple_amm_swap_1() {
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
-        &[&PrivateKeysForTests::user_token_b_key()],
+        &[&PrivateKeysForTests::user_token_a_key()],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
@@ -3293,6 +3255,7 @@ fn simple_amm_swap_2() {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_a_definition_id(),
+        user: IdForExeTests::user_holder(),
     };
     let message = public_transaction::Message::try_new(
         programs::amm().id().into(),
@@ -3311,6 +3274,7 @@ fn simple_amm_swap_2() {
                 IdForExeTests::user_token_b_id(),
                 programs::token().id().into(),
             ),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
         ],
         vec![0_u128.into()],
         instruction,
@@ -3361,5 +3325,197 @@ fn the_pool_of_a_stranger_program_is_a_different_address() {
             stranger
         ),
         "each token program must get its own pool for a pair"
+    );
+}
+
+fn token_row(account_id: AccountId) -> ProgramShardSelector {
+    ProgramShardSelector::new(account_id, programs::token().id().into())
+}
+
+fn user_signed_tx(
+    state: &V03State,
+    program: AccountId,
+    shard_selectors: Vec<ProgramShardSelector>,
+    instruction: &impl borsh::BorshSerialize,
+) -> PublicTransaction {
+    let nonce = state
+        .get_account_by_id(IdForExeTests::user_owner_id())
+        .nonce;
+    let message =
+        public_transaction::Message::try_new(program, shard_selectors, vec![nonce], instruction)
+            .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(
+        &message,
+        &[&PrivateKeysForTests::user_token_a_key()],
+    );
+    PublicTransaction::new(message, witness_set)
+}
+
+fn deposit_into_vault_a(
+    state: &V03State,
+    from_holding: AccountId,
+    amount: u128,
+) -> PublicTransaction {
+    user_signed_tx(
+        state,
+        programs::token().id().into(),
+        vec![
+            token_row(from_holding),
+            token_row(IdForExeTests::vault_a_id()),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
+        ],
+        &token_core::Instruction::Transfer {
+            sender: IdForExeTests::user_holder(),
+            recipient: vault_holder(IdForExeTests::pool_definition_id()),
+            amount_to_transfer: amount,
+        },
+    )
+}
+
+#[test]
+fn a_vault_withdrawal_needs_the_pool_grant() {
+    let mut state = state_for_amm_tests();
+    let attempts = [
+        IdForExeTests::pool_definition_id(),
+        IdForExeTests::user_owner_id(),
+    ]
+    .map(|owner| {
+        user_signed_tx(
+            &state,
+            programs::token().id().into(),
+            vec![
+                token_row(IdForExeTests::vault_a_id()),
+                token_row(IdForExeTests::user_token_a_id()),
+                ProgramShardSelector::balance(owner),
+            ],
+            &token_core::Instruction::Transfer {
+                sender: vault_holder(IdForExeTests::pool_definition_id()),
+                recipient: IdForExeTests::user_holder(),
+                amount_to_transfer: 1,
+            },
+        )
+    });
+
+    for tx in &attempts {
+        assert!(state.transition_from_public_transaction(tx, 1, 0).is_err());
+    }
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::vault_a_id()),
+        AccountsForExeTests::vault_a_init()
+    );
+}
+
+#[test]
+fn a_vault_only_receives_its_own_definition_and_may_be_prefunded() {
+    let mut state = state_for_amm_tests_with_new_def();
+    let squat = deposit_into_vault_a(&state, IdForExeTests::user_token_b_id(), 1);
+
+    assert!(
+        state
+            .transition_from_public_transaction(&squat, 1, 0)
+            .is_err()
+    );
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::vault_a_id()),
+        Account::default()
+    );
+
+    let prefund = deposit_into_vault_a(&state, IdForExeTests::user_token_a_id(), 100);
+    state
+        .transition_from_public_transaction(&prefund, 1, 0)
+        .unwrap();
+
+    let create = user_signed_tx(
+        &state,
+        programs::amm().id().into(),
+        vec![
+            ProgramShardSelector::new(
+                IdForExeTests::pool_definition_id(),
+                programs::amm().id().into(),
+            ),
+            token_row(IdForExeTests::vault_a_id()),
+            token_row(IdForExeTests::vault_b_id()),
+            token_row(IdForExeTests::token_lp_definition_id()),
+            token_row(IdForExeTests::user_token_a_id()),
+            token_row(IdForExeTests::user_token_b_id()),
+            token_row(IdForExeTests::user_token_lp_id()),
+            ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
+        ],
+        &amm_core::Instruction::NewDefinition {
+            token_a_amount: BalanceForExeTests::vault_a_balance_init(),
+            token_b_amount: BalanceForExeTests::vault_b_balance_init(),
+            token_program_id: programs::token().id().into(),
+            user: IdForExeTests::user_holder(),
+        },
+    );
+    state
+        .transition_from_public_transaction(&create, 2, 0)
+        .unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::pool_definition_id()),
+        AccountsForExeTests::pool_definition_new_init()
+    );
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::vault_a_id()),
+        AccountsForExeTests::holding(&TokenHolding::Fungible {
+            definition_id: IdForExeTests::token_a_definition_id(),
+            balance: BalanceForExeTests::vault_a_balance_init() + 100,
+        })
+    );
+}
+
+#[test]
+fn a_swap_is_bound_to_its_pool_and_vaults() {
+    let mut state = state_for_amm_tests();
+    let other_pool = amm_core::compute_pool_pda(
+        programs::amm().id().into(),
+        IdForExeTests::token_a_definition_id(),
+        AccountId::new([5; 32]),
+        programs::token().id().into(),
+    );
+    let swap = |pool, vault_a, vault_b| {
+        user_signed_tx(
+            &state,
+            programs::amm().id().into(),
+            vec![
+                ProgramShardSelector::new(pool, programs::amm().id().into()),
+                token_row(vault_a),
+                token_row(vault_b),
+                token_row(IdForExeTests::user_token_a_id()),
+                token_row(IdForExeTests::user_token_b_id()),
+                ProgramShardSelector::balance(IdForExeTests::user_owner_id()),
+            ],
+            &amm_core::Instruction::SwapExactInput {
+                swap_amount_in: BalanceForExeTests::swap_amount_in(),
+                min_amount_out: BalanceForExeTests::swap_min_amount_out(),
+                token_definition_id_in: IdForExeTests::token_b_definition_id(),
+                user: IdForExeTests::user_holder(),
+            },
+        )
+    };
+    let attempts = [
+        swap(
+            other_pool,
+            IdForExeTests::vault_a_id(),
+            IdForExeTests::vault_b_id(),
+        ),
+        swap(
+            IdForExeTests::pool_definition_id(),
+            IdForExeTests::vault_b_id(),
+            IdForExeTests::vault_a_id(),
+        ),
+    ];
+
+    for tx in &attempts {
+        assert!(state.transition_from_public_transaction(tx, 1, 0).is_err());
+    }
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::vault_b_id()),
+        AccountsForExeTests::vault_b_init()
+    );
+    assert_eq!(
+        state.get_account_by_id(IdForExeTests::user_token_b_id()),
+        AccountsForExeTests::user_token_b_holding()
     );
 }

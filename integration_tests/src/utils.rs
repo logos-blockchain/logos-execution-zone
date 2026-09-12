@@ -14,9 +14,7 @@ use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
-        programs::{
-            native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
-        },
+        programs::{native_token_transfer::AuthTransferSubcommand, token::TokenSubcommand},
     },
     storage::key_chain::FoundPrivateAccount,
 };
@@ -135,14 +133,14 @@ pub async fn send(
 /// Create a token (New) and wait for the block to be included.
 pub async fn create_token(
     ctx: &mut TestContext,
-    definition_account_id: CliAccountMention,
-    supply_account_id: CliAccountMention,
+    definition: CliAccountMention,
+    owner: CliAccountMention,
     name: impl Into<String>,
     total_supply: u128,
 ) -> anyhow::Result<()> {
-    let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id,
-        supply_account_id,
+    let subcommand = TokenSubcommand::New {
+        definition,
+        owner,
         name: name.into(),
         total_supply,
     };
@@ -156,11 +154,13 @@ pub async fn create_token(
 pub async fn token_send(
     ctx: &mut TestContext,
     from: CliAccountMention,
+    definition: AccountId,
     to: CliAccountMention,
     amount: u128,
 ) -> anyhow::Result<()> {
-    let subcommand = TokenProgramAgnosticSubcommand::Send {
+    let subcommand = TokenSubcommand::Send {
         from,
+        definition,
         to: Some(to),
         to_npk: None,
         to_vpk: None,

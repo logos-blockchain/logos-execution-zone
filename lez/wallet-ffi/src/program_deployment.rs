@@ -442,41 +442,6 @@ pub unsafe extern "C" fn wallet_ffi_amm_elf(ffi_program: *mut FfiProgram) -> Wal
     WalletFfiError::Success
 }
 
-/// Writes elf data of ata into buffer.
-///
-/// WARNING: Result is not consisent and change between versions, use for testing purposes only.
-///
-/// # Parameters
-/// - `ffi_program`: Valid pointer to `FfiProgram`
-///
-/// # Returns
-/// - `Success` if deployment was submitted successfully
-/// - Error code on other failures
-///
-/// # Memory
-/// - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
-///
-/// # Safety
-/// - `ffi_program` must be a non-null pointer
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_ata_elf(ffi_program: *mut FfiProgram) -> WalletFfiError {
-    if ffi_program.is_null() {
-        print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
-    }
-
-    let elf = programs::ata().elf().to_vec();
-
-    let (raw_elf_data, raw_elf_size, _) = elf.into_raw_parts();
-
-    unsafe {
-        (*ffi_program).elf_data = raw_elf_data;
-        (*ffi_program).elf_size = raw_elf_size;
-    };
-
-    WalletFfiError::Success
-}
-
 /// Free a ffi program returned by functions `wallet_ffi_*_elf`.
 ///
 /// # Safety

@@ -4,7 +4,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Balance},
+    account::{AccountId, AccountIdData, Balance},
     program::PdaSeed,
 };
 
@@ -133,7 +133,7 @@ impl WrappedTokenConfig {
 /// genesis so the guest can pin its caller without importing the inbox image id.
 #[must_use]
 pub fn config_account_id(wrapped_token_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&wrapped_token_id, &config_seed())
+    AccountIdData::public().derive_pda_id(wrapped_token_id, &config_seed())
 }
 
 #[must_use]
@@ -144,7 +144,7 @@ const fn config_seed() -> PdaSeed {
 /// PDA holding one recipient's wrapped-token balance.
 #[must_use]
 pub fn holding_account_id(wrapped_token_id: AccountId, recipient: &[u8; 32]) -> AccountId {
-    AccountId::for_public_pda(&wrapped_token_id, &holding_seed(recipient))
+    AccountIdData::public().derive_pda_id(wrapped_token_id, &holding_seed(recipient))
 }
 
 #[must_use]

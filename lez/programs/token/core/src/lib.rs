@@ -16,56 +16,77 @@ pub enum Instruction {
     /// Transfer tokens from sender to recipient.
     ///
     /// Required accounts:
-    /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or empty).
-    Transfer { amount_to_transfer: u128 },
+    /// - Sender's Token Holding account (initialized),
+    /// - Recipient's Token Holding account (initialized or empty),
+    /// - Sender's owner (authorized).
+    Transfer {
+        sender: HoldingTarget,
+        recipient: HoldingTarget,
+        amount_to_transfer: u128,
+    },
 
     /// Create a new fungible token definition without metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty).
-    NewFungibleDefinition { name: String, total_supply: u128 },
+    /// - Token Definition account (empty, authorized),
+    /// - Holder's Token Holding account (empty).
+    NewFungibleDefinition {
+        name: String,
+        total_supply: u128,
+        holder: HoldingTarget,
+    },
 
     /// Create a new fungible or non-fungible token definition with metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty),
-    /// - Token Metadata account (empty).
+    /// - Token Definition account (empty, authorized),
+    /// - Holder's Token Holding account (empty),
+    /// - Token Metadata account (empty, authorized).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
         /// Boxed to avoid large enum variant size.
         metadata: Box<NewTokenMetadata>,
+        holder: HoldingTarget,
     },
 
     /// Initialize a token holding account for a given token definition.
     ///
     /// Required accounts:
     /// - Token Definition account (initialized),
-    /// - Token Holding account,
-    InitializeAccount,
+    /// - Holder's Token Holding account (empty, or already initialized for the definition).
+    InitializeAccount { holder: HoldingTarget },
 
     /// Burn tokens from the holder's account.
     ///
     /// Required accounts:
     /// - Token Definition account (initialized),
-    /// - Token Holding account (initialized, authorized).
-    Burn { amount_to_burn: u128 },
+    /// - Holder's Token Holding account (initialized),
+    /// - Holder's owner (authorized).
+    Burn {
+        holder: HoldingTarget,
+        amount_to_burn: u128,
+    },
 
     /// Mint new tokens to the holder's account.
     ///
     /// Required accounts:
     /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (initialized or empty).
-    Mint { amount_to_mint: u128 },
+    /// - Holder's Token Holding account (initialized or empty).
+    Mint {
+        holder: HoldingTarget,
+        amount_to_mint: u128,
+    },
 
     /// Print a new NFT from the master copy.
     ///
     /// Required accounts:
-    /// - NFT Master Token Holding account (initialized, authorized),
-    /// - NFT Printed Copy Token Holding account (empty).
-    PrintNft,
+    /// - Master holder's NFT Master Token Holding account (initialized),
+    /// - Copy holder's NFT Printed Copy Token Holding account (empty, or initialized and unowned),
+    /// - Master holder's owner (authorized).
+    PrintNft {
+        master_holder: HoldingTarget,
+        copy_holder: HoldingTarget,
+    },
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]

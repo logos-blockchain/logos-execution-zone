@@ -21,9 +21,9 @@ use crate::{
         keycard::KeycardSubcommand,
         network::NetworkAlias,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
+            amm::AmmSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
-            token::TokenProgramAgnosticSubcommand,
+            token::TokenSubcommand,
         },
         statistics::StatisticsSubcommand,
     },
@@ -60,13 +60,10 @@ pub enum Command {
     Account(AccountSubcommand),
     /// Token program interaction subcommand.
     #[command(subcommand)]
-    Token(TokenProgramAgnosticSubcommand),
+    Token(TokenSubcommand),
     /// AMM program interaction subcommand.
     #[command(subcommand)]
-    AMM(AmmProgramAgnosticSubcommand),
-    /// Associated Token Account program interaction subcommand.
-    #[command(subcommand)]
-    Ata(AtaSubcommand),
+    AMM(AmmSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
@@ -268,7 +265,6 @@ pub async fn execute_subcommand(
         }
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
         }

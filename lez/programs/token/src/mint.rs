@@ -2,18 +2,26 @@ use lee_core::{
     account::{AccountId, BalanceDiff, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{HoldingKind, HoldingTarget, TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn mint(
     definition_account: &AccountInput,
     user_holding_account: &AccountInput,
+    holder: &HoldingTarget,
     self_account_id: AccountId,
     amount_to_mint: u128,
 ) -> Vec<AccountStateDiff> {
     assert!(
         definition_account.is_authorized,
         "Definition authorization is missing"
+    );
+    token_core::verify_holding(
+        holder,
+        user_holding_account,
+        self_account_id,
+        definition_account.account_id,
+        HoldingKind::Fungible,
     );
 
     let mut definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))

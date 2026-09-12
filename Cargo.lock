@@ -144,6 +144,7 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
+ "token_core",
 ]
 
 [[package]]
@@ -151,6 +152,7 @@ name = "amm_program"
 version = "0.1.0"
 dependencies = [
  "amm_core",
+ "borsh",
  "lee",
  "lee_core",
  "programs",
@@ -543,27 +545,6 @@ name = "asn1_der"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
-
-[[package]]
-name = "associated_token_account_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "associated_token_account_program"
-version = "0.1.0"
-dependencies = [
- "associated_token_account_core",
- "borsh",
- "lee",
- "lee_core",
- "programs",
- "token_core",
-]
 
 [[package]]
 name = "astral-tokio-tar"
@@ -2423,7 +2404,6 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "anyhow",
- "associated_token_account_core",
  "authenticated_transfer_core",
  "borsh",
  "clap",
@@ -9521,8 +9501,6 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "amm_program",
- "associated_token_account_core",
- "associated_token_account_program",
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",
@@ -12730,7 +12708,11 @@ dependencies = [
 name = "token_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
+ "lee",
  "lee_core",
+ "programs",
+ "test_methods",
  "token_core",
 ]
 
@@ -13656,7 +13638,6 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "anyhow",
- "associated_token_account_core",
  "async-stream",
  "authenticated_transfer_core",
  "bincode",

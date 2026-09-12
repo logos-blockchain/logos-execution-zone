@@ -26,8 +26,9 @@ use lee::{
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
-    account::{Nonce, ProgramShardSelector},
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, NullifierPublicKey,
+    NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    account::{AccountIdData, Nonce, ProgramShardSelector},
     program::{AccountInput, InstructionData},
 };
 use log::warn;
@@ -417,6 +418,51 @@ impl WalletCore {
         }
     }
 
+    pub fn account_id_data(
+        &self,
+        owner: &AccountIdentity,
+    ) -> Result<AccountIdData, ExecutionFailureKind> {
+        match owner {
+            AccountIdentity::Public(_)
+            | AccountIdentity::PublicNoSign(_)
+            | AccountIdentity::PublicKeycard { .. } => Ok(AccountIdData::public()),
+            AccountIdentity::PrivateOwned(id) => {
+                let found = self
+                    .storage
+                    .key_chain()
+                    .private_account(*id)
+                    .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+                Ok(AccountIdData::from_private_parts(
+                    found.key_chain.nullifier_public_key,
+                    found.key_chain.viewing_public_key.clone(),
+                    found.kind.identifier(),
+                ))
+            }
+            AccountIdentity::PrivateForeign { npk, vpk, kind } => Ok(
+                AccountIdData::from_private_parts(*npk, vpk.clone(), kind.identifier()),
+            ),
+            AccountIdentity::PrivateShared {
+                ask,
+                vpk,
+                identifier,
+            } => Ok(AccountIdData::from_private_parts(
+                NullifierPublicKey::from(&NullifierSecretKey::from(ask)),
+                vpk.clone(),
+                *identifier,
+            )),
+            AccountIdentity::PrivatePdaShared {
+                nsk,
+                vpk,
+                identifier,
+                ..
+            } => Ok(AccountIdData::from_private_parts(
+                NullifierPublicKey::from(nsk),
+                vpk.clone(),
+                *identifier,
+            )),
+        }
+    }
+
     /// Remove a group key holder from storage. Returns the removed holder if it existed.
     pub fn remove_group_key_holder(
         &mut self,
@@ -514,13 +560,8 @@ impl WalletCore {
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(
-            &AccountId::from(program_id),
-            &pda_seed,
-            &npk,
-            &vpk,
-            identifier,
-        );
+        let account_id = AccountIdData::from_private_parts(npk, vpk.clone(), identifier)
+            .derive_pda_id(AccountId::from(program_id), &pda_seed);
 
         self.register_shared_account(
             account_id,
@@ -562,7 +603,8 @@ impl WalletCore {
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::from((&npk, &vpk, identifier));
+        let account_id =
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
         self.catch_up_shared_account(account_id).await?;

@@ -2,12 +2,13 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
+    compute_pool_pda, compute_vault_id,
 };
 use lee_core::{
     account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
     program::{AccountInput, AccountStateDiff, ChainedCall},
 };
+use token_core::HoldingTarget;
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
@@ -19,10 +20,12 @@ pub fn new_definition(
     user_holding_a: &AccountInput,
     user_holding_b: &AccountInput,
     user_holding_lp: &AccountInput,
+    user_owner: &AccountInput,
     token_a_amount: NonZeroU128,
     token_b_amount: NonZeroU128,
     self_account_id: AccountId,
     token_program_id: AccountId,
+    user: &HoldingTarget,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id =
@@ -39,6 +42,10 @@ pub fn new_definition(
         "Cannot set up a swap for a token with itself"
     );
     assert_eq!(
+        user_owner.account_id, user.owner_id,
+        "User owner was not provided"
+    );
+    assert_eq!(
         pool.account_id,
         compute_pool_pda(
             self_account_id,
@@ -50,12 +57,12 @@ pub fn new_definition(
     );
     assert_eq!(
         vault_a.account_id,
-        compute_vault_pda(self_account_id, pool.account_id, definition_token_a_id),
+        compute_vault_id(token_program_id, pool.account_id, definition_token_a_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
         vault_b.account_id,
-        compute_vault_pda(self_account_id, pool.account_id, definition_token_b_id),
+        compute_vault_id(token_program_id, pool.account_id, definition_token_b_id),
         "Vault ID does not match PDA"
     );
     assert_eq!(
@@ -86,9 +93,11 @@ pub fn new_definition(
         token_core::Instruction::NewFungibleDefinition {
             name: String::from("LP Token"),
             total_supply: initial_lp,
+            holder: user.clone(),
         }
     } else {
         token_core::Instruction::Mint {
+            holder: user.clone(),
             amount_to_mint: initial_lp,
         }
     };
@@ -115,32 +124,24 @@ pub fn new_definition(
     );
 
     // Chain call for Token A (user_holding_a -> Vault_A)
-    let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
-    let call_token_a = ChainedCall::new(
+    let call_token_a = crate::deposit(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(user_holding_a),
-            ProgramShardSelector::from(vault_a),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: token_a_amount.into(),
-        },
-    )
-    .with_pda_seeds(vec![vault_a_seed]);
+        user_holding_a,
+        vault_a,
+        user,
+        pool.account_id,
+        token_a_amount.into(),
+    );
 
     // Chain call for Token B (user_holding_b -> Vault_B)
-    let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
-    let call_token_b = ChainedCall::new(
+    let call_token_b = crate::deposit(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(user_holding_b),
-            ProgramShardSelector::from(vault_b),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: token_b_amount.into(),
-        },
-    )
-    .with_pda_seeds(vec![vault_b_seed]);
+        user_holding_b,
+        vault_b,
+        user,
+        pool.account_id,
+        token_b_amount.into(),
+    );
 
     let pool_lp_pda_seed = compute_liquidity_token_pda_seed(pool.account_id);
     let call_token_lp = ChainedCall::new(
@@ -163,6 +164,7 @@ pub fn new_definition(
         AccountStateDiff::unchanged(user_holding_a.clone()),
         AccountStateDiff::unchanged(user_holding_b.clone()),
         AccountStateDiff::unchanged(user_holding_lp.clone()),
+        AccountStateDiff::unchanged(user_owner.clone()),
     ];
 
     (post_diffs, chained_calls)

@@ -9,7 +9,10 @@
 //! sha, which is the bulk of what linking cost in the first place, so splitting
 //! it out barely moves the guest.
 
-use lee_core::{account::AccountId, program::PdaSeed};
+use lee_core::{
+    account::{AccountId, AccountIdData},
+    program::PdaSeed,
+};
 
 const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";
 
@@ -30,8 +33,8 @@ pub fn inbox_source_marker_account_id(
     src_zone: &ZoneId,
     src_account_id: AccountId,
 ) -> AccountId {
-    AccountId::for_public_pda(
-        &inbox_id,
+    AccountIdData::public().derive_pda_id(
+        inbox_id,
         &inbox_source_marker_seed(src_zone, src_account_id),
     )
 }

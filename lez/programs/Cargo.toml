@@ -10,11 +10,6 @@ path = "amm/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "associated_token_account"
-path = "associated_token_account/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "bridge"
 path = "bridge/src/main.rs"
 required-features = ["programs"]
@@ -87,10 +82,8 @@ artifacts = ["dep:build_utils", "dep:lee"]
 programs = [
   "dep:lee_core",
   "dep:amm_program",
-  "dep:associated_token_account_program",
   "dep:token_program",
   "dep:amm_core",
-  "dep:associated_token_account_core",
   "dep:authenticated_transfer_core",
   "dep:bridge_core",
   "dep:clock_core",
@@ -111,7 +104,6 @@ borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
 amm_core = { workspace = true, optional = true }
-associated_token_account_core = { workspace = true, optional = true }
 authenticated_transfer_core = { workspace = true, optional = true, features = [
   "image_id",
 ] }
@@ -129,7 +121,6 @@ ping_core = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
 
 amm_program = { path = "amm", optional = true }
-associated_token_account_program = { path = "associated_token_account", optional = true }
 token_program = { path = "token", optional = true }
 
 [build-dependencies]

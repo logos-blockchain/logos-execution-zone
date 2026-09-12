@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
-use lee_core::Identifier;
+use lee_core::{Identifier, PrivateAccountKind};
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use sequencer_core::{
@@ -65,11 +65,11 @@ pub struct InitialPrivateAccountForWallet {
 impl InitialPrivateAccountForWallet {
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from((
+        AccountId::for_private_account(
             &self.key_chain.nullifier_public_key,
             &self.key_chain.viewing_public_key,
-            self.identifier,
-        ))
+            &PrivateAccountKind::Regular(self.identifier),
+        )
     }
 }
 

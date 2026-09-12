@@ -5,7 +5,7 @@ use test_fixtures::{TestContext, private_mention, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::token::TokenProgramAgnosticSubcommand,
+    programs::token::TokenSubcommand,
 };
 
 use crate::harness::ScenarioOutput;
@@ -21,9 +21,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "token_new_fungible", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(definition_id),
-                    supply_account_id: public_mention(supply_id),
+                Command::Token(TokenSubcommand::New {
+                    definition: public_mention(definition_id),
+                    owner: public_mention(supply_id),
                     name: "BenchToken".to_owned(),
                     total_supply: 1_000_000,
                 }),
@@ -36,8 +36,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "token_public_transfer", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: public_mention(supply_id),
+                    definition: definition_id,
                     to: Some(public_mention(recipient_id)),
                     to_npk: None,
                     to_vpk: None,
@@ -57,8 +58,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "token_shielded_transfer", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: public_mention(supply_id),
+                    definition: definition_id,
                     to: Some(private_mention(private_recipient_id)),
                     to_npk: None,
                     to_vpk: None,

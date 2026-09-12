@@ -2,23 +2,17 @@ use lee_core::{
     account::{AccountId, BalanceDiff, ShardData},
     program::{AccountInput, AccountStateDiff},
 };
-use token_core::TokenHolding;
+use token_core::{HoldingKind, HoldingTarget, TokenHolding};
 
 #[must_use]
 pub fn print_nft(
-    master_account: &AccountInput,
-    printed_account: &AccountInput,
+    pre_states: Vec<AccountInput>,
+    master_holder: &HoldingTarget,
+    copy_holder: &HoldingTarget,
     self_account_id: AccountId,
 ) -> Vec<AccountStateDiff> {
-    assert!(
-        master_account.is_authorized,
-        "Master NFT Account must be authorized"
-    );
-
-    assert!(
-        printed_account.shard_of(self_account_id).is_empty(),
-        "Printed Account must not already hold data"
-    );
+    let ([master_account, printed_account], owner_row) =
+        crate::spend_rows(pre_states, master_holder.owner_id);
 
     let mut master_account_data = TokenHolding::try_from(master_account.shard_of(self_account_id))
         .expect("Invalid Token Holding data");
@@ -32,6 +26,31 @@ pub fn print_nft(
     };
 
     let definition_id = *definition_id;
+    token_core::verify_holding(
+        master_holder,
+        &master_account,
+        self_account_id,
+        definition_id,
+        HoldingKind::NftMaster,
+    );
+    token_core::verify_holding(
+        copy_holder,
+        &printed_account,
+        self_account_id,
+        definition_id,
+        HoldingKind::NftPrintedCopy,
+    );
+
+    let printed_shard = printed_account.shard_of(self_account_id);
+    assert!(
+        printed_shard.is_empty()
+            || TokenHolding::try_from(printed_shard).expect("Invalid Token Holding data")
+                == TokenHolding::NftPrintedCopy {
+                    definition_id,
+                    owned: false,
+                },
+        "Printed Account already holds a copy"
+    );
 
     assert!(
         *print_balance > 1,
@@ -40,13 +59,13 @@ pub fn print_nft(
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
     let master_diff = AccountStateDiff::new(
-        master_account.clone(),
+        master_account,
         BalanceDiff::Add(0),
         ShardData::from(&master_account_data),
     );
 
     let printed_diff = AccountStateDiff::new(
-        printed_account.clone(),
+        printed_account,
         BalanceDiff::Add(0),
         ShardData::from(&TokenHolding::NftPrintedCopy {
             definition_id,
@@ -54,5 +73,5 @@ pub fn print_nft(
         }),
     );
 
-    vec![master_diff, printed_diff]
+    crate::with_owner_row(vec![master_diff, printed_diff], owner_row)
 }

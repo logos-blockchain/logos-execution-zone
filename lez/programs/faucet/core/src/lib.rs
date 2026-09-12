@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, AccountIdData};
 pub use lee_core::program::PdaSeed;
 
 const FAUCET_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/FaucetSeed/0000000000/";
@@ -23,5 +23,5 @@ pub const fn compute_faucet_seed() -> PdaSeed {
 
 #[must_use]
 pub fn compute_faucet_account_id(faucet_account_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&faucet_account_id, &compute_faucet_seed())
+    AccountIdData::public().derive_pda_id(faucet_account_id, &compute_faucet_seed())
 }

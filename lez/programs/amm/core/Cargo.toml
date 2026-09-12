@@ -9,5 +9,6 @@ workspace = true
 
 [dependencies]
 lee_core.workspace = true
+token_core.workspace = true
 risc0-zkvm.workspace = true
 borsh.workspace = true

@@ -3,13 +3,15 @@ use lee_core::{
     program::{AccountInput, AccountStateDiff},
 };
 use token_core::{
-    NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
+    HoldingKind, HoldingTarget, NewTokenDefinition, NewTokenMetadata, TokenDefinition,
+    TokenHolding, TokenMetadata,
 };
 
 #[must_use]
 pub fn new_fungible_definition(
     definition_target_account: &AccountInput,
     holding_target_account: &AccountInput,
+    holder: &HoldingTarget,
     self_account_id: AccountId,
     name: String,
     total_supply: u128,
@@ -25,6 +27,13 @@ pub fn new_fungible_definition(
         "Definition target account must not already hold data"
     );
 
+    token_core::verify_holding(
+        holder,
+        holding_target_account,
+        self_account_id,
+        definition_target_account.account_id,
+        HoldingKind::Fungible,
+    );
     assert!(
         holding_target_account.shard_of(self_account_id).is_empty(),
         "Holding target account must not already hold data"
@@ -60,6 +69,7 @@ pub fn new_definition_with_metadata(
     definition_target_account: &AccountInput,
     holding_target_account: &AccountInput,
     metadata_target_account: &AccountInput,
+    holder: &HoldingTarget,
     self_account_id: AccountId,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
@@ -67,6 +77,10 @@ pub fn new_definition_with_metadata(
     assert!(
         definition_target_account.is_authorized,
         "Definition target authorization is missing"
+    );
+    assert!(
+        metadata_target_account.is_authorized,
+        "Metadata target authorization is missing"
     );
     assert!(
         definition_target_account
@@ -80,10 +94,6 @@ pub fn new_definition_with_metadata(
         "Holding target account must not already hold data"
     );
 
-    assert!(
-        metadata_target_account.is_authorized,
-        "Metadata target authorization is missing"
-    );
     assert!(
         metadata_target_account.shard_of(self_account_id).is_empty(),
         "Metadata target account must not already hold data"
@@ -116,6 +126,13 @@ pub fn new_definition_with_metadata(
             },
         ),
     };
+    token_core::verify_holding(
+        holder,
+        holding_target_account,
+        self_account_id,
+        definition_target_account.account_id,
+        token_holding.kind(),
+    );
 
     let token_metadata = TokenMetadata {
         definition_id: definition_target_account.account_id,

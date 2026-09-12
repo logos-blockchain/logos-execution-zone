@@ -41,7 +41,6 @@ members = [
   "lez/common",
   "lez/programs",
   "lez/programs/amm",
-  "lez/programs/associated_token_account",
   "lez/programs/authenticated_transfer",
   "lez/programs/bridge",
   "lez/programs/clock",
@@ -115,8 +114,6 @@ token_core = { path = "lez/programs/token/core" }
 token_program = { path = "lez/programs/token" }
 amm_core = { path = "lez/programs/amm/core" }
 amm_program = { path = "lez/programs/amm" }
-associated_token_account_core = { path = "lez/programs/associated_token_account/core" }
-ata_program = { path = "lez/programs/associated_token_account" }
 authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
 faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }

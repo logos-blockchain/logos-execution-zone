@@ -1,10 +1,11 @@
 use std::num::NonZeroU128;
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
+use amm_core::PoolDefinition;
 use lee_core::{
     account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
     program::{AccountInput, AccountStateDiff, ChainedCall},
 };
+use token_core::HoldingTarget;
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
@@ -16,10 +17,12 @@ pub fn remove_liquidity(
     user_holding_a: &AccountInput,
     user_holding_b: &AccountInput,
     user_holding_lp: &AccountInput,
+    user_owner: &AccountInput,
     remove_liquidity_amount: NonZeroU128,
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
     self_account_id: AccountId,
+    user: &HoldingTarget,
 ) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
@@ -27,6 +30,7 @@ pub fn remove_liquidity(
     let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
         .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
     let token_program_id = pool_def_data.token_program_id;
+    let pool_seed = crate::pool_seed(pool, &pool_def_data, self_account_id);
 
     assert!(pool_def_data.active, "Pool is inactive");
     assert_eq!(
@@ -40,6 +44,10 @@ pub fn remove_liquidity(
     assert_eq!(
         vault_b.account_id, pool_def_data.vault_b_id,
         "Vault B was not provided"
+    );
+    assert_eq!(
+        user_owner.account_id, user.owner_id,
+        "User owner was not provided"
     );
 
     assert!(
@@ -107,47 +115,38 @@ pub fn remove_liquidity(
     };
 
     // Chaincall for Token A withdraw
-    let call_token_a = ChainedCall::new(
+    let call_token_a = crate::withdraw(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(vault_a),
-            ProgramShardSelector::from(user_holding_a),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: withdraw_amount_a,
-        },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
+        vault_a,
+        user_holding_a,
+        user,
         pool.account_id,
-        pool_def_data.definition_token_a_id,
-    )]);
+        pool_seed,
+        withdraw_amount_a,
+    );
     // Chaincall for Token B withdraw
-    let call_token_b = ChainedCall::new(
+    let call_token_b = crate::withdraw(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(vault_b),
-            ProgramShardSelector::from(user_holding_b),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: withdraw_amount_b,
-        },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
+        vault_b,
+        user_holding_b,
+        user,
         pool.account_id,
-        pool_def_data.definition_token_b_id,
-    )]);
+        pool_seed,
+        withdraw_amount_b,
+    );
     // Chaincall for LP adjustment
     let call_token_lp = ChainedCall::new(
         token_program_id,
         vec![
             ProgramShardSelector::from(pool_definition_lp),
             ProgramShardSelector::from(user_holding_lp),
+            ProgramShardSelector::balance(user.owner_id),
         ],
         &token_core::Instruction::Burn {
+            holder: user.clone(),
             amount_to_burn: delta_lp,
         },
-    )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
+    );
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
@@ -163,6 +162,7 @@ pub fn remove_liquidity(
         AccountStateDiff::unchanged(user_holding_a.clone()),
         AccountStateDiff::unchanged(user_holding_b.clone()),
         AccountStateDiff::unchanged(user_holding_lp.clone()),
+        AccountStateDiff::unchanged(user_owner.clone()),
     ];
 
     (post_diffs, chained_calls)

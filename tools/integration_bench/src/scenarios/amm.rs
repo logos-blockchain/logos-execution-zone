@@ -5,7 +5,7 @@ use test_fixtures::{TestContext, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::{amm::AmmProgramAgnosticSubcommand, token::TokenProgramAgnosticSubcommand},
+    programs::{amm::AmmSubcommand, token::TokenSubcommand},
 };
 
 use crate::harness::ScenarioOutput;
@@ -15,13 +15,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
 
     let def_a = new_public_account(ctx, &mut output, "create_acc_def_a").await?;
     let supply_a = new_public_account(ctx, &mut output, "create_acc_supply_a").await?;
-    let user_a = new_public_account(ctx, &mut output, "create_acc_user_a").await?;
-
     let def_b = new_public_account(ctx, &mut output, "create_acc_def_b").await?;
     let supply_b = new_public_account(ctx, &mut output, "create_acc_supply_b").await?;
-    let user_b = new_public_account(ctx, &mut output, "create_acc_user_b").await?;
-
-    let user_lp = new_public_account(ctx, &mut output, "create_acc_user_lp").await?;
+    let user = new_public_account(ctx, &mut output, "create_acc_user").await?;
 
     timed_token_new(ctx, &mut output, "token_a_new", def_a, supply_a, "TokA").await?;
     timed_token_send(
@@ -29,7 +25,8 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         &mut output,
         "token_a_fund_user",
         supply_a,
-        user_a,
+        def_a,
+        user,
         1_000,
     )
     .await?;
@@ -40,7 +37,8 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         &mut output,
         "token_b_fund_user",
         supply_b,
-        user_b,
+        def_b,
+        user,
         1_000,
     )
     .await?;
@@ -49,10 +47,10 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "amm_new_pool", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::AMM(AmmProgramAgnosticSubcommand::New {
-                    user_holding_a: public_mention(user_a),
-                    user_holding_b: public_mention(user_b),
-                    user_holding_lp: public_mention(user_lp),
+                Command::AMM(AmmSubcommand::New {
+                    user: public_mention(user),
+                    definition_a: def_a,
+                    definition_b: def_b,
                     balance_a: 300,
                     balance_b: 300,
                 }),
@@ -65,12 +63,12 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "amm_swap_exact_input", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::AMM(AmmProgramAgnosticSubcommand::SwapExactInput {
-                    user_holding_a: public_mention(user_a),
-                    user_holding_b: public_mention(user_b),
+                Command::AMM(AmmSubcommand::SwapExactInput {
+                    user: public_mention(user),
+                    definition_in: def_a,
+                    definition_out: def_b,
                     amount_in: 50,
                     min_amount_out: 1,
-                    token_definition: def_a,
                 }),
             )
             .await
@@ -81,10 +79,10 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "amm_add_liquidity", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::AMM(AmmProgramAgnosticSubcommand::AddLiquidity {
-                    user_holding_a: public_mention(user_a),
-                    user_holding_b: public_mention(user_b),
-                    user_holding_lp: public_mention(user_lp),
+                Command::AMM(AmmSubcommand::AddLiquidity {
+                    user: public_mention(user),
+                    definition_a: def_a,
+                    definition_b: def_b,
                     min_amount_lp: 1,
                     max_amount_a: 100,
                     max_amount_b: 100,
@@ -98,10 +96,10 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         .step(ctx, "amm_remove_liquidity", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::AMM(AmmProgramAgnosticSubcommand::RemoveLiquidity {
-                    user_holding_a: public_mention(user_a),
-                    user_holding_b: public_mention(user_b),
-                    user_holding_lp: public_mention(user_lp),
+                Command::AMM(AmmSubcommand::RemoveLiquidity {
+                    user: public_mention(user),
+                    definition_a: def_a,
+                    definition_b: def_b,
                     balance_lp: 50,
                     min_amount_a: 1,
                     min_amount_b: 1,
@@ -150,9 +148,9 @@ async fn timed_token_new(
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(def_id),
-                    supply_account_id: public_mention(supply_id),
+                Command::Token(TokenSubcommand::New {
+                    definition: public_mention(def_id),
+                    owner: public_mention(supply_id),
                     name,
                     total_supply: 10_000,
                 }),
@@ -168,6 +166,7 @@ async fn timed_token_send(
     output: &mut ScenarioOutput,
     label: &str,
     from_id: lee::AccountId,
+    definition: lee::AccountId,
     to_id: lee::AccountId,
     amount: u128,
 ) -> Result<()> {
@@ -175,8 +174,9 @@ async fn timed_token_send(
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::Send {
+                Command::Token(TokenSubcommand::Send {
                     from: public_mention(from_id),
+                    definition,
                     to: Some(public_mention(to_id)),
                     to_npk: None,
                     to_vpk: None,

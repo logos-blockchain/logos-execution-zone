@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Balance, data::DATA_MAX_LENGTH},
+    account::{AccountId, AccountIdData, Balance, data::DATA_MAX_LENGTH},
     program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
@@ -269,7 +269,7 @@ pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_tx_index: u32) -> M
 /// The config account holding the allowlists.
 #[must_use]
 pub fn inbox_config_account_id(inbox_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &inbox_config_seed())
+    AccountIdData::public().derive_pda_id(inbox_id, &inbox_config_seed())
 }
 
 /// Seed of the config PDA the guest initializes at genesis.
@@ -285,7 +285,7 @@ pub fn inbox_seen_shard_account_id(
     src_zone: &ZoneId,
     src_block_id: u64,
 ) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
+    AccountIdData::public().derive_pda_id(inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
 }
 
 /// Seed of the seen-shard PDA.

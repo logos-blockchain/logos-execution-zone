@@ -8,7 +8,7 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId, ProgramId, ShardData, SharedSecretKey};
+use lee::{AccountId, AccountIdData, ProgramId, ShardData, SharedSecretKey};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -560,8 +560,8 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 identifier,
             } => {
                 let npk = NullifierPublicKey::from(&nsk);
-                let account_id =
-                    AccountId::for_private_pda(&authority, &seed, &npk, &vpk, identifier);
+                let account_id = AccountIdData::from_private_parts(npk, vpk.clone(), identifier)
+                    .derive_pda_id(authority, &seed);
                 let vpk_vec = vpk.to_bytes().to_vec();
                 let vpk_len = vpk_vec.len();
                 let vpk_data = if vpk_len > 0 {
@@ -697,7 +697,8 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 let authority: AccountId = value.authority.into();
                 let seed: PdaSeed = value.seed.into();
                 let identifier = value.identifier.into();
-                let derived = AccountId::for_private_pda(&authority, &seed, &npk, &vpk, identifier);
+                let derived = AccountIdData::from_private_parts(npk, vpk.clone(), identifier)
+                    .derive_pda_id(authority, &seed);
                 if AccountId::from(value.account_id) != derived {
                     return Err(WalletFfiError::InvalidAccountId);
                 }

@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, AccountIdData};
 pub use lee_core::program::PdaSeed;
 
 pub mod event;
@@ -46,7 +46,7 @@ pub const fn compute_bridge_seed() -> PdaSeed {
 
 #[must_use]
 pub fn compute_bridge_account_id(bridge_program_account_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&bridge_program_account_id, &compute_bridge_seed())
+    AccountIdData::public().derive_pda_id(bridge_program_account_id, &compute_bridge_seed())
 }
 
 /// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
@@ -72,8 +72,8 @@ pub fn deposit_receipt_account_id(
     bridge_program_account_id: AccountId,
     l1_deposit_op_id: [u8; 32],
 ) -> AccountId {
-    AccountId::for_public_pda(
-        &bridge_program_account_id,
+    AccountIdData::public().derive_pda_id(
+        bridge_program_account_id,
         &deposit_receipt_seed(l1_deposit_op_id),
     )
 }

@@ -29,7 +29,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+use lee_core::{PrivateAccountKind, program::PROGRAM_LOADER_ACCOUNT_ID};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
@@ -1024,10 +1024,10 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = lee::AccountId::for_regular_private_account(
+        let account_id = lee::AccountId::for_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            &PrivateAccountKind::Regular(0_u128),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1170,10 +1170,10 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = lee::AccountId::for_regular_private_account(
+        let account_id = lee::AccountId::for_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            &PrivateAccountKind::Regular(0_u128),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1255,10 +1255,10 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     let (private_account_id_1, private_account_1_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = lee::AccountId::for_regular_private_account(
+        let account_id = lee::AccountId::for_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            &PrivateAccountKind::Regular(0_u128),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1267,10 +1267,10 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     let (private_account_id_2, private_account_2_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = lee::AccountId::for_regular_private_account(
+        let account_id = lee::AccountId::for_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            &PrivateAccountKind::Regular(0_u128),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)

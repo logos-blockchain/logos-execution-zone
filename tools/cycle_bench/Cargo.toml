@@ -20,7 +20,6 @@ authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true
-associated_token_account_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 

@@ -4,7 +4,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, AccountIdData, ProgramShardSelector},
     program::PdaSeed,
 };
 
@@ -49,7 +49,7 @@ pub enum Instruction {
 /// PDA accumulating all locked balance on this zone.
 #[must_use]
 pub fn escrow_account_id(bridge_lock_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&bridge_lock_id, &escrow_seed())
+    AccountIdData::public().derive_pda_id(bridge_lock_id, &escrow_seed())
 }
 
 #[must_use]
@@ -60,7 +60,7 @@ const fn escrow_seed() -> PdaSeed {
 /// PDA holding one holder's bridgeable balance, debited by `Lock`.
 #[must_use]
 pub fn holding_account_id(bridge_lock_id: AccountId, holder: &[u8; 32]) -> AccountId {
-    AccountId::for_public_pda(&bridge_lock_id, &holding_seed(holder))
+    AccountIdData::public().derive_pda_id(bridge_lock_id, &holding_seed(holder))
 }
 
 #[must_use]
@@ -81,7 +81,7 @@ pub fn holding_seed(holder: &[u8; 32]) -> PdaSeed {
 /// the guest can pin both without importing their image ids.
 #[must_use]
 pub fn config_account_id(bridge_lock_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&bridge_lock_id, &config_seed())
+    AccountIdData::public().derive_pda_id(bridge_lock_id, &config_seed())
 }
 
 #[must_use]

@@ -13,5 +13,6 @@ token_core.workspace = true
 amm_core.workspace = true
 
 [dev-dependencies]
+borsh.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 programs = { workspace = true }

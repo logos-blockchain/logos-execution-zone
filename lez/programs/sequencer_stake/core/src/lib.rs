@@ -4,7 +4,10 @@ use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::InstructionData};
+use lee_core::{
+    account::{AccountId, AccountIdData},
+    program::InstructionData,
+};
 use serde::{Deserialize, Serialize};
 
 /// Approvals a `Slash` must carry. Raising it moves the program id.
@@ -240,7 +243,7 @@ const fn slash_sink_seed() -> PdaSeed {
 
 #[must_use]
 pub fn slash_sink_account_id(program_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &slash_sink_seed())
+    AccountIdData::public().derive_pda_id(program_id, &slash_sink_seed())
 }
 
 /// Seed of the PDA holding the [`SequencerStakeConfig`].
@@ -251,7 +254,7 @@ pub const fn sequencer_stake_config_seed() -> PdaSeed {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id(program_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
+    AccountIdData::public().derive_pda_id(program_id, &sequencer_stake_config_seed())
 }
 
 #[must_use]
@@ -261,7 +264,7 @@ pub const fn stake_funds_seed(ownership_id: &AccountId) -> PdaSeed {
 
 #[must_use]
 pub fn stake_funds_account_id(program_id: AccountId, ownership_id: &AccountId) -> AccountId {
-    AccountId::for_public_pda(&program_id, &stake_funds_seed(ownership_id))
+    AccountIdData::public().derive_pda_id(program_id, &stake_funds_seed(ownership_id))
 }
 
 #[cfg(test)]
