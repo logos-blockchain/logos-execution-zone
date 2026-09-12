@@ -4,6 +4,7 @@
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
+use sequencer_channel_config_actor::Wire;
 use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
 use sequencer_slasher_actor::Approval;
 
@@ -23,6 +24,15 @@ pub enum TxEvaluation {
 pub enum ApprovalEvaluation {
     /// Correctly signed by the key it names; forward and hand to the slasher.
     Accept(Approval),
+    /// Nothing this node can use, but not the sender's fault.
+    Ignore(String),
+    Reject(String),
+}
+
+#[derive(Debug)]
+pub enum ConfigEvaluation {
+    /// From a channel key; forward and hand to the channel-config actor.
+    Accept(Wire),
     /// Nothing this node can use, but not the sender's fault.
     Ignore(String),
     Reject(String),
@@ -87,9 +97,39 @@ pub fn evaluate_approval(
     }
 }
 
+/// Decodes a gossiped channel-config message and drops it unless `origin`
+/// has stake on record.
+///
+/// Stake, not committee membership: a slash drops the key's entry, so a
+/// slashed key is muted at once, while a key that asked to leave keeps its
+/// entry and still signs for the channel until the config removing it lands.
+///
+/// `Ignore` rather than `Reject` because the staked set is head-relative.
+#[must_use]
+pub fn evaluate_config_message(
+    data: &[u8],
+    origin: Option<[u8; 32]>,
+    staked_keys: Option<&AccreditedKeys>,
+) -> ConfigEvaluation {
+    let Some(message) = Wire::decode(data) else {
+        return ConfigEvaluation::Reject("undecodable channel-config message".to_owned());
+    };
+    let Some(staked_keys) = staked_keys else {
+        return ConfigEvaluation::Accept(message);
+    };
+
+    if origin.is_some_and(|origin| staked_keys.contains(&origin)) {
+        ConfigEvaluation::Accept(message)
+    } else {
+        ConfigEvaluation::Ignore("originator has no stake on record".to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use sequencer_channel_config_actor::Signature;
     use sequencer_slasher_actor::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -190,6 +230,60 @@ mod tests {
         assert!(matches!(
             evaluate_transaction(&bytes, 1),
             TxEvaluation::Reject(_)
+        ));
+    }
+
+    /// A channel-config signature as it goes on the wire.
+    fn config_bytes() -> Vec<u8> {
+        let key = Ed25519Key::from_bytes(&[5; 32]);
+        Wire::Signature(Signature {
+            tx_hash: [7; 32],
+            signature: IndexedSignature::new(0, key.sign_payload(&[7; 32])),
+        })
+        .encode()
+    }
+
+    #[test]
+    fn a_config_message_from_a_staked_key_is_accepted() {
+        let staked_keys = AccreditedKeys::from([[1; 32], [2; 32]]);
+        assert!(matches!(
+            evaluate_config_message(&config_bytes(), Some([2; 32]), Some(&staked_keys)),
+            ConfigEvaluation::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn a_config_message_from_a_key_without_stake_is_ignored() {
+        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        assert!(matches!(
+            evaluate_config_message(&config_bytes(), Some([9; 32]), Some(&staked_keys)),
+            ConfigEvaluation::Ignore(_)
+        ));
+    }
+
+    #[test]
+    fn an_anonymous_config_message_is_ignored_once_stake_is_known() {
+        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        assert!(matches!(
+            evaluate_config_message(&config_bytes(), None, Some(&staked_keys)),
+            ConfigEvaluation::Ignore(_)
+        ));
+    }
+
+    #[test]
+    fn unknown_stake_filters_no_config_message() {
+        assert!(matches!(
+            evaluate_config_message(&config_bytes(), Some([9; 32]), None),
+            ConfigEvaluation::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn an_undecodable_config_message_is_rejected() {
+        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        assert!(matches!(
+            evaluate_config_message(&[99, 1, 2], Some([1; 32]), Some(&staked_keys)),
+            ConfigEvaluation::Reject(_)
         ));
     }
 }

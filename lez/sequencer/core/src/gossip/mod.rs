@@ -5,14 +5,15 @@ use std::collections::HashSet;
 
 use tokio::sync::watch;
 
-/// Keys the mesh accepts a slash approval from, fed from the `sequencer_stake`
-/// config by `refresh_committee`.
+/// Keys the mesh accepts messages from, fed from the `sequencer_stake` config
+/// by `refresh_committee`: the committee for slash approvals, every staked key
+/// for channel-config messages.
 pub type AccreditedKeys = HashSet<[u8; 32]>;
 
 /// Written by `refresh_committee` on every head move.
 pub type AccreditedKeysSender = watch::Sender<Option<AccreditedKeys>>;
 
-/// Read by the gossip actor per inbound approval.
+/// Read by the gossip actor per inbound approval or config message.
 pub type AccreditedKeysReceiver = watch::Receiver<Option<AccreditedKeys>>;
 
 /// The mesh's accredited-key channel: `None` filters nothing, `Some` of an

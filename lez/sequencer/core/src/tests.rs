@@ -23,7 +23,7 @@ use logos_blockchain_core::{
     mantle::{
         TxHash,
         ledger::Inputs,
-        ops::channel::{ChannelId, MsgId, deposit::Metadata},
+        ops::channel::{ChannelId, Ed25519PublicKey, MsgId, deposit::Metadata},
     },
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -43,13 +43,13 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use crate::{
     LiveCommittee, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
-    block_publisher::FollowUpdate,
+    block_publisher::{FollowUpdate, LiveChannelConfig},
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
     classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
-    deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
+    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, checkpoint_at, mock_checkpoint, mock_msg_of},
     resubmittable_txs,
@@ -114,6 +114,7 @@ fn empty_follow_update() -> FollowUpdate {
         deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
+        channel: None,
     }
 }
 
@@ -1626,18 +1627,30 @@ fn empty_committee() -> LiveCommittee {
     LiveCommittee::at(Vec::new(), MsgId::root())
 }
 
+/// A live channel sitting at the config entry [`mock::checkpoint_at`] calls
+/// finalized.
+fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
+    LiveChannelConfig {
+        keys,
+        config_tip: MsgId::root(),
+        required_signatures: 1,
+    }
+}
+
 #[tokio::test]
 async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
     // Genesis stakes the bootstrap key, so the head wants it accredited already.
-    let (mut sequencer, mempool_handle) = common_setup().await;
+    let (sequencer, mempool_handle) = common_setup().await;
+    let chain = sequencer.chain();
+    let finalized = MsgId::root();
 
     assert!(
-        sequencer
-            .build_block_from_mempool(Some(&empty_committee()))
-            .await
-            .unwrap()
-            .committee_update
-            .is_none(),
+        config_target(
+            chain.lock().await.final_state(),
+            &live_channel(Vec::new()),
+            finalized
+        )
+        .is_none(),
         "an unfinalized stake must not move the committee"
     );
 
@@ -1649,7 +1662,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         .unwrap();
     apply_follow_update(
         sequencer.block_store().storage_ref(),
-        &sequencer.chain(),
+        &chain,
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(genesis, Slot::from(0))],
@@ -1658,19 +1671,20 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
     )
     .await;
 
-    let wanted = sequencer
-        .build_block_from_mempool(Some(&empty_committee()))
-        .await
-        .unwrap()
-        .committee_update
+    let final_state = chain.lock().await.final_state().clone();
+    let wanted = config_target(&final_state, &live_channel(Vec::new()), finalized)
         .expect("the stake is irreversible now, so the committee should follow it");
     assert!(
-        sequencer
-            .build_block_from_mempool(Some(&LiveCommittee::at(wanted, MsgId::root())))
-            .await
-            .unwrap()
-            .committee_update
-            .is_none(),
+        config_target(
+            &final_state,
+            &live_channel(Vec::new()),
+            MsgId::from([1; 32])
+        )
+        .is_none(),
+        "no config is targeted while another is still in flight"
+    );
+    assert!(
+        config_target(&final_state, &live_channel(wanted.keys), finalized).is_none(),
         "a committee that already matches must not be resubmitted"
     );
 }
