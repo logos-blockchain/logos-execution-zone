@@ -1,4 +1,6 @@
-use lee_core::{EncryptionScheme, SharedSecretKey, program::PrivateAccountKind};
+use lee_core::{
+    EncryptionScheme, SharedSecretKey, account::AccountIdData, program::PrivateAccountKind,
+};
 
 use super::*;
 
@@ -7,8 +9,11 @@ fn an_unused_private_witness_is_rejected() {
     let program = crate::test_methods::noop();
     let touched_keys = test_private_account_keys_1();
     let unused_keys = test_private_account_keys_2();
-    let touched_id =
-        AccountId::for_regular_private_account(&touched_keys.npk(), &touched_keys.vpk(), 0);
+    let touched_id = AccountId::for_private_account(
+        &touched_keys.npk(),
+        &touched_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let result = execute_and_prove(
         ProvingInput {
@@ -43,7 +48,8 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let replaced: ShardData = b"replaced".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let keys = test_private_account_keys_1();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let account_id =
+        AccountId::for_private_account(&keys.npk(), &keys.vpk(), &PrivateAccountKind::Regular(0));
     let pre_account = Account {
         nonce: Nonce(9),
         ..Account::funded(42)
@@ -101,10 +107,16 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let result = execute_and_prove(
         ProvingInput {
@@ -143,10 +155,16 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let result = execute_and_prove(
         ProvingInput {
@@ -172,10 +190,16 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let result = execute_and_prove(
         ProvingInput {
@@ -208,10 +232,16 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let result = execute_and_prove(
         ProvingInput {
@@ -240,7 +270,8 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
 }
 
 /// Happy path for a private PDA at top level: the witness carries `binding: (authority, seed)`,
-/// so the circuit derives `AccountId::for_private_pda(authority, seed, npk, vpk, identifier)` and
+/// so the circuit derives
+/// `AccountIdData::from_private_parts(npk, vpk, identifier).derive_pda_id(authority, seed)` and
 /// treats exactly that address as the witness's own.
 #[test]
 fn private_pda_witness_binding_succeeds() {
@@ -248,13 +279,8 @@ fn private_pda_witness_binding_succeeds() {
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
 
-    let account_id = AccountId::for_private_pda(
-        &AccountId::from(program.id()),
-        &seed,
-        &keys.npk(),
-        &keys.vpk(),
-        u128::MAX,
-    );
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), u128::MAX)
+        .derive_pda_id(AccountId::from(program.id()), &seed);
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
@@ -283,13 +309,8 @@ fn private_pda_npk_mismatch_fails() {
     let keys_b = test_private_account_keys_2();
     let seed = PdaSeed::new([42; 32]);
 
-    let account_id = AccountId::for_private_pda(
-        &AccountId::from(program.id()),
-        &seed,
-        &keys_a.npk(),
-        &keys_a.vpk(),
-        u128::MAX,
-    );
+    let account_id = AccountIdData::from_private_parts(keys_a.npk(), keys_a.vpk(), u128::MAX)
+        .derive_pda_id(AccountId::from(program.id()), &seed);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -313,7 +334,8 @@ fn private_pda_npk_mismatch_fails() {
 /// private PDA, then chains to a callee delegating the account's own seed via
 /// `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization is
 /// established via the private derivation
-/// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+/// `AccountIdData::from_private_parts(npk, vpk, identifier).derive_pda_id(delegator, seed)`
+/// equals `pre.account_id`.
 #[test]
 fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let delegator = crate::test_methods::private_pda_delegator();
@@ -322,8 +344,8 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id =
-        AccountId::for_private_pda(&delegator_id, &seed, &keys.npk(), &keys.vpk(), u128::MAX);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), u128::MAX)
+        .derive_pda_id(delegator_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -360,13 +382,8 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_private_pda(
-        &delegator_id,
-        &derivation_seed,
-        &keys.npk(),
-        &keys.vpk(),
-        u128::MAX,
-    );
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), u128::MAX)
+        .derive_pda_id(delegator_id, &derivation_seed);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -399,7 +416,8 @@ fn a_private_pda_first_seen_in_a_callee_is_bound_by_its_witness_and_granted_by_t
     let seed = PdaSeed::new([77; 32]);
     let forwarder_id: AccountId = forwarder.id().into();
 
-    let account_id = AccountId::for_private_pda(&forwarder_id, &seed, &keys.npk(), &keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), 0)
+        .derive_pda_id(forwarder_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -436,7 +454,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     let seed = PdaSeed::new([77; 32]);
     let forwarder_id: AccountId = forwarder.id().into();
 
-    let account_id = AccountId::for_public_pda(&forwarder_id, &seed);
+    let account_id = AccountIdData::public().derive_pda_id(forwarder_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -476,7 +494,7 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
     let wrong_seed = PdaSeed::new([88; 32]);
     let forwarder_id: AccountId = forwarder.id().into();
 
-    let account_id = AccountId::for_public_pda(&forwarder_id, &seed);
+    let account_id = AccountIdData::public().derive_pda_id(forwarder_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -513,7 +531,8 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &keys.npk(), &keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), 0)
+        .derive_pda_id(delegator_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let sibling_id: AccountId = sibling.id().into();
@@ -562,7 +581,7 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_public_pda(&delegator_id, &seed);
+    let account_id = AccountIdData::public().derive_pda_id(delegator_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let sibling_id: AccountId = sibling.id().into();
@@ -605,7 +624,8 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &keys.npk(), &keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), 0)
+        .derive_pda_id(delegator_id, &seed);
 
     let callee_id: AccountId = callee.id().into();
     let sibling_id: AccountId = sibling.id().into();
@@ -647,7 +667,8 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &keys.npk(), &keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), 0)
+        .derive_pda_id(delegator_id, &seed);
 
     let forwarder_id: AccountId = forwarder.id().into();
     let callee_id: AccountId = callee.id().into();
@@ -697,10 +718,13 @@ fn holder_authorization_survives_across_sibling_calls() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id =
-        AccountId::for_private_pda(&delegator_id, &seed, &pda_keys.npk(), &pda_keys.vpk(), 0);
-    let holder_id =
-        AccountId::for_regular_private_account(&holder_keys.npk(), &holder_keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(pda_keys.npk(), pda_keys.vpk(), 0)
+        .derive_pda_id(delegator_id, &seed);
+    let holder_id = AccountId::for_private_account(
+        &holder_keys.npk(),
+        &holder_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let callee_id: AccountId = callee.id().into();
     let sibling_id: AccountId = sibling.id().into();
@@ -743,7 +767,8 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
     let seed = PdaSeed::new([77; 32]);
     let delegator_id: AccountId = delegator.id().into();
 
-    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &keys.npk(), &keys.vpk(), 0);
+    let account_id = AccountIdData::from_private_parts(keys.npk(), keys.vpk(), 0)
+        .derive_pda_id(delegator_id, &seed);
 
     let forwarder_id: AccountId = forwarder.id().into();
     let callee_id: AccountId = callee.id().into();
@@ -802,7 +827,8 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let forwarder_id: AccountId = forwarder.id().into();
 
     let keys = test_private_account_keys_1();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let account_id =
+        AccountId::for_private_account(&keys.npk(), &keys.vpk(), &PrivateAccountKind::Regular(0));
 
     let program_with_deps =
         ProgramWithDependencies::new(forwarder, forwarder_id, [(callee_id, callee)].into());
@@ -843,10 +869,10 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let seed_b = PdaSeed::new([2; 32]);
 
     let forwarder_id: AccountId = forwarder.id().into();
-    let account_a =
-        AccountId::for_private_pda(&forwarder_id, &seed_a, &keys_a.npk(), &keys_a.vpk(), 0);
-    let account_b =
-        AccountId::for_private_pda(&forwarder_id, &seed_b, &keys_b.npk(), &keys_b.vpk(), 0);
+    let account_a = AccountIdData::from_private_parts(keys_a.npk(), keys_a.vpk(), 0)
+        .derive_pda_id(forwarder_id, &seed_a);
+    let account_b = AccountIdData::from_private_parts(keys_b.npk(), keys_b.vpk(), 0)
+        .derive_pda_id(forwarder_id, &seed_b);
 
     let callee_id: AccountId = callee.id().into();
     let program_with_deps =
@@ -896,10 +922,10 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
     let keys_b = test_private_account_keys_2();
     let seed = PdaSeed::new([55; 32]);
 
-    let account_a =
-        AccountId::for_private_pda(&program_id, &seed, &keys_a.npk(), &keys_a.vpk(), u128::MAX);
-    let account_b =
-        AccountId::for_private_pda(&program_id, &seed, &keys_b.npk(), &keys_b.vpk(), u128::MAX);
+    let account_a = AccountIdData::from_private_parts(keys_a.npk(), keys_a.vpk(), u128::MAX)
+        .derive_pda_id(program_id, &seed);
+    let account_b = AccountIdData::from_private_parts(keys_b.npk(), keys_b.vpk(), u128::MAX)
+        .derive_pda_id(program_id, &seed);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -976,8 +1002,11 @@ fn private_accounts_can_only_be_initialized_once() {
 fn circuit_should_fail_if_there_are_repeated_ids() {
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let witness = update_witness(&sender_keys, 0, Account::funded(100), (1, vec![]));
 
     let result = execute_and_prove(
@@ -1002,8 +1031,11 @@ fn private_authorized_uninitialized_account() {
 
     // Set up keys for the authorized private account
     let private_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+    let account_id = AccountId::for_private_account(
+        &private_keys.npk(),
+        &private_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let program = crate::test_methods::simple_balance_transfer();
 
@@ -1038,8 +1070,11 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
 
     // Set up keys for the private account
     let private_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+    let account_id = AccountId::for_private_account(
+        &private_keys.npk(),
+        &private_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let writer_program = crate::test_methods::data_changer();
     let writer_id: AccountId = writer_program.id().into();
@@ -1110,10 +1145,10 @@ fn two_private_pda_family_members_receive_and_spend() {
     );
 
     let funder_id = funder_keys.account_id();
-    let alice_pda_0_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_keys.npk(), &alice_keys.vpk(), 0);
-    let alice_pda_1_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_keys.npk(), &alice_keys.vpk(), 1);
+    let alice_pda_0_id = AccountIdData::from_private_parts(alice_keys.npk(), alice_keys.vpk(), 0)
+        .derive_pda_id(proxy_id, &seed);
+    let alice_pda_1_id = AccountIdData::from_private_parts(alice_keys.npk(), alice_keys.vpk(), 1)
+        .derive_pda_id(proxy_id, &seed);
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
@@ -1351,10 +1386,16 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
     let recipient_keys = test_private_account_keys_2();
     let sender_account = Account::funded(100);
     let state = V03State::new().with_private_account(&sender_keys, &sender_account);
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let membership_proof = state
         .get_proof_for_commitment(&Commitment::new(&sender_id, &sender_account))
         .expect("sender's commitment must be in state");

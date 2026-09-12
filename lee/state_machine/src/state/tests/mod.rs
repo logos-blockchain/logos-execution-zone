@@ -14,8 +14,9 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
-        ProgramId, ProgramSegment, TimestampValidityWindow, TransactionEvent,
+        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind,
+        ProgramEvent, ProgramHeader, ProgramId, ProgramSegment, TimestampValidityWindow,
+        TransactionEvent,
     },
 };
 
@@ -75,7 +76,11 @@ impl V03State {
 
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+        let account_id = AccountId::for_private_account(
+            &keys.npk(),
+            &keys.vpk(),
+            &PrivateAccountKind::Regular(0),
+        );
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
@@ -301,8 +306,11 @@ fn shielded_balance_transfer_for_tests(
     let sender_id = sender_keys.account_id();
     let sender_account = state.get_account_by_id(sender_id);
     let sender_nonce = sender_account.nonce;
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -334,11 +342,17 @@ fn private_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_id = AccountId::for_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -379,8 +393,11 @@ fn deshielded_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_id = AccountId::for_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
 
     let (output, proof) = execute_and_prove(

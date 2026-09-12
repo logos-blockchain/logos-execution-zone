@@ -122,8 +122,11 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
+    let account_id = AccountId::for_private_account(
+        &account_keys.npk(),
+        &account_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
         let instruction = (
@@ -181,8 +184,11 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
+    let account_id = AccountId::for_private_account(
+        &account_keys.npk(),
+        &account_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
         let instruction = (

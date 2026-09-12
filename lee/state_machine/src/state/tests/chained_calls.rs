@@ -1,3 +1,5 @@
+use lee_core::account::AccountIdData;
+
 use super::*;
 use crate::AccountData;
 
@@ -96,7 +98,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
 fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
     let chain_caller = crate::test_methods::chain_caller();
     let pda_seed = PdaSeed::new([37; 32]);
-    let from = AccountId::for_public_pda(&AccountId::from(chain_caller.id()), &pda_seed);
+    let from = AccountIdData::public().derive_pda_id(AccountId::from(chain_caller.id()), &pda_seed);
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let mut state = V03State::new()
@@ -203,9 +205,16 @@ fn private_chained_call(number_of_calls: u32) {
     let from_pre = Account::funded(initial_balance);
     let to_pre = Account::default();
 
-    let from_account_id =
-        AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), 0);
-    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), 0);
+    let from_account_id = AccountId::for_private_account(
+        &from_keys.npk(),
+        &from_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
+    let to_account_id = AccountId::for_private_account(
+        &to_keys.npk(),
+        &to_keys.vpk(),
+        &PrivateAccountKind::Regular(0),
+    );
     let from_commitment = Commitment::new(&from_account_id, &from_pre);
     let to_commitment = Commitment::new(&to_account_id, &to_pre);
     let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);

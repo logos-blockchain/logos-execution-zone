@@ -16,8 +16,8 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateWitness,
-    WitnessKind, account::Account, encryption::ViewingPublicKey,
+    DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
+    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -464,14 +464,16 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     sync_private(&mut ctx).await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = AccountId::for_regular_private_account(&npk, &vpk, identifier_1);
+    let account_id_1 =
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier_1));
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.data.balance, 100);
 
-    let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
+    let account_id_2 =
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier_2));
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
@@ -586,7 +588,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let attacker_private_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
+    let attacker_private_id =
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(1337));
     let amount: u128 = 1;
 
     let faucet_account = get_account(&ctx, faucet_account_id).await?;
@@ -645,7 +648,8 @@ async fn prove_init_with_commitment_root(
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id =
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(0));
 
     let (output, _) = execute_and_prove(
         ProvingInput {
@@ -687,7 +691,8 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id =
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(0));
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 

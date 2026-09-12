@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use lee::{Account, AccountId};
-use lee_core::Identifier;
+use lee_core::{Identifier, PrivateAccountKind};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -266,10 +266,10 @@ impl KeyTree<ChildKeysPrivate> {
         identifier: Identifier,
     ) -> Option<lee::AccountId> {
         let node = self.key_map.get(cci)?;
-        let account_id = lee::AccountId::for_regular_private_account(
+        let account_id = lee::AccountId::for_private_account(
             &node.value.0.nullifier_public_key,
             &node.value.0.viewing_public_key,
-            identifier,
+            &PrivateAccountKind::Regular(identifier),
         );
         if self.account_id_map.contains_key(&account_id) {
             return None;

@@ -1,4 +1,4 @@
-use lee::AccountId;
+use lee::{AccountId, AccountIdData};
 
 use crate::{
     error::WalletFfiError, FfiBytes32, FfiNullifierPublicKey, FfiPdaSeed, FfiPrivateAccountKeys,
@@ -18,7 +18,9 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
     program_id: FfiProgramId,
     pda_seed: FfiPdaSeed,
 ) -> FfiBytes32 {
-    AccountId::for_public_pda(&AccountId::from(program_id.data), &pda_seed.into()).into()
+    AccountIdData::public()
+        .derive_pda_id(AccountId::from(program_id.data), &pda_seed.into())
+        .into()
 }
 
 /// Produce account id for private PDA.
@@ -69,13 +71,12 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
     }
 
     unsafe {
-        *account_id = AccountId::for_private_pda(
-            &AccountId::from(program_id.data),
-            &pda_seed.into(),
-            &ffi_private_keys.npk(),
-            &vpk.unwrap(),
+        *account_id = AccountIdData::from_private_parts(
+            ffi_private_keys.npk(),
+            vpk.unwrap(),
             identifier.into(),
         )
+        .derive_pda_id(AccountId::from(program_id.data), &pda_seed.into())
         .into();
     }
 
@@ -84,7 +85,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
 #[cfg(test)]
 mod tests {
-    use lee::AccountId;
+    use lee::{AccountId, AccountIdData};
     use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, NullifierPublicKey};
 
     use crate::{
@@ -98,7 +99,7 @@ mod tests {
         let program_id = [100_u32, 101, 102, 103, 104, 105, 106, 107];
         let pda_seed = PdaSeed::new([42; 32]);
 
-        let pda_id = AccountId::for_public_pda(&AccountId::from(program_id), &pda_seed);
+        let pda_id = AccountIdData::public().derive_pda_id(AccountId::from(program_id), &pda_seed);
         let ffi_pda_id = wallet_ffi_account_id_for_public_pda(program_id.into(), pda_seed.into());
 
         assert_eq!(pda_id.into_value(), ffi_pda_id.data);
@@ -112,13 +113,8 @@ mod tests {
         let npk = NullifierPublicKey([44; 32]);
         let identifier = 100_000_u128;
 
-        let pda_id = AccountId::for_private_pda(
-            &AccountId::from(program_id),
-            &pda_seed,
-            &npk,
-            &vpk,
-            identifier,
-        );
+        let pda_id = AccountIdData::from_private_parts(npk, vpk.clone(), identifier)
+            .derive_pda_id(AccountId::from(program_id), &pda_seed);
 
         let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
 

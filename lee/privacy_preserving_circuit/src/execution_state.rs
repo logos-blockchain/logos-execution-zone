@@ -6,7 +6,7 @@ use std::{
 use lee_core::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, ProgramImageClaim,
     PublicAction, WitnessKind,
-    account::{AccountData, AccountId, ProgramShardSelector},
+    account::{AccountData, AccountId, AccountIdData, ProgramShardSelector},
     program::{
         AccountInput, AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
@@ -550,7 +550,7 @@ fn public_seed_granted(
 ) -> Option<(AccountId, PdaSeed)> {
     let caller_account_id = caller.account_id?;
     caller_pda_seeds.iter().find_map(|seed| {
-        (AccountId::for_public_pda(&caller_account_id, seed) == account_id)
+        (AccountIdData::public().derive_pda_id(caller_account_id, seed) == account_id)
             .then_some((caller_account_id, *seed))
     })
 }

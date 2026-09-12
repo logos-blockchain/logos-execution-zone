@@ -13,8 +13,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, ProgramShardSelector,
-    ProvingInput, PublicKey,
+    AccountId, AccountIdData, PrivacyPreservingTransaction, PrivateKey, ProgramId,
+    ProgramShardSelector, ProvingInput, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -47,8 +47,8 @@ async fn fund_private_pda(
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
-    let pda_account_id =
-        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
+    let pda_account_id = AccountIdData::from_private_parts(npk, vpk.clone(), identifier)
+        .derive_pda_id(authority_program_id, &seed);
     let sender_account = wallet
         .get_account_public(sender)
         .await
@@ -238,8 +238,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         [(auth_transfer_account_id, auth_transfer)].into(),
     );
 
-    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
-    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
+    let alice_pda_0_id = AccountIdData::from_private_parts(alice_npk, alice_vpk.clone(), 0)
+        .derive_pda_id(proxy_id, &seed);
+    let alice_pda_1_id = AccountIdData::from_private_parts(alice_npk, alice_vpk.clone(), 1)
+        .derive_pda_id(proxy_id, &seed);
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();

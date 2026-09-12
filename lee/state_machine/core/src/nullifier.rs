@@ -28,7 +28,7 @@ impl AccountId {
     /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
     /// key and identifier.
     #[must_use]
-    pub fn for_regular_private_account(
+    pub(crate) fn for_regular_private_account(
         npk: &NullifierPublicKey,
         vpk: &ViewingPublicKey,
         identifier: Identifier,
@@ -45,12 +45,6 @@ impl AccountId {
                 .try_into()
                 .expect("Conversion should not fail"),
         )
-    }
-}
-
-impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
-    fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
-        Self::for_regular_private_account(npk, vpk, identifier)
     }
 }
 

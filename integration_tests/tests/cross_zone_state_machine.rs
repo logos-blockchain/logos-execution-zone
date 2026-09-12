@@ -17,8 +17,8 @@ use cross_zone_inbox_core::{
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
-    ValidatedStateDiff,
+    AccountId, AccountIdData, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction,
+    V03State, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::{Account, AccountData};
@@ -2139,7 +2139,7 @@ fn the_governance_path_holds() {
     let src_zone = [2_u8; 32];
 
     let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+    let authority = AccountIdData::public().derive_pda_id(proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
@@ -2225,7 +2225,7 @@ fn the_governance_path_guards_hold() {
     let src_zone = [2_u8; 32];
 
     let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+    let authority = AccountIdData::public().derive_pda_id(proxy_id, &seed);
 
     let call = |delegated: Option<lee_core::program::PdaSeed>| {
         via_proxy(
@@ -2324,7 +2324,7 @@ fn the_receiver_governance_path_holds() {
     let src_zone = [2_u8; 32];
 
     let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+    let authority = AccountIdData::public().derive_pda_id(proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
     seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
@@ -2367,7 +2367,7 @@ fn a_shared_authority_serves_both_targets() {
     let src_zone = [2_u8; 32];
 
     let seed = lee_core::program::PdaSeed::new([3; 32]);
-    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+    let authority = AccountIdData::public().derive_pda_id(proxy_id, &seed);
 
     let mut state = base_state().with_programs([test_programs::authority_proxy()]);
     seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);

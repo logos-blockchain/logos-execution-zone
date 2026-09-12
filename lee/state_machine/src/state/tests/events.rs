@@ -1,3 +1,5 @@
+use lee_core::account::AccountIdData;
+
 use super::*;
 
 // Reference for the selector VALUE convention: selector = first 8 bytes of
@@ -126,10 +128,10 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let emitter = crate::test_methods::event_emitter();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
-    let receiver_id =
-        AccountId::for_public_pda(&AccountId::from(emitter.id()), &PdaSeed::new([1; 32]));
+    let vault_id = AccountIdData::public()
+        .derive_pda_id(AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
+    let receiver_id = AccountIdData::public()
+        .derive_pda_id(AccountId::from(emitter.id()), &PdaSeed::new([1; 32]));
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, Account::funded(1000));
@@ -255,7 +257,8 @@ fn events_are_filterable_by_selector_and_decodable() {
 fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let keys = test_private_account_keys_1();
     let emitter = crate::test_methods::event_emitter();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let account_id =
+        AccountId::for_private_account(&keys.npk(), &keys.vpk(), &PrivateAccountKind::Regular(0));
 
     let (output, proof) = execute_and_prove(
         ProvingInput {

@@ -235,7 +235,7 @@ impl PrivateAccountKind {
 impl AccountId {
     /// Derives an [`AccountId`] for a public PDA from the owning program's account ID and seed.
     #[must_use]
-    pub fn for_public_pda(account_id: &Self, seed: &PdaSeed) -> Self {
+    pub(crate) fn for_public_pda(account_id: &Self, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00";
@@ -260,7 +260,7 @@ impl AccountId {
     /// The `identifier` further diversifies the address, so a single `(account_id, seed, npk)`
     /// tuple controls a family of 2^128 addresses.
     #[must_use]
-    pub fn for_private_pda(
+    pub(crate) fn for_private_pda(
         account_id: &Self,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
@@ -286,6 +286,7 @@ impl AccountId {
     }
 
     /// Derives the [`AccountId`] for a private account from the nullifier public key and kind.
+    #[cfg(any(feature = "host", test))]
     #[must_use]
     pub fn for_private_account(
         npk: &NullifierPublicKey,

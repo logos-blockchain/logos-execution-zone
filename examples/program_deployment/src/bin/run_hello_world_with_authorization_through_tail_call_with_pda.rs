@@ -9,7 +9,7 @@ use lee::{
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::program::PdaSeed;
+use lee_core::{account::AccountIdData, program::PdaSeed};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -46,7 +46,7 @@ async fn main() {
     let program = Program::new(bytecode.into()).unwrap();
 
     // Compute the PDA to pass it as input account to the public execution
-    let pda = AccountId::for_public_pda(&AccountId::from(program.id()), &PDA_SEED);
+    let pda = AccountIdData::public().derive_pda_id(AccountId::from(program.id()), &PDA_SEED);
     // The caller only needs the account ID; the callee selects its shard.
     let shard_selectors = vec![ProgramShardSelector::balance(pda)];
     let instruction_data = ();
