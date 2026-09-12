@@ -46,29 +46,30 @@ impl Proof {
 
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
-    pub program: Program,
-    /// Where `program` is actually deployed — never assumed to be its bytecode's bijection
-    /// address, since the same bytecode may be deployed more than once at different addresses.
+    /// Where the top-level call is dispatched — never assumed to be the root bytecode's
+    /// bijection address, since the same bytecode may be deployed more than once at different
+    /// addresses.
     pub self_account_id: AccountId,
-    // TODO: avoid having a copy of the bytecode of each dependency.
-    /// Every program a chained call may target, keyed by the account address it's deployed at —
-    /// never its bytecode identity, for the same reason. The caller building this off-chain
-    /// (e.g. the wallet) already knows which program lives where; there's no live state to look
-    /// it up against inside a pure proving function.
-    pub dependencies: HashMap<AccountId, Program>,
+    // TODO: avoid having a copy of the bytecode of each program.
+    /// Every program this execution may dispatch, root included, keyed by the account address
+    /// it's deployed at — never its bytecode identity, for the same reason. The caller building
+    /// this off-chain (e.g. the wallet) already knows which program lives where; there's no live
+    /// state to look it up against inside a pure proving function.
+    pub programs: HashMap<AccountId, Program>,
 }
 
 impl ProgramWithDependencies {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         program: Program,
         self_account_id: AccountId,
         dependencies: HashMap<AccountId, Program>,
     ) -> Self {
+        let mut programs = dependencies;
+        programs.insert(self_account_id, program);
         Self {
-            program,
             self_account_id,
-            dependencies,
+            programs,
         }
     }
 }
@@ -119,9 +120,8 @@ pub fn execute_and_prove_with(
         dummy_inputs,
     } = input;
     let ProgramWithDependencies {
-        program: initial_program,
         self_account_id: initial_account_id,
-        dependencies,
+        programs,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
@@ -196,15 +196,20 @@ pub fn execute_and_prove_with(
         pda_seeds: vec![],
     };
 
-    let mut chained_calls =
-        VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
+    let mut chained_calls = VecDeque::from_iter([(initial_call, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_account_id, caller_authorized_accounts)) =
+    while let Some((chained_call, caller_account_id, caller_authorized_accounts)) =
         chained_calls.pop_front()
     {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
             return Err(LeeError::MaxChainedCallsDepthExceeded);
         }
+
+        let program = programs.get(&chained_call.program_account_id).ok_or(
+            InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                program_account_id: chained_call.program_account_id,
+            },
+        )?;
 
         // Best-effort mirror of what the circuit will independently authorize, used only to build
         // this callee's input. The top-level call's shard selectors were resolved against the
@@ -307,14 +312,8 @@ pub fn execute_and_prove_with(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in new_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_account_id).ok_or(
-                InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_account_id: new_call.program_account_id,
-                },
-            )?;
             chained_calls.push_front((
                 new_call,
-                next_program,
                 Some(chained_call.program_account_id),
                 authorized_output_accounts.clone(),
             ));
@@ -329,18 +328,13 @@ pub fn execute_and_prove_with(
     // identity — the guest circuit uses these for `env::verify`, unchecked; the sequencer
     // verifies each one against real chain state before accepting the proof (see
     // `ProgramImageClaim`'s doc comment).
-    let program_image_claims: Vec<ProgramImageClaim> =
-        std::iter::once((*initial_account_id, initial_program.id()))
-            .chain(
-                dependencies
-                    .iter()
-                    .map(|(account_id, program)| (*account_id, program.id())),
-            )
-            .map(|(account_id, image_id)| ProgramImageClaim {
-                account_id,
-                image_id,
-            })
-            .collect();
+    let program_image_claims: Vec<ProgramImageClaim> = programs
+        .iter()
+        .map(|(account_id, program)| ProgramImageClaim {
+            account_id: *account_id,
+            image_id: program.id(),
+        })
+        .collect();
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
