@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
 
 use key_protocol::key_management::{
+    KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{
         chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
     },
     secret_holders::ViewingSecretKey,
 };
+use lee_core::{Identifier, PrivateAccountKind};
 use serde::{Deserialize, Serialize};
-use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
+use testnet_initial_state::PublicAccountPrivateInitialData;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
@@ -39,7 +41,34 @@ pub enum PersistentAccountData {
     Public(PersistentAccountDataPublic),
     Private(Box<PersistentAccountDataPrivate>),
     ImportedPublic(PublicAccountPrivateInitialData),
-    ImportedPrivate(Box<PrivateAccountPrivateInitialData>),
+    ImportedPrivate(Box<PersistentImportedPrivateAccount>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistentImportedPrivateAccount {
+    pub account: lee_core::account::Account,
+    pub key_chain: KeyChain,
+    pub chain_index: Option<ChainIndex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PrivateAccountKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<Identifier>,
+}
+
+impl PersistentImportedPrivateAccount {
+    pub fn resolve_kind(&self) -> anyhow::Result<PrivateAccountKind> {
+        match (&self.kind, self.identifier) {
+            (Some(kind), None) => Ok(kind.clone()),
+            (Some(kind), Some(identifier)) if kind.identifier() == identifier => Ok(kind.clone()),
+            (Some(_), Some(_)) => Err(anyhow::anyhow!(
+                "Imported private account has contradictory kind and identifier"
+            )),
+            (None, Some(identifier)) => Ok(PrivateAccountKind::Regular(identifier)),
+            (None, None) => Err(anyhow::anyhow!(
+                "Imported private account has no kind or identifier"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

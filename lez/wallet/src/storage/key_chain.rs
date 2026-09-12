@@ -14,13 +14,13 @@ use lee_core::{
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
+use testnet_initial_state::PublicAccountPrivateInitialData;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
     storage::persistent::{
         KeyChainPersistentData, PersistentAccountData, PersistentAccountDataPrivate,
-        PersistentAccountDataPublic,
+        PersistentAccountDataPublic, PersistentImportedPrivateAccount,
     },
 };
 
@@ -547,17 +547,15 @@ impl UserKeyChain {
 
         // Then try to update imported account
         for (key, data) in &mut self.imported_private_accounts {
-            for (kind, imported_account) in &mut data.accounts {
-                let expected_id = AccountId::for_private_account(
-                    &key.key_chain.nullifier_public_key,
-                    &key.key_chain.viewing_public_key,
-                    kind,
-                );
-                if expected_id == account_id {
-                    debug!("Updating imported private account {account_id}");
-                    *imported_account = account;
-                    return Ok(());
-                }
+            let expected_id = AccountId::for_private_account(
+                &key.key_chain.nullifier_public_key,
+                &key.key_chain.viewing_public_key,
+                &kind,
+            );
+            if expected_id == account_id {
+                debug!("Updating imported private account {account_id}");
+                data.accounts.insert(kind, account);
+                return Ok(());
             }
         }
 
@@ -778,11 +776,12 @@ impl UserKeyChain {
             } = data;
             for (kind, account) in imported_accounts {
                 accounts.push(PersistentAccountData::ImportedPrivate(Box::new(
-                    PrivateAccountPrivateInitialData {
+                    PersistentImportedPrivateAccount {
                         account: account.clone(),
                         key_chain: key_chain.clone(),
                         chain_index: chain_index.clone(),
-                        identifier: kind.identifier(),
+                        kind: Some(kind.clone()),
+                        identifier: None,
                     },
                 )));
             }
@@ -850,6 +849,7 @@ impl UserKeyChain {
                     imported_public_accounts.insert(data.account_id, data.pub_sign_key);
                 }
                 PersistentAccountData::ImportedPrivate(data) => {
+                    let kind = data.resolve_kind()?;
                     imported_private_accounts
                         .entry(ImportedPrivateAccountKey {
                             key_chain: data.key_chain,
@@ -859,7 +859,7 @@ impl UserKeyChain {
                             accounts: BTreeMap::new(),
                         })
                         .accounts
-                        .insert(PrivateAccountKind::Regular(data.identifier), data.account);
+                        .insert(kind, data.account);
                 }
             }
         }
