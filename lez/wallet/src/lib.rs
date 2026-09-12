@@ -925,9 +925,16 @@ impl WalletCore {
         accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
+        payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_account_id, |_| Ok(()))
-            .await
+        self.send_pub_tx_with_pre_check(
+            accounts,
+            instruction_data,
+            program_account_id,
+            payer,
+            |_| Ok(()),
+        )
+        .await
     }
 
     pub async fn send_pub_tx_with_pre_check(
@@ -935,6 +942,7 @@ impl WalletCore {
         accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
+        payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -946,18 +954,62 @@ impl WalletCore {
             ));
         }
 
+        let accounts = match payer {
+            Some(payer) => accounts
+                .into_iter()
+                .map(|mention| {
+                    let identity = if matches!(mention.identity, AccountIdentity::PublicNoSign(id) if id == payer)
+                    {
+                        AccountIdentity::Public(payer)
+                    } else {
+                        mention.identity
+                    };
+                    AccountMention {
+                        identity,
+                        program_account_id: mention.program_account_id,
+                    }
+                })
+                .collect(),
+            None => accounts,
+        };
+
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.pre_states())?;
 
         let shard_selectors = acc_manager.shard_selectors();
-        let nonces = acc_manager.public_account_nonces();
+        let mut nonces = acc_manager.public_account_nonces();
 
-        let payer = acc_manager.fee_payer_account_id().ok_or_else(|| {
-            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                "Public transaction has no signing account to pay its fees".to_owned(),
-            ))
-        })?;
+        let mut external_payer_key = None;
+        let payer = match payer {
+            None => acc_manager.fee_payer_account_id().ok_or_else(|| {
+                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                    "Public transaction has no signing account to pay its fees".to_owned(),
+                ))
+            })?,
+            Some(payer) if acc_manager.signs(payer) => payer,
+            Some(payer) => {
+                let key = self
+                    .get_account_public_signing_key(payer)
+                    .ok_or_else(|| {
+                        ExecutionFailureKind::TransactionBuildError(
+                            lee::error::LeeError::InvalidInput(
+                                "Fee payer's signing key is not held by this wallet".to_owned(),
+                            ),
+                        )
+                    })?
+                    .clone();
+                let account = self
+                    .get_account_view(lee::ProgramShardSelector::balance(payer))
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
+                // Appended last, after every regular signer `sign_message` produces — nonces and
+                // signatures must line up positionally.
+                nonces.push(account.nonce);
+                external_payer_key = Some(key);
+                payer
+            }
+        };
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_account_id,
@@ -973,29 +1025,21 @@ impl WalletCore {
         );
 
         let message_hash = message.hash();
-        let signatures_public_keys = acc_manager
+        let mut signatures_public_keys = acc_manager
             .sign_message(message_hash)
             .map_err(ExecutionFailureKind::SignError)?;
+        if let Some(key) = external_payer_key {
+            signatures_public_keys.push((
+                lee::Signature::new(&key, &message_hash),
+                lee::PublicKey::new_from_private_key(&key),
+            ));
+        }
 
         let witness_set =
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
-        first_success_or_error(
-            self.multi_sequencer_client
-                .metered_send_transaction(LeeTransaction::Public(tx))
-                .await,
-        )
-    }
-
-    /// Submits an already-built public transaction directly, for callers that need to construct
-    /// their own [`FeeDeclaration`] (e.g. a facade taking a separate fee payer) instead of going
-    /// through [`Self::send_pub_tx`]'s self-pay selection.
-    pub(crate) async fn submit_public_transaction(
-        &self,
-        tx: lee::public_transaction::PublicTransaction,
-    ) -> Result<HashType, ExecutionFailureKind> {
         first_success_or_error(
             self.multi_sequencer_client
                 .metered_send_transaction(LeeTransaction::Public(tx))

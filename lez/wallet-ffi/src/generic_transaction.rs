@@ -204,6 +204,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         accounts,
         instruction_data.to_vec(),
         ProgramId::from(program_id).into(),
+        None,
     )) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())

@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
                     ],
                     instruction_data,
                     sequencer_stake_program_id,
+                    None,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -137,6 +138,7 @@ async fn main() -> Result<()> {
                     ],
                     instruction_data,
                     sequencer_stake_program_id,
+                    None,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

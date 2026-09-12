@@ -1,13 +1,10 @@
 use anyhow::{Context as _, Result, bail};
 use common::HashType;
-use lee::{AccountId, ProgramShardSelector, PublicKey, Signature, program::Program};
+use lee::{AccountId, ProgramShardSelector, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
-use crate::{
-    AccountIdentity, AccountMention, DEFAULT_GAS_LIMIT, DEFAULT_MAX_FEE, ExecutionFailureKind,
-    WalletCore, account_manager::AccountManager,
-};
+use crate::{AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
 
 /// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` instructions.
 ///
@@ -27,68 +24,9 @@ impl ProgramLoader<'_> {
         instruction_data: lee_core::program::InstructionData,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let Some(payer) = payer else {
-            return self
-                .0
-                .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID)
-                .await;
-        };
-
-        if accounts.iter().any(|mention| mention.identity.is_private()) {
-            return Err(ExecutionFailureKind::TransactionBuildError(
-                lee::error::LeeError::InvalidInput(
-                    "Private accounts are not allowed in public transactions".to_owned(),
-                ),
-            ));
-        }
-
-        let acc_manager = AccountManager::new(self.0, accounts).await?;
-        let shard_selectors = acc_manager.shard_selectors();
-        let mut nonces = acc_manager.public_account_nonces();
-
-        let payer_account = self
-            .0
-            .get_account_view(ProgramShardSelector::balance(payer))
+        self.0
+            .send_pub_tx(accounts, instruction_data, PROGRAM_LOADER_ACCOUNT_ID, payer)
             .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        let payer_key = self
-            .0
-            .get_account_public_signing_key(payer)
-            .ok_or_else(|| {
-                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                    "Fee payer's signing key is not held by this wallet".to_owned(),
-                ))
-            })?;
-        // Appended last, after every regular signer `sign_message` produces — nonces and
-        // signatures must line up positionally (see `AccountManager::public_account_nonces`).
-        nonces.push(payer_account.nonce);
-
-        let message = lee::public_transaction::Message::new_preserialized(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            shard_selectors,
-            nonces,
-            instruction_data,
-            Some(lee::FeeDeclaration::new(
-                payer,
-                DEFAULT_GAS_LIMIT,
-                0,
-                DEFAULT_MAX_FEE,
-            )),
-        );
-
-        let message_hash = message.hash();
-        let mut signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
-        signatures_public_keys.push((
-            Signature::new(payer_key, &message_hash),
-            PublicKey::new_from_private_key(payer_key),
-        ));
-        let witness_set =
-            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
-
-        let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
-        self.0.submit_public_transaction(tx).await
     }
 
     /// Writes one bytecode segment to `target`'s empty loader shard.

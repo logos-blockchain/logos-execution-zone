@@ -48,7 +48,7 @@ impl Amm<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
         self.0
-            .send_pub_tx(accounts, instruction_data, amm_program_id())
+            .send_pub_tx(accounts, instruction_data, amm_program_id(), None)
             .await
     }
 

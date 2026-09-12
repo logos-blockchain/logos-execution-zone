@@ -127,15 +127,24 @@ impl Token<'_> {
         &self,
         accounts: Vec<AccountMention>,
         instruction: Instruction,
+        payer: Option<AccountId>,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
         if !accounts.iter().any(|mention| mention.identity.is_private()) {
             let tx_hash = self
                 .0
-                .send_pub_tx(accounts, instruction_data, token_program_id())
+                .send_pub_tx(accounts, instruction_data, token_program_id(), payer)
                 .await?;
             return Ok((tx_hash, vec![]));
+        }
+        if payer.is_some() {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                lee::error::LeeError::InvalidInput(
+                    "A separate payer is only supported for fully public token transactions"
+                        .to_owned(),
+                ),
+            ));
         }
         let tracked: Vec<Option<AccountId>> = accounts
             .iter()
@@ -173,6 +182,7 @@ impl Token<'_> {
                 total_supply,
                 holder,
             },
+            None,
         )
         .await
     }
@@ -181,12 +191,14 @@ impl Token<'_> {
         &mut self,
         definition: AccountIdentity,
         holder: AccountIdentity,
+        payer: Option<AccountId>,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
         let (holder, holding) =
             self.prepare_holding(&holder, definition.account_id(), HoldingKind::Fungible)?;
         self.send(
             vec![definition.select_program_shard(token_program_id()), holding],
             Instruction::InitializeAccount { holder },
+            payer,
         )
         .await
     }
@@ -209,6 +221,7 @@ impl Token<'_> {
                 recipient: recipient_holder,
                 amount_to_transfer: amount,
             },
+            None,
         )
         .await
     }
@@ -238,6 +251,7 @@ impl Token<'_> {
                 holder: holder_descriptor,
                 amount_to_burn: amount,
             },
+            None,
         )
         .await
     }
@@ -256,6 +270,7 @@ impl Token<'_> {
                 holder,
                 amount_to_mint: amount,
             },
+            None,
         )
         .await
     }

@@ -28,6 +28,7 @@ impl Bridge<'_> {
                 ],
                 instruction_data,
                 programs::bridge().id().into(),
+                None,
             )
             .await
     }

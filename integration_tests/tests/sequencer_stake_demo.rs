@@ -116,6 +116,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             ],
             stake_instruction_data,
             stake_id,
+            None,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -264,6 +265,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             ],
             unstake_request_data,
             stake_id,
+            None,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

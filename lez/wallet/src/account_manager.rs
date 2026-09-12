@@ -544,6 +544,19 @@ impl AccountManager {
             .map(|account| account.shard_selector.account_id)
     }
 
+    pub fn signs(&self, account_id: AccountId) -> bool {
+        self.states.iter().any(|state| match state {
+            State::Public {
+                account,
+                sk: Some(_),
+            }
+            | State::PublicKeycard { account, .. } => {
+                account.shard_selector.account_id == account_id
+            }
+            State::Public { sk: None, .. } | State::Private(_) => false,
+        })
+    }
+
     pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()

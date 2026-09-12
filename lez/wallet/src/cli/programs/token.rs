@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use clap::Subcommand;
 use lee::AccountId;
 use lee_core::PrivateAccountKind;
@@ -59,6 +59,10 @@ pub enum TokenSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
         owner: CliAccountMention,
+        /// A funded public account to pay the fee. If omitted, the wallet selects a payer from
+        /// the transaction's signing accounts. An explicitly chosen input is also authorized.
+        #[arg(long)]
+        payer: Option<CliAccountMention>,
     },
     /// Send tokens from the holding of `from` to the holding of the recipient.
     ///
@@ -183,11 +187,24 @@ impl WalletSubcommand for TokenSubcommand {
                     .send_new_definition(definition, owner, name, total_supply)
                     .await?
             }
-            Self::Initialize { definition, owner } => {
-                let definition = identity(&definition, wallet_core, true)?;
+            Self::Initialize {
+                definition,
+                owner,
+                payer,
+            } => {
+                let payer = payer
+                    .as_ref()
+                    .map(|mention| resolve_public(mention, wallet_core))
+                    .transpose()?;
+                let definition = match definition.resolve(wallet_core.storage())? {
+                    AccountIdWithPrivacy::Public(id) => AccountIdentity::PublicNoSign(id),
+                    AccountIdWithPrivacy::Private(id) => wallet_core
+                        .resolve_private_account(id)
+                        .with_context(|| format!("Private account {id} is not in the wallet"))?,
+                };
                 let owner = identity(&owner, wallet_core, false)?;
                 Token(wallet_core)
-                    .send_initialize(definition, owner)
+                    .send_initialize(definition, owner, payer)
                     .await?
             }
             Self::Send {
@@ -245,6 +262,13 @@ impl WalletSubcommand for TokenSubcommand {
         wallet_core
             .poll_and_finalize_pp_transaction(tx_hash, &decode)
             .await
+    }
+}
+
+fn resolve_public(mention: &CliAccountMention, wallet_core: &WalletCore) -> Result<AccountId> {
+    match mention.resolve(wallet_core.storage())? {
+        AccountIdWithPrivacy::Public(account_id) => Ok(account_id),
+        AccountIdWithPrivacy::Private(_) => bail!("expected a public account, got a private one"),
     }
 }
 
