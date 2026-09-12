@@ -42,6 +42,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
                 Command::Token(TokenSubcommand::Send {
+                    kind: token_core::HoldingKind::Fungible,
                     from: public_mention(supply_id),
                     definition: def_id,
                     to: Some(private_mention(private_a)),
@@ -62,6 +63,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
                 Command::Token(TokenSubcommand::Send {
+                    kind: token_core::HoldingKind::Fungible,
                     from: private_mention(private_a),
                     definition: def_id,
                     to: Some(public_mention(public_recipient_id)),
@@ -82,6 +84,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
                 Command::Token(TokenSubcommand::Send {
+                    kind: token_core::HoldingKind::Fungible,
                     from: private_mention(private_a),
                     definition: def_id,
                     to: Some(private_mention(private_b)),

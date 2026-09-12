@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use lee::AccountId;
 use lee_core::PrivateAccountKind;
+use token_core::HoldingKind;
 
 use crate::{
     AccountIdentity, WalletCore,
@@ -21,6 +22,9 @@ pub enum TokenSubcommand {
         /// Token definition account - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         definition: AccountId,
+        /// Holding kind: fungible, nft-master or nft-printed-copy.
+        #[arg(long, default_value = "fungible", value_parser = parse_holding_kind)]
+        kind: HoldingKind,
     },
     /// Show the holding of `owner` for `definition`.
     Holding {
@@ -30,6 +34,9 @@ pub enum TokenSubcommand {
         /// Token definition account - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         definition: AccountId,
+        /// Holding kind: fungible, nft-master or nft-printed-copy.
+        #[arg(long, default_value = "fungible", value_parser = parse_holding_kind)]
+        kind: HoldingKind,
     },
     /// Produce a new token whose supply is held by `owner`.
     New {
@@ -81,6 +88,9 @@ pub enum TokenSubcommand {
         /// `--to-keys`).
         #[arg(long)]
         to_identifier: Option<u128>,
+        /// Holding kind: fungible, nft-master or nft-printed-copy.
+        #[arg(long, default_value = "fungible", value_parser = parse_holding_kind)]
+        kind: HoldingKind,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -93,6 +103,9 @@ pub enum TokenSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
         holder: CliAccountMention,
+        /// Holding kind: fungible, nft-master or nft-printed-copy.
+        #[arg(long, default_value = "fungible", value_parser = parse_holding_kind)]
+        kind: HoldingKind,
         /// amount - amount of balance to burn.
         #[arg(long)]
         amount: u128,
@@ -134,14 +147,25 @@ impl WalletSubcommand for TokenSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, decode) = match self {
-            Self::Address { owner, definition } => {
+            Self::Address {
+                owner,
+                definition,
+                kind,
+            } => {
                 let owner = identity(&owner, wallet_core, false)?;
-                println!("{}", Token(wallet_core).holding_id(&owner, definition)?);
+                println!(
+                    "{}",
+                    Token(wallet_core).holding_id(&owner, definition, kind)?
+                );
                 return Ok(SubcommandReturnValue::Empty);
             }
-            Self::Holding { owner, definition } => {
+            Self::Holding {
+                owner,
+                definition,
+                kind,
+            } => {
                 let owner = identity(&owner, wallet_core, false)?;
-                match Token(wallet_core).holding(&owner, definition).await? {
+                match Token(wallet_core).holding(&owner, definition, kind).await? {
                     Some(holding) => println!("{}", serde_json::to_string(&holding)?),
                     None => println!("No holding"),
                 }
@@ -174,23 +198,25 @@ impl WalletSubcommand for TokenSubcommand {
                 to_vpk,
                 to_keys,
                 to_identifier,
+                kind,
                 amount,
             } => {
                 let sender = identity(&from, wallet_core, true)?;
                 let recipient = recipient(to, to_npk, to_vpk, to_keys, to_identifier, wallet_core)?;
                 Token(wallet_core)
-                    .send_transfer(sender, recipient, definition, amount)
+                    .send_transfer(sender, recipient, definition, kind, amount)
                     .await?
             }
             Self::Burn {
                 definition,
                 holder,
+                kind,
                 amount,
             } => {
                 let definition = identity(&definition, wallet_core, false)?;
                 let holder = identity(&holder, wallet_core, true)?;
                 Token(wallet_core)
-                    .send_burn(definition, holder, amount)
+                    .send_burn(definition, holder, kind, amount)
                     .await?
             }
             Self::Mint {
@@ -219,6 +245,17 @@ impl WalletSubcommand for TokenSubcommand {
         wallet_core
             .poll_and_finalize_pp_transaction(tx_hash, &decode)
             .await
+    }
+}
+
+fn parse_holding_kind(value: &str) -> Result<HoldingKind, String> {
+    match value {
+        "fungible" => Ok(HoldingKind::Fungible),
+        "nft-master" => Ok(HoldingKind::NftMaster),
+        "nft-printed-copy" => Ok(HoldingKind::NftPrintedCopy),
+        other => Err(format!(
+            "unknown holding kind '{other}', expected fungible, nft-master or nft-printed-copy"
+        )),
     }
 }
 

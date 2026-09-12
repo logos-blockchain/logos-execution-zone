@@ -46,13 +46,14 @@ impl Token<'_> {
         &self,
         owner: &AccountIdentity,
         definition_id: AccountId,
+        kind: HoldingKind,
     ) -> Result<AccountId, ExecutionFailureKind> {
         let target = self.holding_target(owner)?;
         Ok(token_core::holding_id(
             &target,
             token_program_id(),
             definition_id,
-            HoldingKind::Fungible,
+            kind,
         ))
     }
 
@@ -60,9 +61,10 @@ impl Token<'_> {
         &self,
         owner: &AccountIdentity,
         definition_id: AccountId,
+        kind: HoldingKind,
     ) -> Result<Option<TokenHolding>, ExecutionFailureKind> {
         let token_program_id = token_program_id();
-        let holding_id = self.holding_id(owner, definition_id)?;
+        let holding_id = self.holding_id(owner, definition_id, kind)?;
         let decode = |shard: &ShardData| {
             (!shard.is_empty())
                 .then(|| TokenHolding::try_from(shard))
@@ -88,30 +90,26 @@ impl Token<'_> {
         &mut self,
         owner: &AccountIdentity,
         definition_id: AccountId,
+        kind: HoldingKind,
     ) -> Result<(HoldingTarget, AccountMention), ExecutionFailureKind> {
         let token_program_id = token_program_id();
         let target = self.holding_target(owner)?;
-        let holding_id = token_core::holding_id(
-            &target,
-            token_program_id,
-            definition_id,
-            HoldingKind::Fungible,
-        );
+        let holding_id = token_core::holding_id(&target, token_program_id, definition_id, kind);
         let Some((npk, vpk, identifier)) = target.account_id_data.private_parts() else {
             let mention =
                 AccountIdentity::PublicNoSign(holding_id).select_program_shard(token_program_id);
             return Ok((target, mention));
         };
-        let kind = PrivateAccountKind::Pda {
+        let account_kind = PrivateAccountKind::Pda {
             account_id: token_program_id,
-            seed: token_core::holding_seed(target.owner_id, definition_id, HoldingKind::Fungible),
+            seed: token_core::holding_seed(target.owner_id, definition_id, kind),
             identifier,
         };
         let identity = if matches!(owner, AccountIdentity::PrivateOwned(_)) {
             let key_chain = self.0.storage.key_chain_mut();
             if key_chain.private_account(holding_id).is_none() {
                 key_chain
-                    .insert_private_account(holding_id, kind, Account::default())
+                    .insert_private_account(holding_id, account_kind, Account::default())
                     .map_err(|_err| ExecutionFailureKind::KeyNotFoundError)?;
             }
             AccountIdentity::PrivateOwned(holding_id)
@@ -119,7 +117,7 @@ impl Token<'_> {
             AccountIdentity::PrivateForeign {
                 npk: *npk,
                 vpk: vpk.clone(),
-                kind,
+                kind: account_kind,
             }
         };
         Ok((target, identity.select_program_shard(token_program_id)))
@@ -166,7 +164,8 @@ impl Token<'_> {
         name: String,
         total_supply: u128,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
-        let (holder, holding) = self.prepare_holding(&holder, definition.account_id())?;
+        let (holder, holding) =
+            self.prepare_holding(&holder, definition.account_id(), HoldingKind::Fungible)?;
         self.send(
             vec![definition.select_program_shard(token_program_id()), holding],
             Instruction::NewFungibleDefinition {
@@ -183,7 +182,8 @@ impl Token<'_> {
         definition: AccountIdentity,
         holder: AccountIdentity,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
-        let (holder, holding) = self.prepare_holding(&holder, definition.account_id())?;
+        let (holder, holding) =
+            self.prepare_holding(&holder, definition.account_id(), HoldingKind::Fungible)?;
         self.send(
             vec![definition.select_program_shard(token_program_id()), holding],
             Instruction::InitializeAccount { holder },
@@ -196,11 +196,12 @@ impl Token<'_> {
         sender: AccountIdentity,
         recipient: AccountIdentity,
         definition_id: AccountId,
+        kind: HoldingKind,
         amount: u128,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
-        let (sender_holder, sender_holding) = self.prepare_holding(&sender, definition_id)?;
+        let (sender_holder, sender_holding) = self.prepare_holding(&sender, definition_id, kind)?;
         let (recipient_holder, recipient_holding) =
-            self.prepare_holding(&recipient, definition_id)?;
+            self.prepare_holding(&recipient, definition_id, kind)?;
         self.send(
             vec![sender_holding, recipient_holding, sender.balance()],
             Instruction::Transfer {
@@ -216,11 +217,12 @@ impl Token<'_> {
         &mut self,
         definition: AccountIdentity,
         holder: AccountIdentity,
+        kind: HoldingKind,
         amount: u128,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
         let token_program_id = token_program_id();
         let (holder_descriptor, holding) =
-            self.prepare_holding(&holder, definition.account_id())?;
+            self.prepare_holding(&holder, definition.account_id(), kind)?;
         let accounts = if definition.account_id() == holder.account_id() {
             vec![holder.select_program_shard(token_program_id), holding]
         } else {
@@ -246,7 +248,8 @@ impl Token<'_> {
         holder: AccountIdentity,
         amount: u128,
     ) -> Result<SentTransaction, ExecutionFailureKind> {
-        let (holder, holding) = self.prepare_holding(&holder, definition.account_id())?;
+        let (holder, holding) =
+            self.prepare_holding(&holder, definition.account_id(), HoldingKind::Fungible)?;
         self.send(
             vec![definition.select_program_shard(token_program_id()), holding],
             Instruction::Mint {

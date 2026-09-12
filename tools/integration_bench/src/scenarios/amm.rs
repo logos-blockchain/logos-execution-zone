@@ -175,6 +175,7 @@ async fn timed_token_send(
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
                 Command::Token(TokenSubcommand::Send {
+                    kind: token_core::HoldingKind::Fungible,
                     from: public_mention(from_id),
                     definition,
                     to: Some(public_mention(to_id)),

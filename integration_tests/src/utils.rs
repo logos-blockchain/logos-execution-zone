@@ -159,6 +159,7 @@ pub async fn token_send(
     amount: u128,
 ) -> anyhow::Result<()> {
     let subcommand = TokenSubcommand::Send {
+        kind: token_core::HoldingKind::Fungible,
         from,
         definition,
         to: Some(to),

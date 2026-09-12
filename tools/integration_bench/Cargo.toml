@@ -9,6 +9,7 @@ publish = false
 workspace = true
 
 [dependencies]
+token_core.workspace = true
 common.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 lee.workspace = true

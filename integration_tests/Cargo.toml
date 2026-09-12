@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+token_core.workspace = true
 # LEZ and workspace crates.
 borsh.workspace = true
 test_fixtures.workspace = true
