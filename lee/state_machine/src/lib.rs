@@ -7,7 +7,8 @@ pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
     account::{
-        Account, AccountData, AccountId, Balance, Cycles, Fee, Gas, ProgramShardSelector, ShardData,
+        Account, AccountData, AccountId, AccountIdData, Balance, Cycles, Fee, Gas,
+        ProgramShardSelector, ShardData,
     },
     encryption::EphemeralPublicKey,
     program::{AccountInput, ProgramId},

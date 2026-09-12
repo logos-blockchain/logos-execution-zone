@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
+pub use account_id_data::AccountIdData;
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::ShardData;
@@ -10,6 +11,7 @@ use thiserror::Error;
 
 use crate::{NullifierSecretKey, program::AccountStateDiff};
 
+pub mod account_id_data;
 pub mod data;
 
 #[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
