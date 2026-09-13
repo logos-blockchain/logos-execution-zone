@@ -2,8 +2,8 @@ use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
     program::{
-        AccountStateDiff, BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, TimestampValidityWindow, read_lee_call, respond_unsupported_call,
+        BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, TimestampValidityWindow, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -49,7 +49,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![AccountStateDiff::unchanged(pre)],
+        vec![ShardStateDiff::unchanged(pre)],
     )
     .with_block_validity_window(block_validity_window)
     .with_chained_calls(vec![chained_call])

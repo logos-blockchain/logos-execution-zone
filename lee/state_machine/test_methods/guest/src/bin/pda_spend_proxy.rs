@@ -3,8 +3,8 @@ use lee_core::{
     account::ProgramShardSelector,
     native_token::Instruction as NativeInstruction,
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -43,8 +43,8 @@ fn main() {
         pda_seeds: vec![seed],
     };
 
-    let first_post = AccountStateDiff::unchanged(first);
-    let second_post = AccountStateDiff::unchanged(second);
+    let first_post = ShardStateDiff::unchanged(first);
+    let second_post = ShardStateDiff::unchanged(second);
 
     ProgramOutput::new(
         self_account_id,

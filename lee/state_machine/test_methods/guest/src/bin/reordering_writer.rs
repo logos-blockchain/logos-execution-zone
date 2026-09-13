@@ -1,7 +1,7 @@
 use lee_core::{
     account::ShardData,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -31,8 +31,8 @@ fn main() {
     };
 
     let written = data.try_into().expect("written data fits the data limit");
-    let first_diff = AccountStateDiff::new(first_pre, written);
-    let second_diff = AccountStateDiff::new(second_pre, ShardData::empty());
+    let first_diff = ShardStateDiff::new(first_pre, written);
+    let second_diff = ShardStateDiff::new(second_pre, ShardData::empty());
 
     ProgramOutput::new(
         self_account_id,

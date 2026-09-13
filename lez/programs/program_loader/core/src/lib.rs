@@ -7,7 +7,7 @@ pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment}
 use lee_core::{
     account::{AccountId, ShardData},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{AccountInput, AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
+    program::{AccountInput, PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ShardStateDiff},
 };
 
 /// Recommended max bytes of bytecode per segment.
@@ -59,7 +59,7 @@ pub fn write_segment(
     pre_states: &[AccountInput],
     bytecode: Vec<u8>,
     next_segment: Option<AccountId>,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let expected_len = if next_segment.is_some() { 2 } else { 1 };
     assert_eq!(
         pre_states.len(),
@@ -72,7 +72,7 @@ pub fn write_segment(
         "segment target already deployed"
     );
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         target.clone(),
         ShardData::try_from(
             ProgramSegment {
@@ -93,7 +93,7 @@ pub fn write_segment(
             ProgramSegment::from_bytes(referenced.shard_of(PROGRAM_LOADER_ACCOUNT_ID)).is_some(),
             "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
-        diffs.push(AccountStateDiff::unchanged(referenced.clone()));
+        diffs.push(ShardStateDiff::unchanged(referenced.clone()));
     }
 
     diffs
@@ -112,7 +112,7 @@ pub fn create_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
@@ -130,7 +130,7 @@ pub fn create_header(
 
     let image_id = compute_image_id(pre_states);
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         pre_states[0].clone(),
         ShardData::try_from(
             ProgramHeader {
@@ -145,7 +145,7 @@ pub fn create_header(
     diffs.extend(
         pre_states[1..]
             .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
+            .map(|pre| ShardStateDiff::unchanged(pre.clone())),
     );
     diffs
 }
@@ -156,7 +156,7 @@ pub fn update_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
@@ -182,7 +182,7 @@ pub fn update_header(
 
     let image_id = compute_image_id(pre_states);
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         pre_states[0].clone(),
         ShardData::try_from(
             ProgramHeader {
@@ -197,7 +197,7 @@ pub fn update_header(
     diffs.extend(
         pre_states[1..]
             .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
+            .map(|pre| ShardStateDiff::unchanged(pre.clone())),
     );
     diffs
 }

@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -24,7 +24,7 @@ fn main() {
         return;
     };
 
-    let target_diff = AccountStateDiff::new(
+    let target_diff = ShardStateDiff::new(
         target,
         data.try_into()
             .expect("provided data should fit into data limit"),
@@ -34,7 +34,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![target_diff, AccountStateDiff::unchanged(other)],
+        vec![target_diff, ShardStateDiff::unchanged(other)],
     )
     .write();
 }

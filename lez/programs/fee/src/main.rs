@@ -4,7 +4,7 @@ use fee_core::{
 use lee_core::{
     native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
-        AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
+        AccountInput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -50,7 +50,7 @@ fn distribute(
     self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountInput>,
     summary: BlockFeeSummary,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let Ok([pre_state, pre_escrow, pre_inbox, pre_producer]) = <[_; 4]>::try_from(pre_states)
     else {
         panic!("Distribute requires exactly 4 accounts");
@@ -98,10 +98,10 @@ fn distribute(
     .collect();
 
     let state_diffs = vec![
-        AccountStateDiff::new(pre_state, post_state_data),
-        AccountStateDiff::unchanged(pre_escrow),
-        AccountStateDiff::unchanged(pre_inbox),
-        AccountStateDiff::unchanged(pre_producer),
+        ShardStateDiff::new(pre_state, post_state_data),
+        ShardStateDiff::unchanged(pre_escrow),
+        ShardStateDiff::unchanged(pre_inbox),
+        ShardStateDiff::unchanged(pre_producer),
     ];
     (state_diffs, chained_calls)
 }
@@ -110,7 +110,7 @@ fn refund(
     self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountInput>,
     amount: u128,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let Ok([pre_inbox, pre_payer]) = <[_; 2]>::try_from(pre_states) else {
         panic!("Refund requires exactly 2 accounts");
     };
@@ -125,8 +125,8 @@ fn refund(
         amount,
     )];
     let state_diffs = vec![
-        AccountStateDiff::unchanged(pre_inbox),
-        AccountStateDiff::unchanged(pre_payer),
+        ShardStateDiff::unchanged(pre_inbox),
+        ShardStateDiff::unchanged(pre_payer),
     ];
     (state_diffs, chained_calls)
 }

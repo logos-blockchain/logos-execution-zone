@@ -10,7 +10,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use crate::{
     NullifierSecretKey,
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::AccountStateDiff,
+    program::ShardStateDiff,
 };
 
 pub mod data;
@@ -168,7 +168,7 @@ impl AccountData {
         decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    pub fn apply_diff(&mut self, diff: &AccountStateDiff) {
+    pub fn apply_diff(&mut self, diff: &ShardStateDiff) {
         if let Some(data) = &diff.post_data {
             self.set_shard(diff.pre_state.shard.0, data.clone());
         }
@@ -433,7 +433,7 @@ mod tests {
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.data.apply_diff(&AccountStateDiff::new(
+        account.data.apply_diff(&ShardStateDiff::new(
             AccountInput::with_shard(
                 AccountId::new([1; 32]),
                 true,

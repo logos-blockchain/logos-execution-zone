@@ -2,8 +2,8 @@ use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -32,8 +32,8 @@ fn main() {
         return;
     };
 
-    let first_post = AccountStateDiff::unchanged(first.clone());
-    let second_post = AccountStateDiff::unchanged(second.clone());
+    let first_post = ShardStateDiff::unchanged(first.clone());
+    let second_post = ShardStateDiff::unchanged(second.clone());
 
     let chained_call = ChainedCall {
         program_account_id: transfer_program_id.into(),

@@ -7,7 +7,7 @@
 
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
@@ -409,7 +409,7 @@ impl IdForTests {
 }
 
 /// Asserts the diff leaves the native balance untouched and sets data to exactly `expected`'s.
-fn assert_data_diff(diff_output: &AccountStateDiff, expected: &AccountInput) {
+fn assert_data_diff(diff_output: &ShardStateDiff, expected: &AccountInput) {
     let effective_data = diff_output
         .post_data
         .clone()

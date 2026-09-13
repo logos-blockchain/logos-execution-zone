@@ -4,8 +4,8 @@ use lee_core::{
     account::{AccountId, ProgramShardSelector, ShardData},
     native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
-        AccountInput, AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        AccountInput, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 use sequencer_stake_core::{
@@ -150,7 +150,7 @@ fn stake(
     amount: u128,
     mover_account_id: lee_core::account::AccountId,
     mover_instruction_data: InstructionData,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let [funding_account, ownership_account, funds_account, config_account] =
         <[AccountInput; 4]>::try_from(pre_states).expect(
             "Stake requires a funding account, an ownership account, the stake funds account, and the config account",
@@ -222,7 +222,7 @@ fn stake(
     let funds_id = funds_account.account_id;
 
     // pass-through: propagates authorization into the nested mover call
-    let funding_account_post = AccountStateDiff::unchanged(funding_account);
+    let funding_account_post = ShardStateDiff::unchanged(funding_account);
 
     let new_stake_record_data: ShardData = StakeRecord {
         sequencer_key,
@@ -231,11 +231,11 @@ fn stake(
     .to_bytes()
     .try_into()
     .expect("StakeRecord should fit in account data");
-    let ownership_account_post = AccountStateDiff::new(ownership_account, new_stake_record_data);
+    let ownership_account_post = ShardStateDiff::new(ownership_account, new_stake_record_data);
 
-    let funds_account_post = AccountStateDiff::unchanged(funds_account);
+    let funds_account_post = ShardStateDiff::unchanged(funds_account);
 
-    let config_account_post = AccountStateDiff::new(
+    let config_account_post = ShardStateDiff::new(
         config_account,
         config
             .to_bytes()
@@ -280,7 +280,7 @@ fn native_balance(account: &AccountInput) -> u128 {
 fn confirm_stake(
     pre_states: Vec<AccountInput>,
     expected_balance_after: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let [funds_account] = <[AccountInput; 1]>::try_from(pre_states)
         .expect("ConfirmStake requires exactly the stake funds account");
 
@@ -290,7 +290,7 @@ fn confirm_stake(
         "mover call did not deposit the expected amount into the stake funds account"
     );
 
-    vec![AccountStateDiff::unchanged(funds_account)]
+    vec![ShardStateDiff::unchanged(funds_account)]
 }
 
 fn unstake_request(
@@ -298,7 +298,7 @@ fn unstake_request(
     pre_states: Vec<AccountInput>,
     amount: u128,
     destination: AccountId,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let [ownership_account, config_account] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("UnstakeRequest requires the ownership account and the config account");
 
@@ -343,7 +343,7 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let ownership_post = AccountStateDiff::new(
+    let ownership_post = ShardStateDiff::new(
         ownership_account,
         record
             .to_bytes()
@@ -351,7 +351,7 @@ fn unstake_request(
             .expect("StakeRecord should fit in account data"),
     );
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config_account,
         config
             .to_bytes()
@@ -412,7 +412,7 @@ fn init_channel_params(
     self_account_id: AccountId,
     pre_states: Vec<AccountInput>,
     channel_params: ChannelParams,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let [config_account] = <[AccountInput; 1]>::try_from(pre_states)
         .expect("InitChannelParams requires the config account");
 
@@ -440,7 +440,7 @@ fn init_channel_params(
 
     config.channel_params = Some(channel_params);
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config_account,
         config
             .to_bytes()
@@ -457,7 +457,7 @@ fn slash(
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
     approvals: &[SlashApproval],
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let [ownership_account, funds_account, sink_account, config_account] =
         <[AccountInput; 4]>::try_from(pre_states).expect(
             "Slash requires the ownership account, the stake funds account, the slash sink, and the config account",
@@ -493,7 +493,7 @@ fn slash(
 
     // The whole tracked stake burns, including any pending unstake.
     record.pending_unstake = None;
-    let ownership_post = AccountStateDiff::new(
+    let ownership_post = ShardStateDiff::new(
         ownership_account,
         record
             .to_bytes()
@@ -501,7 +501,7 @@ fn slash(
             .expect("StakeRecord should fit in account data"),
     );
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config_account,
         config
             .to_bytes()
@@ -520,8 +520,8 @@ fn slash(
     (
         vec![
             ownership_post,
-            AccountStateDiff::unchanged(funds_account),
-            AccountStateDiff::unchanged(sink_account),
+            ShardStateDiff::unchanged(funds_account),
+            ShardStateDiff::unchanged(sink_account),
             config_post,
         ],
         vec![burn_call],
@@ -531,7 +531,7 @@ fn slash(
 fn finalize_unstake(
     self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountInput>,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let [ownership_account, funds_account, destination_account, config_account] =
         <[AccountInput; 4]>::try_from(pre_states).expect(
             "FinalizeUnstake requires the ownership account, the stake funds account, a destination account, and the config account",
@@ -552,7 +552,7 @@ fn finalize_unstake(
     );
 
     // no signature check: already authorized back in UnstakeRequest
-    let ownership_post = AccountStateDiff::new(
+    let ownership_post = ShardStateDiff::new(
         ownership_account,
         record
             .to_bytes()
@@ -582,7 +582,7 @@ fn finalize_unstake(
         config.entries.remove(&record.sequencer_key);
     }
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config_account,
         config
             .to_bytes()
@@ -600,8 +600,8 @@ fn finalize_unstake(
     (
         vec![
             ownership_post,
-            AccountStateDiff::unchanged(funds_account),
-            AccountStateDiff::unchanged(destination_account),
+            ShardStateDiff::unchanged(funds_account),
+            ShardStateDiff::unchanged(destination_account),
             config_post,
         ],
         vec![release_call],

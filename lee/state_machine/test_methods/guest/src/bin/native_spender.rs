@@ -2,7 +2,7 @@ use lee_core::{
     account::ProgramShardSelector,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -42,14 +42,14 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::new(
+            ShardStateDiff::new(
                 own_pre,
                 own_data
                     .try_into()
                     .expect("provided data should fit into data limit"),
             ),
-            AccountStateDiff::unchanged(sender_pre),
-            AccountStateDiff::unchanged(recipient_pre),
+            ShardStateDiff::unchanged(sender_pre),
+            ShardStateDiff::unchanged(recipient_pre),
         ],
     )
     .with_chained_calls(vec![transfer])

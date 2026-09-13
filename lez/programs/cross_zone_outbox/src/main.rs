@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::program::{
-    AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -79,7 +79,7 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
-    let post = AccountStateDiff::new(outbox, new_data);
+    let post = ShardStateDiff::new(outbox, new_data);
 
     ProgramOutput::new(
         self_account_id,

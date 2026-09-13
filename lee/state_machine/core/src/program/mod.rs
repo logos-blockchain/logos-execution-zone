@@ -390,13 +390,13 @@ impl ProgramSegment {
 /// An account's pre-state alongside the changes to be applied to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountStateDiff {
+pub struct ShardStateDiff {
     pub pre_state: AccountInput,
     /// The new shard data, or `None` to leave it unchanged.
     pub post_data: Option<ShardData>,
 }
 
-impl AccountStateDiff {
+impl ShardStateDiff {
     /// A diff that leaves `pre_state`'s selected shard untouched.
     #[must_use]
     pub const fn unchanged(pre_state: AccountInput) -> Self {
@@ -541,7 +541,7 @@ pub struct ProgramOutput {
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// Each account's pre-state paired with the diff the program's execution applies to it.
-    pub state_diffs: Vec<AccountStateDiff>,
+    pub state_diffs: Vec<ShardStateDiff>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -558,7 +558,7 @@ impl ProgramOutput {
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         instruction_data: InstructionData,
-        state_diffs: Vec<AccountStateDiff>,
+        state_diffs: Vec<ShardStateDiff>,
     ) -> Self {
         Self {
             self_account_id,
@@ -809,7 +809,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         .pre_states
         .iter()
         .cloned()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
     ProgramOutput::new(
         envelope.self_account_id,
@@ -830,7 +830,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
 #[must_use]
 pub fn pre_states_match_shard_selectors(
     shard_selectors: &[ProgramShardSelector],
-    diffs: &[AccountStateDiff],
+    diffs: &[ShardStateDiff],
 ) -> bool {
     shard_selectors.iter().copied().eq(diffs
         .iter()
@@ -865,7 +865,7 @@ pub fn get_program_via<'state>(
 
 /// Checks shard-selector uniqueness and shard writes for a program call.
 pub fn validate_execution(
-    state_diffs: &[AccountStateDiff],
+    state_diffs: &[ShardStateDiff],
     executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
     // Each account may appear at most once per shard it selects.

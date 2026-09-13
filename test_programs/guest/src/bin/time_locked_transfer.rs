@@ -14,7 +14,7 @@ use lee_core::{
     account::ProgramShardSelector,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -67,10 +67,10 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(sender_pre),
-            AccountStateDiff::unchanged(receiver_pre),
+            ShardStateDiff::unchanged(sender_pre),
+            ShardStateDiff::unchanged(receiver_pre),
             // Clock account is read-only: post state equals pre state.
-            AccountStateDiff::unchanged(clock_pre),
+            ShardStateDiff::unchanged(clock_pre),
         ],
     )
     .with_chained_calls(vec![transfer])

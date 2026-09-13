@@ -7,7 +7,7 @@ use lee_core::{
     account::{AccountId, ProgramShardSelector},
     native_token::custody_transfer,
     program::{
-        AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
+        AccountInput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -183,13 +183,13 @@ fn lock(
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(config),
+            ShardStateDiff::unchanged(config),
             // The holder only signs, its account is echoed untouched, as are
             // the holding and escrow.
-            AccountStateDiff::unchanged(holder),
-            AccountStateDiff::unchanged(holding),
-            AccountStateDiff::unchanged(escrow),
-            AccountStateDiff::unchanged(outbox),
+            ShardStateDiff::unchanged(holder),
+            ShardStateDiff::unchanged(holding),
+            ShardStateDiff::unchanged(escrow),
+            ShardStateDiff::unchanged(outbox),
         ],
     )
     .with_chained_calls(vec![move_call, emit_call])
@@ -226,7 +226,7 @@ fn init_config(
         );
     }
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
         config_bytes(outbox_account_id, target_account_id)
             .to_vec()

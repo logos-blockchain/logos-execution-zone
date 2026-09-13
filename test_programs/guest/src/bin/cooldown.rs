@@ -12,7 +12,7 @@
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -82,7 +82,7 @@ fn main() {
         last_run_timestamp: current_timestamp,
         ..cooldown_state
     };
-    let state_diff = AccountStateDiff::new(
+    let state_diff = ShardStateDiff::new(
         state,
         updated_state
             .to_bytes()
@@ -91,7 +91,7 @@ fn main() {
     );
 
     // Clock account is read-only.
-    let clock_diff = AccountStateDiff::unchanged(clock_pre);
+    let clock_diff = ShardStateDiff::unchanged(clock_pre);
 
     ProgramOutput::new(
         self_account_id,

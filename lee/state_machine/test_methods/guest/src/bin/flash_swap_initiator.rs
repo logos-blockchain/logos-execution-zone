@@ -41,7 +41,7 @@ use lee_core::{
     account::ProgramShardSelector,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -150,8 +150,8 @@ fn main() {
                 caller_account_id,
                 instruction_data,
                 vec![
-                    AccountStateDiff::unchanged(vault_pre),
-                    AccountStateDiff::unchanged(receiver_pre),
+                    ShardStateDiff::unchanged(vault_pre),
+                    ShardStateDiff::unchanged(receiver_pre),
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
@@ -191,7 +191,7 @@ fn main() {
                 self_account_id,
                 caller_account_id,
                 instruction_data,
-                vec![AccountStateDiff::unchanged(vault)],
+                vec![ShardStateDiff::unchanged(vault)],
             )
             .write();
         }

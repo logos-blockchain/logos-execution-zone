@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -10,7 +10,7 @@ pub fn burn(
     user_holding_account: &AccountInput,
     self_account_id: AccountId,
     amount_to_burn: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         user_holding_account.is_authorized,
         "Authorization is missing"
@@ -94,10 +94,9 @@ pub fn burn(
     }
 
     let definition_diff =
-        AccountStateDiff::new(definition_account.clone(), ShardData::from(&definition));
+        ShardStateDiff::new(definition_account.clone(), ShardData::from(&definition));
 
-    let holding_diff =
-        AccountStateDiff::new(user_holding_account.clone(), ShardData::from(&holding));
+    let holding_diff = ShardStateDiff::new(user_holding_account.clone(), ShardData::from(&holding));
 
     vec![definition_diff, holding_diff]
 }

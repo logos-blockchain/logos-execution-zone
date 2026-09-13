@@ -1,7 +1,7 @@
 use lee_core::{
     account::{AccountId, ShardData},
     program::{
-        AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -20,11 +20,7 @@ const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(
-    self_account_id: AccountId,
-    pre_state: &AccountInput,
-    greeting: &[u8],
-) -> AccountStateDiff {
+fn write(self_account_id: AccountId, pre_state: &AccountInput, greeting: &[u8]) -> ShardStateDiff {
     // Construct the new data value: the existing data with the greeting appended.
     let new_data: ShardData = {
         let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
@@ -34,18 +30,18 @@ fn write(
             .expect("ShardData should fit within the allowed limits")
     };
 
-    AccountStateDiff::new(pre_state.clone(), new_data)
+    ShardStateDiff::new(pre_state.clone(), new_data)
 }
 
 fn move_data(
     self_account_id: AccountId,
     from_pre: &AccountInput,
     to_pre: &AccountInput,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     // Construct the new data values.
     let from_data: Vec<u8> = from_pre.shard_of(self_account_id).clone().into_inner();
 
-    let from_post = AccountStateDiff::new(from_pre.clone(), ShardData::default());
+    let from_post = ShardStateDiff::new(from_pre.clone(), ShardData::default());
 
     let to_post = {
         let mut bytes = to_pre.shard_of(self_account_id).clone().into_inner();
@@ -53,7 +49,7 @@ fn move_data(
         let new_data: ShardData = bytes
             .try_into()
             .expect("ShardData should fit within the allowed limits");
-        AccountStateDiff::new(to_pre.clone(), new_data)
+        ShardStateDiff::new(to_pre.clone(), new_data)
     };
 
     vec![from_post, to_post]

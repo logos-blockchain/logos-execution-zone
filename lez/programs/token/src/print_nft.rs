@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::TokenHolding;
 
@@ -9,7 +9,7 @@ pub fn print_nft(
     master_account: &AccountInput,
     printed_account: &AccountInput,
     self_account_id: AccountId,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
@@ -39,12 +39,12 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let master_diff = AccountStateDiff::new(
+    let master_diff = ShardStateDiff::new(
         master_account.clone(),
         ShardData::from(&master_account_data),
     );
 
-    let printed_diff = AccountStateDiff::new(
+    let printed_diff = ShardStateDiff::new(
         printed_account.clone(),
         ShardData::from(&TokenHolding::NftPrintedCopy {
             definition_id,

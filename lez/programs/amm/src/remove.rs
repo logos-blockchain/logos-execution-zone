@@ -3,7 +3,7 @@ use std::num::NonZeroU128;
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
     account::{AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -20,7 +20,7 @@ pub fn remove_liquidity(
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
     self_account_id: AccountId,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
 
     // 1. Fetch Pool state
@@ -152,13 +152,13 @@ pub fn remove_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_diffs = vec![
-        AccountStateDiff::new(pool.clone(), ShardData::from(&pool_post_definition)),
-        AccountStateDiff::unchanged(vault_a.clone()),
-        AccountStateDiff::unchanged(vault_b.clone()),
-        AccountStateDiff::unchanged(pool_definition_lp.clone()),
-        AccountStateDiff::unchanged(user_holding_a.clone()),
-        AccountStateDiff::unchanged(user_holding_b.clone()),
-        AccountStateDiff::unchanged(user_holding_lp.clone()),
+        ShardStateDiff::new(pool.clone(), ShardData::from(&pool_post_definition)),
+        ShardStateDiff::unchanged(vault_a.clone()),
+        ShardStateDiff::unchanged(vault_b.clone()),
+        ShardStateDiff::unchanged(pool_definition_lp.clone()),
+        ShardStateDiff::unchanged(user_holding_a.clone()),
+        ShardStateDiff::unchanged(user_holding_b.clone()),
+        ShardStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
     (post_diffs, chained_calls)

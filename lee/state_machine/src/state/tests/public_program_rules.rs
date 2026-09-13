@@ -3,7 +3,7 @@ use lee_core::program::InstructionData;
 use super::*;
 
 /// A program can drop an entire account from its own output by simply omitting its
-/// `AccountStateDiff` — `validate_execution` has no way to catch this on its own, since a
+/// `ShardStateDiff` — `validate_execution` has no way to catch this on its own, since a
 /// shorter `state_diffs` list is perfectly well-formed. This must still be rejected: every
 /// account the caller declared in the transaction must appear somewhere in the final diff.
 #[test]
@@ -322,7 +322,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     assert_eq!(state.get_account_by_id(to), recipient_pre);
 }
 
-/// Order no longer carries meaning: each `AccountStateDiff` embeds its own pre-state, so a
+/// Order no longer carries meaning: each `ShardStateDiff` embeds its own pre-state, so a
 /// program listing its diffs in a different order than it received the corresponding pre-states
 /// still validates and applies correctly.
 #[test]

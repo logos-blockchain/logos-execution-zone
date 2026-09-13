@@ -28,7 +28,7 @@ use lee_core::{
     account::ProgramShardSelector,
     native_token::Instruction as NativeInstruction,
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -93,8 +93,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(vault_pre),
-            AccountStateDiff::unchanged(receiver_pre),
+            ShardStateDiff::unchanged(vault_pre),
+            ShardStateDiff::unchanged(receiver_pre),
         ],
     )
     .with_chained_calls(chained_calls)

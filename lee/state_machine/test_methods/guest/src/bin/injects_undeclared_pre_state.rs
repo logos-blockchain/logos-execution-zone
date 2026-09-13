@@ -1,7 +1,7 @@
 use lee_core::{
     account::AccountId,
     program::{
-        AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -24,12 +24,12 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let mut state_diffs: Vec<AccountStateDiff> = pre_states
+    let mut state_diffs: Vec<ShardStateDiff> = pre_states
         .into_iter()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
 
-    state_diffs.push(AccountStateDiff::unchanged(AccountInput::balance(
+    state_diffs.push(ShardStateDiff::unchanged(AccountInput::balance(
         fabricated_account_id,
         false,
         0,

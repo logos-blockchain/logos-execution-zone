@@ -2,7 +2,7 @@ use bridge_core::Instruction;
 use lee_core::{
     native_token::custody_transfer,
     program::{
-        AccountStateDiff, ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -59,9 +59,9 @@ fn main() {
             if !receipt.shard_of(self_account_id).is_empty() {
                 (
                     vec![
-                        AccountStateDiff::unchanged(bridge),
-                        AccountStateDiff::unchanged(recipient),
-                        AccountStateDiff::unchanged(receipt),
+                        ShardStateDiff::unchanged(bridge),
+                        ShardStateDiff::unchanged(recipient),
+                        ShardStateDiff::unchanged(receipt),
                     ],
                     vec![],
                     vec![],
@@ -77,9 +77,9 @@ fn main() {
                 // First mint: write the marker byte into the receipt. The write
                 // is what records the mint.
                 let post_diffs = vec![
-                    AccountStateDiff::unchanged(bridge),
-                    AccountStateDiff::unchanged(recipient),
-                    AccountStateDiff::new(
+                    ShardStateDiff::unchanged(bridge),
+                    ShardStateDiff::unchanged(recipient),
+                    ShardStateDiff::new(
                         receipt,
                         vec![1].try_into().expect("1 byte fits in account data"),
                     ),

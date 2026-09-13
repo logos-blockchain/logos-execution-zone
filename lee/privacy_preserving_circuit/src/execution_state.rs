@@ -9,9 +9,10 @@ use lee_core::{
     account::{AccountData, AccountId, ProgramShardSelector},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountInput, AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall,
-        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
-        ValidityWindow, pre_states_match_shard_selectors, validate_execution,
+        AccountInput, BlockValidityWindow, CallKind, CallerData, ChainedCall,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, ShardStateDiff,
+        TimestampValidityWindow, ValidityWindow, pre_states_match_shard_selectors,
+        validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -248,7 +249,7 @@ impl ExecutionState {
         &mut self,
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
-        state_diffs: Vec<AccountStateDiff>,
+        state_diffs: Vec<ShardStateDiff>,
         private_witnesses: &[PrivateWitness],
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
@@ -687,8 +688,8 @@ mod tests {
             call_kind: CallKind::Unknown(7),
             instruction_data: instruction,
             state_diffs: vec![
-                AccountStateDiff::new(native_row(1, true, 100), forged_credit.clone()),
-                AccountStateDiff::new(native_row(2, false, 0), forged_credit),
+                ShardStateDiff::new(native_row(1, true, 100), forged_credit.clone()),
+                ShardStateDiff::new(native_row(2, false, 0), forged_credit),
             ],
             chained_calls: vec![ChainedCall {
                 program_account_id: AccountId::new([0xCC; 32]),

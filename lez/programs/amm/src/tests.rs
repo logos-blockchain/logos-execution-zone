@@ -7,7 +7,7 @@ use amm_core::{
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
     account::{Account, AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -1526,7 +1526,7 @@ impl AccountsForExeTests {
 
 /// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
 /// pre-state's data if it was left unchanged.
-fn effective_post_data(diff: &AccountStateDiff) -> ShardData {
+fn effective_post_data(diff: &ShardStateDiff) -> ShardData {
     diff.post_data
         .clone()
         .unwrap_or_else(|| diff.pre_state.shard.1.clone())

@@ -1,8 +1,8 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
     program::{
-        AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -27,7 +27,7 @@ fn main() {
 
     let state_diffs = pre_states
         .into_iter()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
 
     ProgramOutput::new(

@@ -2,9 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Balance, ProgramShardSelector, ShardData},
-    program::{
-        AccountInput, AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramOutput,
-    },
+    program::{AccountInput, ChainedCall, InstructionData, PdaSeed, ProgramOutput, ShardStateDiff},
 };
 
 pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
@@ -100,8 +98,8 @@ pub fn execute(
         caller_account_id,
         instruction_data.clone(),
         vec![
-            AccountStateDiff::new(sender.clone(), encode_balance(sent)),
-            AccountStateDiff::new(recipient.clone(), encode_balance(received)),
+            ShardStateDiff::new(sender.clone(), encode_balance(sent)),
+            ShardStateDiff::new(recipient.clone(), encode_balance(received)),
         ],
     ))
 }

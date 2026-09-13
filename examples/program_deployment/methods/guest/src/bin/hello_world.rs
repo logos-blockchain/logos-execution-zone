@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -42,8 +42,8 @@ fn main() {
             .expect("ShardData should fit within the allowed limits")
     };
 
-    // Wrap the diff inside an `AccountStateDiff` instance.
-    let post_state = AccountStateDiff::new(pre_state, new_data);
+    // Wrap the diff inside an `ShardStateDiff` instance.
+    let post_state = ShardStateDiff::new(pre_state, new_data);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

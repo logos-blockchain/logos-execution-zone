@@ -2,7 +2,7 @@ use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -27,7 +27,7 @@ fn main() {
 
     let state_diffs: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
+        .map(|pre| ShardStateDiff::unchanged(pre.clone()))
         .collect();
 
     assert_eq!(pre_states.len(), 2);
