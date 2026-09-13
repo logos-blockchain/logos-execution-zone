@@ -18,7 +18,9 @@ use lee::{
     AccountId, PrivateKey, ProgramShardSelector, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::{account::Nonce, program::PROGRAM_LOADER_ACCOUNT_ID};
+use lee_core::{
+    account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
+};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
@@ -191,7 +193,11 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     }
 
     let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
-    assert!(balance_only.data.shards.is_empty());
+    assert_eq!(
+        balance_only.data.shards.keys().copied().collect::<Vec<_>>(),
+        vec![NATIVE_TOKEN_PROGRAM_ID],
+        "a balance view carries exactly the native shard"
+    );
 
     let last_writer = writers[BLOAT_WRITERS - 1];
     let scoped_get = |scope: ReadScope, raw: bool| {
@@ -224,7 +230,10 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
     let selector: indexer_service_protocol::ProgramShardSelector =
         ProgramShardSelector::new(victim, last_writer).into();
+    let native_selector: indexer_service_protocol::ProgramShardSelector =
+        ProgramShardSelector::balance(victim).into();
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
+    let native_key = indexer_service_protocol::AccountId::native_token_program();
 
     let indexer = &**ctx.indexer_client();
     let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
@@ -236,10 +245,6 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         "the indexer view must carry only the selected shard"
     );
     assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
-    assert_eq!(
-        current.data.balance().unwrap(),
-        balance_only.data.balance().unwrap()
-    );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
     let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -252,8 +257,14 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         before_population.data.shards[&last_writer_key].0.is_empty(),
         "the historical view must predate the shard, not mirror current state"
     );
+    let native_before = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        native_selector,
+        height_before_bloat,
+    )
+    .await?;
     assert_eq!(
-        before_population.data.balance().unwrap(),
+        native_before.data.balance().unwrap(),
         balance_only.data.balance().unwrap(),
         "the historical view must be the real account at that height, not a default"
     );
@@ -268,20 +279,32 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         after_population.data.shards[&last_writer_key].0, expected_shard,
         "the historical view must serve real shard data, not always empty"
     );
+    assert_eq!(after_population.nonce, balance_only.nonce.0);
+    let native_after = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        native_selector,
+        indexer_height,
+    )
+    .await?;
     assert_eq!(
-        after_population.data.balance().unwrap(),
+        native_after.data.balance().unwrap(),
         balance_only.data.balance().unwrap()
     );
-    assert_eq!(after_population.nonce, balance_only.nonce.0);
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
         ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
-    assert_eq!(missing.data.balance().unwrap(), 0);
+    assert_eq!(
+        missing.data.shards.keys().copied().collect::<Vec<_>>(),
+        vec![native_key]
+    );
+    assert!(
+        missing.data.shards[&native_key].0.is_empty(),
+        "a scoped read of a missing account carries the requested key with empty data"
+    );
     assert_eq!(missing.nonce, 0);
-    assert!(missing.data.shards.is_empty());
 
     assert!(
         indexer_service_rpc::RpcClient::get_account_view_at_block(

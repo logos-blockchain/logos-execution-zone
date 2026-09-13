@@ -14,7 +14,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee::AccountId;
+use lee::{Account, AccountId};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
@@ -155,11 +155,8 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    assert!(acc1.account.data.shards.is_empty());
-    assert!(acc2.account.data.shards.is_empty());
-
-    assert_eq!(acc1.account.data.balance().unwrap(), 100);
-    assert_eq!(acc2.account.data.balance().unwrap(), 101);
+    assert_eq!(acc1.account.data, Account::funded(100).data);
+    assert_eq!(acc2.account.data, Account::funded(101).data);
 
     log::info!("Tree checks passed, testing restored accounts can transact");
 

@@ -11,6 +11,7 @@ use integration_tests::{
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
+use lee::Account;
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -29,10 +30,9 @@ async fn get_existing_account() -> Result<()> {
 
     // Genesis credits the account.
     assert_eq!(
-        account.data.balance().unwrap(),
-        INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
+        account.data,
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
     );
-    assert!(account.data.shards.is_empty());
     // It also gets used as a funder for private accounts on genesis twice.
     assert_eq!(account.nonce.0, 2);
 

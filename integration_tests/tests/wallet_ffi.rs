@@ -26,7 +26,7 @@ use integration_tests::{
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
@@ -618,10 +618,9 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     };
 
     assert_eq!(
-        account.data.balance().unwrap(),
-        INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
+        account.data,
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
     );
-    assert!(account.data.shards.is_empty());
     assert_eq!(account.nonce.0, 2);
 
     let mut out_balance_only = FfiAccount::default();
@@ -638,11 +637,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     };
 
     assert_eq!(
-        balance_only.data.balance().unwrap(),
-        INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]
+        balance_only.data,
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
     );
     assert_eq!(balance_only.nonce.0, 2);
-    assert!(balance_only.data.shards.is_empty());
 
     let program_id = AccountId::from(programs::token().id());
     let mut out_program_full = FfiAccount::default();
@@ -672,13 +670,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_program_view).try_into().unwrap()
     };
 
-    assert!(
-        program_view.data.shards.is_empty(),
-        "a null program pointer must not select a shard the account actually holds"
-    );
     assert_eq!(
-        program_view.data.balance().unwrap(),
-        program_full.data.balance().unwrap()
+        program_view.data,
+        program_full.data.project([NATIVE_TOKEN_PROGRAM_ID]),
+        "a null program pointer must select the native shard, not one the account holds"
     );
 
     let mut out_named_shard = FfiAccount::default();
@@ -695,14 +690,9 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_named_shard).try_into().unwrap()
     };
 
-    assert_eq!(named_shard.data.shards.len(), 1);
     assert_eq!(
-        named_shard.data.shards[&PROGRAM_LOADER_ACCOUNT_ID],
-        expected_shard
-    );
-    assert_eq!(
-        named_shard.data.balance().unwrap(),
-        program_full.data.balance().unwrap()
+        named_shard.data,
+        program_full.data.project([PROGRAM_LOADER_ACCOUNT_ID])
     );
 
     unsafe {
@@ -745,10 +735,9 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
     // interim policy), so this asserts against the private constant, not the
     // LGO-scaled public one.
     assert_eq!(
-        account.data.balance().unwrap(),
-        INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]
+        account.data,
+        Account::funded(INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]).data
     );
-    assert!(account.data.shards.is_empty());
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -889,7 +878,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_public_account_is_credited_without_gaining_a_record() -> Result<()> {
+fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -942,8 +931,7 @@ fn wallet_ffi_public_account_is_credited_without_gaining_a_record() -> Result<()
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert!(account.data.shards.is_empty());
-    assert_eq!(ffi_balance(wallet_ffi_handle, &out_account_id, true), 100);
+    assert_eq!(account.data, Account::funded(100).data);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut credit_result);

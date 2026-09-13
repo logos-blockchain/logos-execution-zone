@@ -19,9 +19,10 @@ use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
     AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
     ValidatedStateDiff,
+    error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::account::Account;
+use lee_core::{account::Account, native_token::TransferError};
 use ping_core::{
     ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
     sender_config_account_id,
@@ -1315,7 +1316,12 @@ fn a_direct_transfer_from_the_holding_is_refused() {
         panic!("an unauthorized holding debit must not execute");
     };
     assert!(
-        format!("{err:?}").contains("Sender must be authorized"),
+        matches!(
+            &err,
+            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender { account_id },
+            )) if *account_id == holding_id_of(holder_id)
+        ),
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
