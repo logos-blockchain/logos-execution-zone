@@ -48,8 +48,14 @@ async fn required_entry(world: &CucumberWorld) -> Result<SequencerEntry, StepErr
         })
 }
 
+/// Waits for the last submission to land in a block. "Accepted" reads that
+/// as the transaction taking effect; "included in a block" is the neutral
+/// form for a fee-charged transaction whose execution failed, which is still
+/// included with its fee kept and its effects reverted, and whose rejection
+/// the steps that follow pin through the unchanged state.
 #[then("the stake transaction is accepted")]
 #[then("the donation transaction is accepted")]
+#[then("the stake transaction is included in a block")]
 async fn stake_transaction_accepted(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;

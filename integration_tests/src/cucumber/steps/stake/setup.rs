@@ -10,7 +10,7 @@ use wallet::AccountIdentity;
 use super::{
     super::log_step,
     helpers::{
-        config_entry, first_configured_public_account, get_account, stake_config,
+        config_entry, deploy_program, first_configured_public_account, get_account, stake_config,
         submit_accepted_stake, wait_for_inclusion,
     },
 };
@@ -187,5 +187,27 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
 fn off_curve_key_bytes(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     world.stake_mut()?.set_off_curve_bytes(OFF_CURVE_BYTES);
+    Ok(())
+}
+
+#[given("the stake_chain_caller test program is deployed")]
+async fn deploy_stake_chain_caller(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let program = test_programs::stake_chain_caller();
+    let account_id = deploy_program(world.lez()?, &program).await?;
+    world
+        .stake_mut()?
+        .set_deployed_program(&program, account_id);
+    Ok(())
+}
+
+#[given("the simple_balance_transfer test program is deployed")]
+async fn deploy_simple_balance_transfer(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    let program = test_programs::simple_balance_transfer();
+    let account_id = deploy_program(world.lez()?, &program).await?;
+    world
+        .stake_mut()?
+        .set_deployed_program(&program, account_id);
     Ok(())
 }
