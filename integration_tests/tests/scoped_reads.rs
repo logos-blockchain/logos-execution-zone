@@ -39,6 +39,21 @@ const BLOAT_SHARD_BYTES: usize = 700 * 1024;
 
 const BLOAT_WRITERS: usize = 4;
 
+#[track_caller]
+fn assert_bloat_shard(shard: Option<&[u8]>) {
+    let shard = shard.expect("bloat shard missing from scoped response");
+    assert_eq!(shard.len(), BLOAT_SHARD_BYTES, "bloat shard length");
+    let mismatch = shard
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| *byte != 0xFF);
+    assert_eq!(
+        mismatch, None,
+        "expected 0xFF throughout; first mismatch (offset, byte)"
+    );
+}
+
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<sequencer_service_rpc::ClientError>(),
@@ -163,11 +178,7 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
         )
         .await?;
         let view = get_account_view(ctx, ProgramShardSelector::new(victim, *writer_id)).await?;
-        assert_eq!(
-            view.data.shards[writer_id].as_ref(),
-            shard.as_slice(),
-            "the bloat write must have taken effect, not merely been included"
-        );
+        assert_bloat_shard(view.data.shards.get(writer_id).map(AsRef::as_ref));
     }
 
     writers
@@ -185,7 +196,8 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let error = get_account(&ctx, victim)
         .await
-        .expect_err("the whole-account read must fail once the account is bloated");
+        .err()
+        .expect("the whole-account read must fail once the account is bloated");
     assert!(
         is_oversized_response(&error),
         "the read must fail on response size specifically, not on any error: {error:?}"
@@ -243,7 +255,6 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
 
     let indexer = &**ctx.indexer_client();
-    let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
 
     let current = indexer_service_rpc::RpcClient::get_account_view(indexer, selector).await?;
     assert_eq!(
@@ -251,7 +262,13 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         1,
         "the indexer view must carry only the selected shard"
     );
-    assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
+    assert_bloat_shard(
+        current
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
+    );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
     let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -282,9 +299,12 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         indexer_height,
     )
     .await?;
-    assert_eq!(
-        after_population.data.shards[&last_writer_key].0, expected_shard,
-        "the historical view must serve real shard data, not always empty"
+    assert_bloat_shard(
+        after_population
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
     );
     assert_eq!(after_population.nonce, balance_only.nonce.0);
     let native_after = indexer_service_rpc::RpcClient::get_account_view_at_block(
