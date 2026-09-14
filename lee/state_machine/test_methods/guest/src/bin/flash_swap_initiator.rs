@@ -39,7 +39,7 @@
 
 use lee_core::{
     account::ProgramShardSelector,
-    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
         ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
@@ -55,7 +55,6 @@ pub enum FlashSwapInstruction {
     /// 2. Callback (user logic, e.g. arbitrage)
     /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
     Initiate {
-        token_program_id: lee_core::account::AccountId,
         callback_program_id: lee_core::account::AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u8>,
@@ -86,7 +85,6 @@ fn main() {
 
     match instruction {
         FlashSwapInstruction::Initiate {
-            token_program_id,
             callback_program_id,
             amount_out,
             callback_instruction_data,
@@ -102,18 +100,12 @@ fn main() {
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
             // the PDA seed to authorize the token program to debit the vault on our behalf.
-            let transfer_instruction =
-                borsh::to_vec(&NativeInstruction::Transfer { amount: amount_out })
-                    .expect("transfer instruction serialization");
-            let call_1 = ChainedCall {
-                program_account_id: token_program_id,
-                shard_selectors: vec![
-                    ProgramShardSelector::from(&vault_pre),
-                    ProgramShardSelector::from(&receiver_pre),
-                ],
-                instruction_data: transfer_instruction,
-                pda_seeds: vec![PdaSeed::new([0_u8; 32])],
-            };
+            let call_1 = custody_transfer(
+                vault_pre.account_id,
+                PdaSeed::new([0_u8; 32]),
+                receiver_pre.account_id,
+                amount_out,
+            );
 
             // Chained call 2: User callback. The callback may run arbitrary logic (arbitrage,
             // etc.) and is expected to return funds to the vault.

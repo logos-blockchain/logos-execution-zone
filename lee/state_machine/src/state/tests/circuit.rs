@@ -1300,12 +1300,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                         .get_proof_for_commitment(&commitment_pda_0)
                         .expect("pda_0 must be in state"),
                 )],
-                instruction_data: Program::serialize_instruction((
-                    seed,
-                    amount,
-                    NATIVE_TOKEN_PROGRAM_ID,
-                ))
-                .unwrap(),
+                instruction_data: Program::serialize_instruction((seed, amount)).unwrap(),
                 ..Default::default()
             },
             &spend_with_deps,
@@ -1341,12 +1336,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                         .get_proof_for_commitment(&commitment_pda_1)
                         .expect("pda_1 must be in state"),
                 )],
-                instruction_data: Program::serialize_instruction((
-                    seed,
-                    amount,
-                    NATIVE_TOKEN_PROGRAM_ID,
-                ))
-                .unwrap(),
+                instruction_data: Program::serialize_instruction((seed, amount)).unwrap(),
                 ..Default::default()
             },
             &spend_with_deps,

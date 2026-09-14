@@ -12,8 +12,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, ProgramShardSelector,
-    ProvingInput, PublicKey,
+    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector, ProvingInput,
+    PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -23,11 +23,8 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
-    PrivateWitness, WitnessKind,
-    account::Account,
-    encryption::ViewingPublicKey,
-    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
-    program::PdaSeed,
+    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
+    native_token::Instruction as NativeInstruction, program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -107,10 +104,6 @@ async fn fund_private_pda(
 /// Spends from an owned private PDA to a fresh private-foreign recipient.
 ///
 /// Alice must own the PDA in the wallet (i.e. it must have been synced after a receive).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test helper — grouping args would obscure intent"
-)]
 async fn spend_private_pda(
     wallet: &WalletCore,
     pda_account_id: AccountId,
@@ -119,7 +112,6 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    transfer_program_id: ProgramId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
@@ -132,7 +124,7 @@ async fn spend_private_pda(
                 }
                 .balance(),
             ],
-            Program::serialize_instruction((seed, amount, transfer_program_id))
+            Program::serialize_instruction((seed, amount))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
         )
@@ -165,9 +157,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let proxy_id: AccountId = proxy.id().into();
-    // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
-    // identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
-    let transfer_program_id: ProgramId = ProgramId::from(NATIVE_TOKEN_PROGRAM_ID);
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -331,7 +320,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_0,
         &spend_program,
-        transfer_program_id,
     )
     .await?;
 
@@ -344,7 +332,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_1,
         &spend_program,
-        transfer_program_id,
     )
     .await?;
 

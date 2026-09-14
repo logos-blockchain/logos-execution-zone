@@ -6,7 +6,7 @@ use lee_core::{
     WitnessKind,
     account::{Account, AccountId, Nonce},
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError},
-    program::{PdaSeed, PrivateAccountKind, ProgramId},
+    program::{PdaSeed, PrivateAccountKind},
 };
 
 use super::*;
@@ -414,9 +414,7 @@ fn private_pda_withdraw() {
         ProgramWithDependencies::new(program.clone(), program.id().into(), HashMap::new());
 
     // amount=0: the PDA has no balance yet
-    let instruction =
-        Program::serialize_instruction((seed, 0_u128, ProgramId::from(NATIVE_TOKEN_PROGRAM_ID)))
-            .unwrap();
+    let instruction = Program::serialize_instruction((seed, 0_u128)).unwrap();
 
     let result = execute_and_prove(
         ProvingInput {
@@ -823,12 +821,7 @@ fn pda_update_attempt(
                 pda_account,
                 commitment_set.get_proof_for(&pda_commitment).unwrap(),
             )],
-            instruction_data: Program::serialize_instruction((
-                seed,
-                1_u128,
-                NATIVE_TOKEN_PROGRAM_ID,
-            ))
-            .unwrap(),
+            instruction_data: Program::serialize_instruction((seed, 1_u128)).unwrap(),
             ..Default::default()
         },
         &program_with_deps,

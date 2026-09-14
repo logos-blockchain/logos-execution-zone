@@ -1,9 +1,8 @@
-use borsh::to_vec;
 use lee_core::{
-    account::ProgramShardSelector,
+    native_token::custody_transfer,
     program::{
-        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
+        PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+        respond_unsupported_call,
     },
 };
 
@@ -11,7 +10,7 @@ use lee_core::{
 ///
 /// `pre_states = [pda, recipient]`. Debits the PDA and credits the recipient.
 /// The PDA-to-npk binding is established via `pda_seeds` in the chained transfer.
-type Instruction = (PdaSeed, u128, ProgramId);
+type Instruction = (PdaSeed, u128);
 
 fn main() {
     let call = read_lee_call::<Instruction>();
@@ -20,7 +19,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (seed, amount, transfer_program_id),
+            instruction: (seed, amount),
         },
         instruction_data,
     ) = call
@@ -32,19 +31,10 @@ fn main() {
         return;
     };
 
-    let first_post = ShardStateDiff::unchanged(first.clone());
-    let second_post = ShardStateDiff::unchanged(second.clone());
+    let chained_call = custody_transfer(first.account_id, seed, second.account_id, amount);
 
-    let chained_call = ChainedCall {
-        program_account_id: transfer_program_id.into(),
-        instruction_data: to_vec(&lee_core::native_token::Instruction::Transfer { amount })
-            .unwrap(),
-        shard_selectors: vec![
-            ProgramShardSelector::from(&first),
-            ProgramShardSelector::from(&second),
-        ],
-        pda_seeds: vec![seed],
-    };
+    let first_post = ShardStateDiff::unchanged(first);
+    let second_post = ShardStateDiff::unchanged(second);
 
     ProgramOutput::new(
         self_account_id,
