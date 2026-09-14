@@ -90,7 +90,7 @@ impl Drop for SequencerServiceFFI {
             }
             drop(scheduler_ref);
         }
-        
+
         if !self.gossip.is_null() {
             let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<Gossip>>()) };
             // stop the gossip next.
