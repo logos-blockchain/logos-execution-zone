@@ -13,21 +13,6 @@ mod guests {
 
 #[must_use]
 #[inline]
-pub const fn simple_balance_transfer() -> Program {
-    use guests::{
-        SIMPLE_BALANCE_TRANSFER_ELF, SIMPLE_BALANCE_TRANSFER_ID, SIMPLE_BALANCE_TRANSFER_PATH,
-    };
-
-    let _unused = SIMPLE_BALANCE_TRANSFER_PATH;
-
-    Program::new_unchecked(
-        SIMPLE_BALANCE_TRANSFER_ID,
-        Cow::Borrowed(SIMPLE_BALANCE_TRANSFER_ELF),
-    )
-}
-
-#[must_use]
-#[inline]
 pub const fn reverse_transfer() -> Program {
     use guests::{REVERSE_TRANSFER_ELF, REVERSE_TRANSFER_ID, REVERSE_TRANSFER_PATH};
 
