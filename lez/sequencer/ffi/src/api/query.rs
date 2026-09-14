@@ -463,14 +463,18 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
         return PointerResult::from_error(OperationStatus::ClientError);
     }
 
+    let left_bound = if before_limit.saturating_sub(limit) != 0 {
+        before_limit.saturating_sub(limit)
+    } else {
+        1
+    };
+
     let block_range_resp = sequencer.runtime().block_on(
         sequencer
             .executor_ref()
             .ask(GetBlockRange {
-                range: BoundedRangeInclusive::try_from(
-                    before_limit.saturating_sub(limit)..=before_limit,
-                )
-                .expect("Previous checks ensure that range fits the limit"),
+                range: BoundedRangeInclusive::try_from(left_bound..=before_limit)
+                    .expect("Previous checks ensure that range fits the limit"),
             })
             .send(),
     );
@@ -535,8 +539,12 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     );
 
     match tx_range_resp {
-        Ok(tx_range_opt) => {
-            if let Some(tx_range) = tx_range_opt {
+        Ok(tx_range_opt) => tx_range_opt.map_or_else(
+            || {
+                log::error!("Account not found for account to block id map");
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
+            |tx_range| {
                 PointerResult::from_value(
                     tx_range
                         .into_iter()
@@ -544,11 +552,8 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
                         .collect::<Vec<_>>()
                         .into(),
                 )
-            } else {
-                log::error!("Account not found for account to block id map");
-                PointerResult::from_error(OperationStatus::ClientError)
-            }
-        }
+            },
+        ),
         Err(err) => {
             log::error!("Failed to query account to block map: {err:#}");
             PointerResult::from_error(OperationStatus::ClientError)

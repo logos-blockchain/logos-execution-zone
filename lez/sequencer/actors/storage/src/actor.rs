@@ -222,45 +222,41 @@ impl StorageActor {
                 .body
                 .transactions
                 .iter()
-                .map(|tx| tx.affected_public_account_ids())
-                .flatten();
+                .flat_map(LeeTransaction::affected_public_account_ids);
 
             for acc in affected_accounts {
                 let meta_acc_opt = self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?;
 
-                match meta_acc_opt {
-                    Some(meta_acc) => {
-                        self.db().put_batch(
-                            batch,
-                            &acc,
-                            &entities::AccountIdToBlockIdMetaLen {
-                                length: meta_acc.length.saturating_add(1),
-                            },
-                        )?;
-                        let map_key = entities::AccountIdToBlockIdKey::from((acc, meta_acc.length));
-                        self.db().put_batch(
-                            batch,
-                            &map_key,
-                            &entities::AccountIdToBlockIdDestination {
-                                block_id: *block_id,
-                            },
-                        )?;
-                    }
-                    None => {
-                        self.db().put_batch(
-                            batch,
-                            &acc,
-                            &entities::AccountIdToBlockIdMetaLen { length: 1 },
-                        )?;
-                        let map_key = entities::AccountIdToBlockIdKey::from((acc, 0));
-                        self.db().put_batch(
-                            batch,
-                            &map_key,
-                            &entities::AccountIdToBlockIdDestination {
-                                block_id: *block_id,
-                            },
-                        )?;
-                    }
+                if let Some(meta_acc) = meta_acc_opt {
+                    self.db().put_batch(
+                        batch,
+                        &acc,
+                        &entities::AccountIdToBlockIdMetaLen {
+                            length: meta_acc.length.saturating_add(1),
+                        },
+                    )?;
+                    let map_key = entities::AccountIdToBlockIdKey::from((acc, meta_acc.length));
+                    self.db().put_batch(
+                        batch,
+                        &map_key,
+                        &entities::AccountIdToBlockIdDestination {
+                            block_id: *block_id,
+                        },
+                    )?;
+                } else {
+                    self.db().put_batch(
+                        batch,
+                        &acc,
+                        &entities::AccountIdToBlockIdMetaLen { length: 1 },
+                    )?;
+                    let map_key = entities::AccountIdToBlockIdKey::from((acc, 0));
+                    self.db().put_batch(
+                        batch,
+                        &map_key,
+                        &entities::AccountIdToBlockIdDestination {
+                            block_id: *block_id,
+                        },
+                    )?;
                 }
             }
         }
@@ -450,6 +446,11 @@ impl StorageActor {
                 .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
 
         if let Some(meta_acc_data) = meta_acc_opt {
+            log::info!(
+                "############################### Meta acc data len is {}",
+                meta_acc_data.length
+            );
+
             let mut affecting_txs = vec![];
             let mut local_offset = 0;
             let mut local_limit = 0;
@@ -481,14 +482,14 @@ impl StorageActor {
                     if local_offset >= offset {
                         if local_limit < limit {
                             affecting_txs.push(aff_tx);
-                            local_limit += 1;
+                            local_limit = local_limit.saturating_add(1);
 
                             if local_limit >= limit {
                                 break 'outer;
                             }
                         }
                     } else {
-                        local_offset += 1;
+                        local_offset = local_offset.saturating_add(1);
                     }
                 }
             }
@@ -1346,6 +1347,6 @@ impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
         }: GetAccountIdToAffectingTxMapItemUptoLimit,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self.get_affecting_txs_for_account_id(account_id, offset, limit)?)
+        self.get_affecting_txs_for_account_id(account_id, offset, limit)
     }
 }

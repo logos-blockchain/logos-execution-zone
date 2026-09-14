@@ -389,6 +389,7 @@ impl From<(AccountId, u64)> for AccountIdToBlockIdKey {
         let mut key_bytes = [0; 32 + 8];
 
         key_bytes[..32].copy_from_slice(value.0.as_ref());
+        #[expect(clippy::big_endian_bytes, reason = "We use big endian for `u64` in DB")]
         key_bytes[32..].copy_from_slice(value.1.to_be_bytes().as_ref());
 
         Self { key_bytes }
