@@ -1,19 +1,15 @@
-use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
-    native_token::Instruction as NativeInstruction,
     program::{
-        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
+        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
-type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
+type Instruction = (InstructionData, ProgramId, u32, Option<PdaSeed>);
 
 /// A program that calls another program `num_chain_calls` times.
-/// It permutes the order of the input accounts on the subsequent call
-/// The `ProgramId` in the instruction must be the `program_id` of the native token
-/// program.
+/// It permutes the order of the input accounts on the subsequent call.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -21,7 +17,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (amount, transfer_program_id, num_chain_calls, pda_seed),
+            instruction: (call_instruction_data, callee_program_id, num_chain_calls, pda_seed),
         },
         instruction_data,
     ) = call
@@ -33,7 +29,6 @@ fn main() {
         return;
     };
 
-    let call_instruction_data = to_vec(&NativeInstruction::Transfer { amount }).unwrap();
     let permuted = vec![
         ProgramShardSelector::from(&sender_pre),
         ProgramShardSelector::from(&recipient_pre),
@@ -42,7 +37,7 @@ fn main() {
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_account_id: transfer_program_id.into(),
+            program_account_id: callee_program_id.into(),
             instruction_data: call_instruction_data.clone(),
             shard_selectors: permuted.clone(),
             pda_seeds: pda_seed.iter().copied().collect(),

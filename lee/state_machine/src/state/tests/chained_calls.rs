@@ -12,8 +12,12 @@ fn public_chained_call() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 37;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) =
-        (amount, ProgramId::from(NATIVE_TOKEN_PROGRAM_ID), 2, None);
+    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+        Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
+        ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
+        2,
+        None,
+    );
 
     // The `chain_caller` chains the program twice
     let expected_to_post = Account::funded(amount * 2);
@@ -53,8 +57,8 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 0;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
-        amount,
+    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+        Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
         ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
         u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32") + 1,
         None,
@@ -92,8 +96,8 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         .with_public_account_balances([(from, initial_balance), (to, 0)])
         .with_test_programs();
     let amount: u128 = 58;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
-        amount,
+    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+        Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
         ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
         1,
         Some(pda_seed),
@@ -145,8 +149,12 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
 
     // The transaction executes the chain_caller program, which internally calls the
     // native token program
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) =
-        (amount, ProgramId::from(NATIVE_TOKEN_PROGRAM_ID), 1, None);
+    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+        Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
+        ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
+        1,
+        None,
+    );
     let message = public_transaction::Message::try_new(
         chain_caller.id().into(),
         // The chain_caller program permutes the account order in the chain call.
@@ -201,8 +209,8 @@ fn private_chained_call(number_of_calls: u32) {
         ])
         .with_test_programs();
     let amount: u128 = 37;
-    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
-        amount,
+    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+        Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
         ProgramId::from(NATIVE_TOKEN_PROGRAM_ID),
         number_of_calls,
         None,
