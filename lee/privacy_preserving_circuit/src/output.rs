@@ -14,6 +14,7 @@ pub fn compute_circuit_output(
     execution_state: ExecutionState,
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
+    ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
@@ -152,6 +153,7 @@ pub fn compute_circuit_output(
                     random_seed,
                     new_nullifier,
                     new_nonce,
+                    ciphertext_padding,
                 );
             }
         }
@@ -216,6 +218,7 @@ fn emit_private_output(
     random_seed: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
+    ciphertext_padding: Option<u32>,
 ) {
     let mut post_with_updated_nonce = post_state;
     post_with_updated_nonce.nonce = new_nonce;
@@ -230,6 +233,7 @@ fn emit_private_output(
         kind,
         &shared_secret,
         &new_nullifier.0,
+        ciphertext_padding,
     );
 
     output.private_actions.push(PrivateAction {
@@ -272,6 +276,7 @@ mod tests {
             &PrivateAccountKind::Regular(0),
             &SharedSecretKey([0; 32]),
             &nullifier,
+            None,
         );
         PrivateAction {
             nullifier,

@@ -10,6 +10,7 @@ fn main() {
         account_identities,
         program_account_id,
         dummy_inputs,
+        ciphertext_padding,
         initial_pre_states,
         program_image_claims,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
@@ -26,6 +27,7 @@ fn main() {
         execution_state,
         &account_identities,
         dummy_inputs,
+        ciphertext_padding,
         program_image_claims,
     );
 

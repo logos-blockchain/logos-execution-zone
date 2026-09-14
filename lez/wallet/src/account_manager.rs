@@ -6,7 +6,7 @@ use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
-    NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
+    NullifierWitness, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
@@ -16,6 +16,12 @@ use lee_core::{
 use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{ExecutionFailureKind, WalletCore};
+
+/// Length every note ciphertext the wallet emits is padded up to.
+///
+/// 512 sits roughly 200 bytes above the largest builtin-program account data (the AMM's). Not
+/// configurable on purpose: the only sender who opts out is the distinguishable one.
+pub const CIPHERTEXT_PAD_SIZE: u32 = 512;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum AccountIdentity {
@@ -721,13 +727,10 @@ fn random_vec(len: usize) -> Vec<u8> {
     bytes
 }
 
-/// Generates a dummy note: random bytes sized to a default-account ciphertext, a real
+/// Generates a dummy note: random bytes sized to [`CIPHERTEXT_PAD_SIZE`], a real
 /// ML-KEM ciphertext epk toward a throwaway key, and a random view tag.
 fn random_dummy_note() -> EncryptedAccountData {
-    // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
-    let ciphertext_len = PrivateAccountKind::HEADER_LEN
-        .checked_add(Account::default().to_bytes().len())
-        .expect("dummy ciphertext length fits in usize");
+    let ciphertext_len = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
     let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
     let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
     EncryptedAccountData {

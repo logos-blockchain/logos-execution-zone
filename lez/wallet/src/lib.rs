@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::AccountIdentity;
+pub use account_manager::{AccountIdentity, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -810,6 +810,7 @@ impl WalletCore {
                 instruction_data,
                 acc_manager.account_identities(),
                 acc_manager.dummy_inputs_default(),
+                Some(CIPHERTEXT_PAD_SIZE),
                 &program.to_owned(),
             )?;
 
