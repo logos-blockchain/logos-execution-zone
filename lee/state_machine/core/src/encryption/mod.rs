@@ -232,6 +232,95 @@ mod tests {
         assert_eq!(account_ct.0.len(), pda_ct.0.len());
     }
 
+    fn account_with_data(data_len: usize) -> Account {
+        Account {
+            data: vec![7_u8; data_len].try_into().expect("data fits"),
+            ..Account::default()
+        }
+    }
+
+    fn plaintext_len(account: &Account) -> u32 {
+        let len = PrivateAccountKind::HEADER_LEN
+            .checked_add(account.to_bytes().len())
+            .expect("plaintext length fits in usize");
+        u32::try_from(len).expect("plaintext length fits in u32")
+    }
+
+    #[test]
+    fn encrypt_pads_short_plaintext_to_requested_length() {
+        let secret = SharedSecretKey([0_u8; 32]);
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let kind = PrivateAccountKind::Regular(0);
+
+        for data_len in [0, 10, 100, 300] {
+            let account = account_with_data(data_len);
+            let base = plaintext_len(&account);
+            // exact fit (no-op), one byte over (tightest pad), and a loose pad
+            for delta in [0, 1, 1000] {
+                let pad = base.saturating_add(delta);
+                let ct = EncryptionScheme::encrypt(&account, &kind, &secret, &nullifier, Some(pad));
+                assert_eq!(
+                    ct.as_bytes().len(),
+                    usize::try_from(pad).expect("pad fits in usize"),
+                    "data_len {data_len}, pad {pad}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn encrypt_leaves_plaintext_longer_than_the_pad_alone() {
+        let secret = SharedSecretKey([0_u8; 32]);
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let kind = PrivateAccountKind::Regular(0);
+        let account = account_with_data(1000);
+        let base = plaintext_len(&account);
+
+        let pad = base.saturating_sub(1);
+        let ct = EncryptionScheme::encrypt(&account, &kind, &secret, &nullifier, Some(pad));
+
+        assert_eq!(
+            ct.as_bytes().len(),
+            usize::try_from(base).expect("plaintext length fits in usize")
+        );
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn padded_note_round_trips() {
+        const PAD: u32 = 512;
+
+        let d = [3_u8; 32];
+        let z = [4_u8; 32];
+        let vpk = shared_key_derivation::ViewingPublicKey::from_seed(&d, &z);
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
+
+        let account = Account {
+            balance: 42,
+            ..account_with_data(37)
+        };
+        let kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([1_u8; 32]),
+            seed: PdaSeed::new([2_u8; 32]),
+            identifier: 9,
+        };
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, Some(PAD));
+        assert_eq!(
+            ct.as_bytes().len(),
+            usize::try_from(PAD).expect("pad fits in usize")
+        );
+
+        let (decoded_kind, decoded_account) =
+            EncryptionScheme::decrypt(&ct, &receiver_ss, &nullifier)
+                .expect("a padded note must decrypt");
+
+        assert_eq!(decoded_account, account);
+        assert_eq!(decoded_kind, kind);
+    }
+
     /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
     /// feeds the correct shared secret into the SHA-256 KDF and `ChaCha20` round-trip.
     #[cfg(feature = "host")]

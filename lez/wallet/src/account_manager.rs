@@ -928,4 +928,13 @@ mod tests {
             .collect();
         assert_eq!(manager(over).dummy_inputs_default().len(), 0);
     }
+
+    #[test]
+    fn dummy_notes_are_padded_like_real_ones() {
+        let expected = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+
+        for dummy in manager(vec![]).dummy_inputs_default() {
+            assert_eq!(dummy.note.ciphertext.as_bytes().len(), expected);
+        }
+    }
 }
