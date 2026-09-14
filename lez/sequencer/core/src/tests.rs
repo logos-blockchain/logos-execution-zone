@@ -3861,13 +3861,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     let mut state = V03State::new()
         .with_programs([programs::sequencer_stake()])
         .with_public_accounts([
-            (
-                funding_id,
-                Account::funded(amount).with_shard(
-                    programs::token().id().into(),
-                    vec![1].try_into().expect("1 byte fits in account data"),
-                ),
-            ),
+            (funding_id, Account::funded(amount)),
             (
                 config_id,
                 system_accounts::sequencer_stake_config_account(Some(
@@ -4010,13 +4004,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
     V03State::new()
         .with_programs([programs::sequencer_stake()])
         .with_public_accounts([
-            (
-                funding_id,
-                Account::funded(funding_balance).with_shard(
-                    programs::token().id().into(),
-                    vec![1].try_into().expect("1 byte fits in account data"),
-                ),
-            ),
+            (funding_id, Account::funded(funding_balance)),
             (
                 system_accounts::sequencer_stake_config_account_id(),
                 system_accounts::sequencer_stake_config_account(Some(
@@ -4251,13 +4239,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let mut state = V03State::new()
         .with_programs([programs::sequencer_stake()])
         .with_public_accounts([
-            (
-                funding_id,
-                Account::funded(amount).with_shard(
-                    programs::token().id().into(),
-                    vec![1].try_into().expect("1 byte fits in account data"),
-                ),
-            ),
+            (funding_id, Account::funded(amount)),
             (
                 system_accounts::sequencer_stake_config_account_id(),
                 system_accounts::sequencer_stake_config_account(Some(

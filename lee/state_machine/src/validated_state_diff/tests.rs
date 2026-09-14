@@ -28,9 +28,7 @@ fn public_diff_reflects_a_successful_transfer() {
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::empty());
+    let state = V03State::new().with_public_account_balances([(from, 100)]);
     let message = Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
