@@ -81,6 +81,7 @@ Feature: Stake account validation
     When a Stake of "twice the minimum stake" is submitted with simple_balance_transfer as the mover
     Then the stake transaction is accepted
     And the config entry tracks the staked amount with no pending unstake
+    And the config entry points at the ownership account
     And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
     And the funds account balance increased by the staked amount
     And the funding account balance decreased by the staked amount
