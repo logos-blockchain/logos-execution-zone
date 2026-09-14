@@ -3,12 +3,12 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{borrow::Cow, time::Duration};
+use std::borrow::Cow;
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    TestContext, private_mention, public_mention,
     utils::{
         account_balance, create_token, get_account, get_account_view, new_account, send,
         wait_for_indexer_to_catch_up,
@@ -73,14 +73,15 @@ async fn submit(
     keys.push(&payer.pub_sign_key);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &keys);
 
-    ctx.sequencer_client()
+    let tx_hash = ctx
+        .sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             witness_set,
         )))
         .await?;
 
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
     Ok(())
 }
 
@@ -140,13 +141,15 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
     let mut writers = vec![first_header];
     while writers.len() < BLOAT_WRITERS {
         let header = new_account(ctx, false, None).await?;
-        ProgramLoader(ctx.wallet())
+        let tx_hash = ProgramLoader(ctx.wallet())
             .create_header(header, segments[0], &segments, true, Some(payer.account_id))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        ctx.wallet().poll_transaction(tx_hash).await?;
         writers.push(header);
     }
 
+    let shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
     for writer_id in &writers {
         let payer_nonce = get_account(ctx, payer.account_id).await?.nonce;
         submit(
@@ -154,11 +157,17 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
             *writer_id,
             vec![ProgramShardSelector::new(victim, *writer_id)],
             vec![payer_nonce],
-            vec![0xFF_u8; BLOAT_SHARD_BYTES],
+            shard.clone(),
             payer,
             &[],
         )
         .await?;
+        let view = get_account_view(ctx, ProgramShardSelector::new(victim, *writer_id)).await?;
+        assert_eq!(
+            view.data.shards[writer_id].as_ref(),
+            shard.as_slice(),
+            "the bloat write must have taken effect, not merely been included"
+        );
     }
 
     writers
@@ -189,7 +198,6 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         );
         let view = get_account_view(&ctx, ProgramShardSelector::new(victim, *writer)).await?;
         assert_eq!(view.data.shards.len(), 1, "a scoped read carries one shard");
-        assert_eq!(view.data.shards[writer].as_ref().len(), BLOAT_SHARD_BYTES);
     }
 
     let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
@@ -461,7 +469,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     assert_eq!(chain, vec![segment_id]);
 
     let (_, head_id) = fresh_key(0xD1);
-    loader
+    let tx_hash = loader
         .write_segment(
             head_id,
             test_programs::data_writer().elf().to_vec(),
@@ -470,8 +478,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
 
     let chain_from_head = loader.resolve_chain(head_id).await?;
     assert_eq!(chain_from_head, vec![head_id, segment_id]);
@@ -512,7 +519,8 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
     let rewritten = vec![0xCD_u8; 48];
     let program = ProgramWithDependencies::new(p, p_id, [(q_id, q)].into());
 
-    ctx.wallet()
+    let (tx_hash, _) = ctx
+        .wallet()
         .send_privacy_preserving_tx(
             vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
             Program::serialize_instruction((
@@ -527,8 +535,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
 
     let after = get_account_view(&ctx, ProgramShardSelector::new(account_id, q_id)).await?;
     assert_eq!(
