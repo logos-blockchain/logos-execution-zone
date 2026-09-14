@@ -82,7 +82,7 @@ async fn submit(
         shard_selectors,
         nonces,
         instruction,
-        common::test_utils::test_fee_declaration(payer.account_id),
+        lee::FeeDeclaration::new(payer.account_id, 8_000_000, 0, u128::MAX >> 1),
     )?;
     let mut keys = extra_signers.to_vec();
     keys.push(&payer.pub_sign_key);
@@ -196,8 +196,8 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let error = get_account(&ctx, victim)
         .await
-        .err()
-        .expect("the whole-account read must fail once the account is bloated");
+        .map(|_| ())
+        .expect_err("the whole-account read must fail once the account is bloated");
     assert!(
         is_oversized_response(&error),
         "the read must fail on response size specifically, not on any error: {error:?}"
