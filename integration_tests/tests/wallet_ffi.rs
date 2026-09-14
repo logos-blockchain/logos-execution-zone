@@ -26,7 +26,7 @@ use integration_tests::{
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID};
+use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
@@ -672,8 +672,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         program_view.data,
-        program_full.data.project([NATIVE_TOKEN_PROGRAM_ID]),
-        "a null program pointer must select the native shard, not one the account holds"
+        Account::funded(program_full.data.balance().unwrap()).data
     );
 
     let mut out_named_shard = FfiAccount::default();

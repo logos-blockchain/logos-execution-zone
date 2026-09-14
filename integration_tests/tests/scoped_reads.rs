@@ -233,7 +233,6 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let native_selector: indexer_service_protocol::ProgramShardSelector =
         ProgramShardSelector::balance(victim).into();
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
-    let native_key = indexer_service_protocol::AccountId::native_token_program();
 
     let indexer = &**ctx.indexer_client();
     let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
@@ -296,15 +295,9 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
-    assert_eq!(
-        missing.data.shards.keys().copied().collect::<Vec<_>>(),
-        vec![native_key]
-    );
-    assert!(
-        missing.data.shards[&native_key].0.is_empty(),
-        "a scoped read of a missing account carries the requested key with empty data"
-    );
+    assert_eq!(missing.data.balance().unwrap(), 0);
     assert_eq!(missing.nonce, 0);
+    assert!(missing.data.shards.is_empty());
 
     assert!(
         indexer_service_rpc::RpcClient::get_account_view_at_block(
