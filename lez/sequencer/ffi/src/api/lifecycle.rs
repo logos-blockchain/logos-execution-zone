@@ -3,7 +3,7 @@ use std::{ffi::c_char, path::PathBuf};
 use anyhow::Context as _;
 use kameo::actor::{ActorRef, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
-use sequencer_core::{block_publisher::ZoneSdkPublisher, config::SequencerConfig};
+use sequencer_core::{block_publisher::BlockPublisherTrait, config::SequencerConfig};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_service::{Gossip, setup_gossip};
 use sequencer_slasher_actor::SlasherActor;
@@ -53,7 +53,7 @@ async fn make_sequencer_compoments(
     (
         ActorRef<StorageActor>,
         ActorRef<SlasherActor>,
-        ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>,
+        ActorRef<ExecutorActor<StorageActor, impl BlockPublisherTrait>>,
         ActorRef<Scheduler>,
         Option<Gossip>,
     ),
