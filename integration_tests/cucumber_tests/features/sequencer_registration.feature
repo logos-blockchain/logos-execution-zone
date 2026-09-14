@@ -133,7 +133,7 @@ Feature: Sequencer registration
     And each ownership account is claimed by sequencer_stake backing its sequencer key
     And each stake moved the staked amount from its funding account into its funds account
 
-  @stake_registration_ci @D-15 @P1 @L3
+  @stake_registration_ci @D-17 @P1 @L3
   # Node-level mirror of committee_discovery's two_new_keys_join_in_one_update:
   # both Stakes ride one block, finalize together and qualify in the same
   # discovery window, so a single ChannelConfigOp admits both keys — observed
