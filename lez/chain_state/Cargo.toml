@@ -24,6 +24,11 @@ serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[features]
+default = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["lee/prove"]
+
 [dev-dependencies]
 testnet_initial_state.workspace = true
 serde_json.workspace = true

@@ -232,6 +232,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
       - name: Download resolved Bedrock node
         uses: actions/download-artifact@v4
         with:
@@ -241,8 +243,9 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-host-prebuild
+          # Read-only; prebuild is the only writer.
+          save-if: false
 
       - name: Run test_fixtures tests
         uses: ./.github/actions/run-in-ci-image
@@ -252,6 +255,17 @@ jobs:
             RISC0_DEV_MODE=1
             RUST_LOG=info,kameo=warn
           run: cargo nextest run -p test_fixtures
+
+  abort-on-stale-fixtures:
+    needs: test-fixtures-tests
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # Not a `container:` job: the test binaries bake CARGO_MANIFEST_DIR in at
   # compile time, so the archive has to be built on the same path the matrix
@@ -273,10 +287,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
+          shared-key: ci-host-prebuild
+          # Only writer of this cache.
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Build integration test archive
@@ -321,7 +339,7 @@ jobs:
           echo "Discovered integration targets: $targets_json"
 
   integration-tests:
-    needs: [ci-image, bedrock-node, test-fixtures-tests, integration-tests-prebuild]
+    needs: [ci-image, bedrock-node, integration-tests-prebuild]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -397,11 +415,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin host toolchain
+        uses: ./.github/actions/pin-host-toolchain
+
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-host
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+          shared-key: ci-host-prebuild
+          # Read-only; prebuild is the only writer.
+          save-if: false
 
       - name: Build artifacts
         uses: ./.github/actions/run-in-ci-image

@@ -7,12 +7,12 @@ use jsonrpsee::{
     types::{ErrorCode, ErrorObjectOwned},
 };
 use kameo::{
-    actor::ActorRef,
+    actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
 use log::{error, warn};
-use sequencer_core::gossip::GossipTxPublisher;
 use sequencer_executor_actor::ExecutorActorTrait;
+use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
@@ -22,21 +22,21 @@ use sequencer_service_protocol::{
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     max_block_size: ByteSize,
-    gossip_tx_publisher: Option<GossipTxPublisher>,
+    gossip: Option<Recipient<PublishTransaction>>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
         max_block_size: ByteSize,
-        gossip_tx_publisher: Option<GossipTxPublisher>,
+        gossip: Option<Recipient<PublishTransaction>>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
             max_block_size,
-            gossip_tx_publisher,
+            gossip,
         }
     }
 }
@@ -117,8 +117,12 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         // Published only once admitted, so peers are not fed what the door
         // refused. (A full local mempool has already errored above, so a
         // publish cannot be lost to it either.)
-        if let Some(publisher) = &self.gossip_tx_publisher {
-            publisher.publish(authenticated_tx);
+        // Non-blocking: a full gossip mailbox sheds the publish instead of
+        // stalling the RPC response.
+        if let Some(gossip) = &self.gossip
+            && let Err(err) = gossip.tell(PublishTransaction(authenticated_tx)).try_send()
+        {
+            log::warn!("Dropping local tx publish: gossip mailbox full or closed: {err}");
         }
 
         Ok(tx_hash)

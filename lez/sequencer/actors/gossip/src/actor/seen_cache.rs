@@ -55,26 +55,25 @@ impl SeenCache {
         self.set.contains(hash)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.order.len()
     }
 
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.order.is_empty()
-    }
-
+    #[cfg(test)]
     #[must_use]
     pub const fn hits(&self) -> u64 {
         self.hits
     }
 
+    #[cfg(test)]
     #[must_use]
     pub const fn inserts(&self) -> u64 {
         self.inserts
     }
 
+    #[cfg(test)]
     #[must_use]
     pub const fn evictions(&self) -> u64 {
         self.evictions

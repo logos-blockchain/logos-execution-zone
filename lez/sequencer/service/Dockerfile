@@ -5,8 +5,10 @@ WORKDIR /sequencer_service
 
 # Build argument to enable standalone feature (defaults to false)
 ARG STANDALONE=false
-# Comma-separated extra cargo features, e.g. FEATURES=mdns for LAN peer discovery
-ARG FEATURES=""
+# Comma-separated extra cargo features, e.g. FEATURES=mdns for LAN peer discovery.
+# Defaults to `prove`, which selects the in-process guest executor with a memoized
+# memory image instead of spawning an r0vm subprocess per execution.
+ARG FEATURES="prove"
 
 # Planner stage - generates dependency recipe
 FROM chef AS planner
