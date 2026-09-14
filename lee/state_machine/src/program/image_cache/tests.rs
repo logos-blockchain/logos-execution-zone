@@ -16,7 +16,20 @@ use crate::{
     program::{AccountInput, DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
-fn transfer_pre_states() -> Vec<AccountInput> {
+fn data_changer_target() -> AccountInput {
+    AccountInput::with_shard(
+        AccountId::new([3; 32]),
+        true,
+        AccountId::from(crate::test_methods::data_changer().id()),
+        ShardData::empty(),
+    )
+}
+
+fn data_changer_instruction() -> Vec<u8> {
+    Program::serialize_instruction(vec![1_u8; 4]).expect("the instruction serializes")
+}
+
+fn balance_pre_states() -> Vec<AccountInput> {
     vec![
         AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
         AccountInput::balance(AccountId::new([1; 32]), false, 0),
@@ -66,33 +79,21 @@ fn baseline(env: ExecutorEnv<'_>, elf: &[u8]) -> anyhow::Result<SessionOutcome> 
 fn cached_path_matches_rebuild_path() {
     let cases: Vec<(&str, Program, Vec<AccountInput>, Vec<u8>)> = vec![
         (
-            "simple_balance_transfer",
-            crate::test_methods::simple_balance_transfer(),
-            transfer_pre_states(),
-            Program::serialize_instruction(11_223_344_556_677_u128).unwrap(),
-        ),
-        (
             "noop",
             crate::test_methods::noop(),
-            transfer_pre_states(),
+            balance_pre_states(),
             Vec::new(),
         ),
         (
             "data_changer",
             crate::test_methods::data_changer(),
-            vec![AccountInput::with_shard(
-                AccountId::new([3; 32]),
-                true,
-                0,
-                AccountId::from(crate::test_methods::data_changer().id()),
-                ShardData::empty(),
-            )],
+            vec![data_changer_target()],
             Program::serialize_instruction(vec![9_u8; 32]).unwrap(),
         ),
         (
             "foreign_shard_writer",
             crate::test_methods::foreign_shard_writer(),
-            transfer_pre_states(),
+            balance_pre_states(),
             Program::serialize_instruction(vec![7_u8; 8]).unwrap(),
         ),
         (
@@ -142,9 +143,9 @@ fn cached_path_matches_rebuild_path() {
 /// error text from both paths so any wording drift is visible.
 #[test]
 fn session_limit_still_maps_to_out_of_gas() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let pre_states = transfer_pre_states();
-    let instruction = Program::serialize_instruction(11_223_344_556_677_u128).unwrap();
+    let program = crate::test_methods::data_changer();
+    let pre_states = vec![data_changer_target()];
+    let instruction = data_changer_instruction();
     let budget: Cycles = 1_024;
 
     let base_err = baseline(
@@ -183,7 +184,7 @@ fn session_limit_still_maps_to_out_of_gas() {
 /// itself contains the session-limit phrase.
 #[test]
 fn guest_panic_is_not_out_of_gas() {
-    let program = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::data_changer();
 
     // No input at all: `read_lee_call` panics inside the guest.
     let cached_panic = super::execute(bare_env(DEFAULT_PUBLIC_CYCLE_BUDGET), program.elf())
@@ -239,7 +240,7 @@ fn guest_panic_is_not_out_of_gas() {
 /// id but not an ELF must still each get their own image.
 #[test]
 fn cache_is_keyed_on_elf_bytes_not_program_id() {
-    let a = crate::test_methods::simple_balance_transfer();
+    let a = crate::test_methods::data_changer();
     let b = crate::test_methods::noop();
 
     // `new_unchecked` lets the id lie; the cache must not care.
@@ -253,8 +254,8 @@ fn cache_is_keyed_on_elf_bytes_not_program_id() {
     let warm = super::execute(
         env_for(
             &a,
-            &transfer_pre_states(),
-            &Program::serialize_instruction(1_u128).unwrap(),
+            &[data_changer_target()],
+            &data_changer_instruction(),
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         ),
         a.elf(),
@@ -262,7 +263,7 @@ fn cache_is_keyed_on_elf_bytes_not_program_id() {
     .unwrap();
     std::hint::black_box(warm);
 
-    let pre_states = transfer_pre_states();
+    let pre_states = balance_pre_states();
     let honest = super::execute(
         env_for(&b, &pre_states, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         b.elf(),
@@ -305,7 +306,7 @@ fn multi_segment_session_agrees_on_cycles_and_journal() {
 /// the same bytes abort the thread on the pre-change path whenever `prove` is on.
 #[test]
 fn malformed_elf_is_an_error_not_a_panic() {
-    let program = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::data_changer();
     let truncated = &program.elf()[..64];
 
     super::execute(bare_env(DEFAULT_PUBLIC_CYCLE_BUDGET), truncated)
@@ -327,7 +328,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     let upstream = ExecutorImpl::from_elf(
         env_for(
             &good,
-            &transfer_pre_states(),
+            &balance_pre_states(),
             &[],
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         ),
@@ -341,7 +342,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     let ours = super::execute(
         env_for(
             &good,
-            &transfer_pre_states(),
+            &balance_pre_states(),
             &[],
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         ),

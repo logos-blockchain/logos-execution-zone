@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use clock_core::ClockAccountData;
-use lee_core::account::{Account, AccountData, AccountId};
+use lee_core::account::{Account, AccountId};
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -29,13 +29,7 @@ pub fn faucet_account_id() -> AccountId {
 
 #[must_use]
 pub fn faucet_account() -> Account {
-    Account {
-        data: AccountData {
-            balance: u128::MAX,
-            ..AccountData::default()
-        },
-        ..Account::default()
-    }
+    Account::funded(u128::MAX)
 }
 
 #[must_use]

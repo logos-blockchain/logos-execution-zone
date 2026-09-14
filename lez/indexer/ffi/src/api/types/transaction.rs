@@ -123,14 +123,11 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
     }
 }
 
-/// Selects an account's balance and optionally one program shard.
-///
-/// `program_account_id` is used only when `has_program_account_id` is true.
+/// Selects one of an account's program shards.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct FfiProgramShardSelector {
     pub account_id: FfiAccountId,
-    pub has_program_account_id: bool,
     pub program_account_id: FfiAccountId,
 }
 
@@ -143,8 +140,7 @@ impl From<ProgramShardSelector> for FfiProgramShardSelector {
 
         Self {
             account_id: account_id.into(),
-            has_program_account_id: program_account_id.is_some(),
-            program_account_id: program_account_id.map(Into::into).unwrap_or_default(),
+            program_account_id: program_account_id.into(),
         }
     }
 }
@@ -155,9 +151,9 @@ impl From<FfiProgramShardSelector> for ProgramShardSelector {
             account_id: AccountId {
                 value: value.account_id.data,
             },
-            program_account_id: value.has_program_account_id.then_some(AccountId {
+            program_account_id: AccountId {
                 value: value.program_account_id.data,
-            }),
+            },
         }
     }
 }
@@ -605,7 +601,7 @@ mod tests {
                 program_id: ProgramId([2; 8]),
                 shard_selectors: vec![ProgramShardSelector {
                     account_id: AccountId { value: [3; 32] },
-                    program_account_id: None,
+                    program_account_id: indexer_service_protocol::AccountId::native_token_program(),
                 }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],

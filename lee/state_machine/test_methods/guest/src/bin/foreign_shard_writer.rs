@@ -1,9 +1,6 @@
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = Vec<u8>;
@@ -27,9 +24,8 @@ fn main() {
         return;
     };
 
-    let target_diff = AccountStateDiff::new(
+    let target_diff = ShardStateDiff::new(
         target,
-        BalanceDiff::Add(0),
         data.try_into()
             .expect("provided data should fit into data limit"),
     );
@@ -38,7 +34,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![target_diff, AccountStateDiff::unchanged(other)],
+        vec![target_diff, ShardStateDiff::unchanged(other)],
     )
     .write();
 }

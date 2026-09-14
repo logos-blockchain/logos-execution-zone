@@ -143,13 +143,10 @@ typedef struct FfiProgramId {
 typedef struct FfiBytes32 FfiAccountId;
 
 /**
- * Selects an account's balance and optionally one program shard.
- *
- * `program_account_id` is used only when `has_program_account_id` is true.
+ * Selects one of an account's program shards.
  */
 typedef struct FfiProgramShardSelector {
   FfiAccountId account_id;
-  bool has_program_account_id;
   FfiAccountId program_account_id;
 } FfiProgramShardSelector;
 
@@ -246,13 +243,9 @@ typedef struct FfiShard {
 } FfiShard;
 
 /**
- * An account's balance and program shards.
+ * An account's program shards, the native balance among them.
  */
 typedef struct FfiAccountData {
-  /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
   /**
    * Pointer to the account's shards.
    */
@@ -361,14 +354,10 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
 /**
  * Account data structure - C-compatible version of lee Account.
  *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * Note: `nonce` is a u128 value represented as a little-endian byte array since C doesn't have
+ * native u128 support. The native balance is the shard of the native token program.
  */
 typedef struct FfiAccount {
-  /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
   /**
    * Nonce as little-endian [u8; 16].
    */

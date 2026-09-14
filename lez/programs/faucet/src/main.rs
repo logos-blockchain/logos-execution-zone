@@ -1,8 +1,10 @@
-use authenticated_transfer_core::custody_transfer;
 use faucet_core::Instruction;
-use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-    respond_unsupported_call,
+use lee_core::{
+    native_token::custody_transfer,
+    program::{
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn main() {
@@ -42,8 +44,8 @@ fn main() {
     );
 
     let post_diffs = vec![
-        AccountStateDiff::unchanged(faucet),
-        AccountStateDiff::unchanged(recipient),
+        ShardStateDiff::unchanged(faucet),
+        ShardStateDiff::unchanged(recipient),
     ];
 
     ProgramOutput::new(

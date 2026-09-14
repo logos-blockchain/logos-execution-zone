@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use indexer_service_protocol::Transaction;
 use leptos::prelude::*;
 use leptos_router::components::A;
@@ -29,7 +31,12 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 message,
                 witness_set: _,
             } = tx;
-            format!("{} accounts involved", message.shard_selectors.len())
+            let accounts: BTreeSet<_> = message
+                .shard_selectors
+                .iter()
+                .map(|selector| selector.account_id)
+                .collect();
+            format!("{} accounts involved", accounts.len())
         }
         Transaction::PrivacyPreserving(tx) => {
             let indexer_service_protocol::PrivacyPreservingTransaction {

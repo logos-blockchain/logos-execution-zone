@@ -100,13 +100,12 @@ impl Default for FfiShard {
 
 /// Account data structure - C-compatible version of lee Account.
 ///
-/// Note: `balance` and `nonce` are u128 values represented as little-endian
+/// Note: `nonce` is a u128 value represented as a little-endian
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    /// Balance as little-endian [u8; 16].
-    pub balance: FfiU128,
-    /// Pointer to this account's shards, ordered by program address.
+    /// Pointer to this account's shards, ordered by program address. The native balance is the
+    /// shard of the native token program.
     pub shards: *const FfiShard,
     /// Number of shards.
     pub shards_len: usize,
@@ -117,7 +116,6 @@ pub struct FfiAccount {
 impl Default for FfiAccount {
     fn default() -> Self {
         Self {
-            balance: FfiU128::default(),
             shards: std::ptr::null(),
             shards_len: 0,
             nonce: FfiU128::default(),
@@ -312,26 +310,19 @@ impl Default for FfiAccountIdentity {
     }
 }
 
-/// An account identity with an optional program shard selection.
-///
-/// `program_account_id` is ignored when `has_program_account_id` is false.
+/// An account identity with the program shard it selects.
 #[repr(C)]
 pub struct FfiAccountMention {
     pub identity: FfiAccountIdentity,
     pub program_account_id: FfiBytes32,
-    pub has_program_account_id: bool,
 }
 
 impl TryFrom<&FfiAccountMention> for AccountMention {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiAccountMention) -> Result<Self, Self::Error> {
-        let identity = AccountIdentity::try_from(&value.identity)?;
-        Ok(if value.has_program_account_id {
-            identity.select_program_shard(value.program_account_id.into())
-        } else {
-            identity.balance()
-        })
+        Ok(AccountIdentity::try_from(&value.identity)?
+            .select_program_shard(value.program_account_id.into()))
     }
 }
 
@@ -401,7 +392,6 @@ impl From<lee::Account> for FfiAccount {
         };
 
         Self {
-            balance: value.data.balance.into(),
             shards,
             shards_len,
             nonce: value.nonce.0.into(),
@@ -416,7 +406,6 @@ impl TryFrom<&FfiAccount> for lee::Account {
         let mut account = Self {
             nonce: lee_core::account::Nonce(value.nonce.into()),
             data: lee_core::account::AccountData {
-                balance: value.balance.into(),
                 shards: std::collections::BTreeMap::new(),
             },
         };

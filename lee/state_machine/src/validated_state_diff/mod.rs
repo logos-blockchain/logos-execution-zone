@@ -9,6 +9,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
         TransactionEvent, compute_public_authorized_pdas, get_program_via,
@@ -258,15 +259,10 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
-        // All account_ids must be different
+        // An account may select several shards, but never the same one twice.
         ensure!(
-            shard_selectors
-                .iter()
-                .map(|shard_selector| shard_selector.account_id)
-                .collect::<HashSet<_>>()
-                .len()
-                == shard_selectors.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
+            shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
+            LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
         );
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
@@ -345,7 +341,17 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_account_id, real_pre_states, chained_call.instruction_data
             );
-            let program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            let program_output = if chained_call.program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+                // Native dispatch, on the scheduled program account ID: the protocol's own
+                // transfer implementation runs as Rust, with no zkVM session to charge cycles
+                // against.
+                native_token::execute(
+                    caller_data.account_id,
+                    &real_pre_states,
+                    &chained_call.instruction_data,
+                )
+                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
+            } else if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
                 // Native dispatch: `program_loader` is a pseudo-program run as Rust rather than a
                 // guest ELF, so there is no zkVM session to charge cycles against.
                 execute_program_loader(
@@ -427,11 +433,8 @@ impl ValidatedStateDiff {
                     .get(&account_id)
                     .or_else(|| state.get_account_by_id_ref(account_id))
                     .unwrap_or(&absent);
-                let consistent = expected.data.balance == pre.balance
-                    && pre
-                        .shard
-                        .as_ref()
-                        .is_none_or(|(program, data)| expected.data.shard(*program) == data);
+                let (selected_program, data) = &pre.shard;
+                let consistent = expected.data.shard(*selected_program) == data;
                 ensure!(
                     consistent,
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
@@ -504,15 +507,14 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            // Apply balance and shard changes, preserving all other shards.
+            // Apply shard changes, preserving all other shards.
             for diff in &program_output.state_diffs {
                 let account_id = diff.pre_state.account_id;
                 state_diff
                     .entry(account_id)
                     .or_insert_with(|| state.get_account_by_id(account_id))
                     .data
-                    .apply_diff(diff)
-                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+                    .apply_diff(diff);
             }
 
             // Write all the output event data into a proper event struct,

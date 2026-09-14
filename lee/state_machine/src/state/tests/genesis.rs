@@ -47,7 +47,7 @@ fn new_includes_nullifiers_for_private_accounts() {
 #[test]
 fn insert_program() {
     let mut state = V03State::new();
-    let program_to_insert = crate::test_methods::simple_balance_transfer();
+    let program_to_insert = crate::test_methods::data_changer();
     let account_id = AccountId::from(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 

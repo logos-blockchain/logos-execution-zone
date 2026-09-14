@@ -13,7 +13,6 @@ borsh.workspace = true
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["test_utils"] }
 lee.workspace = true
-authenticated_transfer_core.workspace = true
 sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true
@@ -26,6 +25,7 @@ cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
+token_core.workspace = true
 wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 indexer_service.workspace = true

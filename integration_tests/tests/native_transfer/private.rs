@@ -106,7 +106,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(from_acc.data.balance, 10000);
+    assert_eq!(from_acc.data.balance().unwrap(), 10000);
     let to_before = account_balance(&ctx, to).await?;
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
@@ -124,7 +124,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     // A deshielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so both sides move by exactly the amount.
-    assert_eq!(from_acc.data.balance, 9900);
+    assert_eq!(from_acc.data.balance().unwrap(), 9900);
     assert_eq!(acc_2_balance, to_before + 100);
 
     log::info!("Successfully deshielded transfer to public account");
@@ -225,7 +225,7 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.data.balance, 100);
+    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
 
     log::info!("Successfully transferred over the foreign-keys path");
 
@@ -256,7 +256,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     // A shielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so the public sender pays exactly the amount.
     assert_eq!(acc_from_balance, from_before - 100);
-    assert_eq!(acc_to.data.balance, 20100);
+    assert_eq!(acc_to.data.balance().unwrap(), 20100);
 
     log::info!("Successfully shielded transfer to owned private account");
 
@@ -362,7 +362,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         .get_account_private(to_account_id)
         .context("Failed to get receiver account")?;
 
-    assert_eq!(to_res_acc.data.balance, 100);
+    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
 
     Ok(())
 }
@@ -469,14 +469,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
-    assert_eq!(acc_1.data.balance, 100);
+    assert_eq!(acc_1.data.balance().unwrap(), 100);
 
     let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
         .context("account for identifier 2 not found after sync")?;
-    assert_eq!(acc_2.data.balance, 200);
+    assert_eq!(acc_2.data.balance().unwrap(), 200);
 
     // Both account ids must resolve to the same key node.
     let found_acc1 = ctx
@@ -581,7 +581,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
     let faucet_account_id = system_accounts::faucet_account_id();
     let faucet_program_id: AccountId = programs::faucet().id().into();
-    let auth_transfer_program_id: AccountId = programs::authenticated_transfer().id().into();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
@@ -595,11 +594,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         faucet_chain_caller_id,
-        [
-            (faucet_program_id, programs::faucet()),
-            (auth_transfer_program_id, programs::authenticated_transfer()),
-        ]
-        .into(),
+        [(faucet_program_id, programs::faucet())].into(),
     );
 
     let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
@@ -637,7 +632,6 @@ async fn prove_init_with_commitment_root(
     ctx: &TestContext,
     commitment_root: lee_core::CommitmentSetDigest,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
-    let program = programs::authenticated_transfer();
     let sender_id = ctx.existing_public_accounts()[0];
     let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
 
@@ -667,11 +661,11 @@ async fn prove_init_with_commitment_root(
                 },
             }],
             instruction_data: Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount: 1 },
+                lee_core::native_token::Instruction::Transfer { amount: 1 },
             )?,
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     )?;
 
     Ok(output)

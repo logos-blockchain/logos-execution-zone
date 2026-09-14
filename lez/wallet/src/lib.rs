@@ -103,6 +103,8 @@ pub enum ExecutionFailureKind {
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
+    #[error("Account {0} is mentioned with conflicting identities")]
+    ConflictingAccountIdentity(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
     #[error("Failed to build transaction: {0}")]
@@ -904,18 +906,21 @@ impl WalletCore {
             ));
         }
 
-        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+        let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.pre_states())?;
 
         let shard_selectors = acc_manager.shard_selectors();
         let nonces = acc_manager.public_account_nonces();
 
-        let payer = acc_manager.fee_payer_account_id().ok_or_else(|| {
-            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                "Public transaction has no signing account to pay its fees".to_owned(),
-            ))
-        })?;
+        let payer = acc_manager
+            .fee_payer_account_id(self)
+            .await?
+            .ok_or_else(|| {
+                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                    "Public transaction has no signing account to pay its fees".to_owned(),
+                ))
+            })?;
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_account_id,

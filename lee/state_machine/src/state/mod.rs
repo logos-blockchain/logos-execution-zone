@@ -12,7 +12,6 @@ use lee_core::{
 };
 
 use crate::{
-    AccountData,
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -151,18 +150,9 @@ impl V03State {
         mut self,
         balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
-        let public_accounts = balances.into_iter().map(|(account_id, balance)| {
-            (
-                account_id,
-                Account {
-                    data: AccountData {
-                        balance,
-                        ..AccountData::default()
-                    },
-                    ..Account::default()
-                },
-            )
-        });
+        let public_accounts = balances
+            .into_iter()
+            .map(|(account_id, balance)| (account_id, Account::funded(balance)));
         self.public_state.extend(public_accounts);
         self
     }

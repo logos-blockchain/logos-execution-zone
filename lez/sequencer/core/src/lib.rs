@@ -2331,7 +2331,7 @@ fn genesis_stake_message(
 ) -> Message {
     let amount = minimum_stake;
     let mover_instruction_data = lee::program::Program::serialize_instruction(
-        authenticated_transfer_core::Instruction::Transfer { amount },
+        lee_core::native_token::Instruction::Transfer { amount },
     )
     .expect("Failed to serialize genesis mover instruction");
     // A nonce counts how many times an account has signed. The funding account
@@ -2360,7 +2360,7 @@ fn genesis_stake_message(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
         },
     )

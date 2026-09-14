@@ -5,10 +5,7 @@
 //! RISC0 program (`compute_image_id` rejects anything else), so those are covered at the
 //! state-machine integration level instead, against real guest ELFs.
 
-use lee_core::{
-    account::{AccountId, BalanceDiff},
-    program::AccountInput,
-};
+use lee_core::{account::AccountId, program::AccountInput};
 
 use super::*;
 
@@ -16,7 +13,6 @@ fn empty_target(account_id: AccountId, is_authorized: bool) -> AccountInput {
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        0,
         PROGRAM_LOADER_ACCOUNT_ID,
         ShardData::empty(),
     )
@@ -30,7 +26,6 @@ fn segment_pre(
     AccountInput::with_shard(
         account_id,
         false,
-        0,
         PROGRAM_LOADER_ACCOUNT_ID,
         ShardData::try_from(
             ProgramSegment {
@@ -47,7 +42,6 @@ fn header_pre(account_id: AccountId, header: &ProgramHeader, is_authorized: bool
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        0,
         PROGRAM_LOADER_ACCOUNT_ID,
         ShardData::try_from(header.to_bytes()).unwrap(),
     )
@@ -59,7 +53,6 @@ fn write_segment_writes_the_loader_shard() {
     let pre_states = [AccountInput::with_shard(
         target_id,
         false,
-        5,
         PROGRAM_LOADER_ACCOUNT_ID,
         ShardData::empty(),
     )];
@@ -68,8 +61,6 @@ fn write_segment_writes_the_loader_shard() {
 
     assert_eq!(diffs.len(), 1);
     assert_eq!(diffs[0].pre_state.account_id, target_id);
-    assert_eq!(diffs[0].pre_state.balance, 5);
-    assert_eq!(diffs[0].post_balance_diff, BalanceDiff::Add(0));
     let segment = ProgramSegment::from_bytes(
         diffs[0]
             .post_data
@@ -103,7 +94,6 @@ fn write_segment_linking_to_an_existing_segment_leaves_it_unchanged() {
     assert_eq!(segment.next_segment, Some(next_id));
     // The referenced segment is read-only: no balance or data change.
     assert_eq!(diffs[1].pre_state, next_pre);
-    assert_eq!(diffs[1].post_balance_diff, BalanceDiff::Add(0));
     assert_eq!(diffs[1].post_data, None);
 }
 
@@ -153,7 +143,6 @@ fn write_segment_rejects_a_next_segment_shard_selector_naming_another_shard() {
     let foreign_next = AccountInput::with_shard(
         next_id,
         false,
-        0,
         AccountId::new([9; 32]),
         ShardData::try_from(vec![1]).unwrap(),
     );
@@ -169,7 +158,6 @@ fn write_segment_rejects_a_next_segment_with_malformed_data() {
     let malformed_next = AccountInput::with_shard(
         next_id,
         false,
-        0,
         PROGRAM_LOADER_ACCOUNT_ID,
         ShardData::try_from(vec![0xff, 0xff]).unwrap(),
     );
@@ -258,4 +246,33 @@ fn update_header_rejects_an_unauthorized_caller() {
         first_segment,
         false,
     );
+}
+
+#[test]
+#[should_panic(expected = "the native token program has no deployable bytecode")]
+fn a_header_may_not_be_created_for_the_native_token_program() {
+    let segment_id = AccountId::new([2; 32]);
+    let pre_states = [
+        AccountInput::with_shard(
+            NATIVE_TOKEN_PROGRAM_ID,
+            true,
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::empty(),
+        ),
+        AccountInput::with_shard(
+            segment_id,
+            false,
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::try_from(
+                ProgramSegment {
+                    bytecode: vec![1, 2, 3],
+                    next_segment: None,
+                }
+                .to_bytes(),
+            )
+            .unwrap(),
+        ),
+    ];
+
+    drop(create_header(&pre_states, segment_id, false));
 }

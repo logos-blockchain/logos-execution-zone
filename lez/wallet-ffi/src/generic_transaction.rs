@@ -77,32 +77,7 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             program_map.insert(program_dep.id().into(), program_dep);
         }
 
-        Ok(Self {
-            program: orig_program,
-            self_account_id,
-            dependencies: program_map,
-        })
-    }
-}
-
-impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
-    fn from(value: ProgramWithDependencies) -> Self {
-        let ffi_program = value.program.into();
-
-        let ffi_deps: Vec<FfiProgram> = value
-            .dependencies
-            .into_values()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-
-        let deps_size = ffi_deps.len();
-        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgram;
-
-        Self {
-            program: ffi_program,
-            deps,
-            deps_size,
-        }
+        Ok(Self::new(orig_program, self_account_id, program_map))
     }
 }
 

@@ -1,6 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
-use lee_core::{BlockId, Timestamp, program::TransactionEvent};
+use lee_core::{
+    BlockId, Timestamp, native_token::NATIVE_TOKEN_PROGRAM_ID, program::TransactionEvent,
+};
 use log::warn;
 use serde::{Deserialize, Serialize};
 
@@ -347,21 +349,19 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
 
 /// The fee reserve: hold `amount` from `payer` in the fee inbox.
 ///
-/// Runs `authenticated_transfer` as a fee-settlement invocation authorized by
+/// Runs the native token program as a fee-settlement invocation authorized by
 /// the payer's fee declaration; the returned message carries only the program,
 /// accounts, and instruction the invocation needs.
 #[must_use]
 pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
-    // TODO: consider a stake-program like pattern where tx carries the program id & the instruction
-    // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(payer),
             ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
         ],
         vec![],
-        authenticated_transfer_core::Instruction::Transfer { amount },
+        lee_core::native_token::Instruction::Transfer { amount },
     )
     .expect("Fee reserve message should always be constructable")
 }
@@ -455,15 +455,29 @@ pub fn validate_bridge_account_modification(
 /// user-submitted, so a user transaction that fails this is a forgery attempt.
 #[must_use]
 pub fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
-    pre.data.balance < post.data.balance
-        && pre.nonce == post.nonce
-        && pre.data.shards == post.data.shards
+    fn non_native(
+        account: &lee::Account,
+    ) -> impl Iterator<Item = (&lee::AccountId, &lee::ShardData)> {
+        account
+            .data
+            .shards
+            .iter()
+            .filter(|(program, _)| **program != NATIVE_TOKEN_PROGRAM_ID)
+    }
+    matches!(
+        (pre.data.balance(), post.data.balance()),
+        (Ok(before), Ok(after)) if before < after
+    ) && pre.nonce == post.nonce
+        && non_native(pre).eq(non_native(post))
 }
 
 #[cfg(test)]
 mod tests {
-    use lee::{Account, AccountData, AccountId, PrivateKey, PublicKey, V03State};
-    use lee_core::account::Nonce;
+    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee_core::{
+        account::Nonce,
+        native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
+    };
 
     use super::{
         validate_bridge_account_modification, validate_doesnt_modify_account,
@@ -504,9 +518,10 @@ mod tests {
         };
         let post = Account {
             nonce: pre.nonce,
-            data: AccountData {
-                balance: 600,
-                ..pre.data.clone()
+            data: {
+                let mut data = pre.data.clone();
+                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data
             },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -528,9 +543,10 @@ mod tests {
         };
         let post = Account {
             nonce: Nonce(8),
-            data: AccountData {
-                balance: 600,
-                ..pre.data.clone()
+            data: {
+                let mut data = pre.data.clone();
+                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data
             },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -568,9 +584,10 @@ mod tests {
         let pre = Account::funded(500);
         let post = Account {
             nonce: pre.nonce,
-            data: AccountData {
-                balance: 600,
-                ..pre.data.clone()
+            data: {
+                let mut data = pre.data.clone();
+                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(600));
+                data
             },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -590,9 +607,10 @@ mod tests {
         let pre = Account::funded(1_000);
         let post = Account {
             nonce: pre.nonce,
-            data: AccountData {
-                balance: 400,
-                ..pre.data.clone()
+            data: {
+                let mut data = pre.data.clone();
+                data.set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+                data
             },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);

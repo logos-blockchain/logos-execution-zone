@@ -153,11 +153,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
             programs::bridge().id().into(),
-            [(
-                programs::authenticated_transfer().id().into(),
-                programs::authenticated_transfer(),
-            )]
-            .into(),
+            HashMap::new(),
         );
 
     // Serialize the bridge deposit instruction

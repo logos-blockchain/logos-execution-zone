@@ -4,7 +4,6 @@ use super::*;
 fn flash_swap_successful() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id =
         AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
@@ -24,13 +23,11 @@ fn flash_swap_successful() {
     // Callback instruction: return funds
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id().into(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
         callback_program_id: callback.id().into(),
         amount_out,
         callback_instruction_data: cb_data,
@@ -42,17 +39,16 @@ fn flash_swap_successful() {
 
     // Vault balance restored, receiver back to 0
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance,
-        initial_balance
+        state.get_account_by_id(vault_id).data.balance(),
+        Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance, 0);
+    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
 }
 
 #[test]
 fn flash_swap_callback_keeps_funds_rollback() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id =
         AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
@@ -72,13 +68,11 @@ fn flash_swap_callback_keeps_funds_rollback() {
     // Callback instruction: do NOT return funds
     let cb_instruction = CallbackInstruction {
         return_funds: false,
-        token_program_id: token.id().into(),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
         callback_program_id: callback.id().into(),
         amount_out,
         callback_instruction_data: cb_data,
@@ -95,10 +89,10 @@ fn flash_swap_callback_keeps_funds_rollback() {
 
     // State unchanged (rollback)
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance,
-        initial_balance
+        state.get_account_by_id(vault_id).data.balance(),
+        Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance, 0);
+    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
 }
 
 #[test]
@@ -107,7 +101,6 @@ fn flash_swap_self_call_targets_correct_program() {
     // because vault balance doesn't decrease.
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id =
         AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
@@ -125,13 +118,11 @@ fn flash_swap_self_call_targets_correct_program() {
 
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id().into(),
         amount: 0,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
         callback_program_id: callback.id().into(),
         amount_out: 0,
         callback_instruction_data: cb_data,

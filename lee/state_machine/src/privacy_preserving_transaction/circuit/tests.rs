@@ -4,13 +4,14 @@ use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey,
     WitnessKind,
-    account::{Account, AccountData, AccountId, Nonce},
+    account::{Account, AccountId, Nonce},
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError},
     program::{PdaSeed, PrivateAccountKind},
 };
 
 use super::*;
 use crate::{
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::circuit::execute_and_prove,
     program::Program,
     state::{
@@ -50,7 +51,6 @@ fn proof_inner_roundtrip() {
 #[test]
 fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
     let recipient_keys = test_private_account_keys_1();
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_id = AccountId::new([0; 32]);
     let sender_account = Account::funded(100);
 
@@ -59,14 +59,8 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     let balance_to_move: u128 = 37;
 
-    let expected_sender_pre = AccountData {
-        balance: 100,
-        ..AccountData::default()
-    };
-    let expected_sender_post = AccountData {
-        balance: 100 - balance_to_move,
-        ..AccountData::default()
-    };
+    let expected_sender_pre = Account::funded(100).data;
+    let expected_sender_post = Account::funded(100 - balance_to_move).data;
 
     let expected_recipient_post = Account {
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
@@ -86,10 +80,13 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
             private_witnesses: vec![init_witness(&recipient_keys, 0, Account::default())],
-            instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     )
     .unwrap();
 
@@ -113,7 +110,6 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
 #[test]
 fn prove_privacy_preserving_execution_circuit_fully_private() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
 
@@ -185,10 +181,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                 ),
                 init_witness(&recipient_keys, 0, Account::default()),
             ],
-            instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     )
     .unwrap();
 
@@ -394,56 +393,12 @@ fn private_pda_with_custom_identifier_encrypts_correct_kind() {
     );
 }
 
-/// PDA init: initializes a new PDA under `simple_balance_transfer`'s ownership.
-/// The `simple_transfer_proxy` program chains to `simple_balance_transfer` with `pda_seeds`
-/// to establish authorization and the private PDA binding.
-#[test]
-fn private_pda_init() {
-    let program = crate::test_methods::simple_transfer_proxy();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
-    let keys = test_private_account_keys_1();
-    let npk = keys.npk();
-    let seed = PdaSeed::new([42; 32]);
-    // PDA (new, private PDA)
-    let pda_id =
-        AccountId::for_private_pda(&AccountId::from(program.id()), &seed, &npk, &keys.vpk(), 0);
-
-    let auth_id: AccountId = simple_transfer.id().into();
-    let program_with_deps = ProgramWithDependencies::new(
-        program.clone(),
-        program.id().into(),
-        [(auth_id, simple_transfer)].into(),
-    );
-
-    // is_withdraw=false triggers init path (1 pre-state)
-    let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, false)).unwrap();
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(pda_id)],
-            private_witnesses: vec![init_pda_witness(
-                &keys,
-                0,
-                (program.id().into(), seed),
-                Account::default(),
-            )],
-            instruction_data: instruction,
-            ..Default::default()
-        },
-        &program_with_deps,
-    );
-
-    let (output, _proof) = result.expect("PDA init should succeed");
-    assert_eq!(output.private_actions.len(), 1);
-}
-
-/// PDA withdraw: chains to `simple_balance_transfer` to move balance from PDA to recipient.
+/// PDA withdraw: chains to the native token program to move balance from PDA to recipient.
 /// Uses a default PDA (amount=0) because testing with a pre-funded PDA requires a
 /// two-tx sequence with membership proofs.
 #[test]
 fn private_pda_withdraw() {
-    let program = crate::test_methods::simple_transfer_proxy();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::pda_spend_proxy();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
@@ -455,15 +410,11 @@ fn private_pda_withdraw() {
     let recipient_id = AccountId::new([88; 32]);
     let recipient_account = Account::funded(10000);
 
-    let auth_id: AccountId = simple_transfer.id().into();
-    let program_with_deps = ProgramWithDependencies::new(
-        program.clone(),
-        program.id().into(),
-        [(auth_id, simple_transfer)].into(),
-    );
+    let program_with_deps =
+        ProgramWithDependencies::new(program.clone(), program.id().into(), HashMap::new());
 
-    // is_withdraw=true, amount=0 (PDA has no balance yet)
-    let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, true)).unwrap();
+    // amount=0: the PDA has no balance yet
+    let instruction = Program::serialize_instruction((seed, 0_u128)).unwrap();
 
     let result = execute_and_prove(
         ProvingInput {
@@ -489,14 +440,13 @@ fn private_pda_withdraw() {
     assert_eq!(output.private_actions.len(), 1);
 }
 
-/// Shared regular private account: receives funds via `authenticated_transfer` directly,
+/// Shared regular private account: receives funds via a native transfer directly,
 /// no custom program needed. This demonstrates the non-PDA shared account flow where
 /// keys are derived from GMS via `derive_keys_for_shared_account`. The shared account
 /// uses the standard foreign private account path and works with auth-transfer's
 /// transfer path like any other private account.
 #[test]
 fn shared_account_receives_via_simple_transfer() {
-    let program = crate::test_methods::simple_balance_transfer();
     let shared_keys = test_private_account_keys_1();
     let shared_npk = shared_keys.npk();
     let shared_identifier: u128 = 42;
@@ -509,7 +459,10 @@ fn shared_account_receives_via_simple_transfer() {
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
 
     let balance_to_move: u128 = 100;
-    let instruction = Program::serialize_instruction(balance_to_move).unwrap();
+    let instruction = Program::serialize_instruction(NativeInstruction::Transfer {
+        amount: balance_to_move,
+    })
+    .unwrap();
 
     let result = execute_and_prove(
         ProvingInput {
@@ -527,7 +480,7 @@ fn shared_account_receives_via_simple_transfer() {
             instruction_data: instruction,
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
     let (output, _proof) = result.expect("shared account receive should succeed");
@@ -818,18 +771,16 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
     assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
 }
 
-/// Root-call private-PDA update attempt: `pda_spend_proxy` spends a PDA it owns via
-/// `simple_balance_transfer`.
+/// Root-call private-PDA update attempt: `pda_spend_proxy` spends a PDA it owns via the
+/// native token program.
 fn pda_update_attempt(
     declare_authorized: bool,
     derivation_identifier: u128,
     witness_identifier: u128,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput, LeeError> {
     let program = crate::test_methods::pda_spend_proxy();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
-    let simple_transfer_id: AccountId = simple_transfer.id().into();
     let program_id: AccountId = program.id().into();
     let pda_id = AccountId::for_private_pda(
         &program_id,
@@ -849,11 +800,7 @@ fn pda_update_attempt(
         signers.insert(pda_id);
     }
 
-    let program_with_deps = ProgramWithDependencies::new(
-        program,
-        program_id,
-        [(simple_transfer_id, simple_transfer)].into(),
-    );
+    let program_with_deps = ProgramWithDependencies::new(program, program_id, HashMap::new());
 
     execute_and_prove(
         ProvingInput {
@@ -874,8 +821,7 @@ fn pda_update_attempt(
                 pda_account,
                 commitment_set.get_proof_for(&pda_commitment).unwrap(),
             )],
-            instruction_data: Program::serialize_instruction((seed, 1_u128, simple_transfer_id))
-                .unwrap(),
+            instruction_data: Program::serialize_instruction((seed, 1_u128)).unwrap(),
             ..Default::default()
         },
         &program_with_deps,
@@ -985,7 +931,18 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
 fn private_pda_update_identifier_mismatch_fails() {
     let result = pda_update_attempt(false, 5, 99);
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { .. }
+                )
+            ))
+        ),
+        "refused for the wrong reason: {:?}",
+        result.err()
+    );
 }
 
 fn forwarder_over_callee() -> (ProgramWithDependencies, AccountId, AccountId) {
@@ -1072,12 +1029,11 @@ fn forwarding_input(
 fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_account() {
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
-    let balance = 500;
     let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
     let own_shard = ShardData::try_from(vec![2; 8]).unwrap();
     let write = vec![3; 16];
 
-    let sparse = Account::funded(balance).with_shard(forwarder_id, own_shard.clone());
+    let sparse = Account::funded(500).with_shard(forwarder_id, own_shard.clone());
     let complete = sparse.clone().with_shard(callee_id, on_chain.clone());
 
     let mut asked: Vec<ProgramShardSelector> = Vec::new();
@@ -1101,10 +1057,10 @@ fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_
         panic!("one account, one action: {:?}", output.public_actions)
     };
     assert_eq!(action.account_id, account_id);
-    assert_eq!(action.pre.balance, balance);
     assert_eq!(action.pre.shards[&forwarder_id], own_shard);
     assert_eq!(action.pre.shards[&callee_id], on_chain);
-    assert_eq!(action.post.balance, balance);
+    assert!(!action.pre.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
+    assert!(!action.post.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
     assert_eq!(
         action.post.shards[&callee_id],
         ShardData::try_from(write.clone()).unwrap()
@@ -1309,4 +1265,48 @@ fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
         ShardData::try_from(written).unwrap(),
         "the callee must have run against the root's write, not the resolver's value"
     );
+}
+
+#[test]
+fn a_guest_supplied_for_the_reserved_id_is_refused() {
+    let program = crate::test_methods::noop();
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance(AccountId::new([1; 32]))],
+            instruction_data: Program::serialize_instruction(()).unwrap(),
+            ..Default::default()
+        },
+        &ProgramWithDependencies::new(program, NATIVE_TOKEN_PROGRAM_ID, HashMap::new()),
+    );
+
+    let Err(LeeError::InvalidInput(message)) = result else {
+        panic!("a guest was accepted for the native token program: {result:?}");
+    };
+    assert!(message.contains("no deployable bytecode"), "{message}");
+}
+
+#[test]
+fn a_native_transfer_claims_no_program_image() {
+    let sender_id = AccountId::new([3; 32]);
+    let recipient_id = AccountId::new([4; 32]);
+
+    let (output, _proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
+            ],
+            signers: [sender_id].into(),
+            public_accounts: [(sender_id, Account::funded(100))].into(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 7,
+            })
+            .unwrap(),
+            ..Default::default()
+        },
+        &ProgramWithDependencies::native(),
+    )
+    .expect("the transfer proves");
+
+    assert!(output.program_image_claims.is_empty());
 }

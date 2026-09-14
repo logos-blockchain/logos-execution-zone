@@ -19,9 +19,10 @@ use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
     AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
     ValidatedStateDiff,
+    error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::account::{Account, AccountData};
+use lee_core::{account::Account, native_token::TransferError};
 use ping_core::{
     ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
     sender_config_account_id,
@@ -78,7 +79,6 @@ fn base_state() -> V03State {
         programs::ping_sender(),
         programs::ping_receiver(),
         programs::bridge_lock(),
-        programs::authenticated_transfer(),
         programs::wrapped_token(),
     ])
 }
@@ -230,16 +230,8 @@ fn holding_id_of(holder_id: AccountId) -> AccountId {
 
 /// Seeds a funded holding PDA for `holder_id`, matching genesis.
 fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
-    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
-        holding_id_of(holder_id),
-        Account {
-            data: AccountData {
-                balance,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    )]);
+    *state = std::mem::replace(state, V03State::new())
+        .with_public_accounts([(holding_id_of(holder_id), Account::funded(balance))]);
 }
 
 /// Seeds the bridge-lock config account pinning the real outbox and the wrapped
@@ -892,14 +884,17 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holding_after = public_diff[&holding_id_of(holder_id)].data.balance;
+    let holding_after = public_diff[&holding_id_of(holder_id)]
+        .data
+        .balance()
+        .unwrap();
     assert_eq!(
         holding_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
         "holding debited"
     );
 
-    let escrow_after = public_diff[&escrow_id].data.balance;
+    let escrow_after = public_diff[&escrow_id].data.balance().unwrap();
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
     let record = OutboxRecord::from_bytes(
@@ -1172,7 +1167,8 @@ fn a_lock_naming_another_target_program_is_rejected() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_BALANCE,
         "a refused lock leaves the holding's balance alone"
     );
@@ -1222,7 +1218,8 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_BALANCE,
         "a refused lock leaves the holding's balance alone"
     );
@@ -1302,13 +1299,13 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
     let message = Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(holding_id_of(holder_id)),
             ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
         ],
         vec![],
-        authenticated_transfer_core::Instruction::Transfer {
+        lee_core::native_token::Instruction::Transfer {
             amount: INITIAL_BALANCE,
         },
     )
@@ -1319,14 +1316,20 @@ fn a_direct_transfer_from_the_holding_is_refused() {
         panic!("an unauthorized holding debit must not execute");
     };
     assert!(
-        format!("{err:?}").contains("Sender must be authorized"),
+        matches!(
+            &err,
+            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender { account_id },
+            )) if *account_id == holding_id_of(holder_id)
+        ),
         "rejected for the wrong reason: {err:?}"
     );
     assert_eq!(
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_BALANCE
     );
 }
@@ -1350,12 +1353,13 @@ fn lock_debits_the_holding_not_the_holder() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_BALANCE - LOCK_AMOUNT,
         "the holding is what a lock debits"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).data.balance,
+        state.get_account_by_id(holder_id).data.balance().unwrap(),
         55,
         "the holder's own balance is untouched"
     );
@@ -1461,7 +1465,8 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
         state
             .get_account_by_id(holding_id_of(victim_id))
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_BALANCE,
         "the victim's holding is untouched"
     );

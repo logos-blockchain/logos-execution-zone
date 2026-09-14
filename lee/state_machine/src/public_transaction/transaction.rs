@@ -61,7 +61,10 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use lee_core::account::ProgramShardSelector;
+    use lee_core::{
+        account::ProgramShardSelector,
+        native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+    };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -82,17 +85,15 @@ pub mod tests {
     fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
-        V03State::new()
-            .with_public_account_balances(initial_data)
-            .with_programs([crate::test_methods::simple_balance_transfer()])
+        V03State::new().with_public_account_balances(initial_data)
     }
 
     fn transaction_for_tests() -> PublicTransaction {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -171,9 +172,9 @@ pub mod tests {
         let (key1, _, addr1, _) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr1),
@@ -194,9 +195,9 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -217,9 +218,9 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -241,9 +242,9 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 1_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -262,13 +263,8 @@ pub mod tests {
     #[test]
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
-        let message = Message::new_preserialized(
-            crate::test_methods::simple_balance_transfer().id().into(),
-            vec![],
-            vec![],
-            vec![0; 4],
-            None,
-        );
+        let message =
+            Message::new_preserialized(NATIVE_TOKEN_PROGRAM_ID, vec![], vec![], vec![0; 4], None);
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);

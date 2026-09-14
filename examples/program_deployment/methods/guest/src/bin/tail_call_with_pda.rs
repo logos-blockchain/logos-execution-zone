@@ -1,8 +1,8 @@
 use lee_core::{
     account::ProgramShardSelector,
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -44,7 +44,7 @@ fn main() {
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
     // Create the (unchanged) post state
-    let post_state = AccountStateDiff::unchanged(pre_state.clone());
+    let post_state = ShardStateDiff::unchanged(pre_state.clone());
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> =

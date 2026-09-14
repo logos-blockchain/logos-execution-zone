@@ -124,7 +124,6 @@ fn chained_events_follow_depth_first_pre_order() {
 fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let emitter = crate::test_methods::event_emitter();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id =
         AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
@@ -143,7 +142,6 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
         callback_program_id: emitter.id().into(),
         amount_out: 0,
         callback_instruction_data,
@@ -155,7 +153,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     assert_eq!(payloads(&events), vec![vec![0; 4]]);
     assert_eq!(events[0].account_id, emitter.id().into());
     assert_ne!(events[0].account_id, initiator.id().into());
-    assert_ne!(events[0].account_id, token.id().into());
+    assert_ne!(events[0].account_id, NATIVE_TOKEN_PROGRAM_ID);
 }
 
 #[test]

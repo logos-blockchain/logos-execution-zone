@@ -16,12 +16,10 @@ pub struct FfiShard {
 
 /// Account data structure - C-compatible version of lee Account.
 ///
-/// Note: `balance` and `nonce` are u128 values represented as little-endian
-/// byte arrays since C doesn't have native u128 support.
+/// Note: `nonce` is a u128 value represented as a little-endian byte array since C doesn't have
+/// native u128 support. The native balance is the shard of the native token program.
 #[repr(C)]
 pub struct FfiAccount {
-    /// Balance as little-endian [u8; 16].
-    pub balance: FfiU128,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
     /// Pointer to the account's shards.
@@ -30,11 +28,9 @@ pub struct FfiAccount {
     pub shards_len: usize,
 }
 
-/// An account's balance and program shards.
+/// An account's program shards, the native balance among them.
 #[repr(C)]
 pub struct FfiAccountData {
-    /// Balance as little-endian [u8; 16].
-    pub balance: FfiU128,
     /// Pointer to the account's shards.
     pub shards: *mut FfiShard,
     /// Number of shards.
@@ -65,13 +61,12 @@ impl From<lee::Account> for FfiAccount {
     fn from(value: lee::Account) -> Self {
         let lee::Account {
             nonce,
-            data: lee::AccountData { balance, shards },
+            data: lee::AccountData { shards },
         } = value;
 
         let (shards, shards_len) = shards_into_raw(shards);
 
         Self {
-            balance: balance.into(),
             nonce: nonce.0.into(),
             shards,
             shards_len,
@@ -81,22 +76,17 @@ impl From<lee::Account> for FfiAccount {
 
 impl From<lee::AccountData> for FfiAccountData {
     fn from(value: lee::AccountData) -> Self {
-        let lee::AccountData { balance, shards } = value;
+        let lee::AccountData { shards } = value;
 
         let (shards, shards_len) = shards_into_raw(shards);
 
-        Self {
-            balance: balance.into(),
-            shards,
-            shards_len,
-        }
+        Self { shards, shards_len }
     }
 }
 
 impl From<FfiAccount> for indexer_service_protocol::Account {
     fn from(value: FfiAccount) -> Self {
         let FfiAccount {
-            balance,
             nonce,
             shards,
             shards_len,
@@ -105,7 +95,6 @@ impl From<FfiAccount> for indexer_service_protocol::Account {
         Self {
             nonce: nonce.into(),
             data: indexer_service_protocol::AccountData {
-                balance: balance.into(),
                 shards: unsafe { shards_from_raw(shards, shards_len) },
             },
         }
@@ -115,7 +104,6 @@ impl From<FfiAccount> for indexer_service_protocol::Account {
 impl From<&FfiAccount> for indexer_service_protocol::Account {
     fn from(value: &FfiAccount) -> Self {
         let &FfiAccount {
-            balance,
             nonce,
             shards,
             shards_len,
@@ -124,7 +112,6 @@ impl From<&FfiAccount> for indexer_service_protocol::Account {
         Self {
             nonce: nonce.into(),
             data: indexer_service_protocol::AccountData {
-                balance: balance.into(),
                 shards: unsafe { shards_from_raw(shards, shards_len) },
             },
         }
@@ -133,14 +120,9 @@ impl From<&FfiAccount> for indexer_service_protocol::Account {
 
 impl From<FfiAccountData> for indexer_service_protocol::AccountData {
     fn from(value: FfiAccountData) -> Self {
-        let FfiAccountData {
-            balance,
-            shards,
-            shards_len,
-        } = value;
+        let FfiAccountData { shards, shards_len } = value;
 
         Self {
-            balance: balance.into(),
             shards: unsafe { shards_from_raw(shards, shards_len) },
         }
     }

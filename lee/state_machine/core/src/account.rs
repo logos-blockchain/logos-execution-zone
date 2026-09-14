@@ -6,9 +6,12 @@ pub use data::ShardData;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
-use thiserror::Error;
 
-use crate::{NullifierSecretKey, program::AccountStateDiff};
+use crate::{
+    NullifierSecretKey,
+    native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    program::ShardStateDiff,
+};
 
 pub mod data;
 
@@ -96,22 +99,6 @@ pub type Gas = u64;
 /// A raw zkVM execution cycle count or budget, before it is priced into [`Gas`].
 pub type Cycles = u64;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum BalanceDiff {
-    Add(Balance),
-    Sub(Balance),
-}
-
-#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BalanceDiffError {
-    #[error("balance overflow")]
-    Overflow,
-    #[error("insufficient balance")]
-    InsufficientBalance,
-}
-
 /// Account to be used both in public and private contexts.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
@@ -129,26 +116,30 @@ impl Account {
     }
 }
 
-#[cfg(any(test, feature = "test_utils"))]
 impl Account {
     #[must_use]
-    pub fn funded(balance: Balance) -> Self {
+    pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
         Self {
-            data: AccountData {
-                balance,
-                ..AccountData::default()
-            },
-            ..Self::default()
+            nonce: self.nonce,
+            data: self.data.project(program_account_ids),
         }
+    }
+
+    #[must_use]
+    pub fn funded(balance: Balance) -> Self {
+        Self::default().with_shard(
+            NATIVE_TOKEN_PROGRAM_ID,
+            crate::native_token::encode_balance(balance),
+        )
     }
 }
 
-/// An account's balance and program shards.
+/// An account's program shards, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
+#[serde(deny_unknown_fields)]
 pub struct AccountData {
-    pub balance: Balance,
     pub shards: BTreeMap<AccountId, ShardData>,
 }
 
@@ -173,22 +164,20 @@ impl AccountData {
         self
     }
 
-    pub fn apply_diff(&mut self, diff: &AccountStateDiff) -> Result<(), BalanceDiffError> {
-        self.balance = apply_balance_diff(diff.pre_state.balance, Some(diff.post_balance_diff))?;
-        if let Some((program, pre_data)) = &diff.pre_state.shard {
-            self.set_shard(
-                *program,
-                diff.post_data.clone().unwrap_or_else(|| pre_data.clone()),
-            );
-        }
-        Ok(())
+    pub fn balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
+        decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    /// Returns the balance and requested shards, with empty data for missing shards.
+    pub fn apply_diff(&mut self, diff: &ShardStateDiff) {
+        if let Some(data) = &diff.post_data {
+            self.set_shard(diff.pre_state.shard.0, data.clone());
+        }
+    }
+
+    /// Returns the requested shards, with empty data for missing shards.
     #[must_use]
     pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
         Self {
-            balance: self.balance,
             shards: program_account_ids
                 .into_iter()
                 .map(|program| (program, self.shard(program).clone()))
@@ -196,16 +185,15 @@ impl AccountData {
         }
     }
 
-    /// Updates the balance and supplied shards. Empty data removes a shard.
+    /// Updates the supplied shards. Empty data removes a shard.
     pub fn apply(&mut self, projection: &Self) {
-        self.balance = projection.balance;
         for (program, data) in &projection.shards {
             self.set_shard(*program, data.clone());
         }
     }
 }
 
-/// Selects an account's balance and optionally one program shard.
+/// Selects one of an account's program shards.
 #[derive(
     Debug,
     Copy,
@@ -220,7 +208,7 @@ impl AccountData {
 )]
 pub struct ProgramShardSelector {
     pub account_id: AccountId,
-    pub program_account_id: Option<AccountId>,
+    pub program_account_id: AccountId,
 }
 
 impl ProgramShardSelector {
@@ -228,16 +216,13 @@ impl ProgramShardSelector {
     pub const fn new(account_id: AccountId, program_account_id: AccountId) -> Self {
         Self {
             account_id,
-            program_account_id: Some(program_account_id),
+            program_account_id,
         }
     }
 
     #[must_use]
     pub const fn balance(account_id: AccountId) -> Self {
-        Self {
-            account_id,
-            program_account_id: None,
-        }
+        Self::new(account_id, NATIVE_TOKEN_PROGRAM_ID)
     }
 }
 
@@ -316,31 +301,29 @@ impl Display for AccountId {
     }
 }
 
-pub fn apply_balance_diff(
-    current: Balance,
-    diff: Option<BalanceDiff>,
-) -> Result<Balance, BalanceDiffError> {
-    match diff {
-        None => Ok(current),
-        Some(BalanceDiff::Add(amount)) => current
-            .checked_add(amount)
-            .ok_or(BalanceDiffError::Overflow),
-        Some(BalanceDiff::Sub(amount)) => current
-            .checked_sub(amount)
-            .ok_or(BalanceDiffError::InsufficientBalance),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::program::AccountInput;
 
     #[test]
+    fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
+        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
+            .expect("the stored shape loads");
+        assert_eq!(current.nonce, Nonce(7));
+        assert_eq!(current.data.balance(), Ok(0));
+
+        let legacy =
+            serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
+
+        assert!(legacy.is_err(), "a legacy balance field was accepted");
+    }
+
+    #[test]
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.data.balance, 0);
+        assert_eq!(new_acc.data.balance(), Ok(0));
     }
 
     #[test]
@@ -445,146 +428,65 @@ mod tests {
     }
 
     #[test]
-    fn apply_balance_diff_none_is_noop() {
-        let result = apply_balance_diff(10, None);
-        assert_eq!(result, Ok(10));
-    }
-
-    #[test]
-    fn apply_balance_diff_add_succeeds() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Add(5)));
-        assert_eq!(result, Ok(15));
-    }
-
-    #[test]
-    fn apply_balance_diff_add_zero_is_noop() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Add(0)));
-        assert_eq!(result, Ok(10));
-    }
-
-    #[test]
-    fn apply_balance_diff_add_overflow_is_rejected() {
-        let result = apply_balance_diff(Balance::MAX, Some(BalanceDiff::Add(1)));
-        assert_eq!(result, Err(BalanceDiffError::Overflow));
-    }
-
-    #[test]
-    fn apply_balance_diff_sub_succeeds() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(5)));
-        assert_eq!(result, Ok(5));
-    }
-
-    #[test]
-    fn apply_balance_diff_sub_zero_is_noop() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(0)));
-        assert_eq!(result, Ok(10));
-    }
-
-    #[test]
-    fn apply_balance_diff_sub_down_to_exactly_zero_succeeds() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(10)));
-        assert_eq!(result, Ok(0));
-    }
-
-    #[test]
-    fn apply_balance_diff_sub_insufficient_balance_is_rejected() {
-        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(11)));
-        assert_eq!(result, Err(BalanceDiffError::InsufficientBalance));
-    }
-
-    #[test]
-    fn serde_roundtrip_for_balance_diff() {
-        let diff = BalanceDiff::Add(7);
-
-        let serde_serialized_diff = serde_json::to_vec(&diff).unwrap();
-        let diff_restored = serde_json::from_slice(&serde_serialized_diff).unwrap();
-
-        assert_eq!(diff, diff_restored);
-    }
-
-    #[test]
-    fn borsh_roundtrip_for_balance_diff() {
-        let diff = BalanceDiff::Sub(7);
-
-        let borsh_serialized_diff = borsh::to_vec(&diff).unwrap();
-        let diff_restored = borsh::from_slice(&borsh_serialized_diff).unwrap();
-
-        assert_eq!(diff, diff_restored);
-    }
-
-    #[test]
     fn apply_diff_prunes_an_emptied_shard() {
         let program = AccountId::new([3; 32]);
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account
-            .data
-            .apply_diff(&AccountStateDiff::new(
-                AccountInput::with_shard(
-                    AccountId::new([1; 32]),
-                    true,
-                    10,
-                    program,
-                    b"record".to_vec().try_into().unwrap(),
-                ),
-                BalanceDiff::Sub(3),
-                ShardData::empty(),
-            ))
-            .unwrap();
+        account.data.apply_diff(&ShardStateDiff::new(
+            AccountInput::with_shard(
+                AccountId::new([1; 32]),
+                true,
+                program,
+                b"record".to_vec().try_into().unwrap(),
+            ),
+            ShardData::empty(),
+        ));
 
         assert!(!account.data.shards.contains_key(&program));
-        assert_eq!(account, Account::funded(7));
+        assert_eq!(account, Account::funded(10));
     }
 
     #[test]
     fn input_at_reads_a_vacant_shard_as_empty() {
         let account_id = AccountId::new([1; 32]);
         let program = AccountId::new([3; 32]);
-        let data = AccountData {
-            balance: 42,
-            ..AccountData::default()
-        };
+        let data = Account::funded(42).data;
 
         let input = AccountInput::at(ProgramShardSelector::new(account_id, program), true, &data);
 
-        assert_eq!(input.balance, 42);
-        assert_eq!(input.program_account_id(), Some(program));
+        assert_eq!(input.program_account_id(), program);
         assert!(input.shard_of(program).is_empty());
     }
 
     #[test]
-    fn input_at_of_a_balance_only_shard_selector_carries_no_shard() {
+    fn input_at_of_a_balance_shard_selector_carries_the_native_shard() {
         let account_id = AccountId::new([1; 32]);
-        let data = AccountData {
-            balance: 42,
-            ..AccountData::default()
-        }
-        .with_shard(
+        let data = Account::funded(42).data.with_shard(
             AccountId::new([3; 32]),
             b"record".to_vec().try_into().unwrap(),
         );
 
         let input = AccountInput::at(ProgramShardSelector::balance(account_id), false, &data);
 
-        assert_eq!(input.balance, 42);
-        assert_eq!(input.program_account_id(), None);
-        assert!(input.shard.is_none());
+        assert_eq!(input.program_account_id(), NATIVE_TOKEN_PROGRAM_ID);
+        assert_eq!(
+            decode_balance(input.shard_of(NATIVE_TOKEN_PROGRAM_ID)),
+            Ok(42)
+        );
     }
 
     #[test]
     fn project_reads_absent_shards_as_empty() {
         let held = AccountId::new([3; 32]);
         let absent = AccountId::new([4; 32]);
-        let data = AccountData {
-            balance: 9,
-            ..AccountData::default()
-        }
-        .with_shard(held, b"record".to_vec().try_into().unwrap());
+        let data = Account::funded(9)
+            .data
+            .with_shard(held, b"record".to_vec().try_into().unwrap());
 
         let projection = data.project([held, absent]);
 
-        assert_eq!(projection.balance, 9);
+        assert_eq!(projection.balance(), Ok(0));
         assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
         assert_eq!(projection.shards.len(), 2);
     }
@@ -598,25 +500,22 @@ mod tests {
         };
 
         account.data.apply(&AccountData {
-            balance: 1,
             shards: [(program, ShardData::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));
-        assert_eq!(account.data.balance, 1);
-        assert!(account.data.shards.is_empty());
+        assert_eq!(account.data.balance(), Ok(9));
+        assert_eq!(account.data.shards.len(), 1);
     }
 
     #[test]
     fn project_then_apply_is_identity_on_the_touched_shards() {
         let touched = AccountId::new([3; 32]);
         let untouched = AccountId::new([4; 32]);
-        let data = AccountData {
-            balance: 9,
-            ..AccountData::default()
-        }
-        .with_shard(touched, b"record".to_vec().try_into().unwrap())
-        .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+        let data = Account::funded(9)
+            .data
+            .with_shard(touched, b"record".to_vec().try_into().unwrap())
+            .with_shard(untouched, b"other".to_vec().try_into().unwrap());
 
         let mut applied = data.clone();
         applied.apply(&data.project([touched]));
@@ -639,7 +538,7 @@ mod tests {
 
         assert_eq!(account, restored);
         assert_eq!(restored.nonce, Nonce(u128::MAX));
-        assert_eq!(restored.data.balance, u128::MAX);
+        assert_eq!(restored.data.balance(), Ok(u128::MAX));
     }
 
     #[test]
@@ -651,7 +550,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&account).unwrap(),
-            r#"{"nonce":7,"data":{"balance":9,"shards":{}}}"#
+            r#"{"nonce":7,"data":{"shards":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
         );
     }
 }

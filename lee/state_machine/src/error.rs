@@ -1,7 +1,8 @@
 use std::io;
 
 use lee_core::{
-    account::{AccountId, BalanceDiffError, Cycles},
+    account::{AccountId, Cycles},
+    native_token::TransferError,
     program::AccountInput,
 };
 use thiserror::Error;
@@ -178,8 +179,8 @@ pub enum InvalidProgramBehaviorError {
         account_id: AccountId,
     },
 
-    #[error(transparent)]
-    BalanceDiffFailed(#[from] BalanceDiffError),
+    #[error("Invalid native transfer: {0}")]
+    NativeTransferFailed(#[from] TransferError),
 }
 
 #[cfg(test)]

@@ -3,14 +3,14 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{borrow::Cow, time::Duration};
+use std::borrow::Cow;
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    TestContext, private_mention, public_mention,
     utils::{
-        account_balance, get_account, get_account_view, new_account, send,
+        account_balance, create_token, get_account, get_account_view, new_account, send,
         wait_for_indexer_to_catch_up,
     },
 };
@@ -18,7 +18,9 @@ use lee::{
     AccountId, PrivateKey, ProgramShardSelector, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::{account::Nonce, program::PROGRAM_LOADER_ACCOUNT_ID};
+use lee_core::{
+    account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
+};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
@@ -36,6 +38,21 @@ use wallet::{
 const BLOAT_SHARD_BYTES: usize = 700 * 1024;
 
 const BLOAT_WRITERS: usize = 4;
+
+#[track_caller]
+fn assert_bloat_shard(shard: Option<&[u8]>) {
+    let shard = shard.expect("bloat shard missing from scoped response");
+    assert_eq!(shard.len(), BLOAT_SHARD_BYTES, "bloat shard length");
+    let mismatch = shard
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| *byte != 0xFF);
+    assert_eq!(
+        mismatch, None,
+        "expected 0xFF throughout; first mismatch (offset, byte)"
+    );
+}
 
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
@@ -65,20 +82,21 @@ async fn submit(
         shard_selectors,
         nonces,
         instruction,
-        common::test_utils::test_fee_declaration(payer.account_id),
+        lee::FeeDeclaration::new(payer.account_id, 8_000_000, 0, u128::MAX >> 1),
     )?;
     let mut keys = extra_signers.to_vec();
     keys.push(&payer.pub_sign_key);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &keys);
 
-    ctx.sequencer_client()
+    let tx_hash = ctx
+        .sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             witness_set,
         )))
         .await?;
 
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
     Ok(())
 }
 
@@ -138,13 +156,15 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
     let mut writers = vec![first_header];
     while writers.len() < BLOAT_WRITERS {
         let header = new_account(ctx, false, None).await?;
-        ProgramLoader(ctx.wallet())
+        let tx_hash = ProgramLoader(ctx.wallet())
             .create_header(header, segments[0], &segments, true, Some(payer.account_id))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        ctx.wallet().poll_transaction(tx_hash).await?;
         writers.push(header);
     }
 
+    let shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
     for writer_id in &writers {
         let payer_nonce = get_account(ctx, payer.account_id).await?.nonce;
         submit(
@@ -152,11 +172,13 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
             *writer_id,
             vec![ProgramShardSelector::new(victim, *writer_id)],
             vec![payer_nonce],
-            vec![0xFF_u8; BLOAT_SHARD_BYTES],
+            shard.clone(),
             payer,
             &[],
         )
         .await?;
+        let view = get_account_view(ctx, ProgramShardSelector::new(victim, *writer_id)).await?;
+        assert_bloat_shard(view.data.shards.get(writer_id).map(AsRef::as_ref));
     }
 
     writers
@@ -174,6 +196,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let error = get_account(&ctx, victim)
         .await
+        .map(|_| ())
         .expect_err("the whole-account read must fail once the account is bloated");
     assert!(
         is_oversized_response(&error),
@@ -187,11 +210,14 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         );
         let view = get_account_view(&ctx, ProgramShardSelector::new(victim, *writer)).await?;
         assert_eq!(view.data.shards.len(), 1, "a scoped read carries one shard");
-        assert_eq!(view.data.shards[writer].as_ref().len(), BLOAT_SHARD_BYTES);
     }
 
     let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
-    assert!(balance_only.data.shards.is_empty());
+    assert_eq!(
+        balance_only.data.shards.keys().copied().collect::<Vec<_>>(),
+        vec![NATIVE_TOKEN_PROGRAM_ID],
+        "a balance view carries exactly the native shard"
+    );
 
     let last_writer = writers[BLOAT_WRITERS - 1];
     let scoped_get = |scope: ReadScope, raw: bool| {
@@ -224,10 +250,11 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
     let selector: indexer_service_protocol::ProgramShardSelector =
         ProgramShardSelector::new(victim, last_writer).into();
+    let native_selector: indexer_service_protocol::ProgramShardSelector =
+        ProgramShardSelector::balance(victim).into();
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
 
     let indexer = &**ctx.indexer_client();
-    let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
 
     let current = indexer_service_rpc::RpcClient::get_account_view(indexer, selector).await?;
     assert_eq!(
@@ -235,8 +262,13 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         1,
         "the indexer view must carry only the selected shard"
     );
-    assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
-    assert_eq!(current.data.balance, balance_only.data.balance);
+    assert_bloat_shard(
+        current
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
+    );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
     let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -249,8 +281,15 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         before_population.data.shards[&last_writer_key].0.is_empty(),
         "the historical view must predate the shard, not mirror current state"
     );
+    let native_before = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        native_selector,
+        height_before_bloat,
+    )
+    .await?;
     assert_eq!(
-        before_population.data.balance, balance_only.data.balance,
+        native_before.data.balance().unwrap(),
+        balance_only.data.balance().unwrap(),
         "the historical view must be the real account at that height, not a default"
     );
 
@@ -260,19 +299,31 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         indexer_height,
     )
     .await?;
-    assert_eq!(
-        after_population.data.shards[&last_writer_key].0, expected_shard,
-        "the historical view must serve real shard data, not always empty"
+    assert_bloat_shard(
+        after_population
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
     );
-    assert_eq!(after_population.data.balance, balance_only.data.balance);
     assert_eq!(after_population.nonce, balance_only.nonce.0);
+    let native_after = indexer_service_rpc::RpcClient::get_account_view_at_block(
+        indexer,
+        native_selector,
+        indexer_height,
+    )
+    .await?;
+    assert_eq!(
+        native_after.data.balance().unwrap(),
+        balance_only.data.balance().unwrap()
+    );
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
         ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
-    assert_eq!(missing.data.balance, 0);
+    assert_eq!(missing.data.balance().unwrap(), 0);
     assert_eq!(missing.nonce, 0);
     assert!(missing.data.shards.is_empty());
 
@@ -328,6 +379,51 @@ async fn public_transfer_survives_a_bloated_account() -> Result<()> {
         account_balance(&ctx, victim).await?,
         victim_before_return + 100,
         "the return transfer must have credited the victim, not merely been included"
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let supply = ctx.existing_public_accounts()[0];
+    let definition = new_account(&mut ctx, false, None).await?;
+
+    assert_eq!(
+        account_balance(&ctx, definition).await?,
+        0,
+        "the definition account must start unfunded for this to exercise payer selection"
+    );
+    let supply_before = account_balance(&ctx, supply).await?;
+
+    create_token(
+        &mut ctx,
+        public_mention(definition),
+        public_mention(supply),
+        "ScopedPayer",
+        1_000,
+    )
+    .await?;
+
+    let token_program_id: AccountId = programs::token().id().into();
+    let definition_view = get_account_view(
+        &ctx,
+        ProgramShardSelector::new(definition, token_program_id),
+    )
+    .await?;
+    assert!(
+        !definition_view.data.shard(token_program_id).is_empty(),
+        "the definition must have been written, so the transaction was admitted and settled"
+    );
+    assert!(
+        account_balance(&ctx, supply).await? < supply_before,
+        "the funded signer paid the fee, not the empty definition account"
+    );
+    assert_eq!(
+        account_balance(&ctx, definition).await?,
+        0,
+        "the unfunded signer was never selected as payer"
     );
 
     Ok(())
@@ -393,7 +489,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     assert_eq!(chain, vec![segment_id]);
 
     let (_, head_id) = fresh_key(0xD1);
-    loader
+    let tx_hash = loader
         .write_segment(
             head_id,
             test_programs::data_writer().elf().to_vec(),
@@ -402,8 +498,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
 
     let chain_from_head = loader.resolve_chain(head_id).await?;
     assert_eq!(chain_from_head, vec![head_id, segment_id]);
@@ -444,7 +539,8 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
     let rewritten = vec![0xCD_u8; 48];
     let program = ProgramWithDependencies::new(p, p_id, [(q_id, q)].into());
 
-    ctx.wallet()
+    let (tx_hash, _) = ctx
+        .wallet()
         .send_privacy_preserving_tx(
             vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
             Program::serialize_instruction((
@@ -459,8 +555,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ctx.wallet().poll_transaction(tx_hash).await?;
 
     let after = get_account_view(&ctx, ProgramShardSelector::new(account_id, q_id)).await?;
     assert_eq!(

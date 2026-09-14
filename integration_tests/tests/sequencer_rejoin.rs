@@ -113,7 +113,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B removed from the Bedrock committee");
 
     wait_until("B's stake to be released", || async {
-        Ok(get_account(&ctx, funds_b).await?.data.balance == 0)
+        Ok(get_account(&ctx, funds_b).await?.data.balance().unwrap() == 0)
     })
     .await?;
     ensure!(
@@ -128,7 +128,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // B rejoins on the same ownership account, which stays claimed after an exit.
     let mover_instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
             amount: STAKE,
         })
         .context("Failed to serialize the mover instruction")?;
@@ -143,7 +143,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
         },
     )
@@ -151,7 +151,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     .context("Failed to submit B's re-stake")?;
 
     wait_until("B's re-stake to land", || async {
-        Ok(get_account(&ctx, funds_b).await?.data.balance == STAKE)
+        Ok(get_account(&ctx, funds_b).await?.data.balance().unwrap() == STAKE)
     })
     .await?;
     info!("B staked again");

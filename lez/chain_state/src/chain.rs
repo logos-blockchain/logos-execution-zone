@@ -731,7 +731,12 @@ mod tests {
 
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
         assert_head_matches_replay(&chain);
@@ -774,7 +779,12 @@ mod tests {
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 4);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 60
         );
         assert_head_matches_replay(&chain);
@@ -814,7 +824,12 @@ mod tests {
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 50
         );
         assert_head_matches_replay(&chain);
@@ -866,7 +881,12 @@ mod tests {
         assert_eq!(tip.block_id, 2);
         assert_eq!(tip.hash, block2_prime.header.hash);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE
         );
         assert_head_matches_replay(&chain);
@@ -897,7 +917,12 @@ mod tests {
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, peer.header.hash);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE
         );
         assert_head_matches_replay(&chain);
@@ -1136,7 +1161,12 @@ mod tests {
             AcceptOutcome::Applied
         ));
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
         assert_head_matches_replay(&chain);
@@ -1213,12 +1243,22 @@ mod tests {
 
         // Head still reflects both transfers
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 20
         );
         // ...while final reflects only the finalized prefix.
         assert_eq!(
-            chain.final_state().get_account_by_id(to).data.balance,
+            chain
+                .final_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
         assert_head_matches_replay(&chain);
@@ -1385,7 +1425,12 @@ mod tests {
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
         assert_head_matches_replay(&chain);
@@ -1409,9 +1454,22 @@ mod tests {
 
         // The recipient gains exactly the transfer; the sender also paid a fee.
         assert_eq!(
-            chain.head_state().get_account_by_id(to).data.balance,
+            chain
+                .head_state()
+                .get_account_by_id(to)
+                .data
+                .balance()
+                .unwrap(),
             INITIAL_TO_BALANCE + 10
         );
-        assert!(chain.head_state().get_account_by_id(from).data.balance < 10_000_000_000_000 - 10);
+        assert!(
+            chain
+                .head_state()
+                .get_account_by_id(from)
+                .data
+                .balance()
+                .unwrap()
+                < 10_000_000_000_000 - 10
+        );
     }
 }

@@ -1,6 +1,6 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
-    account::{AccountId, BalanceDiff},
+    account::{AccountId, ShardData},
     program::{AccountInput, CallKind, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
@@ -11,23 +11,22 @@ use crate::{
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program},
 };
 
-fn transfer_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, u128) {
-    let program = crate::test_methods::simple_balance_transfer();
-    let balance_to_move: u128 = 11_223_344_556_677;
-    let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
-    let sender = AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211);
-    let recipient = AccountInput::balance(AccountId::new([1; 32]), false, 0);
-    (
-        program,
-        vec![sender, recipient],
-        instruction_data,
-        balance_to_move,
-    )
+fn write_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, Vec<u8>) {
+    let program = crate::test_methods::data_changer();
+    let written = vec![7_u8; 4];
+    let instruction_data = Program::serialize_instruction(written.clone()).unwrap();
+    let target = AccountInput::with_shard(
+        AccountId::new([0; 32]),
+        true,
+        program.id().into(),
+        ShardData::empty(),
+    );
+    (program, vec![target], instruction_data, written)
 }
 
 #[test]
 fn program_execution() {
-    let (program, pre_states, instruction_data, balance_to_move) = transfer_fixture();
+    let (program, pre_states, instruction_data, written) = write_fixture();
 
     let (program_output, _cycles) = program
         .execute(
@@ -39,28 +38,14 @@ fn program_execution() {
         )
         .unwrap();
 
-    let [sender_post, recipient_post] = program_output.state_diffs.try_into().unwrap();
+    let [target_post] = program_output.state_diffs.try_into().unwrap();
 
-    assert_eq!(
-        sender_post.post_balance_diff,
-        BalanceDiff::Sub(balance_to_move)
-    );
-    assert_eq!(sender_post.post_data, None);
-    assert_eq!(
-        recipient_post.post_balance_diff,
-        BalanceDiff::Add(balance_to_move)
-    );
-    assert_eq!(recipient_post.post_data, None);
+    assert_eq!(target_post.post_data, Some(written.try_into().unwrap()));
 }
 
 #[test]
 fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let instruction_data = Program::serialize_instruction(7_u128).unwrap();
-    let pre_states = [
-        AccountInput::balance(AccountId::new([0; 32]), true, 10),
-        AccountInput::balance(AccountId::new([1; 32]), false, 0),
-    ];
+    let (program, pre_states, instruction_data, _) = write_fixture();
 
     let mut env_builder = ExecutorEnv::builder();
     program
@@ -113,7 +98,7 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
 
 #[test]
 fn execute_reports_cycles_within_budget() {
-    let (program, pre_states, instruction_data, _) = transfer_fixture();
+    let (program, pre_states, instruction_data, _) = write_fixture();
     let (_, cycles) = program
         .execute(
             AccountId::from(program.id()),
@@ -124,14 +109,14 @@ fn execute_reports_cycles_within_budget() {
         )
         .expect("executes");
     assert!(cycles > 0);
-    // Holds because this transfer costs far less than the budget; not a general
+    // Holds because this write costs far less than the budget; not a general
     // invariant — a session can overshoot its limit by up to one instruction.
     assert!(cycles <= DEFAULT_PUBLIC_CYCLE_BUDGET);
 }
 
 #[test]
 fn tiny_budget_is_out_of_gas() {
-    let (program, pre_states, instruction_data, _) = transfer_fixture();
+    let (program, pre_states, instruction_data, _) = write_fixture();
     let result = program.execute(
         AccountId::from(program.id()),
         None,
@@ -147,12 +132,7 @@ fn tiny_budget_is_out_of_gas() {
 /// a future call kind looks like to a guest built before it existed.
 #[test]
 fn program_survives_a_call_kind_it_does_not_recognize() {
-    let program = crate::test_methods::simple_balance_transfer();
-    let instruction_data = Program::serialize_instruction(7_u128).unwrap();
-    let pre_states = vec![
-        AccountInput::balance(AccountId::new([0; 32]), true, 10),
-        AccountInput::balance(AccountId::new([1; 32]), false, 0),
-    ];
+    let (program, pre_states, instruction_data, _) = write_fixture();
 
     let mut env_builder = ExecutorEnv::builder();
     // Stands in for a call kind a future protocol upgrade defines.
@@ -174,10 +154,9 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
 
     assert_eq!(output.call_kind, CallKind::Unknown(77));
 
-    // A no-op, not the program's own transfer logic: every account comes back unchanged.
+    // A no-op, not the program's own write logic: every account comes back unchanged.
     assert_eq!(output.state_diffs.len(), pre_states.len());
     for diff in &output.state_diffs {
-        assert_eq!(diff.post_balance_diff, BalanceDiff::Add(0));
         assert_eq!(diff.post_data, None);
     }
     assert!(output.chained_calls.is_empty());

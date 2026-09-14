@@ -7,10 +7,8 @@ use lee_core::{
     },
 };
 
-type Instruction = u128;
+type Instruction = (Vec<u8>, u128);
 
-/// Moves balance out of the SECOND account into the first — the direction a
-/// callee handed someone else's account would take to help itself.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -18,7 +16,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: amount,
+            instruction: (own_data, amount),
         },
         instruction_data,
     ) = call
@@ -26,15 +24,15 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let Ok([recipient, source]) = <[_; 2]>::try_from(pre_states) else {
-        return;
+    let Ok([own_pre, sender_pre, recipient_pre]) = <[_; 3]>::try_from(pre_states) else {
+        panic!("expected exactly 3 pre_states: [own shard, sender balance, recipient balance]");
     };
 
     let transfer = ChainedCall::new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::from(&source),
-            ProgramShardSelector::from(&recipient),
+            ProgramShardSelector::from(&sender_pre),
+            ProgramShardSelector::from(&recipient_pre),
         ],
         &NativeInstruction::Transfer { amount },
     );
@@ -44,8 +42,14 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            ShardStateDiff::unchanged(recipient),
-            ShardStateDiff::unchanged(source),
+            ShardStateDiff::new(
+                own_pre,
+                own_data
+                    .try_into()
+                    .expect("provided data should fit into data limit"),
+            ),
+            ShardStateDiff::unchanged(sender_pre),
+            ShardStateDiff::unchanged(recipient_pre),
         ],
     )
     .with_chained_calls(vec![transfer])

@@ -6,11 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{
-        Account, AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError,
-        ProgramShardSelector, ShardData, apply_balance_diff,
-    },
+    account::{Account, AccountData, AccountId, Balance, ProgramShardSelector, ShardData},
     encryption::ViewingPublicKey,
+    native_token::encode_balance,
 };
 
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
@@ -61,8 +59,7 @@ pub type InstructionData = Vec<u8>;
 pub struct AccountInput {
     pub account_id: AccountId,
     pub is_authorized: bool,
-    pub balance: Balance,
-    pub shard: Option<(AccountId, ShardData)>,
+    pub shard: (AccountId, ShardData),
 }
 
 impl AccountInput {
@@ -70,26 +67,24 @@ impl AccountInput {
     pub const fn with_shard(
         account_id: AccountId,
         is_authorized: bool,
-        balance: Balance,
         program_account_id: AccountId,
         data: ShardData,
     ) -> Self {
         Self {
             account_id,
             is_authorized,
-            balance,
-            shard: Some((program_account_id, data)),
+            shard: (program_account_id, data),
         }
     }
 
     #[must_use]
-    pub const fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
-        Self {
+    pub fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
+        Self::with_shard(
             account_id,
             is_authorized,
-            balance,
-            shard: None,
-        }
+            crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
+            encode_balance(balance),
+        )
     }
 
     #[must_use]
@@ -98,25 +93,23 @@ impl AccountInput {
         is_authorized: bool,
         data: &AccountData,
     ) -> Self {
-        Self {
-            account_id: shard_selector.account_id,
+        Self::with_shard(
+            shard_selector.account_id,
             is_authorized,
-            balance: data.balance,
-            shard: shard_selector
-                .program_account_id
-                .map(|program| (program, data.shard(program).clone())),
-        }
+            shard_selector.program_account_id,
+            data.shard(shard_selector.program_account_id).clone(),
+        )
     }
 
     #[must_use]
-    pub fn program_account_id(&self) -> Option<AccountId> {
-        self.shard.as_ref().map(|(program, _)| *program)
+    pub const fn program_account_id(&self) -> AccountId {
+        self.shard.0
     }
 
     /// Returns the shard data. Panics unless the input selects `program`'s shard.
     #[must_use]
     pub fn shard_of(&self, program: AccountId) -> &ShardData {
-        let (selected, data) = self.shard.as_ref().expect("AccountInput carries no shard");
+        let (selected, data) = &self.shard;
         assert_eq!(
             *selected, program,
             "AccountInput carries another program's shard"
@@ -397,42 +390,26 @@ impl ProgramSegment {
 /// An account's pre-state alongside the changes to be applied to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountStateDiff {
+pub struct ShardStateDiff {
     pub pre_state: AccountInput,
-    pub post_balance_diff: BalanceDiff,
     /// The new shard data, or `None` to leave it unchanged.
     pub post_data: Option<ShardData>,
 }
 
-impl AccountStateDiff {
-    /// A diff that leaves `pre_state`'s balance and shard untouched.
+impl ShardStateDiff {
+    /// A diff that leaves `pre_state`'s selected shard untouched.
     #[must_use]
     pub const fn unchanged(pre_state: AccountInput) -> Self {
         Self {
             pre_state,
-            post_balance_diff: BalanceDiff::Add(0),
             post_data: None,
         }
     }
 
     #[must_use]
-    pub const fn balance(pre_state: AccountInput, post_balance_diff: BalanceDiff) -> Self {
+    pub const fn new(pre_state: AccountInput, post_data: ShardData) -> Self {
         Self {
             pre_state,
-            post_balance_diff,
-            post_data: None,
-        }
-    }
-
-    #[must_use]
-    pub const fn new(
-        pre_state: AccountInput,
-        post_balance_diff: BalanceDiff,
-        post_data: ShardData,
-    ) -> Self {
-        Self {
-            pre_state,
-            post_balance_diff,
             post_data: Some(post_data),
         }
     }
@@ -564,7 +541,7 @@ pub struct ProgramOutput {
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// Each account's pre-state paired with the diff the program's execution applies to it.
-    pub state_diffs: Vec<AccountStateDiff>,
+    pub state_diffs: Vec<ShardStateDiff>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -581,7 +558,7 @@ impl ProgramOutput {
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         instruction_data: InstructionData,
-        state_diffs: Vec<AccountStateDiff>,
+        state_diffs: Vec<ShardStateDiff>,
     ) -> Self {
         Self {
             self_account_id,
@@ -675,56 +652,10 @@ pub struct TransactionEvent {
     pub event: ProgramEvent,
 }
 
-/// Representation of a number as `lo + hi * 2^128`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct WrappedBalanceSum {
-    lo: u128,
-    hi: u128,
-}
-
-impl WrappedBalanceSum {
-    /// Constructs a [`WrappedBalanceSum`] from an iterator of balances.
-    ///
-    /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
-    /// expected in practical scenarios.
-    pub fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
-        let mut wrapped = Self { lo: 0, hi: 0 };
-
-        for balance in balances {
-            let (new_sum, did_overflow) = wrapped.lo.overflowing_add(balance);
-            if did_overflow {
-                wrapped.hi = wrapped.hi.checked_add(1)?;
-            }
-            wrapped.lo = new_sum;
-        }
-
-        Some(wrapped)
-    }
-}
-
-impl std::fmt::Display for WrappedBalanceSum {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.hi == 0 {
-            write!(f, "{}", self.lo)
-        } else {
-            write!(f, "{} * 2^128 + {}", self.hi, self.lo)
-        }
-    }
-}
-
-impl From<u128> for WrappedBalanceSum {
-    fn from(value: u128) -> Self {
-        Self { lo: value, hi: 0 }
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Pre-state account IDs are not unique")]
-    PreStateAccountIdsNotUnique,
-
-    #[error("Trying to decrease balance of unauthorized account {account_id}")]
-    UnauthorizedBalanceDecrease { account_id: AccountId },
+    #[error("Pre-state shard selectors are not unique")]
+    PreStateShardSelectorsNotUnique,
 
     #[error(
         "Program {executing_account_id} wrote data on a shard selector of {account_id} that does not name it"
@@ -732,24 +663,6 @@ pub enum ExecutionValidationError {
     ForeignShardWrite {
         account_id: AccountId,
         executing_account_id: AccountId,
-    },
-
-    #[error("Invalid balance diff for account {account_id}: {source}")]
-    InvalidBalanceDiff {
-        account_id: AccountId,
-        #[source]
-        source: BalanceDiffError,
-    },
-
-    #[error("Total balance across accounts overflowed 2^256 - 1")]
-    BalanceSumOverflow,
-
-    #[error(
-        "Total balance across accounts is not preserved: total added {total_added}, total subtracted {total_subbed}"
-    )]
-    MismatchedTotalBalance {
-        total_added: WrappedBalanceSum,
-        total_subbed: WrappedBalanceSum,
     },
 }
 
@@ -896,7 +809,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         .pre_states
         .iter()
         .cloned()
-        .map(AccountStateDiff::unchanged)
+        .map(ShardStateDiff::unchanged)
         .collect();
     ProgramOutput::new(
         envelope.self_account_id,
@@ -917,7 +830,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
 #[must_use]
 pub fn pre_states_match_shard_selectors(
     shard_selectors: &[ProgramShardSelector],
-    diffs: &[AccountStateDiff],
+    diffs: &[ShardStateDiff],
 ) -> bool {
     shard_selectors.iter().copied().eq(diffs
         .iter()
@@ -950,76 +863,26 @@ pub fn get_program_via<'state>(
     Some((header.image_id, elf))
 }
 
-/// Checks account uniqueness, balance changes, and shard writes for a program call.
+/// Checks shard-selector uniqueness and shard writes for a program call.
 pub fn validate_execution(
-    state_diffs: &[AccountStateDiff],
+    state_diffs: &[ShardStateDiff],
     executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
-    // 1. Each account may appear at most once per call.
+    // Each account may appear at most once per shard it selects.
     let mut named = HashSet::new();
     for diff in state_diffs {
-        if !named.insert(diff.pre_state.account_id) {
-            return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
-        }
-    }
-
-    for diff in state_diffs {
         let pre = &diff.pre_state;
-
-        // 2. Decreasing balance requires the account to be authorized
-        if matches!(diff.post_balance_diff, BalanceDiff::Sub(amount) if amount > 0)
-            && !pre.is_authorized
-        {
-            return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
-                account_id: pre.account_id,
-            });
+        if !named.insert(ProgramShardSelector::from(pre)) {
+            return Err(ExecutionValidationError::PreStateShardSelectorsNotUnique);
         }
 
-        // 3. A program may only write to its own shards.
-        if diff.post_data.is_some() && pre.program_account_id() != Some(executing_account_id) {
+        // A program may only write to its own shards.
+        if diff.post_data.is_some() && pre.program_account_id() != executing_account_id {
             return Err(ExecutionValidationError::ForeignShardWrite {
                 account_id: pre.account_id,
                 executing_account_id,
             });
         }
-
-        // 4. Balance diff must be valid against this account's own pre-state balance.
-        if let Err(source) = apply_balance_diff(pre.balance, Some(diff.post_balance_diff)) {
-            return Err(ExecutionValidationError::InvalidBalanceDiff {
-                account_id: pre.account_id,
-                source,
-            });
-        }
-    }
-
-    // 5. Total balance is preserved
-    let Some(total_added) =
-        WrappedBalanceSum::from_balances(state_diffs.iter().filter_map(|diff| {
-            match diff.post_balance_diff {
-                BalanceDiff::Add(amount) => Some(amount),
-                BalanceDiff::Sub(_) => None,
-            }
-        }))
-    else {
-        return Err(ExecutionValidationError::BalanceSumOverflow);
-    };
-
-    let Some(total_subbed) =
-        WrappedBalanceSum::from_balances(state_diffs.iter().filter_map(|diff| {
-            match diff.post_balance_diff {
-                BalanceDiff::Sub(amount) => Some(amount),
-                BalanceDiff::Add(_) => None,
-            }
-        }))
-    else {
-        return Err(ExecutionValidationError::BalanceSumOverflow);
-    };
-
-    if total_added != total_subbed {
-        return Err(ExecutionValidationError::MismatchedTotalBalance {
-            total_added,
-            total_subbed,
-        });
     }
 
     Ok(())

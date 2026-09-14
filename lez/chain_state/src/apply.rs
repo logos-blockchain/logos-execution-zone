@@ -420,7 +420,7 @@ fn settle_charged_transaction(
 
     // Phase 1: Reserve
     //
-    // hold `reserved` from the payer in the inbox via `authenticated_transfer`,
+    // hold `reserved` from the payer in the inbox via a native transfer,
     // authorized by the fee declaration.
     //
     // This does NOT advance the nonce, invalidates the tx if the payer cannot afford it.
@@ -657,14 +657,16 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_escrow_account_id())
                 .data
-                .balance,
+                .balance()
+                .unwrap(),
             0
         );
         assert_eq!(
             state
                 .get_account_by_id(system_accounts::fee_inbox_account_id())
                 .data
-                .balance,
+                .balance()
+                .unwrap(),
             0
         );
     }
@@ -739,8 +741,8 @@ mod tests {
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
-        let initial_from = state.get_account_by_id(from).data.balance;
-        let initial_to = state.get_account_by_id(to).data.balance;
+        let initial_from = state.get_account_by_id(from).data.balance().unwrap();
+        let initial_to = state.get_account_by_id(to).data.balance().unwrap();
 
         // Genesis (block 1): fee/clock only.
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -759,8 +761,11 @@ mod tests {
         // it plus real fees; every fee unit is accounted for in the fee flow:
         // the inbox drained each block, so all revenue sits in escrow plus what
         // the guest already paid the producer.
-        assert_eq!(state.get_account_by_id(to).data.balance, initial_to + 100);
-        let from_final = state.get_account_by_id(from).data.balance;
+        assert_eq!(
+            state.get_account_by_id(to).data.balance().unwrap(),
+            initial_to + 100
+        );
+        let from_final = state.get_account_by_id(from).data.balance().unwrap();
         let fees_paid = initial_from - 100 - from_final;
         assert!(fees_paid > 0, "charged transfers must pay a nonzero fee");
 
@@ -770,12 +775,14 @@ mod tests {
         let escrow = state
             .get_account_by_id(system_accounts::fee_escrow_account_id())
             .data
-            .balance;
-        let producer_balance = state.get_account_by_id(producer).data.balance;
+            .balance()
+            .unwrap();
+        let producer_balance = state.get_account_by_id(producer).data.balance().unwrap();
         let inbox = state
             .get_account_by_id(system_accounts::fee_inbox_account_id())
             .data
-            .balance;
+            .balance()
+            .unwrap();
         assert_eq!(inbox, 0, "the inbox must drain every block");
         assert_eq!(
             fees_paid,
@@ -821,7 +828,8 @@ mod tests {
         let inbox_revenue = state
             .get_account_by_id(system_accounts::fee_inbox_account_id())
             .data
-            .balance;
+            .balance()
+            .unwrap();
         assert!(inbox_revenue > 0, "the transfer must have funded the inbox");
 
         // The drain: invoke the fee program's Refund to sweep the accrued inbox
@@ -877,8 +885,8 @@ mod tests {
                 .data
                 .shard(system_accounts::fee_program_id()),
         );
-        let sender_before = state.get_account_by_id(sender).data.balance;
-        let recipient_before = state.get_account_by_id(recipient).data.balance;
+        let sender_before = state.get_account_by_id(sender).data.balance().unwrap();
+        let recipient_before = state.get_account_by_id(recipient).data.balance().unwrap();
 
         let free = common::test_utils::create_transaction_native_token_transfer_without_fee(
             sender,
@@ -895,9 +903,12 @@ mod tests {
             "expected MissingFeeDeclaration, got {err:?}",
         );
         // The rejection happens before any state mutation: nothing moved.
-        assert_eq!(state.get_account_by_id(sender).data.balance, sender_before);
         assert_eq!(
-            state.get_account_by_id(recipient).data.balance,
+            state.get_account_by_id(sender).data.balance().unwrap(),
+            sender_before
+        );
+        assert_eq!(
+            state.get_account_by_id(recipient).data.balance().unwrap(),
             recipient_before
         );
     }
@@ -920,9 +931,9 @@ mod tests {
                 .shard(system_accounts::fee_program_id()),
         );
 
-        let payer_before = state.get_account_by_id(payer).data.balance;
+        let payer_before = state.get_account_by_id(payer).data.balance().unwrap();
         let payer_nonce_before = u128::from(state.get_account_by_id(payer).nonce);
-        let recipient_before = state.get_account_by_id(recipient).data.balance;
+        let recipient_before = state.get_account_by_id(recipient).data.balance().unwrap();
 
         // Move more than the payer owns: the guest's `checked_sub` panics, so the
         // action reverts after the reserve has already been taken.
@@ -942,7 +953,7 @@ mod tests {
 
         // The transfer moved nothing.
         assert_eq!(
-            state.get_account_by_id(recipient).data.balance,
+            state.get_account_by_id(recipient).data.balance().unwrap(),
             recipient_before
         );
         // The nonce advanced, so the transaction cannot be replayed.
@@ -954,7 +965,7 @@ mod tests {
         );
         // The fee was charged: the payer paid, and it accrued as real revenue.
         assert!(
-            state.get_account_by_id(payer).data.balance < payer_before,
+            state.get_account_by_id(payer).data.balance().unwrap() < payer_before,
             "the reverted action still pays a fee",
         );
         assert!(

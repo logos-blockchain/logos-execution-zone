@@ -228,10 +228,6 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
         // TODO: Get programs from state
         let mut program_ids = BTreeMap::new();
-        program_ids.insert(
-            "authenticated_transfer".to_owned(),
-            programs::authenticated_transfer().id(),
-        );
         program_ids.insert("token".to_owned(), programs::token().id());
         program_ids.insert("amm".to_owned(), programs::amm().id());
         program_ids.insert(

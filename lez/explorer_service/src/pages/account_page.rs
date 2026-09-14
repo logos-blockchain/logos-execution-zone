@@ -1,6 +1,6 @@
 use std::str::FromStr as _;
 
-use indexer_service_protocol::{Account, AccountData, AccountId};
+use indexer_service_protocol::{Account, AccountId};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -87,13 +87,19 @@ pub fn AccountPage() -> impl IntoView {
                         .map(|result| match result {
                             Ok(acc) => {
                                 let Account {
-                        nonce,
-                        data: AccountData { balance, shards },
-                    } = acc;
+                                    nonce,
+                                    data: account_data,
+                                } = acc;
+                                let balance_str = account_data
+                                    .balance()
+                                    .map_or_else(
+                                        || "<malformed>".to_owned(),
+                                        |balance| balance.to_string(),
+                                    );
+                                let shards = account_data.shards;
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
-                                let balance_str = balance.to_string();
                                 let nonce_str = nonce.to_string();
                                 view! {
                                     <div class="account-detail">
