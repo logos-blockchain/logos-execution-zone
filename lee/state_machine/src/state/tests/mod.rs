@@ -452,7 +452,7 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
     };
     let recipient_keys = test_private_account_keys_2();
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.register_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

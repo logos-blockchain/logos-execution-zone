@@ -320,7 +320,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let mut state = V03State::new();
-    state.register_program(&emitter);
+    state.insert_program(&emitter);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)

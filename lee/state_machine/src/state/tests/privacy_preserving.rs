@@ -31,7 +31,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
             ..Account::default()
         },
     )]);
-    state.register_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
 
@@ -78,7 +78,7 @@ fn transition_from_privacy_preserving_transaction_private() {
     let recipient_keys = test_private_account_keys_2();
 
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.register_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
 
@@ -215,7 +215,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
             },
         )])
         .with_private_account(&sender_keys, &sender_private_account);
-    state.register_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
 

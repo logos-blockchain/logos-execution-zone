@@ -1246,7 +1246,7 @@ fn private_accounts_can_only_be_initialized_once() {
     let recipient_keys = test_private_account_keys_2();
 
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.register_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
 
     let balance_to_move = 37;
     let balance_to_move_2 = 30;
@@ -1512,8 +1512,8 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     let mut state =
         V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
-    state.register_program(&simple_transfer);
-    state.register_program(&proxy);
+    state.insert_program(&simple_transfer);
+    state.insert_program(&proxy);
 
     let alice_pda_0_account = Account {
         balance: amount,
