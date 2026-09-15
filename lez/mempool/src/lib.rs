@@ -13,8 +13,10 @@ use tokio::sync::mpsc::{Receiver, Sender};
 pub struct MemPool<T> {
     receiver: Receiver<T>,
     front_buffer: Vec<T>,
-    /// `front_buffer.len()`, shared with [`MemPoolHandle`].
-    held: Arc<AtomicUsize>,
+    /// Every item the pool holds, in the channel or not.
+    ///
+    /// [`MemPoolHandle`] reserves a slot here before sending, so admission is one atomic op.
+    len: Arc<AtomicUsize>,
 }
 
 impl<T> MemPool<T> {
@@ -22,13 +24,13 @@ impl<T> MemPool<T> {
     pub fn new(max_size: usize) -> (Self, MemPoolHandle<T>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
 
-        let held = Arc::new(AtomicUsize::new(0));
+        let len = Arc::new(AtomicUsize::new(0));
         let mem_pool = Self {
             receiver,
             front_buffer: Vec::new(),
-            held: Arc::clone(&held),
+            len: Arc::clone(&len),
         };
-        let sender = MemPoolHandle { sender, held };
+        let sender = MemPoolHandle { sender, len };
         (mem_pool, sender)
     }
 
@@ -47,15 +49,15 @@ impl<T> MemPool<T> {
 
     /// Pop an item from the mempool first checking the front buffer (LIFO) then the channel (FIFO).
     pub fn pop(&mut self) -> Option<T> {
+        // First check if there are any items in the front buffer (LIFO),
+        // otherwise try to receive from the channel (FIFO)
+        let item = self.front_buffer.pop().or_else(|| self.try_recv())?;
+        self.len.fetch_sub(1, Ordering::Relaxed);
+        Some(item)
+    }
+
+    fn try_recv(&mut self) -> Option<T> {
         use tokio::sync::mpsc::error::TryRecvError;
-
-        // First check if there are any items in the front buffer (LIFO)
-        if let Some(item) = self.front_buffer.pop() {
-            self.held.fetch_sub(1, Ordering::Relaxed);
-            return Some(item);
-        }
-
-        // Otherwise, try to receive from the channel (FIFO)
 
         match self.receiver.try_recv() {
             Ok(item) => Some(item),
@@ -69,7 +71,7 @@ impl<T> MemPool<T> {
     /// Push an item to the front of the mempool (will be popped first).
     pub fn push_front(&mut self, item: T) {
         self.front_buffer.push(item);
-        self.held.fetch_add(1, Ordering::Relaxed);
+        self.len.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Reorders everything held so that `pop` yields the best item first.
@@ -95,7 +97,12 @@ impl<T> MemPool<T> {
         let mut items: Vec<Option<(Vec<G>, T)>> = Vec::new();
         // per lane, item indices in arrival order; only the front is eligible
         let mut lanes: HashMap<G, VecDeque<usize>> = HashMap::new();
-        for (arrival, item) in std::iter::from_fn(|| self.pop()).enumerate() {
+
+        // we read & order and fill the pool again, `len` is not touched,
+        // so we do not use `pop` here
+        let in_buffer = std::mem::take(&mut self.front_buffer).into_iter().rev();
+        let in_channel = std::iter::from_fn(|| self.try_recv());
+        for (arrival, item) in in_buffer.chain(in_channel).enumerate() {
             let groups = lanes_of(&item);
             for group in &groups {
                 lanes.entry(group.clone()).or_default().push_back(arrival);
@@ -138,21 +145,20 @@ impl<T> MemPool<T> {
 
         // `pop` takes from the end.
         ordered.reverse();
-        self.held.store(ordered.len(), Ordering::Relaxed);
         self.front_buffer = ordered;
     }
 }
 
 pub struct MemPoolHandle<T> {
     sender: Sender<T>,
-    held: Arc<AtomicUsize>,
+    len: Arc<AtomicUsize>,
 }
 
 impl<T> Clone for MemPoolHandle<T> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
-            held: Arc::clone(&self.held),
+            len: Arc::clone(&self.len),
         }
     }
 }
@@ -161,18 +167,26 @@ impl<T> MemPoolHandle<T> {
     /// Send an item to the mempool blocking if the channel is full. Bounded by
     /// the channel alone, unlike [`Self::try_push`].
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
-        self.sender.send(item).await
+        self.len.fetch_add(1, Ordering::Relaxed);
+        self.sender.send(item).await.inspect_err(|_| {
+            // revert len++ on error
+            self.len.fetch_sub(1, Ordering::Relaxed);
+        })
     }
 
     /// Send an item to the mempool, failing _immediately_ if it is full: the
     /// bound counts what the pool already holds, not just the channel.
     pub fn try_push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::TrySendError<T>> {
-        let max_size = self.sender.max_capacity();
-        let in_channel = max_size.saturating_sub(self.sender.capacity());
-        if self.held.load(Ordering::Relaxed).saturating_add(in_channel) >= max_size {
+        // reserve the slot first: the pool can never exceed `max_size` this way
+        if self.len.fetch_add(1, Ordering::Relaxed) >= self.sender.max_capacity() {
+            self.len.fetch_sub(1, Ordering::Relaxed);
             return Err(tokio::sync::mpsc::error::TrySendError::Full(item));
         }
-        self.sender.try_send(item)
+        // every channel item is counted, so this fails only when closed or when
+        // the channel-bounded `push` is also in use; either way undo the slot
+        self.sender.try_send(item).inspect_err(|_| {
+            self.len.fetch_sub(1, Ordering::Relaxed);
+        })
     }
 }
 
