@@ -126,7 +126,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
 
     // An unaccredited key writes nothing that L1 accepts.
     wait_until("the offender's key to be accredited", || async {
-        Ok(committee(&observer)
+        Ok(committee(&observer, channel)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))
@@ -185,9 +185,15 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
             return Ok(true);
         }
         // L1 rejects a write out of turn, so only offer on our turn.
-        if offender.ask(CheckIsOurTurn).await? {
+        if offender
+            .ask(CheckIsOurTurn {
+                channel_id: channel,
+            })
+            .await?
+        {
             let outcome = offender
                 .ask(PublishRawInscription {
+                    channel_id: channel,
                     data: GARBAGE.to_vec(),
                 })
                 .await
@@ -258,7 +264,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     );
 
     wait_until("the offender to leave the accredited committee", || async {
-        Ok(!committee(&observer)
+        Ok(!committee(&observer, channel)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))

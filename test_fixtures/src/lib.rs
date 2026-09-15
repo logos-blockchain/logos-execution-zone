@@ -1133,7 +1133,7 @@ async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: Channel
     let wait = async {
         loop {
             let channel_exists = bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists { channel_id })
                 .await?;
             if channel_exists {
                 return Ok::<(), anyhow::Error>(());

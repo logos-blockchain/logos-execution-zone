@@ -13,7 +13,7 @@ use clap::Parser;
 use kameo::actor::{ActorRef, Spawn as _};
 use sequencer_bedrock_actor::{
     BedrockActor,
-    protocol::{CheckIsOurTurn, GetChannelTipMessageId, MsgId, PublishRawInscription},
+    protocol::{ChannelId, CheckIsOurTurn, GetChannelTipMessageId, MsgId, PublishRawInscription},
 };
 
 #[derive(Debug, Parser)]
@@ -34,10 +34,14 @@ struct Args {
 }
 
 /// Waits for the tip to become `msg`. False if the turn ends first: L1 refused it.
-async fn wait_until_tip(bedrock_ref: &ActorRef<BedrockActor>, msg: MsgId) -> Result<bool> {
-    while bedrock_ref.ask(CheckIsOurTurn).await? {
+async fn wait_until_tip(
+    bedrock_ref: &ActorRef<BedrockActor>,
+    channel_id: ChannelId,
+    msg: MsgId,
+) -> Result<bool> {
+    while bedrock_ref.ask(CheckIsOurTurn { channel_id }).await? {
         if bedrock_ref
-            .ask(GetChannelTipMessageId)
+            .ask(GetChannelTipMessageId { channel_id })
             .await
             .context("Failed to read the channel tip")?
             == Some(msg)
@@ -73,10 +77,11 @@ async fn main() -> Result<()> {
         hex::encode(bedrock_signing_key.public_key().to_bytes())
     );
 
+    let channel_id = config.bedrock_config.channel_id;
     let bedrock_config = sequencer_bedrock_actor::config::Config {
         node_url: config.bedrock_config.node_url,
         basic_auth: config.bedrock_config.auth.map(Into::into),
-        channel_id: config.bedrock_config.channel_id,
+        channel_id,
         bedrock_signing_key,
         funding_pk: config.bedrock_config.funding_key,
         priority_fee_percent: config.bedrock_config.priority_fee_percent,
@@ -100,12 +105,13 @@ async fn main() -> Result<()> {
 
     let mut landed = 0;
     while landed < count {
-        if !bedrock_ref.ask(CheckIsOurTurn).await? {
+        if !bedrock_ref.ask(CheckIsOurTurn { channel_id }).await? {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
         let outcome = bedrock_ref
             .ask(PublishRawInscription {
+                channel_id,
                 data: payload.as_bytes().to_vec(),
             })
             .await
@@ -113,7 +119,7 @@ async fn main() -> Result<()> {
         println!("offered non-block payload as {}", outcome.this_msg);
 
         // Offering is not landing, and nothing resubmits once this exits.
-        if wait_until_tip(&bedrock_ref, outcome.this_msg).await? {
+        if wait_until_tip(&bedrock_ref, channel_id, outcome.this_msg).await? {
             landed = landed.saturating_add(1);
             println!("landed {landed}/{count}: {}", outcome.this_msg);
         } else {

@@ -15,8 +15,8 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
-        GetChannelTipSlot, MsgId, PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        CreateChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, MsgId,
+        PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
     },
 };
 
@@ -45,12 +45,6 @@ mockall::mock! {
             msg: CheckChannelExists,
             ctx: &mut Context<Self, Result<bool>>
         ) -> Result<bool>;
-
-        pub fn handle_get_channel_id(
-            &mut self,
-            msg: GetChannelId,
-            ctx: &mut Context<Self, GetChannelIdReply>
-        ) -> GetChannelIdReply;
 
         pub fn handle_check_is_our_turn(
             &mut self,
@@ -165,18 +159,6 @@ impl Message<CheckChannelExists> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_check_channel_exists(msg, ctx)
-    }
-}
-
-impl Message<GetChannelId> for MockBedrockActor {
-    type Reply = GetChannelIdReply;
-
-    async fn handle(
-        &mut self,
-        msg: GetChannelId,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_channel_id(msg, ctx)
     }
 }
 

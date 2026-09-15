@@ -250,15 +250,20 @@ fn channel_serving(tip_slot: Option<Slot>, messages: Vec<(ZoneMessage, Slot)>) -
         .returning(move |_msg, _ctx| Ok(tip_slot.is_some()));
     mock.expect_handle_get_channel_tip_slot()
         .returning(move |_msg, _ctx| Ok(tip_slot));
-    mock.expect_handle_read_channel()
-        .returning(move |ReadChannel { after }, _ctx| {
+    mock.expect_handle_read_channel().returning(
+        move |ReadChannel {
+                  channel_id: _,
+                  after,
+              },
+              _ctx| {
             let messages: Vec<_> = messages
                 .iter()
                 .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
                 .cloned()
                 .collect();
             Ok(Box::pin(futures::stream::iter(messages)))
-        });
+        },
+    );
     mock.expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| true);
     mock

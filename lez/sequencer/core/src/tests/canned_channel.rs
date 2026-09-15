@@ -81,8 +81,13 @@ impl CannedChannel {
             });
         mock.expect_handle_change_channel_config()
             .returning(|_msg, _ctx| Ok(()));
-        mock.expect_handle_read_channel()
-            .returning(move |ReadChannel { after }, _ctx| Ok(history_after(&messages, after)));
+        mock.expect_handle_read_channel().returning(
+            move |ReadChannel {
+                      channel_id: _,
+                      after,
+                  },
+                  _ctx| Ok(history_after(&messages, after)),
+        );
         mock.expect_handle_get_channel_tip_message_id().returning({
             let tip = Arc::clone(&tip);
             move |_msg, _ctx| {
@@ -97,6 +102,7 @@ impl CannedChannel {
         });
         mock.expect_handle_publish_block().returning(
             move |PublishBlock {
+                      channel_id: _,
                       block,
                       withdrawals,
                       parent,

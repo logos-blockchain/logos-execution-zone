@@ -7,6 +7,7 @@ pub use logos_blockchain_zone_sdk::{
     sequencer::{DepositInfo, SequencerCheckpoint as Checkpoint, WithdrawArg, WithdrawInfo},
 };
 pub use sequencer_stake_core::ChannelParams;
+use sharding_pool_actor::ShardingKey;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
@@ -51,6 +52,7 @@ pub struct ChannelUpdate {
 /// Only valid while the channel does not exist, and `keys[0]` must be this sequencer's own key,
 /// since creation hands the first turn to index 0.
 pub struct CreateChannel {
+    pub channel_id: ChannelId,
     pub genesis: Block,
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
@@ -58,11 +60,20 @@ pub struct CreateChannel {
 
 /// Publish block to the configured channel.
 pub struct PublishBlock {
+    pub channel_id: ChannelId,
     pub block: Block,
     pub withdrawals: Vec<WithdrawArg>,
     /// Parent message ID to inscribe the block on.
     /// If [`None`] then the block is inscribed on top of channel tip.
     pub parent: Option<MsgId>,
+}
+
+impl ShardingKey for PublishBlock {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Outcome of a publish operation.
@@ -80,11 +91,22 @@ pub struct PublishOutcome {
 /// offence needs it.
 #[cfg(feature = "test-utils")]
 pub struct PublishRawInscription {
+    pub channel_id: ChannelId,
     pub data: Vec<u8>,
+}
+
+#[cfg(feature = "test-utils")]
+impl ShardingKey for PublishRawInscription {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Change the configuration of the channel.
 pub struct ChangeChannelConfig {
+    pub channel_id: ChannelId,
     pub new_keys: Vec<Ed25519PublicKey>,
     /// How long one sequencer's posting turn lasts, in slots.
     pub posting_timeframe: u32,
@@ -96,28 +118,58 @@ pub struct ChangeChannelConfig {
     pub transfer_threshold: u16,
 }
 
+impl ShardingKey for ChangeChannelConfig {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Check if configured channel exists.
-pub struct CheckChannelExists;
-
-/// Get the ID of the configured channel.
-pub struct GetChannelId;
-
-#[derive(Reply)]
-pub struct GetChannelIdReply {
+pub struct CheckChannelExists {
     pub channel_id: ChannelId,
+}
+
+impl ShardingKey for CheckChannelExists {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Whether this sequencer is currently authorized to write to the channel.
 ///
 /// Prefer subscribing to `channel/<channel_id>/turn` topic instead of polling this.
-pub struct CheckIsOurTurn;
+pub struct CheckIsOurTurn {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for CheckIsOurTurn {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Get live (adopted, possibly not yet finalized) accredited-key snapshot for
 /// this channel with the config entry it comes from.
 ///
 /// The config entry is what tells a caller whether this committee is the
 /// finalized one: compare it to the checkpoint's `finalized_config`.
-pub struct GetAccreditedKeys;
+pub struct GetAccreditedKeys {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetAccreditedKeys {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// The channel's accredited keys, the config entry they come from, and whose
 /// turn the tip was written on.
@@ -139,13 +191,42 @@ impl AccreditedKeys {
 }
 
 /// Get current channel frontier slot on the connected chain.
-pub struct GetChannelTipSlot;
+pub struct GetChannelTipSlot {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetChannelTipSlot {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Get live channel tip message id.
-pub struct GetChannelTipMessageId;
+pub struct GetChannelTipMessageId {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for GetChannelTipMessageId {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 /// Finalized channel messages from `after` (exclusive) up to LIB.
 pub struct ReadChannel {
+    pub channel_id: ChannelId,
     /// Passing [`None`] will read from the channel's genesis.
     pub after: Option<Slot>,
+}
+
+impl ShardingKey for ReadChannel {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }

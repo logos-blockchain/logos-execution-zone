@@ -45,9 +45,9 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelUpdate,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelId,
-        GetChannelIdReply, GetChannelTipMessageId, GetChannelTipSlot, MsgId, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys,
+        GetChannelTipMessageId, GetChannelTipSlot, MsgId, PublishBlock, PublishOutcome,
+        ReadChannel, Slot, ZoneMessage,
     },
 };
 
@@ -56,6 +56,10 @@ pub mod config;
 mod tests;
 
 /// Bedrock Actor responsible for interacting with the Bedrock node and managing channel events.
+///
+/// This actor is expected to be used together with [`sharding_pool_actor`]. However it can be used
+/// on its own but make sure to provide the correct `channel_id` in every message. Passing
+/// unexpected `channel_id` will lead to a panic.
 ///
 /// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
 /// - `channel/<channel_id>/update`: for [`ChannelEvent::Update`]
@@ -263,6 +267,10 @@ impl BedrockActor {
             released_notes: released_notes(&result.tx),
         })
     }
+
+    fn assert_channel_id(&self, channel_id: &ChannelId) {
+        assert_eq!(self.config.channel_id, *channel_id, "Channel ID mismatch");
+    }
 }
 
 impl BedrockActorTrait for BedrockActor {}
@@ -307,12 +315,15 @@ impl Message<CreateChannel> for BedrockActor {
     async fn handle(
         &mut self,
         CreateChannel {
+            channel_id,
             genesis,
             keys,
             channel_params,
         }: CreateChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         let own_key = self.config.bedrock_signing_key.public_key();
         if keys.first() != Some(&own_key) {
             return Err(Error::ChannelCreationRequiresOurKey);
@@ -386,12 +397,15 @@ impl Message<PublishBlock> for BedrockActor {
     async fn handle(
         &mut self,
         PublishBlock {
+            channel_id,
             block,
             withdrawals,
             parent,
         }: PublishBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         let data = borsh::to_vec(&block).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_err| Error::BlockTooLarge)?;
 
@@ -456,6 +470,7 @@ impl Message<ChangeChannelConfig> for BedrockActor {
     async fn handle(
         &mut self,
         ChangeChannelConfig {
+            channel_id,
             new_keys,
             posting_timeframe,
             posting_timeout,
@@ -464,6 +479,8 @@ impl Message<ChangeChannelConfig> for BedrockActor {
         }: ChangeChannelConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         let keys =
             Keys::try_from(new_keys).map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
 
@@ -499,28 +516,16 @@ impl Message<CheckChannelExists> for BedrockActor {
     }
 }
 
-impl Message<GetChannelId> for BedrockActor {
-    type Reply = GetChannelIdReply;
-
-    async fn handle(
-        &mut self,
-        GetChannelId: GetChannelId,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        GetChannelIdReply {
-            channel_id: self.config.channel_id,
-        }
-    }
-}
-
 impl Message<CheckIsOurTurn> for BedrockActor {
     type Reply = bool;
 
     async fn handle(
         &mut self,
-        CheckIsOurTurn: CheckIsOurTurn,
+        CheckIsOurTurn { channel_id }: CheckIsOurTurn,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         self.turn_rx.borrow().our_turn_to_write
     }
 }
@@ -530,9 +535,11 @@ impl Message<GetAccreditedKeys> for BedrockActor {
 
     async fn handle(
         &mut self,
-        _msg: GetAccreditedKeys,
+        GetAccreditedKeys { channel_id }: GetAccreditedKeys,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         Ok(self
             .node
             .channel_state(self.config.channel_id)
@@ -551,9 +558,11 @@ impl Message<GetChannelTipSlot> for BedrockActor {
 
     async fn handle(
         &mut self,
-        _msg: GetChannelTipSlot,
+        GetChannelTipSlot { channel_id }: GetChannelTipSlot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         Ok(self
             .node
             .channel_state(self.config.channel_id)
@@ -568,9 +577,11 @@ impl Message<GetChannelTipMessageId> for BedrockActor {
 
     async fn handle(
         &mut self,
-        _msg: GetChannelTipMessageId,
+        GetChannelTipMessageId { channel_id }: GetChannelTipMessageId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         Ok(self
             .node
             .channel_state(self.config.channel_id)
@@ -585,10 +596,12 @@ impl Message<ReadChannel> for BedrockActor {
 
     async fn handle(
         &mut self,
-        ReadChannel { after }: ReadChannel,
+        ReadChannel { channel_id, after }: ReadChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         const BATCH_SIZE: Slot = Slot::new(100);
+
+        self.assert_channel_id(&channel_id);
 
         let lib_slot = self
             .node
@@ -600,7 +613,6 @@ impl Message<ReadChannel> for BedrockActor {
         let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
         let node = self.node.clone();
-        let channel_id = self.config.channel_id;
         let stream = futures::stream::unfold(start_slot, move |current_slot| {
             let node = node.clone();
             async move {
@@ -643,9 +655,11 @@ impl Message<PublishRawInscription> for BedrockActor {
 
     async fn handle(
         &mut self,
-        PublishRawInscription { data }: PublishRawInscription,
+        PublishRawInscription { channel_id, data }: PublishRawInscription,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(&channel_id);
+
         let inscription: Inscription =
             data.try_into().map_err(|_err| Error::InscriptionTooLarge)?;
 

@@ -5,7 +5,10 @@ use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee_core::account::AccountId;
 use log::info;
-use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
+use sequencer_bedrock_actor::{
+    BedrockActor,
+    protocol::{ChannelId, GetAccreditedKeys},
+};
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
@@ -46,9 +49,10 @@ where
 /// The channel's accredited keys, sorted, plus whose turn the tip was written on.
 pub async fn committee(
     observer: &ActorRef<BedrockActor>,
+    channel_id: ChannelId,
 ) -> Result<(Vec<[u8; 32]>, Option<Ed25519PublicKey>)> {
     let Some(accredited) = observer
-        .ask(GetAccreditedKeys)
+        .ask(GetAccreditedKeys { channel_id })
         .await
         .context("Failed to read the channel's accredited keys")?
     else {

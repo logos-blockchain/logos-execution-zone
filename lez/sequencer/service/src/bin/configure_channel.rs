@@ -87,6 +87,7 @@ async fn main() -> Result<()> {
 
     bedrock_ref
         .ask(sequencer_bedrock_actor::protocol::ChangeChannelConfig {
+            channel_id: config.bedrock_config.channel_id,
             new_keys: keys,
             posting_timeframe,
             posting_timeout,

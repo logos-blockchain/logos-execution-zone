@@ -37,7 +37,7 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
-use sequencer_bedrock_actor::BedrockActorTrait;
+use sequencer_bedrock_actor::{BedrockActorTrait, config::ChannelId};
 use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -173,6 +173,7 @@ struct DepositMetadata {
 }
 
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
+    channel_id: ChannelId,
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
@@ -304,6 +305,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
         sequencer_core_metrics::init();
 
+        let channel_id = config.bedrock_config.channel_id;
+
         // A block over Bedrock's inscription cap is unpublishable; fail at
         // startup rather than stalling at the first oversized block.
         assert!(
@@ -332,7 +335,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
         let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
             bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists { channel_id })
                 .await
                 .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
         })
@@ -411,10 +414,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Before producing, verify our local state still belongs to the chain
         // the channel serves and replay any channel blocks we are missing
         // (e.g. from other sequencers).
-        let channel_absent =
-            Self::verify_and_reconstruct(&bedrock_ref, &storage_ref, &chain, is_fresh_start)
-                .await
-                .context("Failed to verify/reconstruct sequencer state from Bedrock")?;
+        let channel_absent = Self::verify_and_reconstruct(
+            channel_id,
+            &bedrock_ref,
+            &storage_ref,
+            &chain,
+            is_fresh_start,
+        )
+        .await
+        .context("Failed to verify/reconstruct sequencer state from Bedrock")?;
 
         // The committee the slasher loaded with predates this catch-up.
         refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
@@ -473,6 +481,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 let outcome = match &founding_committee {
                     Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => bedrock_ref
                         .ask(sequencer_bedrock_actor::protocol::CreateChannel {
+                            channel_id,
                             genesis: block.clone(),
                             keys: keys.clone(),
                             channel_params,
@@ -483,6 +492,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         }),
                     _ => bedrock_ref
                         .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                            channel_id,
                             block: block.clone(),
                             withdrawals: vec![],
                             parent: None,
@@ -525,6 +535,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         let sequencer_core = Self {
+            channel_id,
             chain,
             storage_ref,
             mempool,
@@ -554,6 +565,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Returns whether the channel does not exist yet (has no tip), i.e. whether
     /// this sequencer is the one that must bootstrap-publish its own blocks.
     async fn verify_and_reconstruct(
+        channel_id: ChannelId,
         bedrock_ref: &ActorRef<B>,
         storage_ref: &ActorRef<S>,
         chain: &Mutex<ChainState>,
@@ -568,7 +580,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .and_then(|record| record.slot.checked_sub(1))
             .map(Slot::from);
         let channel_tip_slot = bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot)
+            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot { channel_id })
             .await
             .context("Failed to read channel tip slot")?;
 
@@ -632,7 +644,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // Verify each message against the anchor and replay the
         // blocks (applying the ones we miss, checking the ones we hold).
         let mut messages = bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::ReadChannel { after: after_slot })
+            .ask(sequencer_bedrock_actor::protocol::ReadChannel {
+                channel_id,
+                after: after_slot,
+            })
             .await
             .context("Failed to read channel history for reconstruction")?;
         while let Some((message, slot)) = messages.next().await {
@@ -1079,6 +1094,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         } = self
             .bedrock_ref
             .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                channel_id: self.channel_id,
                 block: block.clone(),
                 withdrawals: withdrawals.clone(),
                 parent,
@@ -1116,7 +1132,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
         match self
             .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetAccreditedKeys)
+            .ask(sequencer_bedrock_actor::protocol::GetAccreditedKeys {
+                channel_id: self.channel_id,
+            })
             .await
         {
             Ok(Some(sequencer_bedrock_actor::protocol::AccreditedKeys {
@@ -1177,7 +1195,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         let tip_slot = match self
             .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot)
+            .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot {
+                channel_id: self.channel_id,
+            })
             .await
         {
             Ok(tip_slot) => tip_slot,
@@ -1212,6 +1232,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         if let Err(err) = self
             .bedrock_ref
             .ask(sequencer_bedrock_actor::protocol::ChangeChannelConfig {
+                channel_id: self.channel_id,
                 new_keys,
                 posting_timeframe: channel_params.posting_timeframe,
                 posting_timeout: channel_params.posting_timeout,
@@ -1993,6 +2014,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.watchers.clone()
     }
 
+    #[must_use]
+    pub const fn channel_id(&self) -> ChannelId {
+        self.channel_id
+    }
+
     /// The height the next produced block would claim.
     pub async fn next_block_height(&self) -> u64 {
         self.chain
@@ -2035,7 +2061,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         match self
             .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelTipMessageId)
+            .ask(sequencer_bedrock_actor::protocol::GetChannelTipMessageId {
+                channel_id: self.channel_id,
+            })
             .await
         {
             Ok(Some(tip)) if tip != pin => Some(PinBehindTip { pin, tip }),

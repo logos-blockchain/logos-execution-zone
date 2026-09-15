@@ -69,7 +69,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     ));
 
     wait_until("both staked keys to be accredited", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("Both sequencers accredited from channel creation");
@@ -92,7 +95,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B requested a full unstake");
 
     wait_until("B to leave the committee", || async {
-        Ok(!committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(!committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B removed from the Bedrock committee");
@@ -142,14 +148,17 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B staked again");
 
     wait_until("B to be accredited again", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B back in the Bedrock committee");
 
     // Rejoining is only real if B writes to the channel again.
     wait_until("the round-robin turn to reach B again", || async {
-        Ok(committee(&observer).await?.1 == Some(key_b))
+        Ok(committee(&observer, channel).await?.1 == Some(key_b))
     })
     .await?;
 

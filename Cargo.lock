@@ -11111,6 +11111,7 @@ dependencies = [
  "sequencer_actors_common",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "sharding_pool_actor",
  "system_accounts",
  "thiserror 2.0.18",
  "tokio",

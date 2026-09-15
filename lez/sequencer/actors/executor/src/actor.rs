@@ -53,7 +53,6 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     sequencer: SequencerCore<S, B>,
     storage_ref: ActorRef<S>,
-    bedrock_ref: ActorRef<B>,
 
     /// Is it our turn to produce a blocks.
     is_our_turn: bool,
@@ -116,7 +115,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
             .map_err(Error::SequencerStartFailed)?;
 
             let is_our_turn = bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn)
+                .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn {
+                    channel_id: sequencer.channel_id(),
+                })
                 .await
                 .map_err(|err| {
                     let err = err.map_err(|_: Infallible| unreachable!());
@@ -129,7 +130,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 mempool_handle,
                 sequencer,
                 storage_ref,
-                bedrock_ref,
                 is_our_turn,
                 background_task,
                 blocked_attempts: BlockedAttempts::default(),
@@ -469,16 +469,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for Execu
         GetChannelId: GetChannelId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let channel_id = self
-            .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetChannelId)
-            .await
-            .map_err(|err| {
-                let err = err.map_err(|_: Infallible| unreachable!());
-                Error::BedrockRequestFailed(err.erase_message())
-            })?;
-
-        Ok(*channel_id.channel_id.as_ref())
+        Ok(*self.sequencer.channel_id().as_ref())
     }
 }
 
