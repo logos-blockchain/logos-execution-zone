@@ -37,7 +37,7 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
-use sequencer_bedrock_actor::{BedrockActorTrait, config::ChannelId};
+use sequencer_bedrock_actor::{BedrockActorTrait, protocol::ChannelId};
 use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,

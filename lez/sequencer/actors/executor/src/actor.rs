@@ -7,7 +7,7 @@ use futures::{
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
-    error::{ActorStopReason, Infallible},
+    error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
     reply::DelegatedReply,
@@ -18,7 +18,6 @@ use lee_core::{
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
-use sequencer_actors_common::EraseMessage as _;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
     MsgId, PinBehindTip, SequencerCore, TransactionOrigin, config::SequencerConfig,
@@ -118,11 +117,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn {
                     channel_id: sequencer.channel_id(),
                 })
-                .await
-                .map_err(|err| {
-                    let err = err.map_err(|_: Infallible| unreachable!());
-                    Error::BedrockRequestFailed(err.erase_message())
-                })?;
+                .await?;
 
             let background_task = sequencer.background_task();
 

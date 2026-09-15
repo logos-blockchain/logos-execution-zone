@@ -16,6 +16,7 @@ sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
+sharding_pool_actor = { workspace = true, features = ["actor"] }
 lee = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }

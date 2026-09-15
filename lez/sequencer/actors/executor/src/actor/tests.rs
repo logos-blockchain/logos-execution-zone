@@ -98,7 +98,7 @@ fn prepare_mock_bedrock_with_empty_channel() -> MockBedrockActor {
         .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
     mock_bedrock
         .expect_handle_check_is_our_turn()
-        .returning(|_msg, _ctx| true);
+        .returning(|_msg, _ctx| Ok(true));
     mock_bedrock
 }
 

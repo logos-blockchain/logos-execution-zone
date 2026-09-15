@@ -66,7 +66,7 @@ impl CannedChannel {
         mock.expect_handle_check_channel_exists()
             .returning(|_msg, _ctx| Ok(false));
         mock.expect_handle_check_is_our_turn()
-            .returning(|_msg, _ctx| true);
+            .returning(|_msg, _ctx| Ok(true));
         mock.expect_handle_get_channel_tip_slot()
             .returning(move |_msg, _ctx| Ok(tip_slot));
         // The config entry is the root, which `checkpoint_at` reports

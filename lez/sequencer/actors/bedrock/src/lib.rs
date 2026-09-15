@@ -1,7 +1,7 @@
 //! Bedrock Actor communicates with Bedrock.
 
 #[cfg(feature = "actor")]
-pub use actor::{BedrockActor, config};
+pub use actor::BedrockActor;
 pub use r#trait::BedrockActorTrait;
 
 #[cfg(feature = "actor")]

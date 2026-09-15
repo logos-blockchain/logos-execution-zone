@@ -265,7 +265,7 @@ fn channel_serving(tip_slot: Option<Slot>, messages: Vec<(ZoneMessage, Slot)>) -
         },
     );
     mock.expect_handle_check_is_our_turn()
-        .returning(|_msg, _ctx| true);
+        .returning(|_msg, _ctx| Ok(true));
     mock
 }
 

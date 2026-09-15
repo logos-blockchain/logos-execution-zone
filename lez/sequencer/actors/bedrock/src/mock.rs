@@ -15,13 +15,20 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, MsgId,
-        PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        CreateChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
+        InitializeChannelPublisher, MsgId, PublishBlock, PublishOutcome, ReadChannel, Slot,
+        ZoneMessage,
     },
 };
 
 mockall::mock! {
     pub BedrockActor {
+        pub fn handle_initialize_channel_publisher(
+            &mut self,
+            msg: InitializeChannelPublisher,
+            ctx: &mut Context<Self, Result<bool>>
+        ) -> Result<bool>;
+
         pub fn handle_create_channel(
             &mut self,
             msg: CreateChannel,
@@ -49,8 +56,8 @@ mockall::mock! {
         pub fn handle_check_is_our_turn(
             &mut self,
             msg: CheckIsOurTurn,
-            ctx: &mut Context<Self, bool>
-        ) -> bool;
+            ctx: &mut Context<Self, Result<bool>>
+        ) -> Result<bool>;
 
         pub fn handle_get_accredited_keys(
             &mut self,
@@ -114,6 +121,18 @@ impl Message<Replace<Self>> for MockBedrockActor {
     }
 }
 
+impl Message<InitializeChannelPublisher> for MockBedrockActor {
+    type Reply = Result<bool>;
+
+    async fn handle(
+        &mut self,
+        msg: InitializeChannelPublisher,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_initialize_channel_publisher(msg, ctx)
+    }
+}
+
 impl Message<CreateChannel> for MockBedrockActor {
     type Reply = Result<PublishOutcome>;
 
@@ -163,7 +182,7 @@ impl Message<CheckChannelExists> for MockBedrockActor {
 }
 
 impl Message<CheckIsOurTurn> for MockBedrockActor {
-    type Reply = bool;
+    type Reply = Result<bool>;
 
     async fn handle(
         &mut self,

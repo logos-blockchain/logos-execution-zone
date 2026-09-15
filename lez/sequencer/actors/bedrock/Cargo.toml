@@ -28,7 +28,6 @@ test-utils = []
 common.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_actors_common.workspace = true
-sequencer_storage_actor.workspace = true
 sharding_pool_actor.workspace = true
 system_accounts = { workspace = true, optional = true }
 

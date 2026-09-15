@@ -1,18 +1,10 @@
 use kameo::error::Infallible;
-use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
+use sequencer_actors_common::ErasedMessage;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Storage request failed")]
-    StorageRequestFailed(
-        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
-    ),
-
     #[error("Broker publish failed")]
     BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
-
-    #[error("Checkpoint (de-)serialization failed")]
-    CheckpointSerializationFailed(#[from] logos_blockchain_core::codec::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \
@@ -26,6 +18,9 @@ pub enum Error {
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("Channel publisher is not initialized, send `InitializeChannelPublisher` first")]
+    ChannelPublisherIsNotInitialized,
 
     #[error("Transaction build failed")]
     TransactionBuildFailed(#[from] logos_blockchain_core::mantle::transactions::TxBuilderError),
@@ -65,10 +60,4 @@ pub enum Error {
 
     #[error("Zone-sdk error")]
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),
-}
-
-impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {
-    fn from(err: kameo::error::SendError<M, sequencer_storage_actor::error::Error>) -> Self {
-        Self::StorageRequestFailed(err.erase_message())
-    }
 }

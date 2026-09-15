@@ -1,13 +1,21 @@
+use std::time::Duration;
+
 use common::block::Block;
 use kameo::Reply;
+pub use logos_blockchain_common_http_client::BasicAuthCredentials;
 pub use logos_blockchain_core::mantle::NoteId;
+pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 pub use logos_blockchain_zone_sdk::{
     Ed25519PublicKey, Slot, ZoneMessage,
     node_types::{ChannelId, HeaderId, MsgId},
-    sequencer::{DepositInfo, SequencerCheckpoint as Checkpoint, WithdrawArg, WithdrawInfo},
+    sequencer::{
+        DepositInfo, SequencerCheckpoint as Checkpoint, SequencerCheckpoint, WithdrawArg,
+        WithdrawInfo,
+    },
 };
 pub use sequencer_stake_core::ChannelParams;
 use sharding_pool_actor::ShardingKey;
+pub use url::Url;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
@@ -47,6 +55,23 @@ pub struct ChannelUpdate {
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
+pub struct InitializeChannelPublisher {
+    pub channel_id: ChannelId,
+    pub bedrock_signing_key: Ed25519Key,
+    pub funding_pk: ZkPublicKey,
+    pub priority_fee_percent: u64,
+    pub initial_checkpoint: Option<SequencerCheckpoint>,
+    pub resubmit_interval: Duration,
+}
+
+impl ShardingKey for InitializeChannelPublisher {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Create the channel and write `genesis` into it in one Mantle tx.
 ///
 /// Only valid while the channel does not exist, and `keys[0]` must be this sequencer's own key,
@@ -56,6 +81,14 @@ pub struct CreateChannel {
     pub genesis: Block,
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
+}
+
+impl ShardingKey for CreateChannel {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
 }
 
 /// Publish block to the configured channel.

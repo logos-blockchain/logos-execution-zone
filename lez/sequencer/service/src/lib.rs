@@ -10,6 +10,7 @@ use kameo_actors::{
     scheduler::{Scheduler, SetInterval},
 };
 use log::info;
+use sequencer_bedrock_actor::protocol::ChannelId;
 pub use sequencer_core::config::*;
 use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
@@ -17,6 +18,7 @@ use sequencer_gossip_actor::{GossipActor, protocol::PublishTransaction};
 use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
+use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
@@ -214,11 +216,16 @@ pub fn run(
             .await?;
         info!("Bedrock Broker Actor spawned");
 
-        let bedrock = setup_bedrock_actor(&config, storage_ref.clone(), bedrock_broker_ref.clone())
-            .await
-            .context("Failed to set up Bedrock Actor")?;
-        let bedrock_ref = BedrockActor::spawn(bedrock);
-        info!("Bedrock Actor spawned");
+        let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(|channel_id| {
+            setup_bedrock_actor(
+                config.bedrock_config.node_url,
+                config.bedrock_config.auth.into(),
+                *channel_id,
+                bedrock_broker_ref.clone(),
+            )
+        });
+        let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
+        info!("Bedrock Sharding Pool Actor spawned");
 
         let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
             .await
@@ -390,29 +397,13 @@ async fn setup_gossip(
 }
 
 #[cfg(not(feature = "standalone"))]
-async fn setup_bedrock_actor(
-    config: &SequencerConfig,
-    storage_ref: ActorRef<StorageActor>,
+fn setup_bedrock_actor(
+    node_url: Url,
+    basic_auth: Option<BasicAuthCredentials>,
+    channel_id: ChannelId,
     bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-) -> sequencer_bedrock_actor::Result<BedrockActor> {
-    let bedrock_signing_key = load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-        .expect("Failed to load or create bedrock signing key");
-    log::info!(
-        "Bedrock signing public key: {}",
-        hex::encode(bedrock_signing_key.public_key().to_bytes())
-    );
-
-    let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
-        node_url: config.bedrock_config.node_url.clone(),
-        basic_auth: config.bedrock_config.auth.clone().map(Into::into),
-        channel_id: config.bedrock_config.channel_id,
-        bedrock_signing_key,
-        funding_pk: config.bedrock_config.funding_key,
-        priority_fee_percent: config.bedrock_config.priority_fee_percent,
-        resubmit_interval: config.retry_pending_blocks_timeout,
-    };
-
-    BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
+) -> BedrockActor {
+    BedrockActor::new(node_url, basic_auth, channel_id, bedrock_broker_ref)
 }
 
 #[cfg(feature = "standalone")]
@@ -420,11 +411,12 @@ async fn setup_bedrock_actor(
     clippy::unused_async,
     reason = "Must be async to match the signature of the non-standalone version"
 )]
-async fn setup_bedrock_actor(
-    _config: &SequencerConfig,
-    _storage_ref: ActorRef<StorageActor>,
+fn setup_bedrock_actor(
+    _node_url: Url,
+    _basic_auth: Option<BasicAuthCredentials>,
+    _channel_id: ChannelId,
     _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-) -> sequencer_bedrock_actor::Result<BedrockActor> {
+) -> BedrockActor {
     use sequencer_bedrock_actor::protocol::{
         AccreditedKeys, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
     };
@@ -467,5 +459,5 @@ async fn setup_bedrock_actor(
         })
     });
 
-    Ok(mock)
+    mock
 }
