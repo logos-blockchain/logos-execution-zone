@@ -583,7 +583,7 @@ In LEE there are two distinct concepts that control who can modify an account:
 **Program Ownership:** Each account has a field: `program_owner: ProgramId`.
 This indicates which program is allowed to update the account’s state during execution.
 - If a program is the program_owner of an account, it can freely mutate its fields.
-- If the account is unowned (`program_owner = DEFAULT_PROGRAM_ID`), a program that writes data to it becomes its owner.
+- If the account is unowned (`program_owner = DEFAULT_PROGRAM_OWNER`), a program that writes data to it becomes its owner.
 - If a program is not the owner and the account is already owned, any attempt to modify its data will cause the transition to fail.
 Program ownership is about mutation rights during program execution.
 
