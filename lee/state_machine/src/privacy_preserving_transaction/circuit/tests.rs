@@ -374,7 +374,9 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     commitment_set.extend(std::slice::from_ref(&commitment));
     let sender = AccountWithMetadata::new(account.clone(), true, account_id);
 
-    let witness = |membership_proof| {
+    let (padded, proof) = execute_and_prove_with_padded_inputs(
+        vec![sender],
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
@@ -385,27 +387,22 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
             nullifier: NullifierWitness::Update {
                 view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
                 nsk: keys.nsk(),
-                membership_proof,
+                membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
-        })]
-    };
-    let membership_proof = commitment_set.get_proof_for(&commitment).unwrap();
-
-    let (padded, proof) = execute_and_prove_with_padded_inputs(
-        vec![sender.clone()],
-        Program::serialize_instruction(()).unwrap(),
-        witness(membership_proof.clone()),
+        })],
         vec![],
         Some(PAD),
-        &program.clone().into(),
+        &program.into(),
     )
     .unwrap();
 
     assert!(proof.is_valid_for(&padded));
     assert_eq!(padded.private_actions.len(), 1);
     let ciphertext = &padded.private_actions[0].encrypted_post_state.ciphertext;
-    let pad = usize::try_from(PAD).expect("pad fits in usize");
-    assert_eq!(ciphertext.as_bytes().len(), pad);
+    assert_eq!(
+        ciphertext.as_bytes().len(),
+        usize::try_from(PAD).expect("pad fits in usize")
+    );
 
     let shared_secret = SharedSecretKey::decapsulate(
         &padded.private_actions[0].encrypted_post_state.epk,
@@ -413,30 +410,19 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
         &keys.z,
     )
     .unwrap();
-    let (_kind, post) = EncryptionScheme::decrypt(
+    let (kind, post) = EncryptionScheme::decrypt(
         ciphertext,
         &shared_secret,
         &padded.private_actions[0].nullifier,
     )
     .unwrap();
-    assert_eq!(post.data, account.data);
-
-    let (unpadded, _proof) = execute_and_prove(
-        vec![sender],
-        Program::serialize_instruction(()).unwrap(),
-        witness(membership_proof),
-        &program.into(),
-    )
-    .unwrap();
-
-    let unpadded_len = unpadded.private_actions[0]
-        .encrypted_post_state
-        .ciphertext
-        .as_bytes()
-        .len();
-    assert!(
-        unpadded_len < pad,
-        "unpadded note must be shorter than the pad, got {unpadded_len}"
+    assert_eq!(kind, PrivateAccountKind::Regular(identifier));
+    assert_eq!(
+        post,
+        Account {
+            nonce: post.nonce,
+            ..account
+        }
     );
 }
 

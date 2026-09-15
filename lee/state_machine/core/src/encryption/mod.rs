@@ -339,6 +339,11 @@ mod tests {
 
         assert_eq!(decoded_account, account);
         assert_eq!(decoded_kind, kind);
+
+        // Padding before the keystream, not after it: zeros bolted onto the ciphertext would
+        // republish the plaintext length, which is the leak the pad exists to close.
+        let tail = usize::try_from(plaintext_len(&account)).expect("plaintext fits in usize");
+        assert!(ct.as_bytes()[tail..].iter().any(|byte| *byte != 0));
     }
 
     #[test]

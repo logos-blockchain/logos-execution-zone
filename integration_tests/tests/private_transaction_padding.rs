@@ -49,7 +49,7 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
         .collect();
     assert!(
         lengths.iter().all(|&len| len == expected),
-        "all note ciphertexts must be padded to {expected} bytes, got {lengths:?}"
+        "notes under the {expected}-byte pad must all reach it, got {lengths:?}"
     );
 
     Ok(())
