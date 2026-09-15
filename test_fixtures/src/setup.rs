@@ -194,8 +194,37 @@ pub fn prebuilt_sequencer_db_dump_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/prebuilt_sequencer_db.dump")
 }
 
+/// Circuit id the committed dump was generated with (`just regenerate-test-fixture`).
+#[must_use]
+pub fn prebuilt_sequencer_db_circuit_id_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/prebuilt_sequencer_db.circuit_id")
+}
+
+/// Hex form of the privacy-preserving circuit id this build embeds.
+#[must_use]
+pub fn privacy_preserving_circuit_id_stamp() -> String {
+    lee::PRIVACY_PRESERVING_CIRCUIT_ID
+        .map(|word| format!("{word:08x}"))
+        .join("")
+}
+
 /// Load and deserialize the committed prebuilt-database dump.
 fn load_prebuilt_dump() -> Result<DbDump> {
+    let stamp_path = prebuilt_sequencer_db_circuit_id_path();
+    let stamped = fs::read_to_string(&stamp_path).with_context(|| {
+        format!(
+            "Failed to read fixture circuit id at {}",
+            stamp_path.display()
+        )
+    })?;
+    let expected = privacy_preserving_circuit_id_stamp();
+    if stamped.trim() != expected {
+        bail!(
+            "Prebuilt fixture was generated for circuit {}, this build embeds {expected}. Run `just regenerate-test-fixture`.",
+            stamped.trim()
+        );
+    }
+
     let path = prebuilt_sequencer_db_dump_path();
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read prebuilt db dump at {}", path.display()))?;
