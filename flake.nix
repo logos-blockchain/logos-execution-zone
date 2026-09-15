@@ -106,11 +106,12 @@
           # the `metal` tool in the wrong place and fail with
           #   error: cannot execute tool 'metal' due to missing Metal Toolchain
           # even when a working Metal Toolchain is installed. This wrapper, put
-          # first in PATH, clears those two vars for metal/metallib invocations
-          # only — so they resolve the real system Xcode Metal Toolchain — while
-          # every other xcrun call passes through with the nix environment
-          # intact. (On recent macOS the Metal Toolchain is a per-user component;
-          # `xcodebuild -downloadComponent MetalToolchain` must have been run.)
+          # first in PATH, resolves metal/metallib from the Metal Toolchain
+          # cryptex mount instead; with no cryptex it clears those two vars and
+          # retries the old lookup. Every other xcrun call passes through with
+          # the nix environment intact. (On recent macOS the Metal Toolchain is
+          # a per-user component; `xcodebuild -downloadComponent MetalToolchain`
+          # must have been run.)
           metalStub = pkgs.writeShellScriptBin "xcrun" ''
             orig=("$@")
 
@@ -135,10 +136,7 @@
               esac
             done
 
-            # The Metal Toolchain is a per-user cryptex mount. xcrun resolves it
-            # only for the user that downloaded it, so a nix build user gets
-            # Xcode's stub, which exits with "cannot execute tool 'metal'". The
-            # mount is world-readable, so address the real binary directly.
+            # The mount is world-readable; only xcrun's lookup is per-user.
             if [ -n "$tool" ]; then
               for cand in /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin/"$tool"; do
                 [ -x "$cand" ] || continue
@@ -148,7 +146,7 @@
                   exit 0
                 fi
                 if [ "$tool" = metal ] && [ -n "$sdk" ]; then
-                  # --sdk was xcrun's job; hand the compiler the sysroot itself.
+                  # DEVELOPER_DIR is still set here, so this resolves nix's SDK.
                   sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null) || sysroot=
                   if [ -z "$sysroot" ]; then
                     echo "xcrun: cannot resolve SDK '$sdk'" >&2
@@ -159,8 +157,7 @@
                 exec "$cand" "''${args[@]}"
               done
 
-              # No cryptex toolchain present: clear the nix SDK vars and let
-              # xcrun look the tool up the way it used to.
+              # No cryptex: clear the nix SDK vars and retry the old lookup.
               unset DEVELOPER_DIR SDKROOT
               export xcrun_nocache=1
             fi
