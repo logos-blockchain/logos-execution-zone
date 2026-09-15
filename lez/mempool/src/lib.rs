@@ -74,16 +74,24 @@ impl<T> MemPool<T> {
 
     /// Reorders everything held so that `pop` yields the best item first.
     ///
+    /// The logic is based on Kahn's algorithm with a priority heap.
+    /// We think of lanes as the edges, and items as the nodes in a DAG.
+    ///
+    /// Time O(n log n + e·k), space O(n + e):
+    /// - `n`: number of items, roughly bounded by the mempool's `max_size`
+    /// - `e`: total lane memberships (the edges)
+    /// - `k`: most lanes any one item has; bounded, as witness count is capped only by tx size
+    ///
+    /// The ordering is based on:
     /// - `priority`: the bid of an item; higher pops first, ties go to the earlier arrival.
     /// - `lanes_of`: the lanes an item belongs to (one per signer `nonce` sequence). Items sharing
     ///   a lane keep their arrival order: an item is ready only once it heads every lane it is in.
-    ///   No lanes would mean it is always ready.
+    ///   If it doesn't belong to any lane, it's already ready.
     pub fn prioritize<K: Ord, G: Hash + Eq + Clone>(
         &mut self,
         priority: impl Fn(&T) -> K,
         lanes_of: impl Fn(&T) -> Vec<G>,
     ) {
-        // Kahn's algorithm with a priority heap: lanes are the edges, items the nodes.
         let mut items: Vec<Option<(Vec<G>, T)>> = Vec::new();
         // per lane, item indices in arrival order; only the front is eligible
         let mut lanes: HashMap<G, VecDeque<usize>> = HashMap::new();
@@ -95,7 +103,7 @@ impl<T> MemPool<T> {
             items.push(Some((groups, item)));
         }
 
-        // ready items: highest bid first, earlier arrival breaks ties
+        // ready items: highest bid first (`K`), earlier arrival breaks ties (`Reverse<usize>`)
         let mut ready: BinaryHeap<(K, Reverse<usize>)> = BinaryHeap::new();
         // an item is enqueued exactly once, however many lanes report it
         let mut queued = vec![false; items.len()];
@@ -105,14 +113,14 @@ impl<T> MemPool<T> {
         loop {
             for i in candidates {
                 let (groups, item) = items[i].as_ref().expect("candidates are unpicked");
-                // ready once it heads every lane it is in; no lanes is always ready
+                // if its not queued already & its the front of all lanes its part of, its ready
                 if !queued[i] && groups.iter().all(|group| lanes[group].front() == Some(&i)) {
                     queued[i] = true;
                     ready.push((priority(item), Reverse(i)));
                 }
             }
             let Some((_, Reverse(best))) = ready.pop() else {
-                break;
+                break; // no more candidates
             };
 
             let (groups, item) = items[best].take().expect("an item is picked once");
@@ -124,6 +132,7 @@ impl<T> MemPool<T> {
                 .iter()
                 .filter_map(|group| lanes[group].front().copied())
                 .collect();
+
             ordered.push(item);
         }
 

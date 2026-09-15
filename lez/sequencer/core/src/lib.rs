@@ -1859,8 +1859,13 @@ fn declared_tip(tx: &LeeTransaction) -> u64 {
 }
 
 /// The accounts whose nonce sequences a transaction belongs to: every signer,
-/// a co-signing payer included. Empty for private transactions, which carry
-/// no nonces.
+/// a co-signing payer included. Empty for private transactions.
+///
+/// FIXME: a private tx with public signers carries one nonce per signature and
+/// advances them on apply, same as a public tx. A later tipped public tx from
+/// the same signer can jump ahead and get the private one dropped on a nonce
+/// mismatch. Once private txs are charged, match both variants here; both
+/// witness sets expose `signatures_and_public_keys`.
 fn signers(tx: &LeeTransaction) -> Vec<AccountId> {
     let LeeTransaction::Public(tx) = tx else {
         return Vec::new();
