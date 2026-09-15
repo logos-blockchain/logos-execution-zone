@@ -106,21 +106,63 @@
           # the `metal` tool in the wrong place and fail with
           #   error: cannot execute tool 'metal' due to missing Metal Toolchain
           # even when a working Metal Toolchain is installed. This wrapper, put
-          # first in PATH, clears those two vars for metal/metallib invocations
-          # only — so they resolve the real system Xcode Metal Toolchain — while
-          # every other xcrun call passes through with the nix environment
-          # intact. (On recent macOS the Metal Toolchain is a per-user component;
-          # `xcodebuild -downloadComponent MetalToolchain` must have been run.)
+          # first in PATH, resolves metal/metallib from the Metal Toolchain
+          # cryptex mount instead; with no cryptex it clears those two vars and
+          # retries the old lookup. Every other xcrun call passes through with
+          # the nix environment intact. (On recent macOS the Metal Toolchain is
+          # a per-user component; `xcodebuild -downloadComponent MetalToolchain`
+          # must have been run.)
           metalStub = pkgs.writeShellScriptBin "xcrun" ''
+            orig=("$@")
+
+            sdk=
             tool=
-            for a in "$@"; do
-              case "$a" in metal|metallib) tool=1 ;; esac
+            find=
+            args=()
+            while [ $# -gt 0 ]; do
+              case "$1" in
+                # A bare --sdk would make `shift 2` spin; let xcrun reject it.
+                --sdk)
+                  [ $# -ge 2 ] || exec /usr/bin/xcrun "''${orig[@]}"
+                  sdk=$2
+                  shift 2
+                  ;;
+                --find|-f) find=1; shift ;;
+                metal|metallib)
+                  if [ -z "$tool" ]; then tool=$1; else args+=("$1"); fi
+                  shift
+                  ;;
+                *) args+=("$1"); shift ;;
+              esac
             done
+
+            # The mount is world-readable; only xcrun's lookup is per-user.
             if [ -n "$tool" ]; then
+              for cand in /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin/"$tool"; do
+                [ -x "$cand" ] || continue
+                # --find asks for the path; returning xcrun's would defeat this.
+                if [ -n "$find" ]; then
+                  echo "$cand"
+                  exit 0
+                fi
+                if [ "$tool" = metal ] && [ -n "$sdk" ]; then
+                  # DEVELOPER_DIR is still set here, so this resolves nix's SDK.
+                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null) || sysroot=
+                  if [ -z "$sysroot" ]; then
+                    echo "xcrun: cannot resolve SDK '$sdk'" >&2
+                    exit 1
+                  fi
+                  exec "$cand" -isysroot "$sysroot" "''${args[@]}"
+                fi
+                exec "$cand" "''${args[@]}"
+              done
+
+              # No cryptex: clear the nix SDK vars and retry the old lookup.
               unset DEVELOPER_DIR SDKROOT
               export xcrun_nocache=1
             fi
-            exec /usr/bin/xcrun "$@"
+
+            exec /usr/bin/xcrun "''${orig[@]}"
           '';
 
           commonArgs = {
