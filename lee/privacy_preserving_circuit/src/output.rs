@@ -160,7 +160,7 @@ pub fn compute_circuit_output(
     }
 
     for dummy in dummy_inputs {
-        emit_dummy_output(&mut output, dummy);
+        emit_dummy_output(&mut output, dummy, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
@@ -185,7 +185,18 @@ fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
     }
 }
 
-fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
+fn emit_dummy_output(
+    output: &mut PrivacyPreservingCircuitOutput,
+    dummy: DummyInput,
+    ciphertext_padding: Option<u32>,
+) {
+    if let Some(padding) = ciphertext_padding {
+        assert!(
+            dummy.note.ciphertext.as_bytes().len()
+                >= usize::try_from(padding).expect("pad length fits in usize"),
+            "Dummy note shorter than the requested ciphertext padding"
+        );
+    }
     // Note: the nullifiers and commitments are generated from seeds.
     // The prover is responsible for their randomness.
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);

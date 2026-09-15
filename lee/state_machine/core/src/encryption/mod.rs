@@ -13,6 +13,13 @@ pub mod shared_key_derivation;
 /// Length in bytes of an ML-KEM-768 ciphertext (the `EphemeralPublicKey` payload).
 pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 
+/// Upper bound on a requested note pad.
+///
+/// Keeps a prover from inflating its own transaction into a whole block at the flat
+/// private-transaction storage fee. Plaintexts longer than this are unaffected, the pad is only
+/// a floor.
+pub const MAX_CIPHERTEXT_PADDING: u32 = 8 * 1024;
+
 pub type Scalar = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -114,8 +121,17 @@ impl EncryptedAccountData {
 }
 
 impl EncryptionScheme {
-    /// `pad_to_len` is a floor: shorter plaintexts are zero-extended to it, longer ones are left
-    /// alone. Decryption needs no counterpart, `Account` bytes are length-prefixed.
+    /// Encrypts a note: the `kind` header followed by the account bytes, under a keystream keyed
+    /// by the shared secret and the nullifier.
+    ///
+    /// `pad_to_len` is a floor: shorter plaintexts are zero-extended to it before encryption,
+    /// longer ones keep their own length. Decryption needs no counterpart, `Account` bytes are
+    /// length-prefixed. Pass `None` off the note path, where the ciphertext is never published
+    /// and its length carries nothing.
+    ///
+    /// # Panics
+    ///
+    /// If `pad_to_len` exceeds [`MAX_CIPHERTEXT_PADDING`].
     #[must_use]
     pub fn encrypt(
         account: &Account,
@@ -129,6 +145,10 @@ impl EncryptionScheme {
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
         if let Some(pad_to_len) = pad_to_len {
+            assert!(
+                pad_to_len <= MAX_CIPHERTEXT_PADDING,
+                "ciphertext padding exceeds the maximum"
+            );
             let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
             if pad_to_len > buffer.len() {
                 buffer.resize(pad_to_len, 0);
@@ -319,6 +339,18 @@ mod tests {
 
         assert_eq!(decoded_account, account);
         assert_eq!(decoded_kind, kind);
+    }
+
+    #[test]
+    #[should_panic(expected = "ciphertext padding exceeds the maximum")]
+    fn encrypt_rejects_padding_above_the_maximum() {
+        let _ct = EncryptionScheme::encrypt(
+            &Account::default(),
+            &PrivateAccountKind::Regular(0),
+            &SharedSecretKey([0_u8; 32]),
+            &Nullifier::for_account_initialization(&AccountId::new([0_u8; 32])),
+            Some(MAX_CIPHERTEXT_PADDING.saturating_add(1)),
+        );
     }
 
     /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
