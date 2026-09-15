@@ -16,7 +16,7 @@ use kameo::{
     error::ActorStopReason,
     message::{Context, Message},
 };
-use lee::V03State;
+use lee::{AccountId, V03State};
 use lee_core::BlockId;
 use log::debug;
 
@@ -27,7 +27,8 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
+        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
@@ -209,6 +210,55 @@ impl StorageActor {
         for (block_id, block) in &to_write {
             self.db()
                 .put_batch(batch, &encoding::BigEndian::new(block_id), block)?;
+
+            self.db().put_batch(
+                batch,
+                &block.block.header.hash,
+                &entities::BlockHashToBlockIdMappingDestination { id: *block_id },
+            )?;
+
+            let affected_accounts = block
+                .block
+                .body
+                .transactions
+                .iter()
+                .flat_map(LeeTransaction::affected_public_account_ids);
+
+            for acc in affected_accounts {
+                let meta_acc_opt = self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?;
+
+                if let Some(meta_acc) = meta_acc_opt {
+                    self.db().put_batch(
+                        batch,
+                        &acc,
+                        &entities::AccountIdToBlockIdMetaLen {
+                            length: meta_acc.length.saturating_add(1),
+                        },
+                    )?;
+                    let map_key = entities::AccountIdToBlockIdKey::from((acc, meta_acc.length));
+                    self.db().put_batch(
+                        batch,
+                        &map_key,
+                        &entities::AccountIdToBlockIdDestination {
+                            block_id: *block_id,
+                        },
+                    )?;
+                } else {
+                    self.db().put_batch(
+                        batch,
+                        &acc,
+                        &entities::AccountIdToBlockIdMetaLen { length: 1 },
+                    )?;
+                    let map_key = entities::AccountIdToBlockIdKey::from((acc, 0));
+                    self.db().put_batch(
+                        batch,
+                        &map_key,
+                        &entities::AccountIdToBlockIdDestination {
+                            block_id: *block_id,
+                        },
+                    )?;
+                }
+            }
         }
 
         Ok((to_write, differs_from_stored))
@@ -383,6 +433,71 @@ impl StorageActor {
         }
 
         Ok(())
+    }
+
+    fn get_affecting_txs_for_account_id(
+        &self,
+        account_id: AccountId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Option<Vec<LeeTransaction>>> {
+        let meta_acc_opt: Option<entities::AccountIdToBlockIdMetaLen> =
+            self.db()
+                .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
+
+        if let Some(meta_acc_data) = meta_acc_opt {
+            log::info!(
+                "############################### Meta acc data len is {}",
+                meta_acc_data.length
+            );
+
+            let mut affecting_txs = vec![];
+            let mut local_offset = 0;
+            let mut local_limit = 0;
+
+            'outer: for i in 0..meta_acc_data.length {
+                let mapping_key = entities::AccountIdToBlockIdKey::from((account_id, i));
+
+                let block_id = self
+                    .db()
+                    .get::<entities::AccountIdToBlockIdDestination>(&mapping_key)?
+                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                        "Inconsistent map: account id to block id map points into nowhere"
+                    )))?
+                    .block_id;
+
+                let affecting_transactions = self
+                    .db()
+                    .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                        "Inconsistent map: account id to block id map points into absent block"
+                    )))?
+                    .block
+                    .body
+                    .transactions
+                    .into_iter()
+                    .filter(|tx| tx.affected_public_account_ids().contains(&account_id));
+
+                for aff_tx in affecting_transactions {
+                    if local_offset >= offset {
+                        if local_limit < limit {
+                            affecting_txs.push(aff_tx);
+                            local_limit = local_limit.saturating_add(1);
+
+                            if local_limit >= limit {
+                                break 'outer;
+                            }
+                        }
+                    } else {
+                        local_offset = local_offset.saturating_add(1);
+                    }
+                }
+            }
+
+            Ok(Some(affecting_txs))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -1202,5 +1317,36 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
         self.db()
             .put(&peer_zone, &entities::CrossZonePeerTip { tip })
             .map_err(Into::into)
+    }
+}
+
+impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        GetBlockHashToBlockIdMapItem { block_hash }: GetBlockHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::BlockHashToBlockIdMappingDestination>(&block_hash)?
+            .map(|dest| dest.id))
+    }
+}
+
+impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        GetAccountIdToAffectingTxMapItemUptoLimit {
+            account_id,
+            offset,
+            limit,
+        }: GetAccountIdToAffectingTxMapItemUptoLimit,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.get_affecting_txs_for_account_id(account_id, offset, limit)
     }
 }

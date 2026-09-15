@@ -21,7 +21,8 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
+        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
@@ -245,6 +246,18 @@ mockall::mock! {
             msg: DumpDb,
             ctx: &mut Context<Self, Result<DbDump>>
         ) -> Result<DbDump>;
+
+        pub fn handle_get_block_hash_to_block_id_map_item(
+            &mut self,
+            msg: GetBlockHashToBlockIdMapItem,
+            ctx: &mut Context<Self, Result<Option<u64>>>
+        ) -> Result<Option<u64>>;
+
+        pub fn handle_get_account_id_to_block_id_map_item_uo_to_a_limit(
+            &mut self,
+            msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+            ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
+        ) -> Result<Option<Vec<LeeTransaction>>>;
     }
 }
 
@@ -708,5 +721,29 @@ impl Message<SetCrossZonePeerTip> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_set_cross_zone_peer_tip(msg, ctx)
+    }
+}
+
+impl Message<GetBlockHashToBlockIdMapItem> for MockStorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetBlockHashToBlockIdMapItem,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_block_hash_to_block_id_map_item(msg, ctx)
+    }
+}
+
+impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for MockStorageActor {
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_account_id_to_block_id_map_item_uo_to_a_limit(msg, ctx)
     }
 }
