@@ -27,9 +27,9 @@ Feature: Stake instruction validation
   # No bad-mover guest needed: the mover instruction data is caller-controlled
   # and opaque to sequencer_stake, so authenticated_transfer itself plays the
   # bad mover when told to move one coin less than the Stake declares. The
-  # runtime rejects the chained ConfirmStake's declared pre-state against the
-  # actual post-mover funds balance (InconsistentAccountPreState) before the
-  # in-guest equality assert can fire.
+  # runtime hands the chained ConfirmStake the funds account as the mover left
+  # it, so the in-program balance equality assert is what rejects: "mover call
+  # did not deposit the expected amount into the stake funds account".
   Scenario: Mover deposits less than the requested amount
     When a Stake of "twice the minimum stake" is submitted with the mover told to deposit one coin less
     Then the stake transaction is not included within the next 2 blocks
