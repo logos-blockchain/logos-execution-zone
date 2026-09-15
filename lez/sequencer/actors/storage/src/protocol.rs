@@ -33,6 +33,7 @@ pub struct DeleteBlock {
     pub block_id: BlockId,
 }
 
+#[cfg(feature = "test-utils")]
 pub struct ResetAllBlocksToPending;
 
 pub struct GetFirstBlockId;

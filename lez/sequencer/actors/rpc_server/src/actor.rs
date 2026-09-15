@@ -4,8 +4,9 @@ use bytesize::ByteSize;
 use jsonrpsee::server::ServerHandle;
 use kameo::{
     Actor,
-    actor::{ActorRef, Recipient},
-    mailbox::Signal,
+    actor::{ActorRef, Recipient, WeakActorRef},
+    error::ActorStopReason,
+    mailbox::{MailboxReceiver, Signal},
 };
 use log::info;
 use sequencer_executor_actor::ExecutorActorTrait;
@@ -78,8 +79,8 @@ impl Actor for RpcServerActor {
     )]
     async fn next(
         &mut self,
-        _actor_ref: kameo::prelude::WeakActorRef<Self>,
-        mailbox_rx: &mut kameo::prelude::MailboxReceiver<Self>,
+        _actor_ref: WeakActorRef<Self>,
+        mailbox_rx: &mut MailboxReceiver<Self>,
     ) -> Result<Option<Signal<Self>>> {
         let handle = self
             .server_handle
@@ -98,8 +99,8 @@ impl Actor for RpcServerActor {
 
     async fn on_stop(
         &mut self,
-        _actor_ref: kameo::prelude::WeakActorRef<Self>,
-        _reason: kameo::prelude::ActorStopReason,
+        _actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
     ) -> Result<()> {
         if let Some(server_handle) = self.server_handle.take() {
             server_handle.stop()?;
