@@ -2,8 +2,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::BalanceDiff,
     program::{
-        AccountStateDiff, CallKind, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
+        AccountStateDiff, CallKind, DeferReads, IncrementalCall, ProgramCall, ProgramEvent,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -89,7 +89,30 @@ fn main() {
             pre_states,
             instruction: instruction_data,
         }) => {
-            let diff: TokenDiff = borsh::from_slice(&instruction_data)
+            let Ok(incremental_call) = borsh::from_slice::<IncrementalCall>(&instruction_data) else {
+                respond_unsupported_call(ProgramCall::<Instruction>::Incremental(ProgramInput {
+                    self_account_id,
+                    caller_account_id,
+                    pre_states,
+                    instruction: instruction_data,
+                }));
+            };
+            let delta_bytes = match incremental_call {
+                IncrementalCall::Probe(_) => {
+                    // Reads never inform this program's own decisions, so every read-only touch
+                    // is safe to leave `Deferred`.
+                    ProgramOutput::new(self_account_id, caller_account_id, instruction_data, vec![])
+                        .with_call_kind(CallKind::Incremental)
+                        .with_events(vec![ProgramEvent {
+                            selector: DeferReads::SELECTOR,
+                            data: DeferReads.to_bytes(),
+                        }])
+                        .write();
+                    return;
+                }
+                IncrementalCall::Update(delta_bytes) => delta_bytes,
+            };
+            let diff: TokenDiff = borsh::from_slice(&delta_bytes)
                 .expect("Incremental instruction must decode as TokenDiff");
             let [pre]: [_; 1] = pre_states
                 .try_into()

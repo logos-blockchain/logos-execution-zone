@@ -743,6 +743,30 @@ pub enum ProgramCall<T> {
     Unsupported(ProgramInput<InstructionData>, u8),
 }
 
+/// The instruction shape every `CallKind::Incremental` invocation carries.
+///
+/// Shared by every caller (public-transaction resolution, privacy-transaction proving, privacy
+/// settlement) and every implementer, so a capability check and a real resolution can never be
+/// confused for one another.
+///
+/// `Probe` asks "do you implement `Incremental` at all?" without supplying anything to resolve —
+/// needed to classify a read-only touch (no `post_data`) on a public account in the privacy
+/// circuit: even a touch that writes nothing can drive a decision elsewhere in the call chain
+/// (e.g. which account a caller pays). By default such a read forces the account `Bound`; a
+/// program may instead emit a `DeferReads` event on its `Probe` response to assert that every
+/// read-only touch it makes is safe to leave unresolved (`Deferred`) — an unconditional,
+/// program-wide claim the caller trusts, not something the circuit verifies against the
+/// program's actual logic. `Probe` carries the same `instruction_data` the originating `Execute`
+/// call received, even though nothing reads it yet, so a future per-instruction answer needs no
+/// wire change. A program that doesn't recognize this envelope at all (decode failure) falls
+/// back to `UnsupportedCallKind`, identical to "doesn't implement `Incremental`".
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum IncrementalCall {
+    Probe(InstructionData),
+    /// The actual delta to resolve, program-defined shape.
+    Update(InstructionData),
+}
+
 /// Diagnostic event recorded when a call kind isn't implemented; the call itself is a no-op,
 /// not a rejection.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -758,6 +782,23 @@ impl UnsupportedCallKind {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("UnsupportedCallKind serializes")
+    }
+}
+
+/// Marker event asserting every read-only touch a program makes is safe to leave `Deferred`.
+///
+/// A self-attested, program-wide claim emitted on a `Probe` response (see `IncrementalCall`'s
+/// doc). Absence means the conservative default: a read-only touch forces `Bound`.
+#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DeferReads;
+
+impl DeferReads {
+    pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
+    pub const SELECTOR_NAME: &str = "lee_core::DeferReads";
+
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("DeferReads serializes")
     }
 }
 

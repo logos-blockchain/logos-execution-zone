@@ -1,7 +1,7 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
-    program::{CallKind, ProgramInput, UnsupportedCallKind},
+    program::{CallKind, IncrementalCall, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
@@ -359,7 +359,8 @@ fn assert_incremental_resolves(delta: BalanceTransferDelta, expected: BalanceDif
         self_account_id: program.id().into(),
         caller_account_id: None,
         pre_states: vec![pre_state],
-        instruction: borsh::to_vec(&delta).unwrap(),
+        instruction: borsh::to_vec(&IncrementalCall::Update(borsh::to_vec(&delta).unwrap()))
+            .unwrap(),
     };
     env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
 

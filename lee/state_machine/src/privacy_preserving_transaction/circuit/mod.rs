@@ -4,11 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput, ProgramImageClaim,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Cycles},
     from_frame,
     program::{
-        AccountStateDiff, ChainedCall, InstructionData, ProgramOutput, UnsupportedCallKind,
-        compute_public_authorized_pdas, post_state,
+        AccountStateDiff, ChainedCall, IncrementalCall, InstructionData, ProgramOutput,
+        UnsupportedCallKind, compute_public_authorized_pdas, post_state,
     },
     to_frame,
 };
@@ -17,9 +17,21 @@ use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover}
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::{Program, check_exit_code},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code},
     state::MAX_NUMBER_CHAINED_CALLS,
 };
+
+/// Cycle budget for an `IncrementalCall::Probe` invocation — deliberately far below
+/// `DEFAULT_PUBLIC_CYCLE_BUDGET`. `Probe` is meant to be answerable as a flag ("do you implement
+/// `Incremental` at all?"), needing no real computation and no real account data (the caller
+/// always supplies a minimal placeholder `pre_state` for `Probe`, never the account's real,
+/// possibly up-to-`DATA_MAX_LENGTH`-sized `data` — see the call site), so its cost should be
+/// flat across every implementer, not just small. Measured: the real guests in this repo answer
+/// it in ~7.5–7.8K cycles, identically whether the real account is empty or at the 700 KiB
+/// maximum, confirming the cost really is fixed startup/decode overhead, not program logic. 2^15
+/// (~32.8K) leaves roughly 4x headroom for legitimate variation across implementations while
+/// still leaving no meaningful room to hide real computation behind a `Probe` response.
+const PROBE_CYCLE_BUDGET: Cycles = 1 << 15;
 
 /// Proof of the privacy preserving execution circuit.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -268,6 +280,11 @@ pub fn execute_and_prove_with_padded_inputs(
                     })
                 });
 
+            let is_public = matches!(
+                account_identities.get(position),
+                Some(InputAccountIdentity::Public)
+            );
+
             // Best-effort mirror of the circuit's own resolution (see the comment at the top of
             // this function): whenever `post_data` is present, resolve it now too, proving the
             // resolution so the circuit can verify it — unconditionally, regardless of whether
@@ -275,13 +292,26 @@ pub fn execute_and_prove_with_padded_inputs(
             // decided there, not here; see `ExecutionState`'s accumulation). A program that
             // hasn't implemented `Incremental` responds with `UnsupportedCallKind`, itself a
             // valid receipt — the original diff then applies verbatim, exactly like copy/replace.
-            let resolved_diff = if let Some(post_data) = &diff.post_data {
+            //
+            // A public account's read-only touch (`post_data: None`) still needs a `Probe`
+            // receipt: even a touch that writes nothing can drive a decision elsewhere in the
+            // call chain, and the circuit can only classify this account `Deferred` if every
+            // program that ever touched it — written or not — answers for it. Private accounts
+            // never defer, so no probe is needed for them.
+            let incremental_call = match &diff.post_data {
+                Some(post_data) => Some(IncrementalCall::Update(post_data.as_ref().to_vec())),
+                None if is_public => Some(IncrementalCall::Probe(
+                    chained_call.instruction_data.clone(),
+                )),
+                None => None,
+            };
+            let resolved_diff = if let Some(incremental_call) = &incremental_call {
                 let incremental_receipt = execute_and_prove_incremental(
                     program,
                     chained_call.program_account_id,
                     caller_account_id,
                     pre,
-                    post_data,
+                    incremental_call,
                 )?;
                 let incremental_output: ProgramOutput = borsh::from_slice(
                     from_frame(&incremental_receipt.journal.bytes).ok_or_else(|| {
@@ -296,7 +326,9 @@ pub fn execute_and_prove_with_padded_inputs(
                     .events
                     .iter()
                     .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
-                let resolved = if unsupported {
+                let resolved = if unsupported || diff.post_data.is_none() {
+                    // A `Probe` (no `post_data`) never carries a resolved diff to apply, even
+                    // when supported — there's nothing to resolve, only capability to confirm.
                     diff.clone()
                 } else {
                     let [resolved]: [AccountStateDiff; 1] =
@@ -432,23 +464,51 @@ fn execute_and_prove_program(
 
 /// Proves a `CallKind::Incremental` invocation of `program` for one account — the wallet-side
 /// counterpart to `resolve_diff_in_circuit`'s expectations: every diff with `post_data` needs a
-/// matching Incremental receipt supplied to the circuit, whether or not the program actually
-/// implements `Incremental` (an `UnsupportedCallKind` response is itself a valid, provable
-/// outcome the circuit checks for).
+/// matching `IncrementalCall::Update` receipt supplied to the circuit, and every other touch on
+/// a public account needs a matching `IncrementalCall::Probe` receipt, whether or not the
+/// program actually implements `Incremental` (an `UnsupportedCallKind` response is itself a
+/// valid, provable outcome the circuit checks for).
+///
+/// A program fully controls how much it computes before answering *any* call kind. `Update`
+/// gets the same budget public `Execute` calls do. `Probe` gets its own, much tighter
+/// `PROBE_CYCLE_BUDGET`: its own output is trivial (no data to resolve), so nothing about a
+/// legitimate answer needs more than startup/decode overhead — and unlike `Update`, `Probe` now
+/// runs on every read-only touch of every public account, not just on writes, so it's reachable
+/// far more often. A tight, kind-specific cap keeps a program from hiding meaningful computation
+/// behind either answer.
 fn execute_and_prove_incremental(
     program: &Program,
     self_account_id: AccountId,
     caller_account_id: Option<AccountId>,
     pre_state: &AccountWithMetadata,
-    diff_data: &[u8],
+    call: &IncrementalCall,
 ) -> Result<Receipt, LeeError> {
+    let (cycle_budget, pre_states) = match call {
+        // No implementation reads `pre_states` to answer `Probe` (nor does the circuit inspect
+        // a `Probe` receipt's content beyond the `UnsupportedCallKind` event) — real account
+        // `data` can be up to `DATA_MAX_LENGTH` (700 KiB), and shipping it through the guest's
+        // input stream for no reason would make `Probe`'s cost scale with account size instead
+        // of staying flat. Keep `account_id`/`is_authorized` (cheap, fixed-size) for
+        // defensiveness; zero the rest.
+        IncrementalCall::Probe(_) => (
+            PROBE_CYCLE_BUDGET,
+            vec![AccountWithMetadata::new(
+                Account::default(),
+                pre_state.is_authorized,
+                pre_state.account_id,
+            )],
+        ),
+        IncrementalCall::Update(_) => (DEFAULT_PUBLIC_CYCLE_BUDGET, vec![pre_state.clone()]),
+    };
     let mut env_builder = ExecutorEnv::builder();
+    env_builder.session_limit(Some(cycle_budget));
     env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
     let input = lee_core::program::ProgramInput {
         self_account_id,
         caller_account_id,
-        pre_states: vec![pre_state.clone()],
-        instruction: diff_data.to_vec(),
+        pre_states,
+        instruction: borsh::to_vec(call)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
     };
     let payload = borsh::to_vec(&input)
         .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
