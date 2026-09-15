@@ -1,10 +1,10 @@
-use indexer_service_protocol::{Account, AccountData, AccountId};
+use indexer_service_protocol::{AccountId, AccountSummary};
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 /// Account preview component
 #[component]
-pub fn AccountPreview(account_id: AccountId, account: Account) -> impl IntoView {
+pub fn AccountPreview(account_id: AccountId, account: AccountSummary) -> impl IntoView {
     let account_id_str = account_id.to_string();
 
     view! {
@@ -17,12 +17,13 @@ pub fn AccountPreview(account_id: AccountId, account: Account) -> impl IntoView 
                     </div>
                 </div>
                 {move || {
-                    let Account {
+                    let AccountSummary {
                         nonce,
-                        data: AccountData { balance, shards },
+                        balance,
+                        shards,
                     } = &account;
                     let shards_len = shards.len();
-                    let shards_bytes: usize = shards.values().map(|data| data.0.len()).sum();
+                    let shards_bytes: u64 = shards.iter().map(|shard| shard.len).sum();
                     view! {
                         <div class="account-preview-body">
                             <div class="account-field">

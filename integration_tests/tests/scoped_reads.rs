@@ -279,6 +279,34 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     assert_eq!(after_population.data.balance, balance_only.data.balance);
     assert_eq!(after_population.nonce, balance_only.nonce.0);
 
+    // The explorer renders shard counts and sizes, so it needs to enumerate shards on
+    // an account a scoped read cannot enumerate and a whole-account read can no longer
+    // return. The summary answers that without carrying the bytes.
+    let victim_key: indexer_service_protocol::AccountId = victim.into();
+    assert!(
+        indexer_service_rpc::RpcClient::get_account(indexer, victim_key)
+            .await
+            .is_err(),
+        "the whole-account indexer read must fail on the bloated account"
+    );
+    let expected_shard_len =
+        u64::try_from(BLOAT_SHARD_BYTES).expect("the bloat shard size fits in u64");
+    let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
+    assert_eq!(
+        summary.shards.len(),
+        writers.len(),
+        "the summary must list every shard the bloat wrote"
+    );
+    assert!(
+        summary
+            .shards
+            .iter()
+            .all(|shard| shard.len == expected_shard_len),
+        "the summary must carry each shard's real size"
+    );
+    assert_eq!(summary.balance, balance_only.data.balance);
+    assert_eq!(summary.nonce, balance_only.nonce.0);
+
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
         ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),

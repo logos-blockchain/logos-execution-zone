@@ -159,6 +159,28 @@ pub struct AccountData {
     pub shards: BTreeMap<AccountId, ShardData>,
 }
 
+/// An account's balance and nonce with one entry per shard, carrying each shard's
+/// size instead of its bytes.
+///
+/// Nothing bounds how many shards an account holds or how large each one is, so a
+/// whole-account read is not a safe way to enumerate them: any third party can write
+/// its own shard onto any account, and enough of them push the response past the
+/// server's size cap for good. This answers "which programs hold state here, and how
+/// much" in a response whose size follows the shard count alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountSummary {
+    pub nonce: Nonce,
+    pub balance: u128,
+    pub shards: Vec<ShardSummary>,
+}
+
+/// One program's shard on an account, by size rather than content.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ShardSummary {
+    pub program_account_id: AccountId,
+    pub len: u64,
+}
+
 /// Selects an account's balance and optionally one program shard.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProgramShardSelector {

@@ -13,12 +13,12 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
+    BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
+    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Selector, ShardData, ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -278,6 +278,26 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .get(&account_id)
             .cloned()
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
+    }
+
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned> {
+        let account = self.get_account(account_id).await?;
+        Ok(AccountSummary {
+            nonce: account.nonce,
+            balance: account.data.balance,
+            shards: account
+                .data
+                .shards
+                .iter()
+                .map(|(program, data)| ShardSummary {
+                    program_account_id: *program,
+                    len: u64::try_from(data.0.len()).expect("a shard is capped well under u64"),
+                })
+                .collect(),
+        })
     }
 
     async fn get_account_at_block(

@@ -1,6 +1,6 @@
 use std::str::FromStr as _;
 
-use indexer_service_protocol::{Account, AccountData, AccountId};
+use indexer_service_protocol::{AccountId, AccountSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -25,7 +25,7 @@ pub fn AccountPage() -> impl IntoView {
     // Load account data
     let account_resource = Resource::new(account_id, |acc_id_opt| async move {
         match acc_id_opt {
-            Some(acc_id) => api::get_account(acc_id).await,
+            Some(acc_id) => api::get_account_summary(acc_id).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
                 "Invalid account ID".to_owned(),
             )),
@@ -86,9 +86,10 @@ pub fn AccountPage() -> impl IntoView {
                         .get()
                         .map(|result| match result {
                             Ok(acc) => {
-                                let Account {
+                                let AccountSummary {
                         nonce,
-                        data: AccountData { balance, shards },
+                        balance,
+                        shards,
                     } = acc;
 
                                 let acc_id = account_id().expect("Account ID should be set");
@@ -129,9 +130,11 @@ pub fn AccountPage() -> impl IntoView {
                                                     <div class="info-grid">
                                                         {shards
                                                             .into_iter()
-                                                            .map(|(program, data)| {
-                                                                let program_str = program.to_string();
-                                                                let data_len = data.0.len();
+                                                            .map(|shard| {
+                                                                let program_str = shard
+                                                                    .program_account_id
+                                                                    .to_string();
+                                                                let data_len = shard.len;
                                                                 view! {
                                                                     <div class="info-row">
                                                                         <span class="info-label hash">

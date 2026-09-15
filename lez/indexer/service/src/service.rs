@@ -9,9 +9,9 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, ProgramId, ProgramShardSelector, Selector, Transaction,
-    resolve_event_block_range,
+    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, ProgramId, ProgramShardSelector, Selector,
+    ShardSummary, Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -143,6 +143,31 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .account_state_at_block(&account_id.into(), block_id)
             .map_err(db_error)?
             .into())
+    }
+
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned> {
+        let account = self
+            .indexer
+            .store
+            .account_current_state(&account_id.into())
+            .await
+            .map_err(db_error)?;
+        Ok(AccountSummary {
+            nonce: account.nonce.into(),
+            balance: account.data.balance,
+            shards: account
+                .data
+                .shards
+                .iter()
+                .map(|(program, data)| ShardSummary {
+                    program_account_id: (*program).into(),
+                    len: u64::try_from(data.len()).expect("a shard is capped well under u64"),
+                })
+                .collect(),
+        })
     }
 
     async fn get_account_view(
