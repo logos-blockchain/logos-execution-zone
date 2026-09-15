@@ -407,32 +407,17 @@ async fn each_ownership_account_claimed(world: &mut CucumberWorld, step: &Step) 
 async fn both_keys_join_live_committee(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
-    let first_hash = scenario.last_submission()?.hash;
-    let second_hash = scenario.second_submission()?.hash;
     let keys = [
         scenario.sequencer_key().to_bytes(),
         scenario.second_sequencer_key().to_bytes(),
     ];
+    let config_tip_before = scenario.config_tip_before()?;
     let timeout = scenario.wait_timeout()?;
     let context = world.lez()?;
-
-    // Stakes sharing a block finalize together, so the joint-accreditation
-    // wait may insist on one atomic committee update. In the rare race where
-    // the two Stakes land in different blocks, split updates are legitimate
-    // and only the eventual outcome is asserted.
-    let first_block = inclusion_block(context, first_hash).await?;
-    let second_block = inclusion_block(context, second_hash).await?;
-    let atomic = first_block.is_some() && first_block == second_block;
-    tracing::info!(
-        target: super::super::TARGET,
-        "Stakes included in blocks {first_block:?} and {second_block:?}: {}",
-        if atomic {
-            "insisting on one atomic committee update"
-        } else {
-            "split blocks, asserting only the eventual outcome"
-        }
-    );
-    wait_for_joint_accreditation(context, keys, atomic, timeout).await
+    // The scenario has already pinned that the Stakes shared a block, so they
+    // finalize together and qualify in the same discovery window: exactly one
+    // committee update, extending the pre-Stake config tip, must admit both.
+    wait_for_joint_accreditation(context, keys, config_tip_before, timeout).await
 }
 
 #[then("each stake moved the staked amount from its funding account into its funds account")]

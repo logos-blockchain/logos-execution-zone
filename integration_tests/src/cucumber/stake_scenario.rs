@@ -20,6 +20,7 @@ use common::HashType;
 use lee::{Account, AccountId, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use sequencer_core::block_publisher::MsgId;
 use sequencer_stake_core::SequencerKey;
 
 use crate::cucumber::error::StepError;
@@ -125,6 +126,9 @@ pub struct StakeScenario {
     snapshot: Option<AccountsSnapshot>,
     last_submission: Option<SubmissionRecord>,
     second_submission: Option<SubmissionRecord>,
+    /// The Bedrock channel's config tip observed before a paired submission,
+    /// so a later step can prove that a single `ChannelConfigOp` extended it.
+    config_tip_before: Option<MsgId>,
 }
 
 impl StakeScenario {
@@ -146,6 +150,7 @@ impl StakeScenario {
             snapshot: None,
             last_submission: None,
             second_submission: None,
+            config_tip_before: None,
         }
     }
 
@@ -328,6 +333,19 @@ impl StakeScenario {
             .ok_or(StepError::MissingObservation {
                 field: "second stake submission",
             })
+    }
+
+    /// Records the channel's config tip observed before a paired submission.
+    pub const fn record_config_tip_before(&mut self, tip: MsgId) {
+        self.config_tip_before = Some(tip);
+    }
+
+    /// Returns the config tip observed before the paired submission, or a
+    /// typed error when no paired submission recorded one.
+    pub fn config_tip_before(&self) -> Result<MsgId, StepError> {
+        self.config_tip_before.ok_or(StepError::MissingObservation {
+            field: "pre-submission channel config tip",
+        })
     }
 
     /// Resolves a Gherkin stake-amount expression against the configured

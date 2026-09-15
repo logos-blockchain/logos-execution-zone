@@ -7,7 +7,8 @@ use common::HashType;
 use futures::future::try_join_all;
 use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
-use sequencer_core::block_publisher::{Ed25519PublicKey, read_channel_state};
+use logos_blockchain_core::mantle::{channel::ChannelState, ops::channel::config::ChannelConfigOp};
+use sequencer_core::block_publisher::{Ed25519PublicKey, MsgId, read_channel_state};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
 use wallet::AccountIdentity;
@@ -348,58 +349,106 @@ pub(super) async fn inclusion_block(
         .map(|(_transaction, block_id)| block_id))
 }
 
-/// Reads the live accredited keys (as raw key bytes) from the Bedrock channel
-/// backing the stack, or `None` while the channel does not exist yet.
-async fn live_accredited_keys(
-    context: &LezScenarioContext,
-) -> Result<Option<Vec<[u8; 32]>>, StepError> {
+/// Reads the Bedrock channel backing the stack. The channel exists from
+/// genesis on, so a missing channel is a query failure, not "not yet".
+pub(super) async fn channel_state(context: &LezScenarioContext) -> Result<ChannelState, StepError> {
     let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
-    let state = read_channel_state(&bedrock_config)
+    read_channel_state(&bedrock_config)
         .await
-        .map_err(|source| StepError::QueryFailedSource { source })?;
-    Ok(state.map(|state| {
-        state
-            .accredited_keys
-            .iter()
-            .map(Ed25519PublicKey::to_bytes)
-            .collect()
-    }))
+        .map_err(|source| StepError::QueryFailedSource { source })?
+        .ok_or_else(|| StepError::QueryFailedSource {
+            source: anyhow::anyhow!(
+                "the Bedrock channel {} does not exist",
+                bedrock_config.channel_id
+            ),
+        })
+}
+
+/// The live accredited keys of `state`, as raw key bytes.
+fn accredited_key_bytes(state: &ChannelState) -> Vec<[u8; 32]> {
+    state
+        .accredited_keys
+        .iter()
+        .map(Ed25519PublicKey::to_bytes)
+        .collect()
+}
+
+/// The id the one `ChannelConfigOp` extending `parent` would carry if it had
+/// produced `state`. Executing a config op copies every field of the op into
+/// the channel state and sets the config tip to the op's id, so the op is
+/// fully reconstructible from `parent` and the state it left behind.
+fn single_update_id(
+    context: &LezScenarioContext,
+    state: &ChannelState,
+    parent: MsgId,
+) -> Result<MsgId, StepError> {
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
+    Ok(ChannelConfigOp {
+        channel: bedrock_config.channel_id,
+        parent,
+        keys: (*state.accredited_keys).clone(),
+        posting_timeframe: state.posting_timeframe.clone(),
+        posting_timeout: state.posting_timeout.clone(),
+        configuration_threshold: state.configuration_threshold,
+        transfer_threshold: state.transfer_threshold,
+    }
+    .id())
 }
 
 /// Waits until both `keys` are accredited on the Bedrock channel, giving up
-/// after `timeout`. With `atomic` — the Stakes shared a block, so they
-/// finalize together, qualify in the same discovery window and one
-/// `ChannelConfigOp` must admit both — observing exactly one accredited key
-/// fails immediately as a split update.
+/// after `timeout`, and then proves the admission was one committee update:
+/// the channel's config tip must be the id of the single `ChannelConfigOp`
+/// that extends `config_tip_before` into the observed state. Every config op
+/// names its parent tip and becomes the tip itself, so a second op in between
+/// — one key admitted per update, or any unrelated update — leaves a tip no
+/// single op from `config_tip_before` can reproduce. Polls that catch one key
+/// accredited without the other fail early with the more specific message;
+/// the tip check is what makes an unobserved split fail too.
 pub(super) async fn wait_for_joint_accreditation(
     context: &LezScenarioContext,
     keys: [[u8; 32]; 2],
-    atomic: bool,
+    config_tip_before: MsgId,
     timeout: Duration,
 ) -> StepResult {
-    wait_until(
+    let state = wait_until(
         POLL_INTERVAL,
         timeout,
         "both sequencer keys to join the live committee",
         || async move {
             // A transient channel-read failure only consumes timeout budget;
             // the split-update assertion below still fails the wait outright.
-            let Some(live) = query_error_as_pending(live_accredited_keys(context).await)? else {
+            let Some(state) = query_error_as_pending(channel_state(context).await.map(Some))?
+            else {
                 return Ok(None);
             };
+            let live = accredited_key_bytes(&state);
             let accredited = keys.map(|key| live.contains(&key));
-            if atomic && accredited.iter().any(|seen| *seen) && !accredited.iter().all(|seen| *seen)
-            {
+            if accredited.iter().any(|seen| *seen) && !accredited.iter().all(|seen| *seen) {
                 return Err(StepError::AssertionFailed {
                     message: "one sequencer key is accredited without the other, but their \
                               Stakes shared a block so a single committee update must admit both"
                         .to_owned(),
                 });
             }
-            Ok(accredited.iter().all(|seen| *seen).then_some(()))
+            Ok(accredited.iter().all(|seen| *seen).then_some(state))
         },
     )
-    .await
+    .await?;
+
+    let expected_tip = single_update_id(context, &state, config_tip_before)?;
+    if state.config_tip_hash != expected_tip {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "both sequencer keys are accredited, but the channel's config tip \
+                 {} is not the single ChannelConfigOp extending the pre-Stake tip \
+                 {config_tip_before} (that op would have id {expected_tip}): more \
+                 than one committee update was posted, so the keys did not join \
+                 together",
+                state.config_tip_hash
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Submits a fully signed, well-formed `Stake` and waits for its inclusion,

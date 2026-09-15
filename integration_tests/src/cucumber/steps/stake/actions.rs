@@ -5,7 +5,7 @@ use wallet::AccountIdentity;
 use super::{
     super::log_step,
     helpers::{
-        first_configured_public_account, get_account, last_block, scenario_snapshot,
+        channel_state, first_configured_public_account, get_account, last_block, scenario_snapshot,
         submit_and_record, submit_and_record_paid_by,
     },
 };
@@ -144,6 +144,9 @@ async fn submit_stakes_for_both_keys(
 
     let snapshot = scenario_snapshot(world).await?;
     let context = world.lez()?;
+    // The committee update these Stakes earn must extend this tip: recorded
+    // before submission so nothing the sequencer posts afterwards is missed.
+    let config_tip_before = channel_state(context).await?.config_tip_hash;
     // Both are admitted before either can be included, so one builder pull
     // tries both against the shared config account. The signing pairs are
     // disjoint, so the second submission does not depend on the first.
@@ -158,6 +161,7 @@ async fn submit_stakes_for_both_keys(
 
     let record = world.stake_mut()?;
     record.set_snapshot(snapshot);
+    record.record_config_tip_before(config_tip_before);
     record.record_submission(SubmissionRecord {
         hash: first_hash,
         amount,

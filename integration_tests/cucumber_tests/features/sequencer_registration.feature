@@ -136,13 +136,19 @@ Feature: Sequencer registration
   @stake_registration_ci @D-17 @P1 @L3
   # Node-level mirror of committee_discovery's two_new_keys_join_in_one_update:
   # both Stakes ride one block, finalize together and qualify in the same
-  # discovery window, so a single ChannelConfigOp admits both keys — observed
-  # through Bedrock channel state, where no poll may catch one key accredited
-  # without the other. In the rare race where the Stakes land in different
-  # blocks, split updates are legitimate and only the eventual outcome is
-  # asserted.
+  # discovery window, so a single ChannelConfigOp admits both keys. Proven
+  # through Bedrock channel state, not just observed: every ChannelConfigOp
+  # names the config tip it extends and becomes the tip itself, so once both
+  # keys are live the tip must equal the id of the one op that extends the
+  # pre-Stake tip into the live state — a second update in between, one key
+  # per op or otherwise, leaves a tip no single op can reproduce, whether or
+  # not a poll happened to catch the split. The same-block assertion keeps
+  # the scenario from passing vacuously: if the back-to-back submissions race
+  # a block boundary, split updates would be legitimate, so the scenario
+  # fails loudly for a rerun instead.
   Scenario: Two simultaneous registrations enter the live committee in one update
     Given a second sequencer key with its own unclaimed ownership account and a funding account holding "ten times the minimum stake"
     When a Stake of "twice the minimum stake" is submitted for each sequencer key back-to-back
     Then both stake transactions are accepted
+    And both stake transactions were included in the same block
     And both sequencer keys join the live committee together
