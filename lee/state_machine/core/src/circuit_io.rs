@@ -36,6 +36,9 @@ pub struct PrivacyPreservingCircuitInput {
     /// The top-level call's own dispatch address.
     pub program_account_id: AccountId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
+    /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
+    pub ciphertext_padding: Option<u32>,
     /// `account_id`s the top-level call was invoked with. Every one must still appear somewhere
     /// in the final accumulated pre-states, or the guest rejects — catches a chained call
     /// silently dropping an account from its own output.

@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::AccountIdentity;
+pub use account_manager::{AccountIdentity, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -803,6 +803,13 @@ impl WalletCore {
                 .collect::<Vec<_>>(),
         )?;
 
+        for account_id in acc_manager.accounts_outgrowing_pad() {
+            warn!(
+                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
+                 identifiable by length in this transaction"
+            );
+        }
+
         let private_account_keys = acc_manager.private_account_keys();
         let (output, proof) =
             lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
@@ -810,6 +817,7 @@ impl WalletCore {
                 instruction_data,
                 acc_manager.account_identities(),
                 acc_manager.dummy_inputs_default(),
+                Some(CIPHERTEXT_PAD_SIZE),
                 &program.to_owned(),
             )?;
 
