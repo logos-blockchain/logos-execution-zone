@@ -3,8 +3,9 @@ use std::{collections::HashSet, sync::Arc};
 use common::{
     HashType,
     block::{Block, BlockMeta, PeerChainTip},
+    transaction::TxEvents,
 };
-use lee::V03State;
+use lee::{AccountId, V03State};
 use lee_core::BlockId;
 
 /// Content-addressed replay key of a cross-zone message, and the identity of the
@@ -126,6 +127,24 @@ pub struct SetCrossZonePeerTip {
     pub tip: PeerChainTip,
 }
 
+pub struct GetBlockHashToBlockIdMapItem {
+    pub block_hash: HashType,
+}
+
+pub struct GetTxHashToBlockIdMapItem {
+    pub tx_hash: HashType,
+}
+
+pub struct GetAccountIdToAffectingTxMapItemUptoLimit {
+    pub account_id: AccountId,
+    pub offset: u64,
+    pub limit: u64,
+}
+
+pub struct GetBlockEvents {
+    pub block_id: u64,
+}
+
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
@@ -169,6 +188,9 @@ pub struct AtomicUpdate {
 
     /// Lower the published high water mark to this height if it is above.
     pub lower_published_high_water: Option<BlockId>,
+
+    /// Events omitted by transactions in blocks.
+    pub events: Vec<(BlockId, Vec<TxEvents>)>,
 }
 
 impl AtomicUpdate {
@@ -176,7 +198,11 @@ impl AtomicUpdate {
     ///
     /// Leaves all other fields empty or [`None`].
     #[must_use]
-    pub fn from_block(block: Block, state: Arc<V03State>) -> Self {
+    pub fn from_block(
+        block: Block,
+        state: Arc<V03State>,
+        events: Vec<(BlockId, Vec<TxEvents>)>,
+    ) -> Self {
         Self {
             checkpoint: None,
             head_tip: Some(BlockMeta::from(&block)),
@@ -192,6 +218,7 @@ impl AtomicUpdate {
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
             lower_published_high_water: None,
+            events,
         }
     }
 }
