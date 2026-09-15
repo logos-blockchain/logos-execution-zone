@@ -11,7 +11,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, Balance, PublicKey, Signature};
+use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
@@ -33,21 +33,21 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
 /// A transaction to be applied at genesis to supply initial balances.
+///
+/// Amounts are `u64`, not [`lee::Balance`], because every one is funded through
+/// the bridge's `Deposit`, whose amount is `u64`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenesisAction {
     SupplyAccount {
         account_id: AccountId,
-        balance: Balance,
+        balance: u64,
     },
-    SupplyBridgeAccount {
-        balance: Balance,
-    },
-    /// Funds a holder's holding PDA at genesis with one replayable faucet
+    /// Funds a holder's holding PDA at genesis with one replayable genesis
     /// credit; the balance-only PDA needs no claim.
     SupplyBridgeLockHolding {
         holder: AccountId,
-        amount: Balance,
+        amount: u64,
     },
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {

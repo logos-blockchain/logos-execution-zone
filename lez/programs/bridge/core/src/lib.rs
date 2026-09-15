@@ -21,6 +21,9 @@ pub enum Instruction {
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
+        ///
+        /// TODO: genesis allocations pass a synthetic id no L1 event backs; they should carry a
+        /// real one once founding stakes are funded by real L1 deposits.
         l1_deposit_op_id: [u8; 32],
         recipient_id: AccountId,
         amount: u64,
