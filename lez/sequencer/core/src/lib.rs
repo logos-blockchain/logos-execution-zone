@@ -31,6 +31,8 @@ use logos_blockchain_zone_sdk::{
 };
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
+use sequencer_channel_config_actor as channel_config;
+pub use sequencer_channel_config_actor::ChannelConfigActor;
 use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -186,8 +188,13 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     slasher: ActorRef<SlasherActor<S>>,
     /// The committee the gossip mesh screens inbound slash approvals against.
     accredited_keys_tx: AccreditedKeysSender,
+    /// Keys with stake on record, which the mesh admits channel-config
+    /// messages from.
+    staked_keys_tx: AccreditedKeysSender,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: block_publisher::Ed25519Key,
+    /// Collects the accredited signatures a channel config update needs.
+    config_manager: ActorRef<ChannelConfigActor>,
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
@@ -387,7 +394,13 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .await,
         );
 
+        let config_manager = ChannelConfigActor::spawn_with_mailbox(
+            ChannelConfigActor::new(bedrock_signing_key.clone()),
+            kameo::mailbox::bounded(channel_config::MAILBOX_CAPACITY),
+        );
+
         let (accredited_keys_tx, _) = accredited_keys_channel();
+        let (staked_keys_tx, _) = accredited_keys_channel();
 
         let block_publisher = BP::new(
             &config.bedrock_config,
@@ -399,7 +412,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 Arc::clone(&chain),
                 mempool_handle.clone(),
                 slasher.clone(),
+                config_manager.clone(),
                 accredited_keys_tx.clone(),
+                staked_keys_tx.clone(),
             ),
         )
         .await
@@ -427,7 +442,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
         // The committee the slasher loaded with predates this catch-up.
-        refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
+        refresh_committee(&slasher, &chain, &accredited_keys_tx, &staked_keys_tx).await;
 
         // Seed the high water mark from the tip we are starting on. Every stored
         // block reached the store by being published or by being adopted from
@@ -529,6 +544,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             last_committee_submission_slot: None,
             slasher,
             accredited_keys_tx,
+            staked_keys_tx,
+            config_manager,
             bedrock_signing_key,
         };
 
@@ -794,20 +811,30 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         slasher: ActorRef<SlasherActor<S>>,
+        config_manager: ActorRef<ChannelConfigActor>,
         accredited_keys_tx: AccreditedKeysSender,
+        staked_keys_tx: AccreditedKeysSender,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let storage_ref = storage_ref.clone();
             let chain = Arc::clone(&chain);
             let mempool_handle = mempool_handle.clone();
             let slasher = slasher.clone();
+            let config_manager = config_manager.clone();
             let accredited_keys_tx = accredited_keys_tx.clone();
+            let staked_keys_tx = staked_keys_tx.clone();
             Box::pin(async move {
                 report_offences(&slasher, &update.undecodable).await;
                 let moved_head = !update.adopted.is_empty();
+                let channel = update.channel.clone();
+                let finalized_config = update.checkpoint.finalized_config;
                 apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
                 if moved_head {
-                    refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
+                    refresh_committee(&slasher, &chain, &accredited_keys_tx, &staked_keys_tx).await;
+                }
+                if let Some(channel) = channel {
+                    refresh_channel_config(&config_manager, &chain, channel, finalized_config)
+                        .await;
                 }
             })
         })
@@ -822,7 +849,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let BlockWithMeta {
             block,
             withdrawals,
-            committee_update,
             parent,
         } = self
             .build_block_from_mempool(live_committee.as_ref())
@@ -868,8 +894,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .context("Failed to persist published high water mark")?;
 
         // Independent Mantle tx, not bundled with the block above — join/exit
-        // config updates don't need to be.
-        self.submit_committee_update(committee_update).await;
+        // config updates don't need to be. Only the turn holder proposes, so at
+        // most one draft is in flight.
+        if self.block_publisher.is_our_turn() {
+            self.advance_channel_config().await;
+        }
 
         let withdrawal_reconciliation_keys: HashSet<_> = released_notes
             .iter()
@@ -883,8 +912,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         Ok(block_id)
     }
 
-    /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
-    /// committee updates. `None` if the channel is missing or unreadable.
+    /// Live committee snapshot for gating `FinalizeUnstake` inclusion. `None`
+    /// if the channel is missing or unreadable.
     async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
         match self.block_publisher.accredited_keys().await {
             Ok(Some((keys, config_tip))) => Some(LiveCommittee {
@@ -905,14 +934,14 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             Ok(None) => {
                 warn!(
                     "No channel to read a live committee from; skipping FinalizeUnstake inclusion \
-                     and committee updates this round"
+                     this round"
                 );
                 None
             }
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
-                     and committee updates this round: {err:#}"
+                     this round: {err:#}"
                 );
                 None
             }
@@ -932,13 +961,52 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         })
     }
 
-    async fn submit_committee_update(
-        &mut self,
-        committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
-    ) {
-        let Some(new_keys) = committee_update else {
-            return;
+    /// One step of the config handshake, run on our turn only.
+    async fn advance_channel_config(&mut self) {
+        let action = match self.config_manager.ask(channel_config::Propose).await {
+            Ok(action) => action,
+            Err(err) => {
+                warn!("Failed to ask the channel-config actor what to do: {err}");
+                return;
+            }
         };
+        let target = match action {
+            channel_config::Action::Idle => return,
+            channel_config::Action::Submit(tx) => return self.submit_signed_config(tx).await,
+            channel_config::Action::Build(target) => target,
+        };
+
+        // Funding is a node round trip, which is why the actor asks for it
+        // instead of doing it: the signatures are over the funded transaction.
+        let funded = match self.block_publisher.fund_channel_config(&target).await {
+            Ok(funded) => funded,
+            Err(err) => {
+                warn!("Failed to fund a channel-config draft: {err:#}");
+                return;
+            }
+        };
+        let message = channel_config::FundedTx {
+            target,
+            tx: Box::new(funded.tx),
+            transfer_proof: funded.transfer_proof,
+        };
+        // Answers as `Propose` would, so a single-signer channel is already
+        // over its threshold on our own signature and lands this turn.
+        match self.config_manager.ask(message).await {
+            Ok(channel_config::Action::Submit(tx)) => self.submit_signed_config(tx).await,
+            Ok(_) => {}
+            Err(err) => warn!("The channel-config actor is gone; dropping the draft: {err}"),
+        }
+    }
+
+    async fn submit_signed_config(
+        &mut self,
+        tx: Box<
+            logos_blockchain_core::mantle::SignedMantleTx<
+                logos_blockchain_core::mantle::transactions::states::Unverified,
+            >,
+        >,
+    ) {
         let tip_slot = match self.block_publisher.channel_tip_slot().await {
             Ok(tip_slot) => tip_slot,
             Err(err) => {
@@ -949,32 +1017,9 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
             return;
         }
-        let new_keys = new_keys
-            .into_iter()
-            .map(|key| {
-                Ed25519PublicKey::from_bytes(&key.to_bytes())
-                    .expect("sequencer key was decoded from a valid Ed25519 public key")
-            })
-            .collect();
-        // Same state the committee decision itself was read from, and the params
-        // have not moved since genesis set them.
-        let channel_params = {
-            let chain = self.chain.lock().await;
-            committee_discovery::channel_params(chain.final_state())
-        };
-        let Some(channel_params) = channel_params else {
-            warn!(
-                "sequencer_stake config carries no channel posting params; skipping committee update"
-            );
-            return;
-        };
         self.last_committee_submission_slot = tip_slot;
-        if let Err(err) = self
-            .block_publisher
-            .submit_channel_config(new_keys, channel_params)
-            .await
-        {
-            warn!("Failed to submit committee channel-config update: {err:#}");
+        if let Err(err) = self.block_publisher.submit_signed_channel_config(tx).await {
+            warn!("Failed to submit the committee channel-config update: {err:#}");
         }
     }
 
@@ -1199,7 +1244,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             mut working_state,
             pending_dispatches,
             finalize_unstake_txs,
-            committee_update,
             parent,
         ) = {
             let chain = self.chain.lock().await;
@@ -1231,18 +1275,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 }
             }
 
-            // Committee membership follows finalized state only.
-            let committee_update = live_committee.and_then(|committee| {
-                committee_discovery::committee_update(chain.final_state(), &committee.keys)
-            });
-
             (
                 prev,
                 height,
                 chain.head_state().clone(),
                 pending,
                 build_finalize_unstake_txs(chain.head_state()),
-                committee_update,
                 parent,
             )
         };
@@ -1571,7 +1609,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         Ok(BlockWithMeta {
             block,
             withdrawals,
-            committee_update,
             parent,
         })
     }
@@ -1606,6 +1643,18 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     #[must_use]
     pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
         self.accredited_keys_tx.subscribe()
+    }
+
+    /// Keys with stake on record, as of the last head move.
+    #[must_use]
+    pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.staked_keys_tx.subscribe()
+    }
+
+    /// Handle to the channel-config actor, for the service to feed gossip into.
+    #[must_use]
+    pub const fn config_manager_ref(&self) -> &ActorRef<ChannelConfigActor> {
+        &self.config_manager
     }
 
     /// This node's Bedrock public key, hex — the identity the channel's
@@ -1821,7 +1870,6 @@ pub struct PinBehindTip {
 struct BlockWithMeta {
     block: Block,
     withdrawals: Vec<WithdrawArg>,
-    committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
     /// The channel tip the cursor sat on when this block was built, read under
     /// the same lock as its height.
     parent: Option<MsgId>,
@@ -1896,12 +1944,78 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
     }
 }
 
+/// The config the channel should move to, or `None` if it already matches or
+/// a config is still in flight.
+///
+/// Committee membership follows finalized state only. A config is in flight
+/// while the live tip is not the finalized one, and zone-sdk would shed a
+/// draft chained on a tip it has not finalized yet.
+fn config_target(
+    final_state: &lee::V03State,
+    live: &block_publisher::LiveChannelConfig,
+    finalized_config: MsgId,
+) -> Option<channel_config::ConfigTarget> {
+    if finalized_config != live.config_tip {
+        debug!("A channel config is still in flight; not targeting another");
+        return None;
+    }
+    let live_keys: Vec<_> = live
+        .keys
+        .iter()
+        .filter_map(|key| sequencer_stake_core::SequencerKey::new(key.to_bytes()))
+        .collect();
+    let new_keys = committee_discovery::committee_update(final_state, &live_keys)?;
+    let Some(channel_params) = committee_discovery::channel_params(final_state) else {
+        warn!("sequencer_stake config carries no channel posting params; no committee update");
+        return None;
+    };
+    let keys: Vec<Ed25519PublicKey> = new_keys
+        .into_iter()
+        .map(|key| {
+            Ed25519PublicKey::from_bytes(&key.to_bytes())
+                .expect("sequencer key was decoded from a valid Ed25519 public key")
+        })
+        .collect();
+
+    Some(channel_config::ConfigTarget {
+        // The op carries the threshold the *next* config must clear, so it is
+        // measured against the committee this op installs.
+        configuration_threshold: committee_discovery::channel_config_threshold(keys.len()),
+        transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+        keys,
+        parent: live.config_tip,
+        posting_timeframe: channel_params.posting_timeframe,
+        posting_timeout: channel_params.posting_timeout,
+    })
+}
+
+/// Hands the channel-config actor the live channel and the config it should
+/// have. Sent from the follow path, turn or not: a peer only signs a draft
+/// matching the config it derived for itself.
+async fn refresh_channel_config(
+    config_manager: &ActorRef<ChannelConfigActor>,
+    chain: &Mutex<ChainState>,
+    live: block_publisher::LiveChannelConfig,
+    finalized_config: MsgId,
+) {
+    let target = config_target(chain.lock().await.final_state(), &live, finalized_config);
+    let view = channel_config::ChannelView {
+        live_keys: live.keys,
+        required_signatures: live.required_signatures,
+        target,
+    };
+    if let Err(err) = config_manager.tell(view).await {
+        warn!("Failed to refresh the channel-config actor: {err}");
+    }
+}
+
 /// Hands the slasher and the gossip mesh the committee the head now holds. The
 /// produce path also refreshes it, but only a producing node takes turns.
 async fn refresh_committee<S: StorageActorTrait>(
     slasher: &ActorRef<SlasherActor<S>>,
     chain: &Mutex<ChainState>,
     accredited_keys_tx: &AccreditedKeysSender,
+    staked_keys_tx: &AccreditedKeysSender,
 ) {
     let config = committee_discovery::read_config(chain.lock().await.head_state());
     let Some(config) = config else {
@@ -1913,17 +2027,33 @@ async fn refresh_committee<S: StorageActorTrait>(
         .copied()
         .map(sequencer_stake_core::SequencerKey::to_bytes)
         .collect();
-    // Every head move lands here, but the committee changes on almost none.
-    accredited_keys_tx.send_if_modified(|current| {
+    set_keys(accredited_keys_tx, keys);
+    // A slash drops the key's entry, so it is muted from the head that holds
+    // the slash; an unstake keeps the entry until the key has left the channel.
+    set_keys(
+        staked_keys_tx,
+        config
+            .entries
+            .keys()
+            .copied()
+            .map(sequencer_stake_core::SequencerKey::to_bytes)
+            .collect(),
+    );
+    if let Err(err) = slasher.tell(SetCommittee(config)).await {
+        warn!("Failed to refresh the slasher committee: {err}");
+    }
+}
+
+/// Publishes a key set the mesh screens against. Every follow update lands
+/// here, but the set changes on almost none, so only a change wakes readers.
+fn set_keys(tx: &AccreditedKeysSender, keys: AccreditedKeys) {
+    tx.send_if_modified(|current| {
         let changed = current.as_ref() != Some(&keys);
         if changed {
             *current = Some(keys);
         }
         changed
     });
-    if let Err(err) = slasher.tell(SetCommittee(config)).await {
-        warn!("Failed to refresh the slasher committee: {err}");
-    }
 }
 
 /// Records what the follow path saw, before the checkpoint moves past it.
@@ -1974,6 +2104,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         deposits,
         withdrawals,
         undecodable: _,
+        channel: _,
     } = update;
 
     let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)
