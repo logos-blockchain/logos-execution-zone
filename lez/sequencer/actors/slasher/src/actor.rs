@@ -7,7 +7,9 @@ use kameo::{
     actor::ActorRef,
     message::{Context, Message},
 };
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message as LeeMessage};
+use lee::{
+    AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message as LeeMessage,
+};
 use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{

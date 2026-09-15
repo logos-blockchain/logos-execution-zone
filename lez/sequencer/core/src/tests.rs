@@ -4811,7 +4811,10 @@ fn a_committee_of_three_takes_two_approvals_to_slash() {
         .transition_from_public_transaction(&two, 4, 0)
         .expect("two of three approvals should slash");
 
-    assert_eq!(state.get_account_by_id(slash_sink_id()).data.balance, amount);
+    assert_eq!(
+        state.get_account_by_id(slash_sink_id()).data.balance,
+        amount
+    );
     assert_eq!(stake_entry(&state, offender), None);
 }
 
@@ -4853,7 +4856,10 @@ fn an_approval_signed_over_another_channel_does_not_slash() {
     state
         .transition_from_public_transaction(&here, 4, 0)
         .expect("the same approvals over this channel should slash");
-    assert_eq!(state.get_account_by_id(slash_sink_id()).data.balance, amount);
+    assert_eq!(
+        state.get_account_by_id(slash_sink_id()).data.balance,
+        amount
+    );
 }
 
 #[test]
@@ -4905,7 +4911,10 @@ fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
         .transition_from_public_transaction(&by_two_peers, 6, 0)
         .expect("the two remaining peers should be enough to slash");
 
-    assert_eq!(state.get_account_by_id(slash_sink_id()).data.balance, amount);
+    assert_eq!(
+        state.get_account_by_id(slash_sink_id()).data.balance,
+        amount
+    );
 }
 
 #[test]

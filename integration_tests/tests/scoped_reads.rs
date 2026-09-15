@@ -11,7 +11,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     utils::{
         account_balance, get_account, get_account_view, new_account, send,
-        wait_for_indexer_to_catch_up,
+        wait_for_indexer_to_catch_up, wait_until,
     },
 };
 use lee::{
@@ -71,14 +71,26 @@ async fn submit(
     keys.push(&payer.pub_sign_key);
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &keys);
 
-    ctx.sequencer_client()
+    let tx_hash = ctx
+        .sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             witness_set,
         )))
         .await?;
 
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    // Wait for real inclusion rather than a block's worth of sleep. Every caller reads
+    // the payer's nonce for the next submission and the bloat writers name programs the
+    // previous submission deployed, so proceeding on a transaction that never settled
+    // produces a nonce mismatch or an unknown program several steps later.
+    wait_until(&format!("transaction {tx_hash} to be included"), || async {
+        Ok(ctx
+            .sequencer_client()
+            .get_transaction(tx_hash)
+            .await?
+            .is_some())
+    })
+    .await?;
     Ok(())
 }
 

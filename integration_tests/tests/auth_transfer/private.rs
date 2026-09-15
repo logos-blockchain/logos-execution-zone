@@ -7,9 +7,7 @@ use integration_tests::{
     utils::{account_balance, assert_private_commitment_in_state, new_account, send, sync_private},
     verify_commitment_is_in_state,
 };
-use lee::{
-    AccountId, ProgramShardSelector, ProvingInput, execute_and_prove, program::Program,
-};
+use lee::{AccountId, ProgramShardSelector, ProvingInput, execute_and_prove, program::Program};
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateWitness,
     WitnessKind, account::Account, encryption::ViewingPublicKey,
