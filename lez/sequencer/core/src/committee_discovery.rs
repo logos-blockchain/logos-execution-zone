@@ -29,7 +29,7 @@ pub fn committee_update(
     let mut desired: Vec<SequencerKey> = config
         .entries
         .iter()
-        .filter(|(_, entry)| entry.net_stake() >= minimum_sequencer_stake)
+        .filter(|(_, entry)| entry.is_accredited(minimum_sequencer_stake))
         .map(|(key, _)| *key)
         .collect();
     desired.sort_unstable();
@@ -135,11 +135,6 @@ fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<S
     StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
 }
 
-#[must_use]
-pub fn config_is_readable(state: &lee::V03State) -> bool {
-    read_config(state).is_some()
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -217,6 +212,7 @@ mod tests {
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                 }),
+                channel_id: Some([0xC1; 32]),
                 entries: stakes
                     .iter()
                     .map(|staked| {

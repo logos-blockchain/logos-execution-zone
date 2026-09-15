@@ -39,7 +39,7 @@ fn sequencer_config() -> (SequencerConfig, TempDir) {
         mempool_max_size: 10,
         block_create_timeout: std::time::Duration::from_secs(5),
         retry_pending_blocks_timeout: std::time::Duration::from_secs(5),
-        signing_key: [37; 32],
+        signing_key: Some([37; 32]),
         bedrock_config: BedrockConfig {
             channel_id: [0; 32].into(),
             node_url: "http://not-used".parse().expect("Failed to parse URL"),
@@ -120,6 +120,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
                                 system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                             posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                         }),
+                        channel_id: Some([0xC1; 32]),
                         entries: BTreeMap::new(),
                     }
                     .to_bytes()

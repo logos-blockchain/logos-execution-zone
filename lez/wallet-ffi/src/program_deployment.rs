@@ -7,6 +7,7 @@ use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     generic_transaction::{FfiProgram, FfiTransactionResult},
+    read_optional_account_id,
     wallet::get_wallet,
     FfiBytes32, WalletHandle,
 };
@@ -47,6 +48,8 @@ fn write_failure(out_result: *mut FfiTransactionResult) {
 /// - `bytecode_data` must be a valid pointer to `bytecode_size` bytes
 /// - `next_segment` may be null (meaning this is the chain's last segment), otherwise a valid
 ///   pointer to a `FfiBytes32` for an already-uploaded segment
+/// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
+///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
@@ -55,6 +58,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
     bytecode_data: *const u8,
     bytecode_size: usize,
     next_segment: *const FfiBytes32,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -75,13 +79,10 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
 
     let target = AccountId::from(unsafe { *target });
     let bytecode = unsafe { read_bytes(bytecode_data, bytecode_size) };
-    let next_segment = if next_segment.is_null() {
-        None
-    } else {
-        Some(AccountId::from(unsafe { *next_segment }))
-    };
+    let next_segment = unsafe { read_optional_account_id(next_segment) };
+    let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).write_segment(target, bytecode, next_segment, None)) {
+    match block_on(ProgramLoader(&wallet).write_segment(target, bytecode, next_segment, payer)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success
@@ -100,6 +101,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `target` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
 /// - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+/// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
+///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
@@ -107,6 +110,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
     target: *const FfiBytes32,
     first_segment: *const FfiBytes32,
     immutable: bool,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -127,6 +131,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
 
     let target = AccountId::from(unsafe { *target });
     let first_segment = AccountId::from(unsafe { *first_segment });
+    let payer = unsafe { read_optional_account_id(payer) };
 
     let loader = ProgramLoader(&wallet);
     let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
@@ -138,8 +143,13 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
         }
     };
 
-    match block_on(loader.create_header(target, first_segment, &chain_segment_ids, immutable, None))
-    {
+    match block_on(loader.create_header(
+        target,
+        first_segment,
+        &chain_segment_ids,
+        immutable,
+        payer,
+    )) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success
@@ -160,6 +170,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
 /// - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
 ///   authorized over
 /// - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+/// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
+///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
@@ -167,6 +179,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     header: *const FfiBytes32,
     first_segment: *const FfiBytes32,
     immutable: bool,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -187,6 +200,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
 
     let header = AccountId::from(unsafe { *header });
     let first_segment = AccountId::from(unsafe { *first_segment });
+    let payer = unsafe { read_optional_account_id(payer) };
 
     let loader = ProgramLoader(&wallet);
     let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
@@ -198,8 +212,13 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
         }
     };
 
-    match block_on(loader.update_header(header, first_segment, &chain_segment_ids, immutable, None))
-    {
+    match block_on(loader.update_header(
+        header,
+        first_segment,
+        &chain_segment_ids,
+        immutable,
+        payer,
+    )) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success
@@ -224,6 +243,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
 /// - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order
 ///   (first chunk first); the wallet must hold every segment's signing key
 /// - `elf_data` must be a valid pointer to `elf_size` bytes
+/// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
+///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
@@ -234,6 +255,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     elf_data: *const u8,
     elf_size: usize,
     immutable: bool,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -255,8 +277,9 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     let header = AccountId::from(unsafe { *header });
     let segment_ids = unsafe { read_account_ids(segments, segments_len) };
     let elf = unsafe { read_bytes(elf_data, elf_size) };
+    let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).deploy(header, &segment_ids, elf, immutable, None)) {
+    match block_on(ProgramLoader(&wallet).deploy(header, &segment_ids, elf, immutable, payer)) {
         Ok(header_account_id) => {
             let tx_hash_str = header_account_id.to_string();
             let tx_hash = CString::new(tx_hash_str).map_or(ptr::null_mut(), CString::into_raw);
@@ -287,6 +310,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
 /// - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order;
 ///   the wallet must hold every segment's signing key
 /// - `elf_data` must be a valid pointer to `elf_size` bytes
+/// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
+///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_program_loader_update(
@@ -297,6 +322,7 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     elf_data: *const u8,
     elf_size: usize,
     immutable: bool,
+    payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -318,8 +344,9 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     let header = AccountId::from(unsafe { *header });
     let segment_ids = unsafe { read_account_ids(segments, segments_len) };
     let elf = unsafe { read_bytes(elf_data, elf_size) };
+    let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(ProgramLoader(&wallet).update(header, &segment_ids, elf, immutable, None)) {
+    match block_on(ProgramLoader(&wallet).update(header, &segment_ids, elf, immutable, payer)) {
         Ok(()) => {
             let tx_hash =
                 CString::new(header.to_string()).map_or(ptr::null_mut(), CString::into_raw);

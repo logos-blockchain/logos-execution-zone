@@ -151,11 +151,15 @@ impl ValidatedStateDiff {
             cycle_budget,
             &mut cycles_used,
         );
-        // any failure pays the full declared budget
-        let cycles = if result.is_err() {
-            cycle_budget
-        } else {
-            cycles_used
+        // A non-zero exit keeps its count: the failing call's cycles ride on the error since
+        // `execute_authorized` bailed before adding them. A panic or session-limit bail loses
+        // the count and pays the full budget.
+        let cycles = match &result {
+            Ok(_) => cycles_used,
+            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
+                cycles_used.saturating_add(*cycles)
+            }
+            Err(_) => cycle_budget,
         };
         let diff = match result {
             Ok(diff) => diff,

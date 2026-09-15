@@ -16,6 +16,7 @@ sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }
 sequencer_rpc_server_actor_metrics = { workspace = true, features = ["record"] }
 sequencer_executor_actor.workspace = true
+sequencer_gossip_actor.workspace = true
 
 kameo.workspace = true
 tokio.workspace = true

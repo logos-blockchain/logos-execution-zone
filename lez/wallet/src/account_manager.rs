@@ -544,6 +544,32 @@ impl AccountManager {
             .map(|account| account.shard_selector.account_id)
     }
 
+    /// Whether `account_id` is a public account whose signature [`Self::sign_message`] produces.
+    pub fn signs_for(&self, account_id: AccountId) -> bool {
+        self.states.iter().any(|state| match state {
+            State::Public {
+                account,
+                sk: Some(_),
+            }
+            | State::PublicKeycard { account, .. } => {
+                account.shard_selector.account_id == account_id
+            }
+            State::Public { sk: None, .. } | State::Private(_) => false,
+        })
+    }
+
+    pub fn public_account_ids(&self) -> Vec<AccountId> {
+        self.states
+            .iter()
+            .filter_map(|state| match state {
+                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
+                    Some(account.shard_selector.account_id)
+                }
+                State::Private(_) => None,
+            })
+            .collect()
+    }
+
     pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()
@@ -930,6 +956,19 @@ mod tests {
         let first_id = first.account().shard_selector.account_id;
         let manager = manager(vec![first, public_signing_state(8, 0)]);
         assert_eq!(manager.fee_payer_account_id(), Some(first_id));
+    }
+
+    #[test]
+    fn signs_for_only_signing_public_accounts() {
+        let signing = public_signing_state(9, 0);
+        let State::Public { account, .. } = &signing else {
+            unreachable!("public_signing_state builds a public account");
+        };
+        let signing_id = account.shard_selector.account_id;
+        let manager = manager(vec![public_state(), signing]);
+        let non_signing_id = manager.public_account_ids()[0];
+        assert!(manager.signs_for(signing_id));
+        assert!(!manager.signs_for(non_signing_id));
     }
 
     #[test]

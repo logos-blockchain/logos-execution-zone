@@ -9,6 +9,8 @@ workspace = true
 
 [features]
 default = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["lee/prove", "chain_state/prove", "storage/prove"]
 
 [dependencies]
 chain_state.workspace = true

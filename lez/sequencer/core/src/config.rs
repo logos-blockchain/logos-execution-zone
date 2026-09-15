@@ -6,12 +6,12 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, Balance, PublicKey, Signature};
+use lee::{AccountId, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 pub use sequencer_stake_core::ChannelParams;
@@ -33,21 +33,21 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 =
     logos_blockchain_core::mantle::ops::channel::inscribe::MAX_BYTES as u64;
 
 /// A transaction to be applied at genesis to supply initial balances.
+///
+/// Amounts are `u64`, not [`lee::Balance`], because every one is funded through
+/// the bridge's `Deposit`, whose amount is `u64`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenesisAction {
     SupplyAccount {
         account_id: AccountId,
-        balance: Balance,
+        balance: u64,
     },
-    SupplyBridgeAccount {
-        balance: Balance,
-    },
-    /// Funds a holder's holding PDA at genesis with one replayable faucet
+    /// Funds a holder's holding PDA at genesis with one replayable genesis
     /// credit; the balance-only PDA needs no claim.
     SupplyBridgeLockHolding {
         holder: AccountId,
-        amount: Balance,
+        amount: u64,
     },
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
@@ -89,8 +89,13 @@ pub struct SequencerConfig {
     /// Interval in which pending blocks are retried.
     #[serde(with = "humantime_serde")]
     pub retry_pending_blocks_timeout: Duration,
-    /// Sequencer own signing key.
-    pub signing_key: [u8; 32],
+    /// The key this sequencer signs its blocks with.
+    ///
+    /// Absent when the node is given one separately (`--signing-key`), which is
+    /// what lets a set of sequencers share a single config file — it is all
+    /// that otherwise differs between them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<[u8; 32]>,
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
     /// Genesis configuration.
@@ -148,6 +153,14 @@ impl SequencerConfig {
         );
 
         Ok(config)
+    }
+
+    /// The key [`Self::signing_key`] names, ready to sign blocks with.
+    pub fn block_signing_key(&self) -> Result<lee::PrivateKey> {
+        let bytes = self.signing_key.context(
+            "No block signing key: set `signing_key` in the config, or pass --signing-key",
+        )?;
+        lee::PrivateKey::try_new(bytes).context("Block signing key is not a valid private key")
     }
 
     /// Where this sequencer's database lives, suffixed with the channel id like

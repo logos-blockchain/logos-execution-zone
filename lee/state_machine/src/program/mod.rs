@@ -9,7 +9,7 @@ use lee_core::{
 };
 #[cfg(not(feature = "prove"))]
 use risc0_zkvm::default_executor;
-use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder};
+use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, ExitCode};
 
 use crate::error::LeeError;
 
@@ -31,6 +31,7 @@ pub const DEFAULT_PUBLIC_CYCLE_BUDGET: Cycles = 1024 * 1024 * 32; // 32M cycles
 pub(crate) struct SessionOutcome {
     pub journal: Vec<u8>,
     pub cycles: Cycles,
+    pub exit_code: ExitCode,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -109,8 +110,6 @@ impl Program {
     /// Runs the session, translating the executor's session-limit bail into the
     /// typed [`LeeError::OutOfGas`]. The only place that error string is
     /// recognized.
-    ///
-    /// FIXME: This is a brittle string match; the executor should provide a typed error.
     pub(crate) fn execute_session(
         env: ExecutorEnv<'_>,
         elf: &[u8],
@@ -125,21 +124,33 @@ impl Program {
             SessionOutcome {
                 journal: info.journal.bytes,
                 cycles,
+                exit_code: info.exit_code,
             }
         });
 
-        raw.map_err(|e| {
-            // check for "Guest panicked" to prevent spoofing
-            // via `panic!("Session limit exceeded")` cases
-            let message = format!("{e:#}");
-            if message.contains("Session limit exceeded") && !message.contains("Guest panicked") {
+        // NOTE: risc0 bails with an untyped anyhow error and the r0vm IPC path
+        // flattens it to a string. the best we can do is a string match...
+        let outcome = raw.map_err(|e| {
+            // check the root cause specifically to avoid spoofed errors
+            // like "Guest panicked: Session limit exceeded"
+            if e.root_cause()
+                .to_string()
+                .starts_with("Session limit exceeded:")
+            {
                 LeeError::OutOfGas {
                     budget: cycle_budget,
                 }
             } else {
                 LeeError::ProgramExecutionFailed(e.to_string())
             }
-        })
+        })?;
+
+        check_exit_code(
+            outcome.exit_code,
+            outcome.cycles,
+            LeeError::ProgramExecutionFailed,
+        )?;
+        Ok(outcome)
     }
 
     /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
@@ -164,5 +175,32 @@ impl Program {
             borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
+    }
+}
+
+/// Gates a finished session on its exit code.
+///
+/// - `ExitCode::Halted(0)` is a success
+/// - `ExitCode::Halted(code)` with a non-zero `code` is a cycle-counted failure
+/// - `ExitCode::Paused(code)` is treated as a full failure as we do not expect `Pause`'s to occur
+/// - Any other exit code is treated as a full failure
+pub(crate) fn check_exit_code(
+    exit_code: ExitCode,
+    cycles: Cycles,
+    on_failure: fn(String) -> LeeError,
+) -> Result<(), LeeError> {
+    match exit_code {
+        ExitCode::Halted(0) => Ok(()),
+        ExitCode::Halted(code) => Err(LeeError::ProgramExitedWithCode { code, cycles }),
+        // A pause keeps its journal and count, but a program is one call to a final output and
+        // the circuit's `env::verify` only resolves a `Halted(0)` claim, so it is a plain
+        // failure on both paths and pays the full budget like a panic.
+        ExitCode::Paused(code) => Err(on_failure(format!("program paused with code {code}"))),
+        // `SystemSplit` never ends a session and `SessionLimit` is documented as never emitted
+        // (risc0-binfmt `exit_code.rs`): the executor bails with "Session limit exceeded"
+        // instead, which `execute_session` maps to `OutOfGas`.
+        ExitCode::SessionLimit | ExitCode::SystemSplit | _ => {
+            Err(on_failure(format!("unexpected exit {exit_code:?}")))
+        }
     }
 }

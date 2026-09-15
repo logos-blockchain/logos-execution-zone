@@ -20,6 +20,7 @@ impl NativeTokenTransfer<'_> {
                 vec![from.balance(), to.balance()],
                 instruction_data,
                 program.id().into(),
+                None,
                 tx_pre_check,
             )
             .await

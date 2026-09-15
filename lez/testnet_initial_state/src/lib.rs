@@ -197,13 +197,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 },
             )
         })
-        .chain([
-            (
-                system_accounts::faucet_account_id(),
-                system_accounts::faucet_account(),
-            ),
-            (system_accounts::bridge_account_id(), Account::default()),
-        ])
+        .chain([(
+            system_accounts::bridge_account_id(),
+            system_accounts::bridge_account(),
+        )])
         .chain(
             system_accounts::clock_account_ids()
                 .into_iter()
@@ -211,7 +208,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         )
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
-            system_accounts::sequencer_stake_config_account(None),
+            system_accounts::sequencer_stake_config_account(None, None),
         )])
         .chain([
             (
@@ -232,7 +229,6 @@ fn initial_programs(cross_zone: bool) -> Vec<Program> {
         programs::clock(),
         programs::fee(),
         programs::ata(),
-        programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),
     ];
@@ -432,25 +428,25 @@ mod tests {
 
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
-        let faucet_id = system_accounts::faucet_account_id();
+        // System-account IDs must be distinct and non-default, and the genesis
+        // bridge account must carry its expected field values. Catches mutations
+        // that replace `system_bridge_account` with `Default::default()`, delete
+        // its `balance`, or replace `system_bridge_account_id` with
+        // `Default::default()`.
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
-        assert_ne!(faucet_id, bridge_id);
 
         let state = initial_state(true);
 
-        let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(faucet.data.balance, u128::MAX, "faucet must hold u128::MAX");
-        assert!(
-            faucet.data.shards.is_empty(),
-            "the faucet holds balance alone, no program's record"
-        );
-
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
-            bridge,
-            Account::default(),
-            "the bridge escrow starts empty, before any deposit mints through it"
+            bridge.data.balance,
+            u128::MAX,
+            "the bridge holds the whole supply"
+        );
+        assert!(
+            bridge.data.shards.is_empty(),
+            "the bridge holds balance alone, no program's record"
         );
     }
 
@@ -474,6 +470,5 @@ mod tests {
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
     }
 }

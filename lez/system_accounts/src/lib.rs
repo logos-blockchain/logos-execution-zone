@@ -23,12 +23,14 @@ pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 pub type Slots = u32;
 
 #[must_use]
-pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id().into())
+pub fn bridge_account_id() -> AccountId {
+    bridge_core::compute_bridge_account_id(programs::bridge().id().into())
 }
 
+/// Holds the whole supply: genesis allocations and L1 deposits are both
+/// `Deposit`s that draw on it, so what it still holds is the unissued supply.
 #[must_use]
-pub fn faucet_account() -> Account {
+pub fn bridge_account() -> Account {
     Account {
         data: AccountData {
             balance: u128::MAX,
@@ -36,11 +38,6 @@ pub fn faucet_account() -> Account {
         },
         ..Account::default()
     }
-}
-
-#[must_use]
-pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id().into())
 }
 
 #[must_use]
@@ -113,11 +110,13 @@ pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
 #[must_use]
 pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
+    channel_id: Option<[u8; 32]>,
 ) -> Account {
     Account::default().with_shard(
         programs::sequencer_stake().id().into(),
         sequencer_stake_core::SequencerStakeConfig {
             channel_params,
+            channel_id,
             entries: BTreeMap::new(),
         }
         .to_bytes()

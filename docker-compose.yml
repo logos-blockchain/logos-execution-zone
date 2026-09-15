@@ -6,7 +6,7 @@ include:
   - path:
       bedrock/docker-compose.yml
   - path:
-      lez/sequencer/service/docker-compose.yml
+      lez/sequencer/service/docker-compose.devnet.yml
   - path:
       lez/indexer/service/docker-compose.yml
   - path:

@@ -1,0 +1,18 @@
+[package]
+name = "devnet_configs"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+sequencer_core.workspace = true
+sequencer_stake_core.workspace = true
+
+logos-blockchain-key-management-system-service.workspace = true
+
+anyhow.workspace = true
+serde_json.workspace = true
