@@ -111,6 +111,16 @@ impl LeeError {
     }
 }
 
+impl From<lee_core::validation::ValidationError> for LeeError {
+    fn from(error: lee_core::validation::ValidationError) -> Self {
+        use lee_core::validation::ValidationError;
+        match error {
+            ValidationError::ProgramBehavior(error) => Self::InvalidProgramBehavior(error),
+            ValidationError::MaxChainedCallsDepthExceeded => Self::MaxChainedCallsDepthExceeded,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
