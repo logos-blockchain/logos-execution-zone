@@ -20,9 +20,9 @@ pub enum LeeCoreError {
 
 /// Ways a program can violate the execution rules the environment enforces on it.
 ///
-/// Lives here rather than in `lee` because both environments reject on it: the public state
-/// machine surfaces it as `LeeError::InvalidProgramBehavior`, and the privacy preserving
-/// circuit panics on it inside the guest.
+/// Lives here rather than in `lee` so the shared traversal in [`crate::validation`] can reject
+/// on it from either environment: the public state machine surfaces it as
+/// `LeeError::InvalidProgramBehavior`, the privacy preserving circuit panics on it in-guest.
 #[derive(Error, Debug)]
 pub enum InvalidProgramBehaviorError {
     #[error(
@@ -55,6 +55,9 @@ pub enum InvalidProgramBehaviorError {
 
     #[error("Chained call to {program_account_id} did not execute")]
     ChainedCallDidNotExecute { program_account_id: AccountId },
+
+    #[error("Program {program_account_id} ran on instruction data its caller did not send")]
+    MismatchedInstructionData { program_account_id: AccountId },
 
     #[error(transparent)]
     ExecutionValidationFailed(#[from] ExecutionValidationError),

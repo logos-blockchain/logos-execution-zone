@@ -31,6 +31,7 @@ pub mod error;
 mod frame;
 mod nullifier;
 pub mod program;
+pub mod validation;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;
 
