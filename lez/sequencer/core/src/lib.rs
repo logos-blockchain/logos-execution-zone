@@ -1367,6 +1367,10 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
+        // prioritize the higher tip first & arrival order for tie-breaks,
+        // while respecting nonce sequencer per-sender
+        self.mempool
+            .prioritize(|(_, tx)| declared_tip(tx), |(_, tx)| signers(tx));
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
         // is not the same as a `Sequencer` origin: it says the transaction has a
@@ -1844,6 +1848,28 @@ impl LiveCommittee {
     const fn at(keys: Vec<sequencer_stake_core::SequencerKey>, config_tip: MsgId) -> Self {
         Self { keys, config_tip }
     }
+}
+
+/// The tip a transaction declares; zero for exempt or unclassifiable ones.
+fn declared_tip(tx: &LeeTransaction) -> u64 {
+    match chain_state::classify::classify(tx, false) {
+        Ok(chain_state::classify::FeeClass::Charged(view)) => view.tip(),
+        Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => 0,
+    }
+}
+
+/// The accounts whose nonce sequences a transaction belongs to: every witness,
+/// a co-signing payer included. A private tx signs for its public accounts the
+/// same way, one nonce per signature; a purely private one has none.
+fn signers(tx: &LeeTransaction) -> Vec<AccountId> {
+    let witnesses = match tx {
+        LeeTransaction::Public(tx) => tx.witness_set().signatures_and_public_keys(),
+        LeeTransaction::PrivacyPreserving(tx) => tx.witness_set().signatures_and_public_keys(),
+    };
+    witnesses
+        .iter()
+        .map(|(_, public_key)| AccountId::from(public_key))
+        .collect()
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
