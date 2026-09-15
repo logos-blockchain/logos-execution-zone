@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap, VecDeque},
     hash::Hash,
     sync::{
         Arc,
@@ -83,52 +83,47 @@ impl<T> MemPool<T> {
         priority: impl Fn(&T) -> K,
         lanes_of: impl Fn(&T) -> Vec<G>,
     ) {
-        // priority-ordered topological sort: lanes are the edges, `items` are the nodes
-        let mut items: Vec<Option<(K, Vec<G>, T)>> = Vec::new();
-        // per lane, item indices in arrival order; the front is the only one eligible
+        // Kahn's algorithm with a priority heap: lanes are the edges, items the nodes.
+        let mut items: Vec<Option<(Vec<G>, T)>> = Vec::new();
+        // per lane, item indices in arrival order; only the front is eligible
         let mut lanes: HashMap<G, VecDeque<usize>> = HashMap::new();
-        // loose items are those in no lane: always eligible
-        let mut loose: Vec<usize> = Vec::new();
         for (arrival, item) in std::iter::from_fn(|| self.pop()).enumerate() {
             let groups = lanes_of(&item);
-            if groups.is_empty() {
-                loose.push(arrival);
-            }
             for group in &groups {
                 lanes.entry(group.clone()).or_default().push_back(arrival);
             }
-            items.push(Some((priority(&item), groups, item)));
+            items.push(Some((groups, item)));
         }
 
-        // O(n * k) head scan per pick
+        // ready items: highest bid first, earlier arrival breaks ties
+        let mut ready: BinaryHeap<(K, Reverse<usize>)> = BinaryHeap::new();
+        // an item is enqueued exactly once, however many lanes report it
+        let mut queued = vec![false; items.len()];
+        // items to check: every item on the first pass, then the new lane heads
+        let mut candidates: Vec<usize> = (0..items.len()).collect();
         let mut ordered = Vec::with_capacity(items.len());
         loop {
-            // candidates: every lane front + the loose items
-            let heads = lanes.values().filter_map(|lane| lane.front().copied());
-            let Some(best) = heads
-                .chain(loose.iter().copied())
-                // ready if it also fronts every other lane it is in
-                .filter(|&i| {
-                    let (_, groups, _) = items[i].as_ref().expect("unpicked items are present");
-                    groups.iter().all(|group| lanes[group].front() == Some(&i))
-                })
-                // highest bid wins; earlier arrival breaks ties
-                .max_by_key(|&i| {
-                    let (bid, _, _) = items[i].as_ref().expect("unpicked items are present");
-                    (bid, Reverse(i))
-                })
-            else {
-                // no eligible candidates left
+            for i in candidates {
+                let (groups, item) = items[i].as_ref().expect("candidates are unpicked");
+                // ready once it heads every lane it is in; no lanes is always ready
+                if !queued[i] && groups.iter().all(|group| lanes[group].front() == Some(&i)) {
+                    queued[i] = true;
+                    ready.push((priority(item), Reverse(i)));
+                }
+            }
+            let Some((_, Reverse(best))) = ready.pop() else {
                 break;
             };
 
-            let (_, groups, item) = items[best].take().expect("an item is picked once");
+            let (groups, item) = items[best].take().expect("an item is picked once");
             for group in &groups {
                 lanes.get_mut(group).expect("registered lane").pop_front();
             }
-            if groups.is_empty() {
-                loose.retain(|&i| i != best);
-            }
+            // whatever now heads those lanes may have become ready
+            candidates = groups
+                .iter()
+                .filter_map(|group| lanes[group].front().copied())
+                .collect();
             ordered.push(item);
         }
 
@@ -250,6 +245,23 @@ mod tests {
             .map(|(_, _, tag)| tag)
             .collect();
         assert_eq!(order, vec!["p", "a0", "a1", "s", "b0"]);
+    }
+
+    #[test]
+    async fn prioritize_enqueues_an_item_once_however_many_lanes_report_it() {
+        let (mut pool, handle) = MemPool::new(10);
+
+        // `y` becomes the head of both lanes at once when `x` is picked;
+        // `z` names the same lane twice.
+        handle.push((1, vec!['A', 'B'], "x")).await.unwrap();
+        handle.push((2, vec!['A', 'B'], "y")).await.unwrap();
+        handle.push((3, vec!['A', 'A'], "z")).await.unwrap();
+
+        pool.prioritize(|&(priority, _, _)| priority, |(_, lanes, _)| lanes.clone());
+        let order: Vec<&str> = std::iter::from_fn(|| pool.pop())
+            .map(|(_, _, tag)| tag)
+            .collect();
+        assert_eq!(order, vec!["x", "y", "z"]);
     }
 
     #[test]
