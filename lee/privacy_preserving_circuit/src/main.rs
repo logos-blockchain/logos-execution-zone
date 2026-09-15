@@ -7,24 +7,24 @@ mod output;
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_outputs,
-        account_identities,
+        private_witnesses,
         program_account_id,
         dummy_inputs,
-        initial_pre_states,
+        initial_shard_selectors,
         program_image_claims,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
-        &account_identities,
+        &private_witnesses,
         program_account_id,
         program_outputs,
-        &initial_pre_states,
+        &initial_shard_selectors,
         &program_image_claims,
     );
 
     let output = output::compute_circuit_output(
         execution_state,
-        &account_identities,
+        &private_witnesses,
         dummy_inputs,
         program_image_claims,
     );

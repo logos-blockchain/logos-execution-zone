@@ -889,6 +889,7 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
+
     use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
 
     use super::*;
@@ -914,10 +915,7 @@ mod tests {
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
-        let new_account = Account {
-            balance: 150,
-            ..Account::default()
-        };
+        let new_account = Account::funded(150);
         let new_commitment = Commitment::new(&account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&key_chain.viewing_public_key);
         let ciphertext = EncryptionScheme::encrypt(
@@ -987,10 +985,7 @@ mod tests {
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
-        let new_account = Account {
-            balance: 250,
-            ..Account::default()
-        };
+        let new_account = Account::funded(250);
         let new_commitment = Commitment::new(&account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let ciphertext = EncryptionScheme::encrypt(
@@ -1077,10 +1072,7 @@ mod tests {
         };
 
         // Init: default -> initialized, discovered via the seeded init nullifier.
-        let initialized = Account {
-            balance: 250,
-            ..Account::default()
-        };
+        let initialized = Account::funded(250);
         let init_msg = make_message(
             Nullifier::for_account_initialization(&account_id),
             &initialized,
@@ -1095,10 +1087,7 @@ mod tests {
         );
 
         // Update: initialized -> updated, discovered via the now-tracked update nullifier.
-        let updated = Account {
-            balance: 500,
-            ..Account::default()
-        };
+        let updated = Account::funded(500);
         let update_spent =
             Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk);
         let update_msg = make_message(update_spent, &updated);
@@ -1210,8 +1199,11 @@ mod tests {
         user_data.add_imported_private_account(key_chain, None, 0, account.clone());
 
         let new_account = lee_core::account::Account {
-            balance: 100,
-            ..account
+            nonce: account.nonce,
+            data: lee_core::account::AccountData {
+                balance: 100,
+                ..account.data
+            },
         };
 
         user_data
@@ -1220,7 +1212,7 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.balance, 100);
+        assert_eq!(retrieved_account.account.data.balance, 100);
     }
 
     #[test]
@@ -1230,10 +1222,7 @@ mod tests {
         let (account_id, _chain_index) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
 
-        let new_account = lee_core::account::Account {
-            balance: 100,
-            ..lee_core::account::Account::default()
-        };
+        let new_account = lee_core::account::Account::funded(100);
 
         user_data
             .insert_private_account(account_id, PrivateAccountKind::Regular(0), new_account)
@@ -1241,7 +1230,7 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.balance, 100);
+        assert_eq!(retrieved_account.account.data.balance, 100);
     }
 
     #[test]
@@ -1255,10 +1244,7 @@ mod tests {
             0,
         ));
 
-        let new_account = lee_core::account::Account {
-            balance: 100,
-            ..lee_core::account::Account::default()
-        };
+        let new_account = lee_core::account::Account::funded(100);
 
         let result = user_data.insert_private_account(
             account_id,

@@ -1,13 +1,14 @@
 use lee_core::{
-    account::{AccountWithMetadata, BalanceDiff, Data},
-    program::AccountStateDiff,
+    account::{AccountId, BalanceDiff, ShardData},
+    program::{AccountInput, AccountStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn burn(
-    definition_account: &AccountWithMetadata,
-    user_holding_account: &AccountWithMetadata,
+    definition_account: &AccountInput,
+    user_holding_account: &AccountInput,
+    self_account_id: AccountId,
     amount_to_burn: u128,
 ) -> Vec<AccountStateDiff> {
     assert!(
@@ -15,9 +16,9 @@ pub fn burn(
         "Authorization is missing"
     );
 
-    let mut definition = TokenDefinition::try_from(&definition_account.account.data)
+    let mut definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
         .expect("Token Definition account must be valid");
-    let mut holding = TokenHolding::try_from(&user_holding_account.account.data)
+    let mut holding = TokenHolding::try_from(user_holding_account.shard_of(self_account_id))
         .expect("Token Holding account must be valid");
 
     assert_eq!(
@@ -95,13 +96,13 @@ pub fn burn(
     let definition_diff = AccountStateDiff::new(
         definition_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&definition),
+        ShardData::from(&definition),
     );
 
     let holding_diff = AccountStateDiff::new(
         user_holding_account.clone(),
         BalanceDiff::Add(0),
-        Data::from(&holding),
+        ShardData::from(&holding),
     );
 
     vec![definition_diff, holding_diff]

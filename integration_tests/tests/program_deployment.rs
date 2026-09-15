@@ -59,7 +59,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     let written: Vec<u8> = vec![9; 4];
     let message = lee::public_transaction::Message::try_new_with_fees(
         account_id,
-        vec![target_id],
+        vec![lee::ProgramShardSelector::new(target_id, account_id)],
         nonces,
         written.clone(),
         common::test_utils::test_fee_declaration(payer_id),
@@ -87,9 +87,11 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let post_state_account = get_account(&ctx, target_id).await?;
 
-    assert_eq!(post_state_account.program_owner, account_id);
-    assert_eq!(post_state_account.balance, 0);
-    assert_eq!(post_state_account.data.as_ref(), written.as_slice());
+    assert_eq!(post_state_account.data.balance, 0);
+    assert_eq!(
+        post_state_account.data.shard(account_id).as_ref(),
+        written.as_slice()
+    );
     assert_eq!(post_state_account.nonce.0, 1);
 
     log::info!("Successfully deployed and executed program");

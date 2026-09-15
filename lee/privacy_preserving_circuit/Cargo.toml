@@ -18,4 +18,4 @@ lee_core.workspace = true
 risc0-zkvm.workspace = true
 
 [dev-dependencies]
-lee_core = { workspace = true, features = ["host"] }
+lee_core = { workspace = true, features = ["test_utils"] }

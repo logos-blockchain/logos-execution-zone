@@ -31,12 +31,13 @@ pub enum Instruction {
     /// Block-tail distribution: apply the market update, drain the inbox (base
     /// revenue to escrow, tips to the producer), and pay the smoothed payout.
     ///
-    /// Accounts: `[state, escrow, inbox, producer]`.
+    /// Accounts: `[state, escrow, inbox, producer]`; `state` is named under this program's
+    /// shard, the rest are balance-only.
     Distribute(BlockFeeSummary),
     /// Per-transaction refund: return `amount` (the unspent part of the reserve)
     /// from the inbox to the payer.
     ///
-    /// Accounts: `[inbox, payer]`.
+    /// Accounts: `[inbox, payer]`, both balance-only.
     Refund { amount: Balance },
 }
 
@@ -55,7 +56,7 @@ pub const fn fee_inbox_seed() -> PdaSeed {
     PdaSeed::new(FEE_INBOX_SEED)
 }
 
-/// The fee-state account: base fees, payout window, and carry live in its `data`.
+/// The fee-state account, which stores base fees, the payout window, and carry.
 #[must_use]
 pub fn compute_fee_state_account_id(fee_account_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&fee_account_id, &fee_state_seed())

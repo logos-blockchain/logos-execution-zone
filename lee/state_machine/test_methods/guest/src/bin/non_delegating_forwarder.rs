@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (ProgramId, InstructionData, bool, Vec<PdaSeed>);
@@ -20,7 +23,7 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let pre_state_ids: Vec<_> = pre_states.iter().map(|pre| pre.account_id).collect();
+    let shard_selectors: Vec<_> = pre_states.iter().map(ProgramShardSelector::from).collect();
 
     let output_state_diffs = if declare_pre_states {
         pre_states
@@ -31,9 +34,7 @@ fn main() {
         Vec::new()
     };
 
-    // Make exactly one chained call based on the input instruction, forwarding whatever
-    // pda_seeds it was given (typically none, so the target PDAs are never authorized) —
-    // this program never claims or otherwise touches the accounts it forwards.
+    // Forward the inputs and supplied PDA seeds in one chained call.
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
@@ -43,7 +44,7 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
-        pre_state_ids,
+        shard_selectors,
         pda_seeds,
     }])
     .write();

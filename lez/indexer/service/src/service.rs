@@ -10,7 +10,8 @@ use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
     Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, ProgramId, Selector, Transaction, resolve_event_block_range,
+    HashType, IndexerStatus, ProgramId, ProgramShardSelector, Selector, Transaction,
+    resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -140,6 +141,32 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .indexer
             .store
             .account_state_at_block(&account_id.into(), block_id)
+            .map_err(db_error)?
+            .into())
+    }
+
+    async fn get_account_view(
+        &self,
+        selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .account_current_view(selector.into())
+            .await
+            .map_err(db_error)?
+            .into())
+    }
+
+    async fn get_account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .account_view_at_block(selector.into(), block_id)
             .map_err(db_error)?
             .into())
     }

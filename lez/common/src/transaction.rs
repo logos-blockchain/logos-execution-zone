@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, V03State, ValidatedStateDiff};
+use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -189,7 +189,9 @@ pub struct TxEvents {
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::clock().id().into(),
-        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+            .map(|id| ProgramShardSelector::new(id, programs::clock().id().into()))
+            .to_vec(),
         vec![],
         timestamp,
     )
@@ -290,11 +292,17 @@ pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
-    let mut account_ids = system_accounts::fee_account_ids().to_vec();
-    account_ids.push(producer); // this is the 4th account
+    let fee_program_id: AccountId = programs::fee().id().into();
+    // Select the fee state shard and balances for the escrow, inbox, and producer.
+    let shard_selectors = vec![
+        ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
+        ProgramShardSelector::balance(system_accounts::fee_escrow_account_id()),
+        ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+        ProgramShardSelector::balance(producer),
+    ];
     let message = lee::public_transaction::Message::try_new(
-        programs::fee().id().into(),
-        account_ids,
+        fee_program_id,
+        shard_selectors,
         vec![],
         fee_core::Instruction::Distribute(summary),
     )
@@ -310,10 +318,10 @@ pub fn fee_invocation(
 pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
     fee_tx
         .message()
-        .account_ids
-        // get the 4th account, which is the producer
-        .get(system_accounts::fee_account_ids().len())
-        .copied()
+        .shard_selectors
+        // the producer is the fourth shard selector `fee_invocation` builds
+        .get(3)
+        .map(|shard_selector| shard_selector.account_id)
 }
 
 /// Validates that the block reward target is not a restricted system account.
@@ -345,7 +353,10 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     // itself, instead of fixing the auth transfer program here
     lee::public_transaction::Message::try_new(
         programs::authenticated_transfer().id().into(),
-        vec![payer, system_accounts::fee_inbox_account_id()],
+        vec![
+            ProgramShardSelector::balance(payer),
+            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+        ],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
@@ -353,14 +364,14 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 }
 
 /// The fee refund: return `amount` from the fee inbox to `payer`.
-///
-/// Runs the fee program as a fee-settlement invocation needing no authorization
-/// — the fee program owns the inbox it debits.
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
         programs::fee().id().into(),
-        vec![system_accounts::fee_inbox_account_id(), payer],
+        vec![
+            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+            ProgramShardSelector::balance(payer),
+        ],
         vec![],
         fee_core::Instruction::Refund { amount },
     )
@@ -414,7 +425,7 @@ pub fn validate_bridge_account_modification(
 ) -> Result<(), lee::error::LeeError> {
     let bridge_account_id = system_accounts::bridge_account_id();
     let pre = state.get_account_by_id(bridge_account_id);
-    let Some(post) = diff.public_diff().get(&bridge_account_id).cloned() else {
+    let Some(post) = diff.public_diff().get(&bridge_account_id) else {
         return Ok(());
     };
 
@@ -424,7 +435,7 @@ pub fn validate_bridge_account_modification(
         )));
     }
 
-    if bridge_balance_only_increased(&pre, &post) {
+    if bridge_balance_only_increased(&pre, post) {
         Ok(())
     } else {
         Err(lee::error::LeeError::InvalidInput(format!(
@@ -440,16 +451,14 @@ pub fn validate_bridge_account_modification(
 /// user-submitted, so a user transaction that fails this is a forgery attempt.
 #[must_use]
 pub fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
-    let expected_pre = lee::Account {
-        balance: pre.balance,
-        ..post.clone()
-    };
-    (expected_pre == *pre) && (pre.balance < post.balance)
+    pre.data.balance < post.data.balance
+        && pre.nonce == post.nonce
+        && pre.data.shards == post.data.shards
 }
 
 #[cfg(test)]
 mod tests {
-    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee::{Account, AccountData, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
     use super::{
@@ -460,8 +469,8 @@ mod tests {
 
     #[test]
     fn a_restricted_system_account_is_not_a_valid_reward_target() {
-        // A plain account is a fine reward target, claimed or not — a producer
-        // picks its own payout account.
+        // A plain account is a fine reward target — a producer picks its own
+        // payout account.
         validate_reward_target(AccountId::new([1; 32]))
             .expect("an ordinary account is a valid reward target");
 
@@ -484,13 +493,15 @@ mod tests {
         // must be accepted.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = Account {
-            balance: 600,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -506,14 +517,15 @@ mod tests {
         // increasing its balance must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = Account {
-            balance: 600,
             nonce: Nonce(8),
-            ..pre.clone()
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -529,9 +541,8 @@ mod tests {
         // must be rejected — a zero-value deposit is not a real credit.
         let bridge_id = system_accounts::bridge_account_id();
         let pre = Account {
-            balance: 500,
             nonce: Nonce(7),
-            ..Account::default()
+            ..Account::funded(500)
         };
         let post = pre.clone();
         let (state, diff) = state_and_diff(bridge_id, pre, post);
@@ -548,13 +559,13 @@ mod tests {
         // non-public tx (private/deployment) that produces a bridge diff — even
         // a balance-only increase — must be rejected.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 500,
-            ..Account::default()
-        };
+        let pre = Account::funded(500);
         let post = Account {
-            balance: 600,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 600,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -570,13 +581,13 @@ mod tests {
         // malicious block author would attempt, and the guard must reject it on
         // the apply path so followers do not accept the drained state.
         let bridge_id = system_accounts::bridge_account_id();
-        let pre = Account {
-            balance: 1_000,
-            ..Account::default()
-        };
+        let pre = Account::funded(1_000);
         let post = Account {
-            balance: 400,
-            ..pre.clone()
+            nonce: pre.nonce,
+            data: AccountData {
+                balance: 400,
+                ..pre.data.clone()
+            },
         };
         let (state, diff) = state_and_diff(bridge_id, pre, post);
 
@@ -593,15 +604,9 @@ mod tests {
         // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
         // account instead).
         let clock_id = system_accounts::clock_account_ids()[0];
-        let pre = Account {
-            balance: 1_000,
-            ..Account::default()
-        };
+        let pre = Account::funded(1_000);
 
-        let changed = Account {
-            balance: 2_000,
-            ..Account::default()
-        };
+        let changed = Account::funded(2_000);
         let (state, diff) = state_and_diff(clock_id, pre.clone(), changed);
         assert!(
             validate_doesnt_modify_account(&state, &diff, clock_id).is_err(),

@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// Proxy for spending from a private PDA via `simple_transfer`.
@@ -32,7 +35,10 @@ fn main() {
     let chained_call = ChainedCall {
         program_account_id: simple_transfer_id.into(),
         instruction_data: to_vec(&amount).unwrap(),
-        pre_state_ids: vec![first.account_id, second.account_id],
+        shard_selectors: vec![
+            ProgramShardSelector::from(&first),
+            ProgramShardSelector::from(&second),
+        ],
         pda_seeds: vec![seed],
     };
 

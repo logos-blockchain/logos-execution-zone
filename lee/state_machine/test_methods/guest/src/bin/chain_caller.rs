@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
@@ -30,14 +33,17 @@ fn main() {
     };
 
     let call_instruction_data = to_vec(&balance).unwrap();
+    let permuted = vec![
+        ProgramShardSelector::from(&sender_pre),
+        ProgramShardSelector::from(&recipient_pre),
+    ];
 
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
             program_account_id: simple_transfer_id.into(),
             instruction_data: call_instruction_data.clone(),
-            // Account order permuted here (sender before recipient).
-            pre_state_ids: vec![sender_pre.account_id, recipient_pre.account_id],
+            shard_selectors: permuted.clone(),
             pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
