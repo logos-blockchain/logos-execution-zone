@@ -5,15 +5,16 @@ use wallet::AccountIdentity;
 use super::{
     super::log_step,
     helpers::{
-        first_configured_public_account, get_account, submit_and_record, submit_and_record_paid_by,
+        channel_state, first_configured_public_account, get_account, last_block, scenario_snapshot,
+        submit_and_record, submit_and_record_paid_by,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
     stake_scenario::{
-        chain_caller_instruction, confirm_stake_instruction, raw_stake_instruction,
-        simple_balance_transfer_instruction, stake_instruction, stake_instruction_with_mover,
-        transfer_instruction,
+        SubmissionRecord, chain_caller_instruction, confirm_stake_instruction,
+        raw_stake_instruction, simple_balance_transfer_instruction, stake_instruction,
+        stake_instruction_with_mover, transfer_instruction,
     },
     world::CucumberWorld,
 };
@@ -124,6 +125,98 @@ async fn submit_stake_with_simple_mover(
     .await
 }
 
+#[when(expr = "a Stake of {string} is submitted for each sequencer key back-to-back")]
+async fn submit_stakes_for_both_keys(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    let first_instruction = stake_instruction(scenario.sequencer_key(), amount)?;
+    let first_accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    let second_instruction = stake_instruction(scenario.second_sequencer_key(), amount)?;
+    let second_accounts = stake_accounts(
+        scenario.second_funding_id()?,
+        scenario.second_ownership_id()?,
+    );
+
+    let snapshot = scenario_snapshot(world).await?;
+    let context = world.lez()?;
+    // The committee update these Stakes earn must extend this tip: recorded
+    // before submission so nothing the sequencer posts afterwards is missed.
+    let config_tip_before = channel_state(context).await?.config_tip_hash;
+    // Both are admitted before either can be included, so one builder pull
+    // tries both against the shared config account. The signing pairs are
+    // disjoint, so the second submission does not depend on the first.
+    let program_id = programs::sequencer_stake().id();
+    let first_hash = context
+        .send_program_transaction(first_accounts, first_instruction, program_id)
+        .await?;
+    let second_hash = context
+        .send_program_transaction(second_accounts, second_instruction, program_id)
+        .await?;
+    let submitted_at_block = last_block(context).await?;
+
+    let record = world.stake_mut()?;
+    record.set_snapshot(snapshot);
+    record.record_config_tip_before(config_tip_before);
+    record.record_submission(SubmissionRecord {
+        hash: first_hash,
+        amount,
+        submitted_at_block,
+    });
+    record.record_second_submission(SubmissionRecord {
+        hash: second_hash,
+        amount,
+        submitted_at_block,
+    });
+    Ok(())
+}
+
+#[when(expr = "a Stake of {string} is submitted with the mover told to deposit one coin {word}")]
+async fn submit_stake_with_skewed_mover(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expression: String,
+    direction: String,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let amount = scenario.amount(&expression)?;
+    // The mover instruction data is caller-controlled and opaque to
+    // sequencer_stake, so authenticated_transfer itself plays the bad mover:
+    // it deposits one coin off the amount the Stake declares.
+    let mover_amount = match direction.as_str() {
+        "less" => amount.checked_sub(1),
+        "more" => amount.checked_add(1),
+        other => {
+            return Err(StepError::InvalidArgument {
+                message: format!("unsupported mover skew '{other}', expected 'less' or 'more'"),
+            });
+        }
+    }
+    .ok_or_else(|| StepError::InvalidArgument {
+        message: format!("mover amount one coin {direction} than {amount} is out of range"),
+    })?;
+    let instruction = stake_instruction_with_mover(
+        scenario.sequencer_key(),
+        amount,
+        programs::authenticated_transfer().id().into(),
+        transfer_instruction(mover_amount)?,
+    )?;
+    let accounts = stake_accounts(scenario.funding_id()?, scenario.ownership_id()?);
+    submit_and_record(
+        world,
+        accounts,
+        instruction,
+        programs::sequencer_stake().id(),
+        amount,
+    )
+    .await
+}
+
 #[when(expr = "a Stake of {string} is submitted without the ownership account's signature")]
 async fn submit_stake_unsigned_ownership(
     world: &mut CucumberWorld,
@@ -217,6 +310,44 @@ async fn submit_confirm_stake_top_level(world: &mut CucumberWorld, step: &Step) 
         accounts,
         instruction,
         programs::sequencer_stake().id(),
+        0,
+    )
+    .await
+}
+
+#[when(
+    "a ConfirmStake matching the current funds balance is submitted as a chained call through \
+     the stake_chain_caller program"
+)]
+async fn submit_confirm_stake_as_chained_call(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    let scenario = world.stake()?;
+    let ownership_id = scenario.ownership_id()?;
+    let chain_caller_id = scenario.deployed_program(&test_programs::stake_chain_caller())?;
+    // The expected balance matches the stake funds account, the account
+    // ConfirmStake reads, so its caller check, the caller being
+    // stake_chain_caller rather than sequencer_stake, is the only assert that
+    // can reject it. The ownership account signs for the same reason as in the
+    // top-level case: the funds PDA has no key.
+    let balance = get_account(world.lez()?, scenario.funds_id()?)
+        .await?
+        .balance;
+    let forwarded = confirm_stake_instruction(balance)?;
+    let instruction = chain_caller_instruction(programs::sequencer_stake().id().into(), forwarded)?;
+    let accounts = vec![AccountIdentity::Public(ownership_id)];
+    // Fee-charged like the chained Stake: the top-level program is the test
+    // program, so a genesis supply account pays and keeps the fee off the
+    // accounts the scenario asserts on.
+    let payer_id = first_configured_public_account(world.lez()?).await?;
+    submit_and_record_paid_by(
+        world,
+        accounts,
+        instruction,
+        chain_caller_id,
+        Some(payer_id),
         0,
     )
     .await

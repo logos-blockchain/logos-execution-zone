@@ -10,16 +10,10 @@ Feature: Stake instruction validation
   # non-inclusion protocol and its two-block window are described in
   # sequencer_registration.feature.
   #
-  # Instruction cases not yet covered here:
-  # - P-15, P-16 need no new test program: the mover instruction data is
-  #   caller-controlled and opaque to sequencer_stake, so authenticated_transfer
-  #   can be told to move a different amount than the Stake declares
-  # - P-19 needs a ConfirmStake chained from another program, rejected by the
-  #   self-caller guard; the stake_chain_caller program supports it
-  #
-  # P-17 deploys a test program at runtime through program_loader, since test
-  # guests are not in the node's compiled-in program set. A deployed program is
-  # addressed by the header account its deployment claims, not by its image id.
+  # P-17 and P-19 deploy a test program at runtime through program_loader,
+  # since test guests are not in the node's compiled-in program set. A deployed
+  # program is addressed by the header account its deployment claims, not by
+  # its image id.
 
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
@@ -28,6 +22,31 @@ Feature: Stake instruction validation
     And a default-owned, unclaimed ownership account for the sequencer key
     And a funding account holding "ten times the minimum stake"
     And chain waits give up after 60 blocks
+
+  @stake_instruction_ci @P-15 @P0 @L3
+  # No bad-mover guest needed: the mover instruction data is caller-controlled
+  # and opaque to sequencer_stake, so authenticated_transfer itself plays the
+  # bad mover when told to move one coin less than the Stake declares. The
+  # runtime hands the chained ConfirmStake the funds account as the mover left
+  # it, so the in-program balance equality assert is what rejects: "mover call
+  # did not deposit the expected amount into the stake funds account".
+  Scenario: Mover deposits less than the requested amount
+    When a Stake of "twice the minimum stake" is submitted with the mover told to deposit one coin less
+    Then the stake transaction is not included within the next 2 blocks
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the config, funding and ownership accounts are unchanged
+
+  @stake_instruction_ci @P-16 @P0 @L3
+  # The balance equality check is two-sided: a surplus cannot be smuggled into
+  # total_staked. Same mechanism as P-15, with authenticated_transfer told to
+  # move one coin more than the Stake declares.
+  Scenario: Mover deposits more than the requested amount
+    When a Stake of "twice the minimum stake" is submitted with the mover told to deposit one coin more
+    Then the stake transaction is not included within the next 2 blocks
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the config, funding and ownership accounts are unchanged
 
   @stake_instruction_ci @P-18 @P0 @L3
   # In-program reason: "ConfirmStake can only be invoked as a self-chained
@@ -62,6 +81,26 @@ Feature: Stake instruction validation
     And the config has no entry for the sequencer key
     And the config and funds accounts are unchanged
     And the funding account balance is unchanged
+    And the ownership account balance is unchanged
+
+  @stake_instruction_ci @P-19 @P1 @L3
+  # In-program reason: "ConfirmStake can only be invoked as a self-chained
+  # call". The chained mirror of P-18: the stake_chain_caller test program
+  # forwards a ConfirmStake whose expected balance matches the stake funds
+  # account, so the caller check, the caller being stake_chain_caller rather
+  # than sequencer_stake, is the only assert that can reject it.
+  #
+  # As in P-17 the top-level transaction targets the test program, so it is
+  # fee-charged and its failure shows as inclusion with reverted effects: a
+  # genesis supply account pays the fee and the signing ownership account
+  # advances only its nonce.
+  Scenario: ConfirmStake chained from a different program is rejected
+    Given the stake_chain_caller test program is deployed
+    When a ConfirmStake matching the current funds balance is submitted as a chained call through the stake_chain_caller program
+    Then the stake transaction is included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the config, funding and funds accounts are unchanged
     And the ownership account balance is unchanged
 
   @stake_instruction_ci @P-24 @P1 @L3

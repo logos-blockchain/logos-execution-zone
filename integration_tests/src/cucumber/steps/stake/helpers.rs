@@ -7,11 +7,13 @@ use common::HashType;
 use futures::future::try_join_all;
 use lee::{Account, AccountId, PublicKey, program::Program};
 use lee_core::program::{InstructionData, ProgramId};
+use logos_blockchain_core::mantle::{channel::ChannelState, ops::channel::config::ChannelConfigOp};
+use sequencer_core::block_publisher::{Ed25519PublicKey, MsgId, read_channel_state};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
 use wallet::AccountIdentity;
 
-use super::super::wait_until;
+use super::super::{environment::helpers::bedrock_read_config, query_error_as_pending, wait_until};
 use crate::cucumber::{
     context::LezScenarioContext,
     error::{StepError, StepResult},
@@ -103,8 +105,43 @@ pub(super) async fn last_block(context: &LezScenarioContext) -> Result<u64, Step
         .map_err(StepError::query_failed)
 }
 
+/// Creates a fresh public account and asserts it starts out default-owned and
+/// unclaimed.
+pub(super) async fn create_unclaimed_account(
+    context: &LezScenarioContext,
+) -> Result<AccountId, StepError> {
+    let account_id = context.new_public_account().await?;
+    let account = get_account(context, account_id).await?;
+    if account != Account::default() {
+        return Err(StepError::AssertionFailed {
+            message: "the fresh account does not start out default-owned and unclaimed".to_owned(),
+        });
+    }
+    Ok(account_id)
+}
+
+/// Creates a fresh public account claimed for `authenticated_transfer` with
+/// exactly `balance` on it, so it can act as a Stake mover's sender.
+pub(super) async fn create_funded_account(
+    context: &LezScenarioContext,
+    balance: u128,
+) -> Result<AccountId, StepError> {
+    let funding_id = context.new_public_account().await?;
+    let supply_id = first_configured_public_account(context).await?;
+    context
+        .public_transfer_to_new_account(supply_id, funding_id, balance)
+        .await?;
+    let funded = get_account(context, funding_id).await?.balance;
+    if funded != balance {
+        return Err(StepError::AssertionFailed {
+            message: format!("the funding account holds {funded}, expected {balance}"),
+        });
+    }
+    Ok(funding_id)
+}
+
 /// Snapshots the config account plus every scenario account introduced so
-/// far, including the stake funds PDA of the ownership account, immediately
+/// far, including the stake funds PDA of each ownership account, immediately
 /// before a submission. The assertion step names which of these it compares.
 pub(super) async fn scenario_snapshot(
     world: &CucumberWorld,
@@ -115,7 +152,9 @@ pub(super) async fn scenario_snapshot(
     account_ids.extend(scenario.funding_id().ok());
     account_ids.extend(scenario.ownership_id().ok());
     account_ids.extend(scenario.funds_id().ok());
+    account_ids.extend(scenario.second_funding_id().ok());
     account_ids.extend(scenario.second_ownership_id().ok());
+    account_ids.extend(scenario.second_funds_id().ok());
 
     let accounts = try_join_all(account_ids.into_iter().map(|account_id| async move {
         Ok::<_, StepError>((account_id, get_account(context, account_id).await?))
@@ -207,12 +246,14 @@ pub(super) async fn wait_for_inclusion(
         timeout,
         format!("transaction {hash} to be included"),
         || async move {
-            Ok(context
-                .sequencer_client()
-                .get_transaction(hash)
-                .await
-                .map_err(StepError::query_failed)?
-                .map(|(_transaction, block_id)| block_id))
+            query_error_as_pending(
+                context
+                    .sequencer_client()
+                    .get_transaction(hash)
+                    .await
+                    .map_err(StepError::query_failed)
+                    .map(|included| included.map(|(_transaction, block_id)| block_id)),
+            )
         },
     )
     .await
@@ -289,6 +330,121 @@ pub(super) async fn assert_not_included(
             message: format!(
                 "transaction {} was included in block {block_id}, expected it to be dropped",
                 submission.hash
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The block that included `hash`, or `None` while it is not included.
+pub(super) async fn inclusion_block(
+    context: &LezScenarioContext,
+    hash: HashType,
+) -> Result<Option<u64>, StepError> {
+    Ok(context
+        .sequencer_client()
+        .get_transaction(hash)
+        .await
+        .map_err(StepError::query_failed)?
+        .map(|(_transaction, block_id)| block_id))
+}
+
+/// Reads the Bedrock channel backing the stack. The channel exists from
+/// genesis on, so a missing channel is a query failure, not "not yet".
+pub(super) async fn channel_state(context: &LezScenarioContext) -> Result<ChannelState, StepError> {
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
+    read_channel_state(&bedrock_config)
+        .await
+        .map_err(|source| StepError::QueryFailedSource { source })?
+        .ok_or_else(|| StepError::QueryFailedSource {
+            source: anyhow::anyhow!(
+                "the Bedrock channel {} does not exist",
+                bedrock_config.channel_id
+            ),
+        })
+}
+
+/// The live accredited keys of `state`, as raw key bytes.
+fn accredited_key_bytes(state: &ChannelState) -> Vec<[u8; 32]> {
+    state
+        .accredited_keys
+        .iter()
+        .map(Ed25519PublicKey::to_bytes)
+        .collect()
+}
+
+/// The id the one `ChannelConfigOp` extending `parent` would carry if it had
+/// produced `state`. Executing a config op copies every field of the op into
+/// the channel state and sets the config tip to the op's id, so the op is
+/// fully reconstructible from `parent` and the state it left behind.
+fn single_update_id(
+    context: &LezScenarioContext,
+    state: &ChannelState,
+    parent: MsgId,
+) -> Result<MsgId, StepError> {
+    let bedrock_config = bedrock_read_config(context.bedrock().primary_api_addr())?;
+    Ok(ChannelConfigOp {
+        channel: bedrock_config.channel_id,
+        parent,
+        keys: (*state.accredited_keys).clone(),
+        posting_timeframe: state.posting_timeframe.clone(),
+        posting_timeout: state.posting_timeout.clone(),
+        configuration_threshold: state.configuration_threshold,
+        transfer_threshold: state.transfer_threshold,
+    }
+    .id())
+}
+
+/// Waits until both `keys` are accredited on the Bedrock channel, giving up
+/// after `timeout`, and then proves the admission was one committee update:
+/// the channel's config tip must be the id of the single `ChannelConfigOp`
+/// that extends `config_tip_before` into the observed state. Every config op
+/// names its parent tip and becomes the tip itself, so a second op in between
+/// — one key admitted per update, or any unrelated update — leaves a tip no
+/// single op from `config_tip_before` can reproduce. Polls that catch one key
+/// accredited without the other fail early with the more specific message;
+/// the tip check is what makes an unobserved split fail too.
+pub(super) async fn wait_for_joint_accreditation(
+    context: &LezScenarioContext,
+    keys: [[u8; 32]; 2],
+    config_tip_before: MsgId,
+    timeout: Duration,
+) -> StepResult {
+    let state = wait_until(
+        POLL_INTERVAL,
+        timeout,
+        "both sequencer keys to join the live committee",
+        || async move {
+            // A transient channel-read failure only consumes timeout budget;
+            // the split-update assertion below still fails the wait outright.
+            let Some(state) = query_error_as_pending(channel_state(context).await.map(Some))?
+            else {
+                return Ok(None);
+            };
+            let live = accredited_key_bytes(&state);
+            let accredited = keys.map(|key| live.contains(&key));
+            if accredited.iter().any(|seen| *seen) && !accredited.iter().all(|seen| *seen) {
+                return Err(StepError::AssertionFailed {
+                    message: "one sequencer key is accredited without the other, but their \
+                              Stakes shared a block so a single committee update must admit both"
+                        .to_owned(),
+                });
+            }
+            Ok(accredited.iter().all(|seen| *seen).then_some(state))
+        },
+    )
+    .await?;
+
+    let expected_tip = single_update_id(context, &state, config_tip_before)?;
+    if state.config_tip_hash != expected_tip {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "both sequencer keys are accredited, but the channel's config tip \
+                 {} is not the single ChannelConfigOp extending the pre-Stake tip \
+                 {config_tip_before} (that op would have id {expected_tip}): more \
+                 than one committee update was posted, so the keys did not join \
+                 together",
+                state.config_tip_hash
             ),
         });
     }
