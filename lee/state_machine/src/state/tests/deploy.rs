@@ -133,7 +133,7 @@ fn a_committed_artifacts_kernel_has_not_drifted() {
     let user_elf = risc0_binfmt::ProgramBinary::decode(crate::PRIVACY_PRESERVING_CIRCUIT_ELF)
         .expect("a committed artifact decodes")
         .user_elf;
-    let reattached = crate::program::attach_kernel(&user_elf);
+    let reattached = crate::program::attach_kernel(user_elf);
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&reattached)
         .expect("re-attaching the current kernel must still decode")
         .into();
@@ -141,7 +141,7 @@ fn a_committed_artifacts_kernel_has_not_drifted() {
         image_id,
         crate::PRIVACY_PRESERVING_CIRCUIT_ID,
         "the committed artifact's embedded kernel no longer matches attach_kernel's current one \
-         — rebuild artifacts (`just build-artifacts`)"
+         \u{2014} rebuild artifacts (`just build-artifacts`)"
     );
 }
 
