@@ -7,7 +7,7 @@ use std::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
-    transaction::LeeTransaction,
+    transaction::{LeeTransaction, TxEvents},
 };
 use itertools::Itertools as _;
 use kameo::{
@@ -21,23 +21,8 @@ use lee_core::BlockId;
 use log::debug;
 
 use crate::{
-    Result, StorageActorTrait,
-    actor::tx_index::TransactionIndex,
-    error::Error,
-    protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
-        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
-        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+    Result, StorageActorTrait, actor::tx_index::TransactionIndex, error::Error, protocol::{
+        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue, DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit, GetAllBlocks, GetBlock, GetBlockEvents, GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -216,6 +201,14 @@ impl StorageActor {
                 &block.block.header.hash,
                 &entities::BlockHashToBlockIdMappingDestination { id: *block_id },
             )?;
+
+            for tx in &block.block.body.transactions {
+                self.db().put_batch(
+                    batch,
+                    &tx.hash(),
+                    &entities::TxHashToBlockIdMappingDestination { id: *block_id },
+                )?;
+            }
 
             let affected_accounts = block
                 .block
@@ -446,11 +439,6 @@ impl StorageActor {
                 .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
 
         if let Some(meta_acc_data) = meta_acc_opt {
-            log::info!(
-                "############################### Meta acc data len is {}",
-                meta_acc_data.length
-            );
-
             let mut affecting_txs = vec![];
             let mut local_offset = 0;
             let mut local_limit = 0;
@@ -498,6 +486,24 @@ impl StorageActor {
         } else {
             Ok(None)
         }
+    }
+
+    fn update_events(
+        &self,
+        batch: &mut db::WriteBatch,
+        events: Vec<(BlockId, Vec<TxEvents>)>,
+    ) -> Result<()> {
+        for (block_id, block_events) in events {
+            self.db().put_batch(
+                batch,
+                &encoding::BigEndian::new(&block_id),
+                &entities::BlockEvents {
+                    events: block_events,
+                },
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -898,6 +904,7 @@ impl Message<AtomicUpdate> for StorageActor {
             finalized_dispatch_records,
             zone_anchor,
             lower_published_high_water,
+            events,
         } = msg;
 
         let mut batch = db::WriteBatch::default();
@@ -976,6 +983,9 @@ impl Message<AtomicUpdate> for StorageActor {
                 },
             )?;
         }
+
+        // Events
+        self.update_events(&mut batch, events)?;
 
         self.db().write(batch)?;
 
@@ -1335,6 +1345,21 @@ impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
     }
 }
 
+impl Message<GetTxHashToBlockIdMapItem> for StorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        GetTxHashToBlockIdMapItem { tx_hash }: GetTxHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::TxHashToBlockIdMappingDestination>(&tx_hash)?
+            .map(|dest| dest.id))
+    }
+}
+
 impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
@@ -1348,5 +1373,20 @@ impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.get_affecting_txs_for_account_id(account_id, offset, limit)
+    }
+}
+
+impl Message<GetBlockEvents> for StorageActor {
+    type Reply = Result<Option<Vec<TxEvents>>>;
+
+    async fn handle(
+        &mut self,
+        GetBlockEvents { block_id }: GetBlockEvents,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::BlockEvents>(&encoding::BigEndian::new(&block_id))?
+            .map(|dest| dest.events))
     }
 }

@@ -46,6 +46,7 @@ fn bookkeeping_update() -> AtomicUpdate {
         zone_anchor: None,
         channel_cursor: None,
         lower_published_high_water: None,
+        events: Vec::new(),
     }
 }
 
@@ -71,7 +72,7 @@ fn deposit_record(byte: u8) -> PendingDepositEventRecord {
 fn reorg_update(blocks: Vec<Block>, head_tip: &Block) -> AtomicUpdate {
     AtomicUpdate {
         blocks,
-        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()))
+        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()), Vec::new())
     }
 }
 
@@ -94,7 +95,7 @@ async fn spawn_with_blocks(path: &Path, blocks: Vec<Block>) -> ActorRef<StorageA
     let storage_ref = StorageActor::spawn(StorageActor::new(path).expect("Failed to open db"));
     for block in blocks {
         storage_ref
-            .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+            .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new()), Vec::new()))
             .await
             .expect("Failed to record a block");
     }
@@ -237,7 +238,7 @@ async fn recorded_transaction_is_looked_up_by_hash() {
     );
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to record the block");
 
@@ -306,7 +307,7 @@ async fn replaced_block_leaves_no_stale_index_entries() {
         .expect("The orphaned block is the stored one so far");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(adopted, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(adopted, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to apply the update");
 
@@ -669,6 +670,7 @@ async fn block_and_state_are_stored_together() {
         .ask(AtomicUpdate::from_block(
             block.clone(),
             state_with_balance(200),
+            Vec::new()
         ))
         .await
         .expect("Failed to record the block");
@@ -698,7 +700,7 @@ async fn finalized_up_to_marks_only_the_blocks_it_covers() {
             blocks: vec![block2.clone(), block3.clone()],
             head_tip: Some(BlockMeta::from(&block3)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -732,13 +734,13 @@ async fn a_rewritten_block_keeps_the_finalized_status_it_had() {
     storage_ref
         .ask(AtomicUpdate {
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200), Vec::new())
         })
         .await
         .expect("Failed to finalize the block");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block2, state_with_balance(300)))
+        .ask(AtomicUpdate::from_block(block2, state_with_balance(300), Vec::new()))
         .await
         .expect("Failed to rewrite the block");
 
@@ -765,6 +767,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .ask(AtomicUpdate::from_block(
             genesis.clone(),
             state_with_balance(200),
+            Vec::new()
         ))
         .await
         .expect("Failed to record the genesis block");
@@ -806,7 +809,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .ask(AtomicUpdate {
             final_snapshot: Some((state_with_balance(200), final_meta)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -959,7 +962,7 @@ async fn the_first_block_written_starts_the_chain() {
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let second_hash = second.header.hash;
     storage_ref
-        .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to record the second block");
 
@@ -1017,7 +1020,7 @@ async fn acc_id_to_tx_map_corectness() {
     let block_2_hash = block_2.header.hash;
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_2, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(block_2, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to record the second block");
 
@@ -1025,14 +1028,14 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_hash = block_3.header.hash;
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_3, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(block_3, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to record the second block");
 
     let block_4 = produce_dummy_block(4, Some(block_3_hash), vec![]);
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_4, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(block_4, Arc::new(V03State::new()), Vec::new()))
         .await
         .expect("Failed to record the second block");
 

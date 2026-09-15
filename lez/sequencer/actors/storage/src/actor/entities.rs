@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{BlockMeta, PeerChainTip},
+    transaction::TxEvents,
 };
 use lee::AccountId;
 use lee_core::BlockId;
@@ -41,12 +42,16 @@ pub enum ColumnFamily {
     Meta,
     /// Small records deleted as the work they track settles.
     Pending,
-    /// Many small records, maps block hases to block ids.
+    /// Many small records, maps block hashes to block ids.
     BlockHashToBlockIdMap,
+    /// Many small records, maps tx hashes to block ids.
+    TxHashToBlockIdMap,
     /// Many small records, maps account ids to block ids, which affect them.
     ///
     /// Contains chains of records.
     AccountIdToBlockIdMap,
+    /// Block events.
+    Events,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -54,12 +59,15 @@ impl db::ColumnFamilies for ColumnFamily {
         let mut options = rocksdb::Options::default();
 
         match *self {
-            Self::Block | Self::BlockHashToBlockIdMap | Self::AccountIdToBlockIdMap => {
+            Self::Block
+            | Self::BlockHashToBlockIdMap
+            | Self::AccountIdToBlockIdMap
+            | Self::TxHashToBlockIdMap => {
                 // Written in bursts of whole blocks, so more memtables to fill
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
             }
-            Self::State => {
+            Self::State | Self::Events => {
                 // A whole state is rewritten on every update. Blob files keep
                 // those values out of compaction, which would otherwise copy
                 // every one of them through each level.
@@ -378,6 +386,19 @@ impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
     const TYPE_NAME: &'static str = db::type_name!(BlockHashToBlockIdMappingDestination);
 }
 
+/// The map entry between tx hashes and block ids.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct TxHashToBlockIdMappingDestination {
+    pub id: u64,
+}
+
+impl db::Storable<ColumnFamily> for TxHashToBlockIdMappingDestination {
+    type Key = HashType;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::TxHashToBlockIdMap;
+    const TYPE_NAME: &'static str = db::type_name!(TxHashToBlockIdMappingDestination);
+}
+
 /// The map key between account id and block id, which affect this account.
 pub struct AccountIdToBlockIdKey {
     // There can not be 2 fields here, because we need to implement AsRef<[u8]>.
@@ -426,4 +447,17 @@ impl db::Storable<ColumnFamily> for AccountIdToBlockIdMetaLen {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
     const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdMetaLen);
+}
+
+/// The map entry between tx hashes and block ids.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BlockEvents {
+    pub events: Vec<TxEvents>,
+}
+
+impl db::Storable<ColumnFamily> for BlockEvents {
+    type Key = BigEndian<BlockId>;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Events;
+    const TYPE_NAME: &'static str = db::type_name!(BlockEvents);
 }
