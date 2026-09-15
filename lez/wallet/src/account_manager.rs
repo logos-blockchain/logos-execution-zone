@@ -6,7 +6,7 @@ use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
-    NullifierWitness, PrivateWitness, SharedSecretKey, WitnessKind,
+    NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
@@ -19,8 +19,10 @@ use crate::{ExecutionFailureKind, WalletCore};
 
 /// Length every note ciphertext the wallet emits is padded up to.
 ///
-/// 512 sits roughly 200 bytes above the largest builtin-program account data (the AMM's). Not
-/// configurable on purpose: the only sender who opts out is the distinguishable one.
+/// Leaves 363 bytes for account data, after the 81-byte kind header and 68 fixed `Account` bytes.
+/// Token definition and metadata notes carry unbounded strings and can outgrow it; those ship at
+/// their own length, which [`WalletCore::send_privacy_preserving_tx_with_pre_check`] warns about.
+/// Always on by choice: the only sender who opts out is the distinguishable one.
 pub const CIPHERTEXT_PAD_SIZE: u32 = 512;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -413,6 +415,20 @@ impl AccountManager {
         self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 
+    /// Private accounts whose note already outgrows [`CIPHERTEXT_PAD_SIZE`], and so ship at their
+    /// own length among uniformly sized ones.
+    pub(crate) fn accounts_outgrowing_pad(&self) -> Vec<AccountId> {
+        let pad = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        self.states
+            .iter()
+            .filter_map(|state| match state {
+                State::Public { .. } | State::PublicKeycard { .. } => None,
+                State::Private(pre) => (note_plaintext_len(&pre.pre_state.account) > pad)
+                    .then_some(pre.pre_state.account_id),
+            })
+            .collect()
+    }
+
     /// Build the per-account input vec for the privacy-preserving circuit. The `kind` and
     /// `nullifier` axes select exactly the fields the circuit's code path for that account
     /// needs, with the ephemeral keys (`ssk`) drawn from the cached values that
@@ -721,6 +737,13 @@ fn random_bytes() -> [u8; 32] {
     bytes
 }
 
+/// Plaintext length of the note a private account encrypts to.
+fn note_plaintext_len(account: &Account) -> usize {
+    PrivateAccountKind::HEADER_LEN
+        .checked_add(account.to_bytes().len())
+        .expect("note plaintext length fits in usize")
+}
+
 fn random_vec(len: usize) -> Vec<u8> {
     let mut bytes = vec![0; len];
     OsRng.fill_bytes(&mut bytes);
@@ -930,11 +953,38 @@ mod tests {
     }
 
     #[test]
-    fn dummy_notes_are_padded_like_real_ones() {
+    fn dummy_notes_are_padded_to_the_wallet_pad() {
         let expected = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        let lengths: Vec<usize> = manager(vec![])
+            .dummy_inputs_default()
+            .iter()
+            .map(|dummy| dummy.note.ciphertext.as_bytes().len())
+            .collect();
 
-        for dummy in manager(vec![]).dummy_inputs_default() {
-            assert_eq!(dummy.note.ciphertext.as_bytes().len(), expected);
-        }
+        assert_eq!(
+            lengths,
+            vec![expected; AccountManager::MAX_PRIVATE_ACCOUNTS]
+        );
+    }
+
+    #[test]
+    fn oversized_private_accounts_are_reported() {
+        let pad = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        let mut state = private_state();
+        let State::Private(pre) = &mut state else {
+            panic!("private_state builds a private account")
+        };
+        pre.pre_state.account.data = vec![0_u8; pad].try_into().expect("data fits");
+        let account_id = pre.pre_state.account_id;
+
+        assert_eq!(
+            manager(vec![state]).accounts_outgrowing_pad(),
+            vec![account_id]
+        );
+        assert!(
+            manager(vec![private_state()])
+                .accounts_outgrowing_pad()
+                .is_empty()
+        );
     }
 }
