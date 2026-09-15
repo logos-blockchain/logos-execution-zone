@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, AccountWithMetadata, Cycles},
     from_frame,
-    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{CallKind, IncrementalCall, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
@@ -199,7 +199,8 @@ impl Program {
             self_account_id,
             caller_account_id,
             pre_states: vec![pre_state.clone()],
-            instruction: post_data.to_vec(),
+            instruction: borsh::to_vec(&IncrementalCall::Update(post_data.to_vec()))
+                .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
         };
         let input_payload =
             borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;

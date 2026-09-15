@@ -52,6 +52,52 @@ fn decrypt_kind(
     kind
 }
 
+/// `Probe`'s cost stays within `PROBE_CYCLE_BUDGET` for every `Incremental`-capable test-method
+/// guest — a regression guard for the budget's own premise (see its doc comment): a legitimate
+/// `Probe` response is flat, near-startup-only cost, not something that scales with a guest's
+/// own resolution logic. If a guest's `Probe` arm ever starts doing real work, or the budget is
+/// ever tightened below what a legitimate guest needs, this is what catches it.
+#[test]
+fn probe_cycles_stay_within_budget_for_every_incremental_capable_test_method() {
+    for (name, program) in [
+        ("stripped_token", crate::test_methods::stripped_token()),
+        (
+            "incremental_balance_transfer",
+            crate::test_methods::incremental_balance_transfer(),
+        ),
+        (
+            "stripped_token_and_forward",
+            crate::test_methods::stripped_token_and_forward(),
+        ),
+    ] {
+        let pre_state =
+            AccountWithMetadata::new(Account::default(), false, AccountId::new([0; 32]));
+
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.write_slice(&lee_core::to_borsh_frame(
+            &lee_core::program::CallKind::Incremental,
+        ));
+        let input = lee_core::program::ProgramInput {
+            self_account_id: program.id().into(),
+            caller_account_id: None,
+            pre_states: vec![pre_state],
+            instruction: borsh::to_vec(&IncrementalCall::Probe(Vec::new())).unwrap(),
+        };
+        env_builder.write_slice(&lee_core::to_frame(&borsh::to_vec(&input).unwrap()));
+
+        let session_info = risc0_zkvm::default_executor()
+            .execute(env_builder.build().unwrap(), program.elf())
+            .unwrap_or_else(|e| panic!("{name}'s Probe response must execute cleanly: {e}"));
+
+        assert!(
+            session_info.cycles() <= PROBE_CYCLE_BUDGET,
+            "{name}'s Probe response used {} cycles, expected at most PROBE_CYCLE_BUDGET \
+             ({PROBE_CYCLE_BUDGET})",
+            session_info.cycles()
+        );
+    }
+}
+
 #[test]
 fn proof_inner_roundtrip() {
     // `Proof::from_inner(b).into_inner()` must return exactly `b`. Catches
@@ -536,6 +582,171 @@ fn public_account_touched_by_an_incremental_capable_program_is_deferred() {
     );
 }
 
+/// The gap a robinhood-style program exposes: a program that never implements `Incremental` and
+/// never even *writes* to an account — merely reads it (an `unchanged` diff, `post_data: None`)
+/// to decide what to do next — must still force that account `Bound`. Its decision (here, which
+/// callee to forward to and with what instruction) is baked immutably into the proof and never
+/// re-verified for a `Deferred` account, so the account it read has to be anchored to real chain
+/// state instead. `acquire_and_forward` echoes the account (no write at all) and chains into
+/// `stripped_token`'s `Initialize`, which alone would be `Deferred`-eligible.
+#[test]
+fn a_read_only_touch_by_a_non_incremental_program_forces_bound() {
+    let forwarder = crate::test_methods::acquire_and_forward();
+    let forwarder_id: AccountId = forwarder.id().into();
+    let token = crate::test_methods::stripped_token();
+    let token_program_id = token.id();
+    let token_account_id: AccountId = token_program_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 55;
+
+    let program_with_deps =
+        ProgramWithDependencies::new(forwarder, forwarder_id, [(token_account_id, token)].into());
+
+    let instruction = Program::serialize_instruction((
+        Option::<Vec<u8>>::None,
+        token_program_id,
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a read-only touch by a non-Incremental program must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!(
+            "acquire_and_forward doesn't implement Incremental: expected Bound, even though it \
+             never wrote to the account"
+        );
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("stripped_token's Incremental resolution must still have run");
+    assert_eq!(data.balance, balance);
+}
+
+/// The residual gap the direct fold-in above doesn't close on its own: a program that *does*
+/// genuinely implement `Incremental` can still make a robinhood-style, unverified decision when
+/// it merely *reads* an account without ever writing to it. The conservative default closes
+/// this: a read-only touch forces `Bound` unless the reading program's `Probe` response asserts
+/// `DeferReads`. `stripped_token_and_forward` reads account X without writing to it (its own
+/// diff collapses to `unchanged`, byte-identical to the fresh account's `data`), does not assert
+/// `DeferReads` on this touch, then chains into `stripped_token`'s genuinely `Incremental`-
+/// eligible `Initialize` on that same account. X must still end up `Bound`, even though
+/// `stripped_token`'s write is genuinely `Incremental`-eligible.
+#[test]
+fn a_read_without_defer_reads_forces_bound_even_when_chained_into_a_genuine_write() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let token = crate::test_methods::stripped_token();
+    let token_program_id = token.id();
+    let token_account_id: AccountId = token_program_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps =
+        ProgramWithDependencies::new(program, program_account_id, [(token_account_id, token)].into());
+
+    // Byte-identical to a fresh account's `data` (empty) — collapses to an `unchanged` diff
+    // (`post_data: None`), i.e. a genuine read of `account_id`, not a write. `defer_reads: false`
+    // is the point of this test.
+    let instruction = Program::serialize_instruction((
+        Vec::<u8>::new(),
+        token_program_id,
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+        false,
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a read chained into a different program's genuine write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!(
+            "stripped_token_and_forward did not assert DeferReads: expected Bound, even though \
+             stripped_token's write is genuinely Incremental-eligible"
+        );
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("stripped_token's Incremental resolution must still have run");
+    assert_eq!(data.balance, balance);
+}
+
+/// The step-2 relaxation itself: the same shape as the test above, except
+/// `stripped_token_and_forward` now asserts `DeferReads` on its `Probe` response for this
+/// touch — a self-attested, program-wide claim that its reads are safe to leave unanchored. With
+/// that claim, X's read is treated as a no-op for classification and `stripped_token`'s genuine
+/// `Incremental` write is left `Deferred`, not forced `Bound`.
+#[test]
+fn a_read_with_defer_reads_stays_deferred_when_chained_into_a_genuine_write() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let token = crate::test_methods::stripped_token();
+    let token_program_id = token.id();
+    let token_account_id: AccountId = token_program_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps =
+        ProgramWithDependencies::new(program, program_account_id, [(token_account_id, token)].into());
+
+    let instruction = Program::serialize_instruction((
+        Vec::<u8>::new(),
+        token_program_id,
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+        true,
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("an asserted-safe read chained into a genuine write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Deferred {
+        account_id: deferred_account_id,
+        resolutions,
+    } = action
+    else {
+        panic!(
+            "stripped_token_and_forward asserted DeferReads: expected Deferred, not Bound-forced \
+             by its own read"
+        );
+    };
+    assert_eq!(deferred_account_id, account_id);
+    let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
+    assert_eq!(resolution.executing_account_id, token_program_id.into());
+    assert_eq!(
+        resolution.post_data.unwrap().as_ref(),
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap().as_slice()
+    );
+}
+
 /// Once an account is forced `Bound` (a touch whose `post_data` a program declines to resolve
 /// via `Incremental`), a later touch by that same program that *is* `Incremental`-eligible
 /// resolves immediately instead of re-entering `deferred` — `bound_accounts` short-circuits it
@@ -578,6 +789,7 @@ fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferr
         borsh::to_vec(&TokenDiff::Add(amount)).unwrap(),
         noop_id,
         Program::serialize_instruction(()).unwrap(),
+        false,
     ))
     .unwrap();
 
@@ -591,6 +803,7 @@ fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferr
         .unwrap(),
         program_id,
         second_touch_instruction,
+        false,
     ))
     .unwrap();
 
@@ -665,6 +878,7 @@ fn a_bound_forcing_touch_discards_a_previously_deferred_accounts_pending_resolut
         borsh::to_vec(&TokenDiff::Add(0)).unwrap(),
         forwarder_id,
         forwarder_instruction,
+        false,
     ))
     .unwrap();
 
