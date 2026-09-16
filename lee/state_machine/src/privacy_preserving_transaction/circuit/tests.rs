@@ -312,6 +312,73 @@ fn update_note_view_tag_is_the_supplied_value() {
 }
 
 #[test]
+fn note_ciphertext_is_padded_to_the_requested_length() {
+    const PAD: u32 = 512;
+
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 7;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let program_account_id: AccountId = program.id().into();
+    let account = Account::default().with_shard(
+        program_account_id,
+        ShardData::try_from(vec![9_u8; 200]).unwrap(),
+    );
+    let expected_post_data = account.data.clone();
+    let commitment = Commitment::new(&account_id, &account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment));
+
+    let (padded, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::new(account_id, program_account_id)],
+            private_witnesses: vec![PrivateWitness {
+                account,
+                vpk: keys.vpk(),
+                random_seed: [0; 32],
+                identifier,
+                kind: WitnessKind::Regular {
+                    ask: Some(keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                    nsk: keys.nsk(),
+                    membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+                },
+            }],
+            instruction_data: Program::serialize_instruction(()).unwrap(),
+            ciphertext_padding: Some(PAD),
+            ..Default::default()
+        },
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&padded));
+    assert_eq!(padded.private_actions.len(), 1);
+    let ciphertext = &padded.private_actions[0].encrypted_post_state.ciphertext;
+    assert_eq!(
+        ciphertext.as_bytes().len(),
+        usize::try_from(PAD).expect("pad fits in usize")
+    );
+
+    let shared_secret = SharedSecretKey::decapsulate(
+        &padded.private_actions[0].encrypted_post_state.epk,
+        &keys.d,
+        &keys.z,
+    )
+    .unwrap();
+    let (kind, post) = EncryptionScheme::decrypt(
+        ciphertext,
+        &shared_secret,
+        &padded.private_actions[0].nullifier,
+    )
+    .unwrap();
+    assert_eq!(kind, PrivateAccountKind::Regular(identifier));
+    assert_eq!(post.data, expected_post_data);
+}
+
+#[test]
 fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
     let account_id =

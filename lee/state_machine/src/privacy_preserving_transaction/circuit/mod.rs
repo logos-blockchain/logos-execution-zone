@@ -92,6 +92,9 @@ pub struct ProvingInput {
     pub private_witnesses: Vec<PrivateWitness>,
     pub instruction_data: InstructionData,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Minimum length each emitted note is padded to, so notes do not leak their
+    /// account's size. `None` leaves them at their natural length.
+    pub ciphertext_padding: Option<u32>,
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
@@ -117,6 +120,7 @@ pub fn execute_and_prove_with(
         private_witnesses,
         instruction_data,
         dummy_inputs,
+        ciphertext_padding,
     } = input;
     let ProgramWithDependencies {
         program: initial_program,
@@ -347,6 +351,7 @@ pub fn execute_and_prove_with(
         private_witnesses,
         program_account_id: *initial_account_id,
         dummy_inputs,
+        ciphertext_padding,
         initial_shard_selectors: shard_selectors,
         program_image_claims,
     };

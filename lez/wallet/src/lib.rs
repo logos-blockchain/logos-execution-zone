@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::{AccountIdentity, AccountMention};
+pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -70,12 +70,7 @@ const ASSUMED_BASE_FEE: u128 = 64;
 const ASSUMED_DATA_BYTES: u128 = 100_000;
 
 /// Default cap on the fee reservation for wallet-built public transactions.
-#[expect(
-    clippy::as_conversions,
-    reason = "u128::from is not const; the widening is lossless"
-)]
-pub const DEFAULT_MAX_FEE: u128 =
-    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+pub const DEFAULT_MAX_FEE: u128 = max_fee_for(DEFAULT_GAS_LIMIT);
 
 pub enum AccDecodeData {
     Skip,
@@ -813,6 +808,13 @@ impl WalletCore {
 
         tx_pre_check(&acc_manager.pre_states())?;
 
+        for account_id in acc_manager.accounts_outgrowing_pad() {
+            warn!(
+                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
+                 identifiable by length in this transaction"
+            );
+        }
+
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
@@ -821,6 +823,7 @@ impl WalletCore {
             private_witnesses: acc_manager.private_witnesses(),
             instruction_data,
             dummy_inputs: acc_manager.dummy_inputs_default(),
+            ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
         // Prove on a blocking thread and use `block_on` for async shard lookups.
@@ -980,9 +983,9 @@ impl WalletCore {
             instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
-                DEFAULT_GAS_LIMIT,
+                self.config.gas_limit,
                 0,
-                DEFAULT_MAX_FEE,
+                max_fee_for(self.config.gas_limit),
             )),
         );
 
@@ -1187,6 +1190,22 @@ impl WalletCore {
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
+}
+
+/// Sizes a fee cap for a given gas limit: a wallet that raises its gas limit
+/// must raise its fee cap in step, or the reservation cannot cover the gas.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "u128::from is not const; the widening is lossless"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "gas_limit and ASSUMED_DATA_BYTES both fit well within u128::MAX, so the widened \
+              sum and product cannot overflow"
+)]
+pub const fn max_fee_for(gas_limit: u64) -> u128 {
+    (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
 }
 
 /// Collapses the per-sequencer send results into one outcome: the first

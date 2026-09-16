@@ -14,6 +14,7 @@ pub fn compute_circuit_output(
     execution_state: ExecutionState,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
+    ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, public_actions, mut private_final) =
@@ -100,11 +101,12 @@ pub fn compute_circuit_output(
             vpk,
             random_seed,
             new_nullifier,
+            ciphertext_padding,
         );
     }
 
     for dummy in dummy_inputs {
-        emit_dummy_output(&mut output, dummy);
+        emit_dummy_output(&mut output, dummy, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
@@ -129,7 +131,18 @@ fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
     }
 }
 
-fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
+fn emit_dummy_output(
+    output: &mut PrivacyPreservingCircuitOutput,
+    dummy: DummyInput,
+    ciphertext_padding: Option<u32>,
+) {
+    if let Some(padding) = ciphertext_padding {
+        assert!(
+            dummy.note.ciphertext.as_bytes().len()
+                >= usize::try_from(padding).expect("pad length fits in usize"),
+            "Dummy note shorter than the requested ciphertext padding"
+        );
+    }
     // Note: the nullifiers and commitments are generated from seeds.
     // The prover is responsible for their randomness.
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
@@ -161,14 +174,20 @@ fn emit_private_output(
     vpk: &ViewingPublicKey,
     random_seed: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
+    ciphertext_padding: Option<u32>,
 ) {
     let commitment_post = Commitment::new(account_id, post_state);
 
     let esk = EphemeralSecretKey::new(account_id, random_seed, &post_state.nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
-    let encrypted_account =
-        EncryptionScheme::encrypt(post_state, kind, &shared_secret, &new_nullifier.0);
+    let encrypted_account = EncryptionScheme::encrypt(
+        post_state,
+        kind,
+        &shared_secret,
+        &new_nullifier.0,
+        ciphertext_padding,
+    );
 
     output.private_actions.push(PrivateAction {
         nullifier: new_nullifier.0,
@@ -219,6 +238,7 @@ mod tests {
             ExecutionState::from_post_states(public),
             &[],
             Vec::new(),
+            None,
             Vec::new(),
         )
     }
@@ -259,6 +279,7 @@ mod tests {
             &PrivateAccountKind::Regular(0),
             &SharedSecretKey([0; 32]),
             &nullifier,
+            None,
         );
         PrivateAction {
             nullifier,
