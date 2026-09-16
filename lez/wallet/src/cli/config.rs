@@ -70,6 +70,9 @@ impl ConfigSubcommand {
                 "calibration_limit" => {
                     println!("{}", config.multi_sequencer_client_config.calibration_limit);
                 }
+                "gas_limit" => {
+                    println!("{}", config.gas_limit);
+                }
                 _ => {
                     println!("Unknown field");
                 }
@@ -109,6 +112,9 @@ impl ConfigSubcommand {
             }
             "calibration_limit" => {
                 config.multi_sequencer_client_config.calibration_limit = value.parse()?;
+            }
+            "gas_limit" => {
+                config.gas_limit = value.parse()?;
             }
             _ => {
                 anyhow::bail!("Unknown field");
@@ -157,6 +163,11 @@ impl ConfigSubcommand {
             "calibration_limit" => {
                 println!(
                     "Sequencer multi node variable: max number of callibration runs before the end of handshake(can not be zero)"
+                );
+            }
+            "gas_limit" => {
+                println!(
+                    "Execution gas declared by public transactions this wallet builds: raise it for programs costing more cycles than the default"
                 );
             }
             _ => {

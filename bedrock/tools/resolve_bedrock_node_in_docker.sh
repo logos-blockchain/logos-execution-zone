@@ -21,25 +21,29 @@ case "$docker_arch" in
         ;;
 esac
 
-image="${BEDROCK_RESOLVER_IMAGE:-logos-execution-zone-ci:local}"
+image="${BEDROCK_RESOLVER_IMAGE:-}"
+if [ -z "$image" ]; then
+    image=lez-bedrock-resolver:local
+    docker build \
+        --platform "$docker_platform" \
+        --file bedrock/tools/resolver.Dockerfile \
+        --tag "$image" \
+        bedrock/tools
+fi
+
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 resolver_home=/tmp/lez-bedrock-resolver-home
 mkdir -p "$cargo_home/registry" "$cargo_home/git" "$HOME/.cache/logos/blockchain"
 
 echo "Resolving Docker Bedrock node for $target_platform using $image"
-docker build \
-    --platform "$docker_platform" \
-    --file .github/docker/ci.Dockerfile \
-    --tag "$image" \
-    .
-
 docker run --rm \
     --platform "$docker_platform" \
     --user "$(id -u):$(id -g)" \
     --volume "$repo_root:$repo_root" \
-    --volume "$cargo_home/registry:/usr/local/cargo/registry" \
-    --volume "$cargo_home/git:/usr/local/cargo/git" \
+    --volume "$cargo_home/registry:/cargo/registry" \
+    --volume "$cargo_home/git:/cargo/git" \
     --volume "$HOME/.cache/logos/blockchain:$resolver_home/.cache/logos/blockchain" \
+    --env CARGO_HOME=/cargo \
     --env HOME="$resolver_home" \
     --env XDG_CACHE_HOME="$resolver_home/.cache" \
     --workdir "$repo_root" \

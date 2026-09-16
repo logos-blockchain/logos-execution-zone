@@ -5,7 +5,7 @@
 )]
 
 use anyhow::Result;
-use integration_tests::TestContext;
+use integration_tests::{TestContext, public_mention, utils::send};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,
     config::{MultiNodeTestContextConfig, bedrock_channel_id},
@@ -96,6 +96,46 @@ async fn modify_config_field_multiseq() -> Result<()> {
     let second_stat = wallet_mut.get_statistics(&leaders[1].1).unwrap();
 
     assert_eq!(first_stat.latest_block_id, second_stat.latest_block_id);
+
+    Ok(())
+}
+
+#[test]
+async fn transactions_declare_the_configured_gas_limit() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let accounts = ctx.existing_public_accounts();
+    let from = accounts[0];
+    let to = accounts[1];
+
+    // One past the per-transaction ceiling, which the sequencer refuses before
+    // it executes anything. Nothing else about a plain transfer can produce
+    // that refusal, so it can only have come from the configured limit.
+    let command = Command::Config(ConfigSubcommand::Set {
+        key: "gas_limit".to_owned(),
+        value: (fee_core::market::MAX_GAS_EXEC + 1).to_string(),
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    assert_eq!(
+        ctx.wallet().config().gas_limit,
+        fee_core::market::MAX_GAS_EXEC + 1
+    );
+
+    let over_cap = send(&mut ctx, public_mention(from), public_mention(to), 100).await;
+    assert!(
+        over_cap.is_err(),
+        "a transfer declaring more gas than the per-transaction cap should be refused"
+    );
+
+    // The same transfer at the default limit, so the refusal above is the
+    // declared gas and nothing else about these accounts.
+    let command = Command::Config(ConfigSubcommand::Set {
+        key: "gas_limit".to_owned(),
+        value: wallet::DEFAULT_GAS_LIMIT.to_string(),
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    send(&mut ctx, public_mention(from), public_mention(to), 100).await?;
 
     Ok(())
 }

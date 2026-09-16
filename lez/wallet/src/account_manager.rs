@@ -17,6 +17,14 @@ use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{ExecutionFailureKind, WalletCore};
 
+/// Length every note ciphertext the wallet emits is padded up to.
+///
+/// Leaves 363 bytes for account data, after the 81-byte kind header and 68 fixed `Account` bytes.
+/// Token definition and metadata notes carry unbounded strings and can outgrow it; those ship at
+/// their own length, which [`WalletCore::send_privacy_preserving_tx_with_pre_check`] warns about.
+/// Always on by choice: the only sender who opts out is the distinguishable one.
+pub const CIPHERTEXT_PAD_SIZE: u32 = 512;
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum AccountIdentity {
     Public(AccountId),
@@ -407,6 +415,20 @@ impl AccountManager {
         self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 
+    /// Private accounts whose note already outgrows [`CIPHERTEXT_PAD_SIZE`], and so ship at their
+    /// own length among uniformly sized ones.
+    pub(crate) fn accounts_outgrowing_pad(&self) -> Vec<AccountId> {
+        let pad = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        self.states
+            .iter()
+            .filter_map(|state| match state {
+                State::Public { .. } | State::PublicKeycard { .. } => None,
+                State::Private(pre) => (note_plaintext_len(&pre.pre_state.account) > pad)
+                    .then_some(pre.pre_state.account_id),
+            })
+            .collect()
+    }
+
     /// Build the per-account input vec for the privacy-preserving circuit. The `kind` and
     /// `nullifier` axes select exactly the fields the circuit's code path for that account
     /// needs, with the ephemeral keys (`ssk`) drawn from the cached values that
@@ -715,19 +737,23 @@ fn random_bytes() -> [u8; 32] {
     bytes
 }
 
+/// Plaintext length of the note a private account encrypts to.
+fn note_plaintext_len(account: &Account) -> usize {
+    PrivateAccountKind::HEADER_LEN
+        .checked_add(account.to_bytes().len())
+        .expect("note plaintext length fits in usize")
+}
+
 fn random_vec(len: usize) -> Vec<u8> {
     let mut bytes = vec![0; len];
     OsRng.fill_bytes(&mut bytes);
     bytes
 }
 
-/// Generates a dummy note: random bytes sized to a default-account ciphertext, a real
+/// Generates a dummy note: random bytes sized to [`CIPHERTEXT_PAD_SIZE`], a real
 /// ML-KEM ciphertext epk toward a throwaway key, and a random view tag.
 fn random_dummy_note() -> EncryptedAccountData {
-    // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
-    let ciphertext_len = PrivateAccountKind::HEADER_LEN
-        .checked_add(Account::default().to_bytes().len())
-        .expect("dummy ciphertext length fits in usize");
+    let ciphertext_len = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
     let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
     let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
     EncryptedAccountData {
@@ -924,5 +950,41 @@ mod tests {
             .take(max + 2)
             .collect();
         assert_eq!(manager(over).dummy_inputs_default().len(), 0);
+    }
+
+    #[test]
+    fn dummy_notes_are_padded_to_the_wallet_pad() {
+        let expected = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        let lengths: Vec<usize> = manager(vec![])
+            .dummy_inputs_default()
+            .iter()
+            .map(|dummy| dummy.note.ciphertext.as_bytes().len())
+            .collect();
+
+        assert_eq!(
+            lengths,
+            vec![expected; AccountManager::MAX_PRIVATE_ACCOUNTS]
+        );
+    }
+
+    #[test]
+    fn oversized_private_accounts_are_reported() {
+        let pad = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+        let mut state = private_state();
+        let State::Private(pre) = &mut state else {
+            panic!("private_state builds a private account")
+        };
+        pre.pre_state.account.data = vec![0_u8; pad].try_into().expect("data fits");
+        let account_id = pre.pre_state.account_id;
+
+        assert_eq!(
+            manager(vec![state]).accounts_outgrowing_pad(),
+            vec![account_id]
+        );
+        assert!(
+            manager(vec![private_state()])
+                .accounts_outgrowing_pad()
+                .is_empty()
+        );
     }
 }

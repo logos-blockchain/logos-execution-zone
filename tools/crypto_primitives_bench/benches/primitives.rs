@@ -57,9 +57,9 @@ fn bench_encryption(c: &mut Criterion) {
     let mut g = c.benchmark_group("encryption");
     g.sample_size(50).noise_threshold(0.05);
     g.bench_function("encrypt", |b| {
-        b.iter(|| EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier));
+        b.iter(|| EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier, None));
     });
-    let ct = EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier);
+    let ct = EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier, None);
     g.bench_function("decrypt", |b| {
         b.iter(|| EncryptionScheme::decrypt(&ct, &shared, &nullifier));
     });

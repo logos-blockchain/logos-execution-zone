@@ -925,6 +925,7 @@ mod tests {
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
             &old_nullifier,
+            None,
         );
         let note = EncryptedAccountData::new(
             ciphertext,
@@ -998,6 +999,7 @@ mod tests {
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
             &old_nullifier,
+            None,
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
@@ -1063,6 +1065,7 @@ mod tests {
                 &PrivateAccountKind::Regular(identifier),
                 &sender_ss,
                 &spent,
+                None,
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {

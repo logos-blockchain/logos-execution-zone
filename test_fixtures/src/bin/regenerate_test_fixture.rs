@@ -17,7 +17,8 @@ use sequencer_storage_actor::{
 use test_fixtures::{
     config,
     setup::{
-        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
+        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_circuit_id_path,
+        prebuilt_sequencer_db_dump_path, privacy_preserving_circuit_id_stamp, setup_bedrock_node,
         setup_wallet,
     },
 };
@@ -152,6 +153,14 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     }
     std::fs::write(dest, dump.bytes)
         .with_context(|| format!("Failed to write fixture dump to {}", dest.display()))?;
+
+    let stamp_path = prebuilt_sequencer_db_circuit_id_path();
+    std::fs::write(&stamp_path, privacy_preserving_circuit_id_stamp()).with_context(|| {
+        format!(
+            "Failed to write fixture circuit id to {}",
+            stamp_path.display()
+        )
+    })?;
 
     Ok(())
 }
