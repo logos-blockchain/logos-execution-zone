@@ -97,6 +97,17 @@ impl BedrockActor {
 
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth.clone()), node_url.clone());
 
+        if let Some(checkpoint) = &initial_checkpoint
+            && has_channel_activity(checkpoint)
+            && node
+                .channel_state(*channel_id)
+                .await
+                .map_err(|err| Error::NodeRequestFailed(err.into()))?
+                .is_none()
+        {
+            return Err(Error::CheckpointChannelMissing);
+        }
+
         let zone_sdk_config = SequencerConfig {
             resubmit_interval: *resubmit_interval,
             ..SequencerConfig::new(FundingConfig {
@@ -702,6 +713,11 @@ impl From<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChannelC
             required_signatures: state.configuration_threshold,
         }
     }
+}
+
+/// Whether `checkpoint` records messages published to or observed on the channel.
+fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
+    checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
 }
 
 /// Every block a channel tx carries, in op order.
