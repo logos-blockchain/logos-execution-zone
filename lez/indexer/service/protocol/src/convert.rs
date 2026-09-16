@@ -7,25 +7,13 @@ use crate::{
     Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
     EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
     Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
+    PrivateAction, Proof, PublicActionWithID, PublicKey, PublicMessage,
     PublicTransaction, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
 // Account-related conversions
 // ============================================================================
-
-impl From<[u32; 8]> for ProgramId {
-    fn from(value: [u32; 8]) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ProgramId> for [u32; 8] {
-    fn from(value: ProgramId) -> Self {
-        value.0
-    }
-}
 
 impl From<lee_core::account::AccountId> for AccountId {
     fn from(value: lee_core::account::AccountId) -> Self {

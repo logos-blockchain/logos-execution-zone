@@ -14,7 +14,7 @@ pub async fn deploy_program(
     bytecode: Vec<u8>,
     payer: AccountId,
 ) -> anyhow::Result<AccountId> {
-    let segment_count = bytecode.len().div_ceil(MAX_SEGMENT_DATA_LEN).max(1);
+    let segment_count = bytecode.len().div_ceil(MAX_SEGMENT_DATA_LEN);
     let header = wallet_core.create_new_account_public(None).0;
     let segments: Vec<AccountId> = (0..segment_count)
         .map(|_| wallet_core.create_new_account_public(None).0)
