@@ -337,7 +337,8 @@ impl IndexerStore {
         if let Err(err) = self.clear_stall_if_present() {
             warn!("Failed to clear stall marker after applying block: {err:#}");
         }
-        Ok(AcceptOutcome::Applied)
+        // Indexer writes logs directly into DB, they are redundant here.
+        Ok(AcceptOutcome::Applied(Vec::new()))
     }
 }
 
@@ -632,7 +633,7 @@ mod tests {
             .expect("genesis applies");
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         let deploy_block = settled_test_block(
@@ -646,7 +647,7 @@ mod tests {
                 .accept_block(&deploy_block, Slot::from(0))
                 .await
                 .unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         let invoke = invoke_emitter_tx(vec![emitted(0), emitted(1)]);
@@ -662,7 +663,7 @@ mod tests {
                 .accept_block(&invoke_block, Slot::from(0))
                 .await
                 .unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         invoke_hash
@@ -699,7 +700,7 @@ mod tests {
         let mut prev_hash = genesis.header.hash;
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         // Blocks 2..=11: one charged native transfer of 10 each (nonces 0..=9).
@@ -709,7 +710,7 @@ mod tests {
             prev_hash = block.header.hash;
             assert!(matches!(
                 store.accept_block(&block, Slot::from(0)).await.unwrap(),
-                AcceptOutcome::Applied
+                AcceptOutcome::Applied(_)
             ));
         }
 
@@ -1294,7 +1295,7 @@ mod accept_tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         // A block that skips ahead (id 3 while the tip is 1) parks the indexer.
@@ -1320,7 +1321,7 @@ mod accept_tests {
         let next = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             store.accept_block(&next, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert!(
             store.get_stall_reason().unwrap().is_none(),
@@ -1406,7 +1407,7 @@ mod accept_tests {
         );
         assert!(matches!(
             store.accept_block(&block, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         let balance_after = store.account_current_state(&from).await.unwrap().balance;
 
@@ -1464,7 +1465,7 @@ mod accept_tests {
         );
         assert!(matches!(
             store.accept_block(&block2, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         let tx3 = common::test_utils::create_transaction_native_token_transfer(
@@ -1478,7 +1479,7 @@ mod accept_tests {
         );
         assert!(matches!(
             store.accept_block(&block3, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         let balance_after = store.account_current_state(&from).await.unwrap().balance;
@@ -1523,7 +1524,7 @@ mod accept_tests {
             .expect("genesis applies");
         assert!(matches!(
             store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         let mut prev_hash = genesis.header.hash;
 
@@ -1546,7 +1547,7 @@ mod accept_tests {
             prev_hash = block.header.hash;
             assert!(matches!(
                 store.accept_block(&block, Slot::from(0)).await.unwrap(),
-                AcceptOutcome::Applied
+                AcceptOutcome::Applied(_)
             ));
         }
 

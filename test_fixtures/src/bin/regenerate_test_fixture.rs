@@ -135,6 +135,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
             lower_published_high_water: None,
+            events: vec![],
         })
         .await
         .context("Failed to stamp the fixture final snapshot at the tip")?;

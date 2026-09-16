@@ -65,7 +65,7 @@ impl From<&Tip> for BlockMeta {
 /// Outcome of feeding a parsed L2 block to a validated tip.
 pub enum AcceptOutcome {
     /// Chained and applied; the tip advances.
-    Applied,
+    Applied(Vec<(BlockId, Vec<TxEvents>)>),
     /// A duplicate re-delivery of an already-applied block. No state change.
     AlreadyApplied,
     /// Did not chain or failed to apply; the tip stays frozen.
@@ -86,10 +86,9 @@ pub fn apply_block(
     tip: Option<&Tip>,
     block: &Block,
     state: &mut V03State,
-) -> Result<(), BlockIngestError> {
+) -> Result<Vec<TxEvents>, BlockIngestError> {
     validate_against_tip(tip, block)?;
-    apply_block_to_state(block, state)?;
-    Ok(())
+    apply_block_to_state(block, state)
 }
 
 /// Checks that `block` is the valid continuation of `tip`: hash integrity,

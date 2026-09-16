@@ -3,8 +3,9 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use common::{HashType, block::Block};
+use common::{HashType, block::Block, transaction::TxEvents};
 use lee::V03State;
+use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
 use logos_blockchain_zone_sdk::Slot;
@@ -240,14 +241,14 @@ impl ChainState {
         };
 
         match apply_block(tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
-            Ok(()) => {
+            Ok(events) => {
                 // now that `apply_block` succeeded, actually reorg the head
                 if let Some(idx) = reorg_at {
                     self.head_blocks.truncate(idx);
                 }
                 self.head_state = scratch;
                 self.head_blocks.push(block.to_owned());
-                AcceptOutcome::Applied
+                AcceptOutcome::Applied(vec![(block.header.block_id, events)])
             }
             Err(err) => AcceptOutcome::Parked(err),
         }
@@ -268,7 +269,7 @@ impl ChainState {
         }
         let outcome = self.apply_adopted(block);
         // Only a block that became the head is ours to pin on.
-        if matches!(outcome, AcceptOutcome::Applied) {
+        if matches!(outcome, AcceptOutcome::Applied(_)) {
             self.record_own_inscription(this_msg, block.header.hash);
         }
         outcome
@@ -315,7 +316,7 @@ impl ChainState {
         let outcome = self.apply_finalized(block, l1_slot);
         if matches!(
             outcome,
-            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
+            AcceptOutcome::Applied(_) | AcceptOutcome::AlreadyApplied
         ) {
             self.set_channel_cursor(this_msg);
         }
@@ -391,8 +392,8 @@ impl ChainState {
     /// set `final_stall`.
     pub fn apply_finalized(&mut self, block: &Block, l1_slot: Slot) -> AcceptOutcome {
         if let Some(idx) = self.head_position_of(block) {
-            self.finalize_through(idx);
-            return AcceptOutcome::Applied;
+            let generated_events = self.finalize_through(idx);
+            return AcceptOutcome::Applied(generated_events);
         }
 
         // Finality is prefix-monotone: a finalized block chaining on an
@@ -408,18 +409,24 @@ impl ChainState {
     }
 
     /// Moves `head_blocks[0..=idx]` into the final tier (already validated in head).
-    fn finalize_through(&mut self, idx: usize) {
+    fn finalize_through(&mut self, idx: usize) -> Vec<(BlockId, Vec<TxEvents>)> {
         let finalized: Vec<Block> = self.head_blocks.drain(0..=idx).collect();
+        let mut events = vec![];
         for block in finalized {
-            apply_block(
+            let block_events = apply_block(
                 self.final_tip.as_ref(),
                 &block,
                 Arc::make_mut(&mut self.final_state),
             )
             .expect("validated head block must apply to the final tier");
+
+            events.push((block.header.block_id, block_events));
+
             self.final_tip = Some(Tip::from(&block));
         }
         self.final_stall = None;
+
+        events
     }
 
     /// Applies a finalized block straight to the final tier. On success the
@@ -437,7 +444,7 @@ impl ChainState {
 
         let mut scratch = Arc::clone(&self.final_state);
         match apply_block(self.final_tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
-            Ok(()) => {
+            Ok(events) => {
                 self.final_state = scratch;
                 self.final_tip = Some(Tip::from(block));
                 self.final_stall = None;
@@ -447,7 +454,7 @@ impl ChainState {
                 // txs are back in the caller's mempool.
                 self.head_blocks.clear();
                 self.head_state = Arc::clone(&self.final_state);
-                AcceptOutcome::Applied
+                AcceptOutcome::Applied(vec![(block.header.block_id, events)])
             }
             Err(err) => {
                 self.record_final_stall(block, l1_slot, err.clone());
@@ -566,12 +573,12 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&genesis),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block2),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
 
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
@@ -631,7 +638,7 @@ mod tests {
         let block3_prime = produce_dummy_block(3, Some(block2.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block3_prime),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
     }
@@ -648,7 +655,7 @@ mod tests {
 
         let block3_prime = produce_dummy_block(3, Some(block2.header.hash), vec![]);
         let outcomes = chain.apply_channel_update(&[block3], &[block3_prime]);
-        assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied]));
+        assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied(_)]));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
     }
 
@@ -665,7 +672,7 @@ mod tests {
         // Finalize through block 2.
         assert!(matches!(
             chain.apply_finalized(&block2, slot(100)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
         // Head tip unchanged; head still ends at 3.
@@ -678,7 +685,7 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_finalized(&genesis, slot(10)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 1);
         // Head mirrors final during backfill.
@@ -770,7 +777,7 @@ mod tests {
 
         assert!(matches!(
             outcomes.as_slice(),
-            [AcceptOutcome::Applied, AcceptOutcome::Applied]
+            [AcceptOutcome::Applied(_), AcceptOutcome::Applied(_)]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 4);
         assert_eq!(
@@ -810,7 +817,7 @@ mod tests {
 
         assert!(matches!(
             outcomes.as_slice(),
-            [AcceptOutcome::Applied, AcceptOutcome::Applied]
+            [AcceptOutcome::Applied(_), AcceptOutcome::Applied(_)]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
         assert_eq!(
@@ -832,7 +839,7 @@ mod tests {
         let unknown = produce_dummy_block(9, Some(HashType([7; 32])), vec![]);
         let outcomes = chain.apply_channel_update(&[unknown], &[block3]);
 
-        assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied]));
+        assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied(_)]));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
         assert_head_matches_replay(&chain);
     }
@@ -860,7 +867,7 @@ mod tests {
         let block2_prime = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block2_prime),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         let tip = chain.head_tip().expect("head tip");
         assert_eq!(tip.block_id, 2);
@@ -912,7 +919,7 @@ mod tests {
         let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_produced(&ours, msg(2)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, ours.header.hash);
         assert_head_matches_replay(&chain);
@@ -972,7 +979,7 @@ mod tests {
         let block1 = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&block1),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.pin_parent(), None, "the head is not a pin source");
 
@@ -987,14 +994,14 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&genesis),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         chain.restore_cursor(parent);
 
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_produced(&block, ours),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.pin_parent(), Some(ours));
         (chain, block)
@@ -1008,7 +1015,7 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
             chain.apply_adopted(&genesis),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         // Nothing published yet: root is the parent the first inscription needs.
         assert!(
@@ -1133,7 +1140,7 @@ mod tests {
         let block3_prime = produce_dummy_block(3, Some(block2.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block3_prime),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(
             chain.head_state().get_account_by_id(to).balance,
@@ -1183,7 +1190,7 @@ mod tests {
         // finalized through, and the head above it survives.
         assert!(matches!(
             chain.apply_finalized(&block2, slot(5)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
@@ -1241,7 +1248,10 @@ mod tests {
 
         // A valid competitor at the same height applies without any reorg event.
         let good = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        assert!(matches!(chain.apply_adopted(&good), AcceptOutcome::Applied));
+        assert!(matches!(
+            chain.apply_adopted(&good),
+            AcceptOutcome::Applied(_)
+        ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
         assert_head_matches_replay(&chain);
     }
@@ -1279,7 +1289,7 @@ mod tests {
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_finalized(&block2, slot(30)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert!(chain.final_stall().is_none());
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
@@ -1301,7 +1311,7 @@ mod tests {
         let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
         assert!(matches!(
             chain.apply_finalized(&block3, slot(10)),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         assert_eq!(chain.final_tip().expect("final tip").block_id, 3);
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
@@ -1375,7 +1385,7 @@ mod tests {
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
         let (block2b, _s2b) = settled(&s1, 2, genesis.header.hash, vec![tx]);
         match chain.apply_finalized(&block2b, slot(20)) {
-            AcceptOutcome::Applied => {}
+            AcceptOutcome::Applied(_) => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 panic!("not applied: {err:?}")
             }

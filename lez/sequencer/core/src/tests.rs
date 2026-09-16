@@ -574,6 +574,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
         .ask(AtomicUpdate::from_block(
             genesis_block,
             Arc::new(genesis_state),
+            Vec::new(),
         ))
         .await
         .unwrap();

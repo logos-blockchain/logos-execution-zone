@@ -21,8 +21,23 @@ use lee_core::BlockId;
 use log::debug;
 
 use crate::{
-    Result, StorageActorTrait, actor::tx_index::TransactionIndex, error::Error, protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue, DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit, GetAllBlocks, GetBlock, GetBlockEvents, GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
+    Result, StorageActorTrait,
+    actor::tx_index::TransactionIndex,
+    error::Error,
+    protocol::{
+        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
+        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
+        GetAllBlocks, GetBlock, GetBlockEvents, GetBlockHashToBlockIdMapItem, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
+        GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 

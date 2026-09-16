@@ -816,6 +816,7 @@ mod tests {
             .ask(AtomicUpdate::from_block(
                 produce_dummy_block(0, None, vec![]),
                 Arc::new(lee::V03State::new()),
+                Vec::new(),
             ))
             .await
             .expect("seed genesis");
