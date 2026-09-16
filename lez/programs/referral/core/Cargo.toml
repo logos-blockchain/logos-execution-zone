@@ -1,0 +1,15 @@
+[package]
+name = "referral_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+borsh.workspace = true
+serde.workspace = true
+risc0-zkvm.workspace = true
+ed25519-dalek.workspace = true
