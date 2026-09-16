@@ -438,8 +438,6 @@ impl AccountManager {
         self.states
             .iter()
             .map(|state| match state {
-                // `Bound`/`Deferred` is inferred in-circuit per diff, from whether the program
-                // executing that diff supports `CallKind::Incremental` — never declared here.
                 State::Public { .. } | State::PublicKeycard { .. } => {
                     InputAccountIdentity::Public
                 }

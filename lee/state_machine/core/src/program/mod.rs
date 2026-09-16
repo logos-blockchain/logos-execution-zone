@@ -695,7 +695,7 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
-    /// A call kind a program opts into for a custom `data`-update step.
+    /// Call kind program opts into for custom `data` update.
     Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
@@ -735,7 +735,6 @@ impl BorshDeserialize for CallKind {
 #[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
-    /// Runs a program's custom `data`-update step against `pre_states` as they stand right now.
     /// The instruction shape is program-defined, so it arrives undecoded.
     Incremental(ProgramInput<InstructionData>),
     /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
@@ -745,23 +744,15 @@ pub enum ProgramCall<T> {
 
 /// The instruction shape every `CallKind::Incremental` invocation carries.
 ///
-/// Shared by every caller (public-transaction resolution, privacy-transaction proving, privacy
-/// settlement) and every implementer, so a capability check and a real resolution can never be
-/// confused for one another.
-///
-/// `Probe` asks "do you implement `Incremental` at all?" without supplying anything to resolve —
-/// needed to classify a read-only touch (no `post_data`) on a public account in the privacy
-/// circuit: even a touch that writes nothing can drive a decision elsewhere in the call chain
-/// (e.g. which account a caller pays). By default such a read forces the account `Bound`; a
-/// program may instead emit a `DeferReads` event on its `Probe` response to assert that every
-/// read-only touch it makes is safe to leave unresolved (`Deferred`) — an unconditional,
-/// program-wide claim the caller trusts, not something the circuit verifies against the
-/// program's actual logic. `Probe` carries the same `instruction_data` the originating `Execute`
-/// call received, even though nothing reads it yet, so a future per-instruction answer needs no
-/// wire change. A program that doesn't recognize this envelope at all (decode failure) falls
-/// back to `UnsupportedCallKind`, identical to "doesn't implement `Incremental`".
+/// Shared by every caller and every implementer, so a capability check and a real resolution
+/// can never be confused for one another. `Probe` carries the same `instruction_data` the
+/// originating `Execute` call received, even though nothing reads it yet, so a future
+/// per-instruction answer needs no wire change. A program that doesn't recognize this envelope
+/// at all (decode failure) falls back to `UnsupportedCallKind`, identical to "doesn't implement
+/// `Incremental`".
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum IncrementalCall {
+    /// A capability check: "do you implement `Incremental` at all?"
     Probe(InstructionData),
     /// The actual delta to resolve, program-defined shape.
     Update(InstructionData),
@@ -787,8 +778,8 @@ impl UnsupportedCallKind {
 
 /// Marker event asserting every read-only touch a program makes is safe to leave `Deferred`.
 ///
-/// A self-attested, program-wide claim emitted on a `Probe` response (see `IncrementalCall`'s
-/// doc). Absence means the conservative default: a read-only touch forces `Bound`.
+/// A self-attested, program-wide claim emitted on a `Probe` response. Absence means the
+/// default: a read-only touch forces `Bound`.
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct DeferReads;
 

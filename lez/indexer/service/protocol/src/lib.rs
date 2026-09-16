@@ -242,6 +242,7 @@ pub struct FeeDeclaration {
 
 pub type InstructionData = Vec<u8>;
 
+/// TODO: Remove once Balance program added.
 /// Mirrors `lee_core::account::BalanceDiff`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum BalanceDiff {

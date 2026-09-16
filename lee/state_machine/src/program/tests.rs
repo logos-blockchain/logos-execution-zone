@@ -391,8 +391,8 @@ fn assert_incremental_resolves(delta: BalanceTransferDelta, expected: BalanceDif
 #[test]
 fn stripped_token_robinhood_signals_unsupported_on_the_incremental_call_kind() {
     let program = crate::test_methods::stripped_token_robinhood();
-    let target_program_id = crate::test_methods::stripped_token().id();
-    let instruction_data = Program::serialize_instruction(target_program_id).unwrap();
+    let target_account_id: AccountId = crate::test_methods::stripped_token().id().into();
+    let instruction_data = Program::serialize_instruction(target_account_id).unwrap();
     let pre_states = vec![
         AccountWithMetadata::new(Account::default(), false, AccountId::new([0; 32])),
         AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),

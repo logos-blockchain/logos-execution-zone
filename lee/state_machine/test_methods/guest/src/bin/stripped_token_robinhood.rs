@@ -1,10 +1,13 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
-// Guest-side mirror of `stripped_token`'s `TokenAccountData`/`Instruction` — this binary can't
-// import them directly, only match their borsh layout.
+// Mirrors `stripped_token`'s `TokenAccountData`/`Instruction` layout — guest binaries can't
+// import each other's types.
 #[derive(borsh::BorshDeserialize)]
 struct TokenAccountData {
     balance: u128,
@@ -24,8 +27,9 @@ enum StrippedTokenInstruction {
     },
 }
 
-/// The `ProgramId` of the `stripped_token` instance whose accounts this reads and compares.
-type Instruction = ProgramId;
+/// The `AccountId` of the `stripped_token` instance whose accounts this reads and compares.
+/// Resolved by the caller — this program never converts a `ProgramId` on its own.
+type Instruction = AccountId;
 
 fn token_balance(data: &lee_core::account::Data) -> u128 {
     if data.is_empty() {
@@ -46,7 +50,7 @@ fn main() {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: stripped_token_id,
+            instruction: stripped_token_account_id,
         },
         instruction_data,
     ) = call
@@ -65,13 +69,13 @@ fn main() {
         borsh::to_vec(&StrippedTokenInstruction::Transfer { amount: 1 }).unwrap();
     let chained_calls = match balance1.cmp(&balance2) {
         std::cmp::Ordering::Greater => vec![ChainedCall {
-            program_account_id: stripped_token_id.into(),
+            program_account_id: stripped_token_account_id,
             instruction_data: transfer_instruction_data,
             pre_state_ids: vec![account1_pre.account_id, account2_pre.account_id],
             pda_seeds: vec![],
         }],
         std::cmp::Ordering::Less => vec![ChainedCall {
-            program_account_id: stripped_token_id.into(),
+            program_account_id: stripped_token_account_id,
             instruction_data: transfer_instruction_data,
             pre_state_ids: vec![account2_pre.account_id, account1_pre.account_id],
             pda_seeds: vec![],

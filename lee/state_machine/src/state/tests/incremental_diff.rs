@@ -103,7 +103,7 @@ fn stripped_token_transfer_resolves_through_incremental_dispatch() {
 
 fn robinhood_message(
     robinhood_program_id: AccountId,
-    stripped_token_program_id: ProgramId,
+    stripped_token_program_id: AccountId,
     account1_id: AccountId,
     account2_id: AccountId,
 ) -> public_transaction::Message {
@@ -137,7 +137,7 @@ fn stripped_token_robinhood_moves_one_unit_from_the_larger_account_to_the_smalle
 
     let message = robinhood_message(
         robinhood_program_id,
-        stripped_token_program.id(),
+        stripped_token_program_id,
         account1_id,
         account2_id,
     );
@@ -168,7 +168,7 @@ fn stripped_token_robinhood_follows_whichever_account_is_actually_larger() {
 
     let message = robinhood_message(
         robinhood_program_id,
-        stripped_token_program.id(),
+        stripped_token_program_id,
         account1_id,
         account2_id,
     );
@@ -197,7 +197,7 @@ fn stripped_token_robinhood_does_nothing_when_balances_are_equal() {
 
     let message = robinhood_message(
         robinhood_program_id,
-        stripped_token_program.id(),
+        stripped_token_program_id,
         account1_id,
         account2_id,
     );
