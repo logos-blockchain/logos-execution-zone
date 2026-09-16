@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
-use chain_state::zone_indexer::ZoneIndexer;
-use common::block::Block;
+use borsh::BorshDeserialize as _;
+use chain_state::{ChannelLineage, InscribedBlock, LineageEntry, zone_indexer::ZoneIndexer};
+use common::block::{Block, BlockHeader};
 use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
@@ -67,10 +68,10 @@ pub struct FollowUpdate {
     pub checkpoint: SequencerCheckpoint,
     /// Blocks newly on the followed L1 branch, in channel order; they extend
     /// the `head` tier, or replace part of it together with `orphaned`.
-    /// Non-block entries (garbage, a
-    /// config op) surface only through the checkpoint's tip. No inscription
-    /// ids ride along: blocks correlate by hash (a re-inscription changes the
-    /// id, never the hash), and the only publishable id is the checkpoint's.
+    /// Entries carrying no block surface only through the checkpoint's tip and
+    /// `lineage`. No inscription ids ride along: blocks correlate by hash (a
+    /// re-inscription changes the id, never the hash), and the only publishable
+    /// id is the checkpoint's.
     pub adopted: Vec<Block>,
     /// Blocks dropped from the branch by an L1 reorg: reverted from the
     /// `head`, their user txs resubmitted to the mempool.
@@ -84,6 +85,11 @@ pub struct FollowUpdate {
     pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
+    /// Every unfinalized channel entry this checkpoint reports, for the
+    /// produce path's [`publishing_verdict`](chain_state::ChainState::publishing_verdict).
+    pub lineage: ChannelLineage,
+    /// The newest entry this update reports finalized, where `lineage` ends.
+    pub finalized_entry: Option<MsgId>,
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -457,6 +463,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
                                     let mut undecodable = Vec::new();
+                                    let mut finalized_entry = None;
                                     for (l1_slot, op) in finalized
                                         .into_iter()
                                         .flat_map(|item| {
@@ -466,6 +473,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
+                                                finalized_entry = Some(inscription.this_msg);
                                                 match block_from_inscription(&inscription) {
                                                     Some(block) => {
                                                         finalized_blocks.push((block, l1_slot));
@@ -499,6 +507,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     }
 
                                     on_follow(FollowUpdate {
+                                        lineage: lineage_from_checkpoint(&checkpoint, channel_id),
+                                        finalized_entry,
                                         checkpoint,
                                         adopted,
                                         orphaned,
@@ -758,6 +768,42 @@ fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
         .ok()
+}
+
+/// The unfinalized channel entries a checkpoint carries, keyed by entry id.
+///
+/// The pending set holds every inscription the sdk has seen and not seen
+/// finalized, peers' included, so it is the channel's unfinalized tail.
+pub(crate) fn lineage_from_checkpoint(
+    checkpoint: &SequencerCheckpoint,
+    channel_id: ChannelId,
+) -> ChannelLineage {
+    let entries = checkpoint
+        .pending_txs
+        .iter()
+        .flat_map(|(_, signed_tx)| channel_inscriptions(signed_tx, channel_id))
+        .map(|inscription| {
+            // Only the header, so a few hundred pending entries cost a header
+            // parse each rather than a full block decode.
+            let block = BlockHeader::deserialize(&mut <Inscription as AsRef<[u8]>>::as_ref(
+                &inscription.payload,
+            ))
+            .ok()
+            .map(|header| InscribedBlock {
+                block_id: header.block_id,
+                hash: header.hash,
+                prev_hash: header.prev_block_hash,
+            });
+            (
+                inscription.this_msg,
+                LineageEntry {
+                    parent: inscription.parent_msg,
+                    block,
+                },
+            )
+        })
+        .collect();
+    ChannelLineage::new(entries)
 }
 
 /// Every block a channel tx carries, in op order.

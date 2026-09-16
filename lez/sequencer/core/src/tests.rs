@@ -107,6 +107,8 @@ async fn start_sequencer(
 /// exercise via `..empty_follow_update()`.
 fn empty_follow_update() -> FollowUpdate {
     FollowUpdate {
+        lineage: chain_state::ChannelLineage::default(),
+        finalized_entry: None,
         checkpoint: mock_checkpoint(),
         adopted: Vec::new(),
         orphaned: Vec::new(),
@@ -3734,6 +3736,28 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
     assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
 
+/// Channel entries in order, each chaining on the one before it, as the sdk
+/// reports the unfinalized tail.
+fn lineage_of(entries: &[(MsgId, Option<&Block>)]) -> chain_state::ChannelLineage {
+    let mut map = std::collections::HashMap::new();
+    let mut parent = MsgId::root();
+    for (msg, block) in entries {
+        map.insert(
+            *msg,
+            chain_state::LineageEntry {
+                parent,
+                block: block.map(|b| chain_state::InscribedBlock {
+                    block_id: b.header.block_id,
+                    hash: b.header.hash,
+                    prev_hash: b.header.prev_block_hash,
+                }),
+            },
+        );
+        parent = *msg;
+    }
+    chain_state::ChannelLineage::new(map)
+}
+
 /// A block held back by a hole in front of it is applied and stored as soon as
 /// the missing block arrives, rather than waiting for finality.
 #[tokio::test]
@@ -3791,6 +3815,91 @@ async fn parked_blocks_apply_and_persist_once_the_hole_is_filled() {
             block.header.hash,
         );
     }
+}
+
+/// A block on the channel the head has not applied must hold the turn: our
+/// height would be stale while the pin is the live tip.
+#[tokio::test]
+async fn a_turn_is_skipped_while_the_head_trails_the_channel() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    let ours = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+
+    // A peer's block 3 lands, but the sdk never reports it as adopted.
+    let peer = common::test_utils::produce_dummy_block(3, Some(ours.header.hash), vec![]);
+    let peer_entry = MsgId::from([7_u8; 32]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(peer_entry),
+            lineage: lineage_of(&[(mock_msg_of(&ours), Some(&ours)), (peer_entry, Some(&peer))]),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain_height().await,
+        2,
+        "the head still ends at 2"
+    );
+    let err = sequencer
+        .run_production_turn()
+        .await
+        .expect_err("the turn must not publish a height the channel passed");
+    assert!(
+        format!("{err:#}").contains("block 3 is on the channel between our head and the pin"),
+        "the turn must stop on the trailing head, got: {err:#}"
+    );
+    assert!(sequencer.store.block_at_id(3).await.unwrap().is_none());
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(2),
+        "a skipped turn claims no height"
+    );
+}
+
+/// A rewind whose entries the sdk also dropped leaves a hole between the head
+/// and the pin, which is not a licence to write the freed heights again.
+#[tokio::test]
+async fn a_turn_is_skipped_when_the_entries_below_the_pin_are_missing() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.store.block_at_id(3).await.unwrap().unwrap();
+
+    // Our 3 is reported orphaned and its entry is gone from the sdk's tail,
+    // while the pin stays on an entry further along the channel.
+    let pin = MsgId::from([7_u8; 32]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(pin),
+            orphaned: vec![second],
+            lineage: lineage_of(&[(pin, None)]),
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(sequencer.chain_height().await, 2, "the orphan rewound to 2");
+    let err = sequencer
+        .run_production_turn()
+        .await
+        .expect_err("a hole between the head and the pin must hold the turn");
+    assert!(
+        format!("{err:#}").contains("entries between our head and the pin are missing"),
+        "the turn must stop on the missing entries, got: {err:#}"
+    );
+    assert!(sequencer.store.block_at_id(3).await.unwrap().is_none());
 }
 
 /// A peer inscribing a second block at a height the head already passed must

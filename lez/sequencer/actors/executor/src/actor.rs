@@ -19,7 +19,7 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    PinBehindTip, SequencerCore, TransactionOrigin,
+    PinBehindTip, PublishVerdict, SequencerCore, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     gossip::AccreditedKeysReceiver,
@@ -255,6 +255,30 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
             }
             return Ok(());
         }
+        // A block of someone else's sits between our head and our pin, so this
+        // turn would pair a stale height with the live channel tip.
+        if let Some(verdict) = self.sequencer.publish_blocker().await {
+            match verdict {
+                PublishVerdict::HeadTrailsPin { block_id } => {
+                    info!(
+                        "Skipping turn: block {block_id} is on the channel above our head {}; \
+                         applying it first",
+                        self.sequencer.next_block_height().await.saturating_sub(1),
+                    );
+                    self.clear_blocked_attempts();
+                }
+                // The pin may be frozen behind the missing entries, so the
+                // blocked run keeps counting.
+                PublishVerdict::LineageGap => warn!(
+                    "Skipping turn: the channel entries between our head {} and our pin are \
+                     missing from the sdk's view",
+                    self.sequencer.next_block_height().await.saturating_sub(1),
+                ),
+                PublishVerdict::Allowed => {}
+            }
+            return Ok(());
+        }
+
         self.clear_blocked_attempts();
 
         info!("Our turn: producing a block and any committee update");
