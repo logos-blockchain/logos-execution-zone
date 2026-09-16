@@ -28,7 +28,6 @@ enum StrippedTokenInstruction {
 }
 
 /// The `AccountId` of the `stripped_token` instance whose accounts this reads and compares.
-/// Resolved by the caller — this program never converts a `ProgramId` on its own.
 type Instruction = AccountId;
 
 fn token_balance(data: &lee_core::account::Data) -> u128 {
@@ -41,8 +40,6 @@ fn token_balance(data: &lee_core::account::Data) -> u128 {
     }
 }
 
-/// Its own diffs are always unchanged — every balance change happens in the chained
-/// `stripped_token` call this emits, never here. Opts into `Execute` only.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(

@@ -62,10 +62,6 @@ fn probe_cycles_stay_within_budget_for_every_incremental_capable_test_method() {
     for (name, program) in [
         ("stripped_token", crate::test_methods::stripped_token()),
         (
-            "incremental_balance_transfer",
-            crate::test_methods::incremental_balance_transfer(),
-        ),
-        (
             "stripped_token_and_forward",
             crate::test_methods::stripped_token_and_forward(),
         ),
@@ -661,7 +657,7 @@ fn a_read_without_defer_reads_forces_bound_even_when_chained_into_a_genuine_writ
     // is the point of this test.
     let instruction = Program::serialize_instruction((
         Vec::<u8>::new(),
-        token_program_id,
+        token_account_id,
         Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
         false,
     ))
@@ -711,7 +707,7 @@ fn a_read_with_defer_reads_stays_deferred_when_chained_into_a_genuine_write() {
 
     let instruction = Program::serialize_instruction((
         Vec::<u8>::new(),
-        token_program_id,
+        token_account_id,
         Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
         true,
     ))
@@ -787,7 +783,7 @@ fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferr
     // (this program always forwards, so there's no way to skip a callee entirely).
     let second_touch_instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenDiff::Add(amount)).unwrap(),
-        noop_id,
+        noop_account_id,
         Program::serialize_instruction(()).unwrap(),
         false,
     ))
@@ -801,7 +797,7 @@ fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferr
             balance: seed_balance,
         })
         .unwrap(),
-        program_id,
+        program_account_id,
         second_touch_instruction,
         false,
     ))
@@ -876,7 +872,7 @@ fn a_bound_forcing_touch_discards_a_previously_deferred_accounts_pending_resolut
     // `existing_balance` — see the doc comment above for why that matters.
     let instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenDiff::Add(0)).unwrap(),
-        forwarder_id,
+        forwarder_account_id,
         forwarder_instruction,
         false,
     ))

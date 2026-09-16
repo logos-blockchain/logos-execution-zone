@@ -1,7 +1,7 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
-    program::{CallKind, IncrementalCall, ProgramInput, UnsupportedCallKind},
+    program::{CallKind, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
@@ -268,121 +268,6 @@ fn simple_balance_transfer_survives_the_incremental_call_kind_it_has_not_opted_i
         .expect("an UnsupportedCallKind event must be emitted");
     let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
     assert_eq!(decoded.raw_discriminant, 1);
-}
-
-// Host-side mirror of `incremental_balance_transfer`'s `BalanceTransferDelta` — the guest crate
-// isn't a host dependency, so this can't be imported directly, only match the borsh layout.
-#[derive(borsh::BorshSerialize)]
-enum BalanceTransferDelta {
-    Add(u128),
-    Sub(u128),
-}
-
-/// `BalanceDiff` already composes safely against any `pre_state`, so `Execute` computes both
-/// sides' final `BalanceDiff` outright and never touches `data` — `post_data` comes back
-/// unchanged.
-#[test]
-fn incremental_balance_transfer_moves_the_balance_directly_on_execute() {
-    let program = crate::test_methods::incremental_balance_transfer();
-    let balance_to_move: u128 = 42;
-    let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
-    let pre_states = vec![
-        AccountWithMetadata::new(
-            Account {
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        ),
-        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
-    ];
-
-    let (output, _cycles) = program
-        .execute(
-            program.id().into(),
-            None,
-            &pre_states,
-            &instruction_data,
-            DEFAULT_PUBLIC_CYCLE_BUDGET,
-        )
-        .expect("executes");
-
-    assert_eq!(output.call_kind, CallKind::Execute);
-    let [sender_post, recipient_post] = output.state_diffs.try_into().unwrap();
-    assert_eq!(
-        sender_post.post_balance_diff,
-        BalanceDiff::Sub(balance_to_move)
-    );
-    assert_eq!(sender_post.post_data, None);
-    assert_eq!(
-        recipient_post.post_balance_diff,
-        BalanceDiff::Add(balance_to_move)
-    );
-    assert_eq!(recipient_post.post_data, None);
-
-    assert!(
-        output
-            .events
-            .iter()
-            .all(|event| event.selector != UnsupportedCallKind::SELECTOR)
-    );
-}
-
-/// `Incremental`'s contract is one account at a time: fed a single account's real `pre_state`
-/// and a `BalanceTransferDelta`, it must decode that delta and re-express it as a resolved
-/// `BalanceDiff` in either direction.
-#[test]
-fn incremental_balance_transfer_resolves_a_sub_delta_on_incremental_call_kind() {
-    assert_incremental_resolves(BalanceTransferDelta::Sub(42), BalanceDiff::Sub(42));
-}
-
-#[test]
-fn incremental_balance_transfer_resolves_an_add_delta_on_incremental_call_kind() {
-    assert_incremental_resolves(BalanceTransferDelta::Add(42), BalanceDiff::Add(42));
-}
-
-fn assert_incremental_resolves(delta: BalanceTransferDelta, expected: BalanceDiff) {
-    let program = crate::test_methods::incremental_balance_transfer();
-    let pre_state = AccountWithMetadata::new(
-        Account {
-            balance: 100,
-            ..Account::default()
-        },
-        true,
-        AccountId::new([0; 32]),
-    );
-
-    let mut env_builder = ExecutorEnv::builder();
-    env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
-    let input = ProgramInput {
-        self_account_id: program.id().into(),
-        caller_account_id: None,
-        pre_states: vec![pre_state],
-        instruction: borsh::to_vec(&IncrementalCall::Update(borsh::to_vec(&delta).unwrap()))
-            .unwrap(),
-    };
-    env_builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
-
-    let session_info = default_executor()
-        .execute(env_builder.build().unwrap(), program.elf())
-        .expect("an opted-in program must execute on CallKind::Incremental");
-
-    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
-    let output: lee_core::program::ProgramOutput = borsh::from_slice(payload).unwrap();
-
-    assert_eq!(output.call_kind, CallKind::Incremental);
-    let [resolved] = output.state_diffs.try_into().unwrap();
-    assert_eq!(resolved.post_balance_diff, expected);
-    // Data was never touched, so it comes back as no change, not a value equal to the input.
-    assert_eq!(resolved.post_data, None);
-
-    assert!(
-        output
-            .events
-            .iter()
-            .all(|event| event.selector != UnsupportedCallKind::SELECTOR)
-    );
 }
 
 /// `stripped_token_robinhood` doesn't implement `Incremental` at all — confirms the

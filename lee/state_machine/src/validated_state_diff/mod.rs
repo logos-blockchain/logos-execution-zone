@@ -475,8 +475,6 @@ impl ValidatedStateDiff {
                 );
             }
 
-            // Resolve each diff to what should actually be applied — via `Incremental` if the
-            // program supports it, or verbatim otherwise — before `validate_execution` sees it.
             let resolved_diffs = program_output
                 .state_diffs
                 .iter()
@@ -904,7 +902,7 @@ fn resolve_diff(
         executing_account_id,
         caller_account_id,
         &real_pre_state,
-        post_data.as_ref(),
+        post_data,
         cycle_budget.saturating_sub(*cycles_used),
     )?;
     *cycles_used = cycles_used

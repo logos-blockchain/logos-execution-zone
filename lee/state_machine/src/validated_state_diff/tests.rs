@@ -13,9 +13,6 @@ use crate::{
     validated_state_diff::ValidatedStateDiff,
 };
 
-// Host-side mirror of `stripped_token`'s `Instruction`/`TokenAccountData`/`TokenDiff` — the
-// guest crate isn't a host dependency, so these can't be imported directly, only match the
-// borsh layout.
 #[derive(borsh::BorshSerialize)]
 enum StrippedTokenInstruction {
     Initialize { balance: u128 },

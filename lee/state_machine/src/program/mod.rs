@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, Cycles},
+    account::{AccountId, AccountWithMetadata, Cycles, Data},
     from_frame,
     program::{CallKind, IncrementalCall, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
@@ -177,18 +177,15 @@ impl Program {
         Ok(())
     }
 
-    /// Invokes a program's `Incremental` handler for one account, feeding it `post_data` — bytes
-    /// the program previously emitted for that account, whatever they mean to it — against
-    /// `pre_state` as it stands right now, not necessarily the one that produced `post_data`. A
-    /// program that hasn't implemented `Incremental` responds with a no-op plus an
-    /// `UnsupportedCallKind` event instead of an error; the caller checks for that event to fall
-    /// back to copy/replace.
+    /// Resolves `post_data` against current `pre_state`. A program that hasn't implemented
+    /// `Incremental` responds with a no-op plus an `UnsupportedCallKind` event instead of an
+    /// error; the caller checks for that event to fall back to copy/replace.
     pub(crate) fn execute_incremental(
         &self,
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
         pre_state: &AccountWithMetadata,
-        post_data: &[u8],
+        post_data: &Data,
         cycle_budget: Cycles,
     ) -> Result<(ProgramOutput, Cycles), LeeError> {
         let mut env_builder = ExecutorEnv::builder();

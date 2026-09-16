@@ -1,9 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::BalanceDiff,
+    account::{AccountId, BalanceDiff},
     program::{
         AccountStateDiff, CallKind, ChainedCall, DeferReads, IncrementalCall, InstructionData,
-        ProgramCall, ProgramEvent, ProgramId, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -18,22 +18,13 @@ enum TokenDiff {
     Add(u128),
 }
 
-/// Raw `post_data` to write (a caller-supplied `TokenDiff::Add` encoding resolves via
-/// `Incremental` below; anything else — e.g. a bare `TokenAccountData` encoding — fails to
-/// decode as `TokenDiff` and is gracefully declined as `Unsupported`, letting a test force this
-/// account `Bound` without a second, differently-behaved program), the callee to forward the
-/// same account to next, the callee's instruction, and whether this program's `Probe` response
-/// should assert `DeferReads` — lets one guest drive both sides of the step-2 read-only
-/// classification in tests, since `Probe` now receives this same `instruction_data`.
-type Instruction = (Vec<u8>, ProgramId, InstructionData, bool);
+/// Raw bytes to write as `post_data`, the callee to forward the account to, the callee's
+/// instruction, and whether this program's `Probe` response should assert `DeferReads`.
+type Instruction = (Vec<u8>, AccountId, InstructionData, bool);
 
 /// `stripped_token`'s `Initialize`/`Incremental`, plus a forward on the same account — lets
-/// tests compose an `Incremental`-eligible touch with a further chained touch on the same
-/// account, which `stripped_token` alone can't do (it never chains). Declining to decode
-/// unrecognized `post_data` as `Unsupported` (rather than panicking) also lets one test drive
-/// both a `Bound`-forcing touch and a genuinely-`Incremental` one from this same program —
-/// ownership rules forbid a *different* program from touching an already-owned account, so
-/// that's otherwise unreachable.
+/// tests chain a further touch onto an `Incremental`-eligible one, which `stripped_token` alone
+/// can't do.
 fn main() {
     let call = read_lee_call::<Instruction>();
     match call {
@@ -57,7 +48,7 @@ fn main() {
             let target_diff = AccountStateDiff::new(target, BalanceDiff::Add(0), post_data);
 
             let chained_call = ChainedCall {
-                program_account_id: callee.into(),
+                program_account_id: callee,
                 instruction_data: callee_instruction,
                 pre_state_ids: vec![account_id],
                 pda_seeds: vec![],
@@ -87,10 +78,8 @@ fn main() {
                 }));
             };
             let delta_bytes = match incremental_call {
-                // Decodes the same `instruction_data` `Execute` received (see `Instruction`'s
-                // doc) to decide whether to assert `DeferReads` — lets a test drive both the
-                // conservative default (a read-only touch forcing `Bound`) and the opted-in
-                // relaxation from the same guest.
+                // Decodes the same `instruction_data` `Execute` received to decide whether to
+                // assert `DeferReads`.
                 IncrementalCall::Probe(probe_instruction_data) => {
                     let defer_reads = borsh::from_slice::<Instruction>(&probe_instruction_data)
                         .is_ok_and(|(_, _, _, defer_reads)| defer_reads);
