@@ -14,6 +14,10 @@ use crate::{
     apply::{Tip, apply_block},
 };
 
+/// How many adopted blocks that did not apply are held for a later hole to
+/// fill. Past this the furthest from the head is dropped.
+const MAX_PARKED_BLOCKS: usize = 256;
+
 /// An inscription of ours the channel has not reported on yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct OwnPublish {
@@ -27,6 +31,8 @@ struct OwnPublish {
 pub struct FollowOutcome {
     /// One per adopted block, in order.
     pub adopted: Vec<AcceptOutcome>,
+    /// Blocks parked by an earlier update that this one let through, in order.
+    pub drained: Vec<Block>,
     /// One per finalized block, in order.
     pub finalized: Vec<AcceptOutcome>,
     /// Whether the update's channel tip was believed and became the new pin.
@@ -58,6 +64,9 @@ pub struct ChainState {
     /// Our own inscriptions the channel has not reported on yet, keyed by the
     /// block each carried.
     own_publishes: HashMap<HashType, OwnPublish>,
+    /// Adopted blocks the head could not apply yet, waiting for the block in
+    /// front of them.
+    parked: Vec<Block>,
 }
 
 impl ChainState {
@@ -79,6 +88,7 @@ impl ChainState {
             final_stall: None,
             channel_cursor: None,
             own_publishes: HashMap::new(),
+            parked: Vec::new(),
         }
     }
 
@@ -279,10 +289,67 @@ impl ChainState {
             self.head_blocks.truncate(idx);
             self.rederive_head();
         }
-        adopted
+        for block in orphaned {
+            self.parked
+                .retain(|held| !(held.header.hash == block.header.hash));
+        }
+        let outcomes: Vec<AcceptOutcome> = adopted
             .iter()
             .map(|block| self.apply_adopted(block))
-            .collect()
+            .collect();
+        for (block, outcome) in adopted.iter().zip(&outcomes) {
+            if matches!(outcome, AcceptOutcome::Parked(_)) {
+                self.park(block);
+            }
+        }
+        outcomes
+    }
+
+    /// Holds an adopted block the head could not apply, for a later update to
+    /// fill the hole in front of it.
+    fn park(&mut self, block: &Block) {
+        if self
+            .parked
+            .iter()
+            .any(|held| held.header.hash == block.header.hash)
+        {
+            return;
+        }
+        self.parked.push(block.to_owned());
+        if self.parked.len() > MAX_PARKED_BLOCKS {
+            let furthest = self
+                .parked
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, held)| held.header.block_id)
+                .map(|(idx, _)| idx);
+            if let Some(idx) = furthest {
+                self.parked.remove(idx);
+            }
+        }
+    }
+
+    /// Applies every parked block the head has since caught up to, in chain
+    /// order, and drops the ones the final tier settled.
+    fn drain_parked(&mut self) -> Vec<Block> {
+        if let Some(final_tip) = &self.final_tip {
+            let settled = final_tip.block_id;
+            self.parked.retain(|held| held.header.block_id > settled);
+        }
+        let mut drained = Vec::new();
+        while let Some(idx) = self.head_tip().and_then(|tip| {
+            self.parked.iter().position(|held| {
+                held.header.block_id == tip.block_id.saturating_add(1)
+                    && held.header.prev_block_hash == tip.hash
+            })
+        }) {
+            let block = self.parked.remove(idx);
+            if !matches!(self.apply_adopted(&block), AcceptOutcome::Applied) {
+                break;
+            }
+            drained.push(block);
+        }
+        drained
     }
 
     /// A finalized block replayed off the channel at startup. The channel
@@ -327,6 +394,7 @@ impl ChainState {
             .iter()
             .map(|(block, l1_slot)| self.apply_finalized(block, *l1_slot))
             .collect();
+        let drained = self.drain_parked();
 
         let cursor_moved = self.cursor_may_move_to(channel_tip);
         if cursor_moved {
@@ -334,6 +402,7 @@ impl ChainState {
         }
         FollowOutcome {
             adopted: adopted_outcomes,
+            drained,
             finalized: finalized_outcomes,
             cursor_moved,
         }
@@ -824,6 +893,49 @@ mod tests {
 
         assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied]));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn a_parked_block_the_channel_drops_is_not_kept() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_channel_update(&[], std::slice::from_ref(&block3));
+
+        // The channel orphans the block we parked, then fills the hole.
+        let outcome = chain.apply_follow(&[block3], &[block2], &[], msg(2));
+        assert!(
+            outcome.drained.is_empty(),
+            "an orphaned block must not come back off the parked set"
+        );
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+    }
+
+    #[test]
+    fn a_parked_block_below_the_final_tier_is_dropped() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let competitor = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_channel_update(&[], &[competitor]);
+
+        // Finality settles 2 and 3, so the parked competitor at 3 is dead.
+        let outcome = chain.apply_follow(
+            &[],
+            &[],
+            &[(block2, slot(10)), (block3.clone(), slot(20))],
+            msg(3),
+        );
+        assert!(outcome.drained.is_empty());
+        assert_eq!(
+            chain.final_tip().expect("final tip").hash,
+            block3.header.hash
+        );
         assert_head_matches_replay(&chain);
     }
 

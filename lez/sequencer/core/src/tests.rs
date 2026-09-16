@@ -3734,6 +3734,65 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
     assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
 
+/// A block held back by a hole in front of it is applied and stored as soon as
+/// the missing block arrives, rather than waiting for finality.
+#[tokio::test]
+async fn parked_blocks_apply_and_persist_once_the_hole_is_filled() {
+    let config = setup_sequencer_config();
+    let (sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
+    let block2 = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
+    let block4 = common::test_utils::produce_dummy_block(4, Some(block3.header.hash), vec![]);
+
+    // 3 and 4 land while 2 is still missing.
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::from([4_u8; 32])),
+            adopted: vec![block3.clone(), block4.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(sequencer.chain_height().await, 1, "the head waits for 2");
+    assert!(sequencer.store.block_at_id(3).await.unwrap().is_none());
+
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::from([5_u8; 32])),
+            adopted: vec![block2.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain_height().await,
+        4,
+        "the parked run caught up"
+    );
+    for block in [&block2, &block3, &block4] {
+        assert_eq!(
+            sequencer
+                .store
+                .block_at_id(block.header.block_id)
+                .await
+                .unwrap()
+                .expect("every applied block is stored")
+                .header
+                .hash,
+            block.header.hash,
+        );
+    }
+}
+
 /// A peer inscribing a second block at a height the head already passed must
 /// not drag the head back to it: the block parks and the head keeps producing.
 #[tokio::test]

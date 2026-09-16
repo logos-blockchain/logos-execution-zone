@@ -51,7 +51,7 @@ use crate::{
     gossip::{
         AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
     },
-    logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
+    logging::{log_drained, log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
 
@@ -2009,6 +2009,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // The whole delta in one call. Outcomes align with the blocks passed in.
         let FollowOutcome {
             adopted: outcomes,
+            drained,
             finalized: finalized_outcomes,
             cursor_moved: _,
         } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
@@ -2031,6 +2032,10 @@ async fn apply_follow_update<S: StorageActorTrait>(
             .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
             .map(|(block, _)| block)
             .collect();
+        // Parked by an earlier update and applied now, so the store gets them
+        // with the head they are part of.
+        to_persist.extend(&drained);
+        log_drained(&drained);
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
         // one never became irreversible, so marking blocks finalized through it
