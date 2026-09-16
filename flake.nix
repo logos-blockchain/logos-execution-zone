@@ -158,6 +158,7 @@
               done
 
               # No cryptex: clear the nix SDK vars and retry the old lookup.
+              echo "xcrun: no $tool under /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin" >&2
               unset DEVELOPER_DIR SDKROOT
               export xcrun_nocache=1
             fi
