@@ -117,17 +117,10 @@
 
             sdk=
             tool=
-            find=
             args=()
             while [ $# -gt 0 ]; do
               case "$1" in
-                # A bare --sdk would make `shift 2` spin; let xcrun reject it.
-                --sdk)
-                  [ $# -ge 2 ] || exec /usr/bin/xcrun "''${orig[@]}"
-                  sdk=$2
-                  shift 2
-                  ;;
-                --find|-f) find=1; shift ;;
+                --sdk) sdk=$2; shift 2 ;;
                 metal|metallib)
                   if [ -z "$tool" ]; then tool=$1; else args+=("$1"); fi
                   shift
@@ -140,25 +133,17 @@
             if [ -n "$tool" ]; then
               for cand in /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin/"$tool"; do
                 [ -x "$cand" ] || continue
-                # --find asks for the path; returning xcrun's would defeat this.
-                if [ -n "$find" ]; then
-                  echo "$cand"
-                  exit 0
-                fi
                 if [ "$tool" = metal ] && [ -n "$sdk" ]; then
-                  # DEVELOPER_DIR is still set here, so this resolves nix's SDK.
-                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null) || sysroot=
-                  if [ -z "$sysroot" ]; then
-                    echo "xcrun: cannot resolve SDK '$sdk'" >&2
-                    exit 1
+                  # Still under DEVELOPER_DIR, so nix's SDK; may fail, hence optional.
+                  sysroot=$(/usr/bin/xcrun --sdk "$sdk" --show-sdk-path 2>/dev/null || true)
+                  if [ -n "$sysroot" ]; then
+                    exec "$cand" -isysroot "$sysroot" "''${args[@]}"
                   fi
-                  exec "$cand" -isysroot "$sysroot" "''${args[@]}"
                 fi
                 exec "$cand" "''${args[@]}"
               done
 
               # No cryptex: clear the nix SDK vars and retry the old lookup.
-              echo "xcrun: no $tool under /var/run/com.apple.security.cryptexd/mnt/*/Metal.xctoolchain/usr/bin" >&2
               unset DEVELOPER_DIR SDKROOT
               export xcrun_nocache=1
             fi
