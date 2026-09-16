@@ -13670,6 +13670,7 @@ dependencies = [
  "program_loader_core",
  "programs",
  "rand 0.8.6",
+ "referral_core",
  "rpassword",
  "sequencer_service_rpc",
  "serde",

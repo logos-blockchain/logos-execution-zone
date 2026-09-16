@@ -15,17 +15,19 @@ use lee_core::BlockId;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    storage::persistent::PersistentStorage,
+    storage::{persistent::PersistentStorage, referral::ReferralStore},
 };
 
 pub mod key_chain;
 mod persistent;
+pub mod referral;
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Storage {
     key_chain: UserKeyChain,
     labels: BTreeMap<Label, AccountIdWithPrivacy>,
     last_synced_block: BlockId,
+    referral: ReferralStore,
 }
 
 impl Storage {
@@ -42,6 +44,7 @@ impl Storage {
                 key_chain: UserKeyChain::new_with_accounts(public_tree, private_tree),
                 labels: BTreeMap::new(),
                 last_synced_block: 0,
+                referral: ReferralStore::default(),
             },
             mnemonic,
         ))
@@ -95,8 +98,18 @@ impl Storage {
         self.key_chain = UserKeyChain::new_with_accounts(public_tree, private_tree);
         self.labels = BTreeMap::new();
         self.last_synced_block = 0;
+        self.referral = ReferralStore::default();
 
         Ok(())
+    }
+
+    #[must_use]
+    pub const fn referral(&self) -> &ReferralStore {
+        &self.referral
+    }
+
+    pub const fn referral_mut(&mut self) -> &mut ReferralStore {
+        &mut self.referral
     }
 
     #[must_use]
@@ -159,6 +172,7 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = self;
         let key_chain_data = key_chain.to_persistent();
 
@@ -166,6 +180,7 @@ impl Storage {
             key_chain: key_chain_data,
             last_synced_block: *last_synced_block,
             labels: labels.clone(),
+            referral: referral.clone(),
         }
     }
 
@@ -174,106 +189,15 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = persistent;
 
         Ok(Self {
             key_chain: UserKeyChain::from_persistent(key_chain)?,
             last_synced_block,
             labels,
+            referral,
         })
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn save_load_roundtrip() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-
-        let (account_id, _) = storage
-            .key_chain_mut()
-            .generate_new_public_transaction_private_key(None);
-
-        let label = Label::new("test_label");
-        storage
-            .add_label(label, AccountIdWithPrivacy::Public(account_id))
-            .unwrap();
-
-        let _ = storage
-            .key_chain_mut()
-            .generate_new_privacy_preserving_transaction_key_chain(None);
-
-        let private_key = lee::PrivateKey::new_os_random();
-        storage
-            .key_chain_mut()
-            .add_imported_public_account(private_key);
-
-        let key_chain = key_protocol::key_management::KeyChain::new_os_random();
-        let account = lee::Account::default();
-        storage
-            .key_chain_mut()
-            .add_imported_private_account(key_chain, None, 0, account);
-
-        storage.set_last_synced_block(42);
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let storage_path = temp_dir.path().join("storage.json");
-
-        storage.save_to_path(&storage_path).unwrap();
-        let loaded_store = Storage::from_path(&storage_path).unwrap();
-
-        assert_eq!(loaded_store, storage);
-    }
-
-    #[test]
-    fn resolve_label_works() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-
-        let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
-
-        storage.add_label(label.clone(), account_id).unwrap();
-        assert_eq!(storage.resolve_label(&label), Some(account_id));
-    }
-
-    #[test]
-    fn resolve_label_returns_none_for_unknown_label() {
-        let (storage, _) = Storage::new("test_pass").unwrap();
-
-        let label = Label::new("test_label");
-        assert_eq!(storage.resolve_label(&label), None);
-    }
-
-    #[test]
-    fn labels_for_account_works() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-
-        let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
-
-        storage.add_label(label.clone(), account_id).unwrap();
-        let another_label = Label::new("another_label");
-        storage
-            .add_label(another_label.clone(), account_id)
-            .unwrap();
-        assert_eq!(
-            storage.labels_for_account(account_id).collect::<Vec<_>>(),
-            vec![&another_label, &label]
-        );
-    }
-
-    #[test]
-    fn check_label_availability_works() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-
-        let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
-
-        assert!(storage.check_label_availability(&label).is_ok());
-        storage.add_label(label.clone(), account_id).unwrap();
-        assert!(storage.check_label_availability(&label).is_err());
-    }
-}
