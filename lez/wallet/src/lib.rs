@@ -31,7 +31,7 @@ use lee_core::{
     program::{AccountInput, InstructionData},
 };
 use log::warn;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
@@ -115,6 +115,21 @@ pub enum ExecutionFailureKind {
     MultiSequencerTransactionSendError,
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+}
+
+pub struct BuiltPrivateTransaction {
+    pub transaction: PrivacyPreservingTransaction,
+    pub shared_secrets: Vec<SharedSecretKey>,
+    pub pinned_public_views: Vec<(ProgramShardSelector, Account)>,
+    pub pinned_private_inputs: Vec<(AccountId, Commitment)>,
+}
+
+pub struct ChainView {
+    pub height: BlockId,
+    pub included: bool,
+    pub signer_nonces: Vec<Nonce>,
+    pub views: Vec<Account>,
+    pub effect_settled: bool,
 }
 
 pub struct WalletCore {
@@ -651,6 +666,55 @@ impl WalletCore {
             .await?)
     }
 
+    pub async fn observe_transaction(
+        &self,
+        hash: HashType,
+        signers: &[AccountId],
+        views: &[ProgramShardSelector],
+        effects: &[Commitment],
+    ) -> Result<ChainView> {
+        Ok(self
+            .multi_sequencer_client
+            .metered_get(
+                async |client: &SequencerClient| -> Result<ChainView, ClientError> {
+                    let height = client.get_last_block_id().await?;
+                    if client.get_transaction(hash).await?.is_some() {
+                        return Ok(ChainView {
+                            height,
+                            included: true,
+                            signer_nonces: Vec::new(),
+                            views: Vec::new(),
+                            effect_settled: effect_settled(client, effects).await?,
+                        });
+                    }
+
+                    let signer_nonces = if signers.is_empty() {
+                        Vec::new()
+                    } else {
+                        client.get_accounts_nonces(signers.to_vec()).await?
+                    };
+
+                    let mut fetched = Vec::with_capacity(views.len());
+                    for selector in views {
+                        let mut account = client.get_account_view(*selector).await?;
+                        account.data.shards.retain(|_, shard| !shard.is_empty());
+                        fetched.push(account);
+                    }
+
+                    let included = client.get_transaction(hash).await?.is_some();
+
+                    Ok(ChainView {
+                        height,
+                        included,
+                        signer_nonces,
+                        views: fetched,
+                        effect_settled: effect_settled(client, effects).await?,
+                    })
+                },
+            )
+            .await?)
+    }
+
     /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self
@@ -811,10 +875,35 @@ impl WalletCore {
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let built = self
+            .build_privacy_preserving_tx_with_pre_check(
+                accounts,
+                instruction_data,
+                program,
+                tx_pre_check,
+            )
+            .await?;
+
+        Ok((
+            self.submit_privacy_preserving_transaction(built.transaction)
+                .await?,
+            built.shared_secrets,
+        ))
+    }
+
+    pub async fn build_privacy_preserving_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<BuiltPrivateTransaction, ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.pre_states())?;
 
+        let pinned_public_views = acc_manager.public_views();
+        let pinned_private_inputs = acc_manager.private_input_commitments();
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
@@ -864,20 +953,28 @@ impl WalletCore {
                 proof,
             );
 
-        let tx = PrivacyPreservingTransaction::new(message, witness_set);
-
         let shared_secrets: Vec<_> = private_account_keys
             .into_iter()
             .map(|keys| keys.ssk)
             .collect();
 
-        let call_res = first_success_or_error(
+        Ok(BuiltPrivateTransaction {
+            transaction: PrivacyPreservingTransaction::new(message, witness_set),
+            shared_secrets,
+            pinned_public_views,
+            pinned_private_inputs,
+        })
+    }
+
+    pub async fn submit_privacy_preserving_transaction(
+        &self,
+        tx: PrivacyPreservingTransaction,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        first_success_or_error(
             self.multi_sequencer_client
                 .metered_send_transaction(LeeTransaction::PrivacyPreserving(tx))
                 .await,
-        );
-
-        Ok((call_res?, shared_secrets))
+        )
     }
 
     pub async fn send_pub_tx(
@@ -897,7 +994,40 @@ impl WalletCore {
         program_account_id: AccountId,
         tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        // Public transaction, all accounts must be public
+        let tx = self
+            .build_public_transaction_with_pre_check(
+                accounts,
+                instruction_data,
+                program_account_id,
+                tx_pre_check,
+            )
+            .await?;
+
+        self.submit_public_transaction(tx).await
+    }
+
+    pub async fn build_public_transaction(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program_account_id: AccountId,
+    ) -> Result<lee::public_transaction::PublicTransaction, ExecutionFailureKind> {
+        self.build_public_transaction_with_pre_check(
+            accounts,
+            instruction_data,
+            program_account_id,
+            |_| Ok(()),
+        )
+        .await
+    }
+
+    pub async fn build_public_transaction_with_pre_check(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program_account_id: AccountId,
+        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<lee::public_transaction::PublicTransaction, ExecutionFailureKind> {
         if accounts.iter().any(|mention| mention.identity.is_private()) {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(
@@ -940,22 +1070,16 @@ impl WalletCore {
             .sign_message(message_hash)
             .map_err(ExecutionFailureKind::SignError)?;
 
-        let witness_set =
-            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
-
-        let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
-
-        first_success_or_error(
-            self.multi_sequencer_client
-                .metered_send_transaction(LeeTransaction::Public(tx))
-                .await,
-        )
+        Ok(lee::public_transaction::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys),
+        ))
     }
 
     /// Submits an already-built public transaction directly, for callers that need to construct
     /// their own [`FeeDeclaration`] (e.g. a facade taking a separate fee payer) instead of going
     /// through [`Self::send_pub_tx`]'s self-pay selection.
-    pub(crate) async fn submit_public_transaction(
+    pub async fn submit_public_transaction(
         &self,
         tx: lee::public_transaction::PublicTransaction,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -1166,6 +1290,17 @@ fn first_success_or_error(
         }
     }
     Err(first_error.unwrap_or(ExecutionFailureKind::MultiSequencerTransactionSendError))
+}
+
+async fn effect_settled(
+    client: &SequencerClient,
+    effects: &[Commitment],
+) -> Result<bool, ClientError> {
+    if effects.is_empty() {
+        return Ok(false);
+    }
+    let (proofs, _root) = client.get_proofs_and_root(effects.to_vec()).await?;
+    Ok(proofs.len() == effects.len() && proofs.iter().all(Option::is_some))
 }
 
 fn decrypt_note_at(

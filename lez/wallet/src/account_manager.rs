@@ -376,6 +376,33 @@ impl AccountManager {
             .collect()
     }
 
+    pub fn public_views(&self) -> Vec<(ProgramShardSelector, Account)> {
+        self.rows
+            .iter()
+            .filter_map(|row| match &self.states[row.account] {
+                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
+                    let mut view = account.account.project([row.program_account_id]);
+                    view.data.shards.retain(|_, shard| !shard.is_empty());
+                    Some((self.row_selector(row), view))
+                }
+                State::Private(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn private_input_commitments(&self) -> Vec<(AccountId, Commitment)> {
+        self.private_states()
+            .filter(|pre| pre.nsk.is_some())
+            .map(|pre| {
+                let account_id = pre.pre_state.account_id;
+                (
+                    account_id,
+                    Commitment::new(&account_id, &pre.pre_state.account),
+                )
+            })
+            .collect()
+    }
+
     pub fn public_account_nonces(&self) -> Vec<Nonce> {
         // Must match the signature order produced by sign_message(): local accounts first,
         // keycard accounts second.
