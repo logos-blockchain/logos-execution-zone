@@ -14,6 +14,13 @@ pub enum Error {
     #[error("Checkpoint (de-)serialization failed")]
     CheckpointSerializationFailed(#[from] logos_blockchain_core::codec::Error),
 
+    #[error(
+        "Stored checkpoint has channel activity but the channel does not exist on the \
+         connected chain; the channel was wiped or the node points at a different chain. \
+         Refusing to resume onto a foreign channel."
+    )]
+    CheckpointChannelMissing,
+
     #[error("Zone-sdk readiness channel closed before becoming ready")]
     ReadinessChannelClosed,
 

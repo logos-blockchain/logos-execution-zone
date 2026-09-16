@@ -93,16 +93,6 @@ async fn wait_for_block_id(
         .with_context(|| format!("Timed out waiting for block id {target}"))?
 }
 
-/// Best-effort extraction of a panic payload's message (panics carry a `String`
-/// or `&str`), for asserting a startup aborted for the *expected* reason.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-        .unwrap_or_else(|| "<non-string panic payload>".to_owned())
-}
-
 /// A `SupplyAccount` genesis action for a fresh account, returning the account
 /// id the funds land in, so tests can assert genesis state is present.
 fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
@@ -310,44 +300,27 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
         .await
         .context("Failed to setup second Bedrock")?;
 
-    // Startup aborts on the missing-channel invariant (a panic in
-    // `start_from_config`). Run it on a dedicated OS thread with its own runtime
-    // so the panic is isolated to `join()` instead of failing the test thread.
-    // The `timeout` future must be created *inside* `block_on` (it needs a running
-    // reactor), so build it in an `async` block rather than as an eager argument.
-    let home_a_path = home_a.path().to_owned();
-    let outcome = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().expect("Failed to build runtime");
-        runtime.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(90),
-                SequencerSetup::new(slow_blocks(), bedrock_addr_b)
-                    .with_genesis(genesis)
-                    .setup_at(&home_a_path),
-            )
-            .await
-        })
-    })
-    .join();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(90),
+        SequencerSetup::new(slow_blocks(), bedrock_addr_b)
+            .with_genesis(genesis)
+            .setup_at(home_a.path()),
+    )
+    .await;
 
     match outcome {
-        // Expected: `start_from_config` panicked on the missing-channel invariant.
-        // Assert the *reason*, so an unrelated panic fails the test rather than
-        // masquerading as success.
-        Err(panic) => {
-            let message = panic_message(&*panic);
+        // Assert the *reason*, so an unrelated failure doesn't pass the test.
+        Ok(Err(err)) => {
+            let message = format!("{err:#}");
             assert!(
                 message.contains("Refusing to resume onto a foreign channel"),
-                "startup panicked for an unexpected reason: {message}"
+                "startup failed for an unexpected reason: {message}"
             );
         }
-        Ok(Err(_elapsed)) => {
+        Err(_elapsed) => {
             bail!("Sequencer startup hung instead of failing against an empty channel")
         }
-        Ok(Ok(Err(err))) => {
-            bail!("Sequencer expected to panic, but it failed with error: {err:#?}")
-        }
-        Ok(Ok(Ok(_handle))) => {
+        Ok(Ok(_handle)) => {
             bail!("Sequencer startup unexpectedly succeeded against an empty channel")
         }
     }
