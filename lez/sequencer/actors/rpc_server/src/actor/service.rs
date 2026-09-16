@@ -238,7 +238,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
-            .map(ChannelId)
+            .map(|channel_id| ChannelId(*channel_id.as_ref()))
             .map_err(map_executor_error)
     }
 

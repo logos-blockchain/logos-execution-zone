@@ -18,6 +18,7 @@ use lee_core::{
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
+use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::BedrockActorTrait;
 use sequencer_core::{
     MsgId, PinBehindTip, SequencerCore, TransactionOrigin, config::SequencerConfig,
@@ -25,6 +26,7 @@ use sequencer_core::{
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
+use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -98,7 +100,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
     pub fn new(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
-        bedrock_ref: ActorRef<B>,
+        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
 
@@ -108,16 +110,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
             let (sequencer, mempool_handle) = SequencerCore::<S, B>::start_from_config(
                 config,
                 storage_ref.clone(),
-                bedrock_ref.clone(),
+                bedrock_pool_ref.clone(),
             )
             .await
             .map_err(Error::SequencerStartFailed)?;
 
-            let is_our_turn = bedrock_ref
+            let is_our_turn = bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn {
                     channel_id: sequencer.channel_id(),
                 })
-                .await?;
+                .await
+                .map_err(SendErrorExt::flatten)?;
 
             let background_task = sequencer.background_task();
 
@@ -464,7 +467,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for Execu
         GetChannelId: GetChannelId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(*self.sequencer.channel_id().as_ref())
+        Ok(self.sequencer.channel_id())
     }
 }
 

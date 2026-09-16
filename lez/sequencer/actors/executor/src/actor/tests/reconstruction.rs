@@ -24,7 +24,7 @@ use logos_blockchain_zone_sdk::ZoneBlock;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::MockBedrockActor,
-    protocol::{Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
+    protocol::{ChannelId, Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_storage_actor::{
@@ -33,7 +33,7 @@ use sequencer_storage_actor::{
 };
 use tokio::test;
 
-use super::sequencer_config;
+use super::{sequencer_config, spawn_bedrock_pool};
 use crate::ExecutorActor;
 
 /// The peer zone a delivery comes from.
@@ -242,40 +242,46 @@ fn expect_reconstructed(store: &mut MockStorageActor, block: &Block, slot: u64) 
         .returning(|_msg, _ctx| Ok(StoreUpdateOutcome::default()));
 }
 
-/// A Bedrock whose channel ends at `tip_slot` (`None`: no channel) and holds
+/// A Bedrock constructor whose channel ends at `tip_slot` (`None`: no channel) and holds
 /// `messages` as finalized history.
-fn channel_serving(tip_slot: Option<Slot>, messages: Vec<(ZoneMessage, Slot)>) -> MockBedrockActor {
-    let mut mock = MockBedrockActor::default();
-    mock.expect_handle_check_channel_exists()
-        .returning(move |_msg, _ctx| Ok(tip_slot.is_some()));
-    mock.expect_handle_get_channel_tip_slot()
-        .returning(move |_msg, _ctx| Ok(tip_slot));
-    mock.expect_handle_read_channel().returning(
-        move |ReadChannel {
-                  channel_id: _,
-                  after,
-              },
-              _ctx| {
-            let messages: Vec<_> = messages
-                .iter()
-                .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
-                .cloned()
-                .collect();
-            Ok(Box::pin(futures::stream::iter(messages)))
-        },
-    );
-    mock.expect_handle_check_is_our_turn()
-        .returning(|_msg, _ctx| Ok(true));
-    mock
+fn channel_serving(
+    tip_slot: Option<Slot>,
+    messages: Vec<(ZoneMessage, Slot)>,
+) -> impl Fn(&ChannelId) -> MockBedrockActor + Send + 'static {
+    move |_channel_id| {
+        let messages = messages.clone();
+        let mut mock = MockBedrockActor::default();
+        mock.expect_handle_check_channel_exists()
+            .returning(move |_msg, _ctx| Ok(tip_slot.is_some()));
+        mock.expect_handle_get_channel_tip_slot()
+            .returning(move |_msg, _ctx| Ok(tip_slot));
+        mock.expect_handle_read_channel().returning(
+            move |ReadChannel {
+                      channel_id: _,
+                      after,
+                  },
+                  _ctx| {
+                let messages: Vec<_> = messages
+                    .iter()
+                    .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
+                    .cloned()
+                    .collect();
+                Ok(Box::pin(futures::stream::iter(messages)))
+            },
+        );
+        mock.expect_handle_check_is_our_turn()
+            .returning(|_msg, _ctx| Ok(true));
+        mock
+    }
 }
 
-/// Starts an executor over `storage_ref` against `bedrock_ref`.
+/// Starts an executor over `storage_ref` against Bedrock actors built by `bedrock`.
 async fn start(
     storage_ref: &ActorRef<MockStorageActor>,
-    bedrock_ref: &ActorRef<MockBedrockActor>,
+    bedrock: impl Fn(&ChannelId) -> MockBedrockActor + Send + 'static,
 ) -> Result<()> {
     let (config, _home) = sequencer_config();
-    ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
+    ExecutorActor::new(config, storage_ref.clone(), spawn_bedrock_pool(bedrock))
         .await
         .map(drop)
         .map_err(anyhow::Error::new)
@@ -421,8 +427,7 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
+    start(&storage_ref, bedrock)
         .await
         .expect("an undecodable inscription must not abort startup");
     storage_ref.ask(MockCheckpoint).await?;
@@ -440,11 +445,12 @@ async fn reconstructs_missing_channel_blocks_into_the_store() -> Result<()> {
     expect_reconstructed(&mut store, &block2, 20);
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref =
-        MockBedrockActor::spawn(channel_serving(Some(Slot::from(20)), messages.clone()));
-    start(&storage_ref, &bedrock_ref)
-        .await
-        .expect("reconstruct");
+    start(
+        &storage_ref,
+        channel_serving(Some(Slot::from(20)), messages.clone()),
+    )
+    .await
+    .expect("reconstruct");
     storage_ref.ask(MockCheckpoint).await?;
 
     // Restarting on the reconstructed store applies nothing again.
@@ -459,11 +465,12 @@ async fn reconstructs_missing_channel_blocks_into_the_store() -> Result<()> {
     expect_anchor(&mut restarted_store, &block2, 20);
 
     let restarted_storage_ref = MockStorageActor::spawn(restarted_store);
-    let restarted_bedrock_ref =
-        MockBedrockActor::spawn(channel_serving(Some(Slot::from(20)), messages));
-    start(&restarted_storage_ref, &restarted_bedrock_ref)
-        .await
-        .expect("reconstruct idempotent");
+    start(
+        &restarted_storage_ref,
+        channel_serving(Some(Slot::from(20)), messages),
+    )
+    .await
+    .expect("reconstruct idempotent");
     restarted_storage_ref.ask(MockCheckpoint).await?;
     Ok(())
 }
@@ -483,9 +490,8 @@ async fn fails_when_channel_serves_a_divergent_block() {
     let bedrock = channel_serving(Some(Slot::from(100)), vec![channel_message(&tampered, 100)]);
 
     let storage_ref = MockStorageActor::spawn(store.into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "diverges from the Bedrock channel",
     );
 }
@@ -501,9 +507,9 @@ async fn fails_when_channel_is_missing() {
 
     // Anchor present, but the channel does not exist on the connected chain.
     let storage_ref = MockStorageActor::spawn(store.into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(channel_serving(None, vec![]));
+    let bedrock = channel_serving(None, vec![]);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "diverges from the Bedrock channel",
     );
 }
@@ -524,9 +530,8 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
     );
 
     let storage_ref = MockStorageActor::spawn(StoredChain::fresh().into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "does not extend local tip",
     );
 }
@@ -545,9 +550,8 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
 
     let store = StoredChain::finalized_genesis().with_head(block2);
     let storage_ref = MockStorageActor::spawn(store.into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "does not extend local tip",
     );
 }
@@ -562,9 +566,8 @@ async fn fails_when_a_channel_block_is_numbered_below_genesis() {
     let bedrock = channel_serving(Some(Slot::from(10)), vec![channel_message(&foreign, 10)]);
 
     let storage_ref = MockStorageActor::spawn(StoredChain::fresh().into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "does not extend local tip",
     );
 }
@@ -577,9 +580,8 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
     let bedrock = channel_serving(Some(Slot::from(10)), vec![channel_message(&orphan, 10)]);
 
     let storage_ref = MockStorageActor::spawn(StoredChain::fresh().into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "does not extend local tip",
     );
 }
@@ -610,8 +612,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() -> R
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
+    start(&storage_ref, bedrock)
         .await
         .expect("a duplicate height the final tier settled must not abort startup");
     storage_ref.ask(MockCheckpoint).await?;
@@ -638,8 +639,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
+    start(&storage_ref, bedrock)
         .await
         .expect("finalized history must replace a conflicting head block");
     storage_ref.ask(MockCheckpoint).await?;
@@ -693,10 +693,7 @@ async fn reconstructed_delivery_settles_its_pending_record() -> Result<()> {
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
-        .await
-        .expect("reconstruct");
+    start(&storage_ref, bedrock).await.expect("reconstruct");
     storage_ref.ask(MockCheckpoint).await?;
     Ok(())
 }
@@ -733,10 +730,7 @@ async fn a_verified_own_block_settles_its_delivery_records() -> Result<()> {
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
-        .await
-        .expect("reconstruct");
+    start(&storage_ref, bedrock).await.expect("reconstruct");
     storage_ref.ask(MockCheckpoint).await?;
     Ok(())
 }
@@ -754,9 +748,9 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
         .with_checkpoint(checkpoint_bytes());
 
     let storage_ref = MockStorageActor::spawn(store.into_mock());
-    let bedrock_ref = MockBedrockActor::spawn(channel_serving(None, vec![]));
+    let bedrock = channel_serving(None, vec![]);
     assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
+        start(&storage_ref, bedrock).await,
         "no longer exists on the connected chain",
     );
 }
@@ -810,10 +804,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
     );
 
     let storage_ref = MockStorageActor::spawn(store);
-    let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    start(&storage_ref, &bedrock_ref)
-        .await
-        .expect("reconstruct");
+    start(&storage_ref, bedrock).await.expect("reconstruct");
     storage_ref.ask(MockCheckpoint).await?;
     Ok(())
 }

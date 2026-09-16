@@ -13,7 +13,10 @@ use clap::Parser;
 use kameo::actor::{ActorRef, Spawn as _};
 use sequencer_bedrock_actor::{
     BedrockActor,
-    protocol::{ChannelId, CheckIsOurTurn, GetChannelTipMessageId, MsgId, PublishRawInscription},
+    protocol::{
+        ChannelId, CheckIsOurTurn, GetChannelTipMessageId, InitializeChannelPublisher, MsgId,
+        PublishRawInscription,
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -78,30 +81,28 @@ async fn main() -> Result<()> {
     );
 
     let channel_id = config.bedrock_config.channel_id;
-    let bedrock_config = sequencer_bedrock_actor::config::Config {
-        node_url: config.bedrock_config.node_url,
-        basic_auth: config.bedrock_config.auth.map(Into::into),
-        channel_id,
-        bedrock_signing_key,
-        funding_pk: config.bedrock_config.funding_key,
-        priority_fee_percent: config.bedrock_config.priority_fee_percent,
-        resubmit_interval: Duration::from_secs(5),
-    };
-
-    let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
-    mock_storage
-        .expect_handle_get_zone_checkpoint_bytes()
-        .returning(|_msg, _ctx| Ok(None));
-    let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
-
     let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock = BedrockActor::new(bedrock_config, mock_storage_ref, broker_ref)
-        .await
-        .context("Failed to setup Bedrock Actor")?;
+    let bedrock = BedrockActor::new(
+        config.bedrock_config.node_url,
+        config.bedrock_config.auth.map(Into::into),
+        channel_id,
+        broker_ref,
+    );
     let bedrock_ref = BedrockActor::spawn(bedrock);
+    bedrock_ref
+        .ask(InitializeChannelPublisher {
+            channel_id,
+            bedrock_signing_key,
+            funding_pk: config.bedrock_config.funding_key,
+            priority_fee_percent: config.bedrock_config.priority_fee_percent,
+            initial_checkpoint: None,
+            resubmit_interval: Duration::from_secs(5),
+        })
+        .await
+        .context("Failed to initialize Bedrock channel publisher")?;
 
     let mut landed = 0;
     while landed < count {

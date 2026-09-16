@@ -63,7 +63,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     let pub_a = Ed25519Key::from_bytes(&config::SEQUENCER_SIGNING_KEY).public_key();
     let pub_b = config::sequencer_signing_key_from_seed(1).public_key();
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // Phase 1: both keys accredited from channel creation.
     let mut want = vec![pub_a.to_bytes(), pub_b.to_bytes()];

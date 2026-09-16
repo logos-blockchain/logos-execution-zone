@@ -12,7 +12,6 @@ workspace = true
 actor = [
   "dep:system_accounts",
 
-  "dep:logos-blockchain-key-management-system-service",
   "dep:logos-blockchain-common-http-client",
   "dep:kameo_actors",
   "dep:tokio",
@@ -37,7 +36,7 @@ kameo.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
-logos-blockchain-key-management-system-service = { workspace = true, optional = true }
+logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-common-http-client = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

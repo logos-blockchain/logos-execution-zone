@@ -1,7 +1,7 @@
 //! Shared test/bench fixtures: spins up bedrock + sequencer + indexer + wallet
 //! end-to-end against docker-compose, exposes a `TestContext` callers can drive.
 
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
@@ -1083,52 +1083,40 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
         .with_context(|| "Timed out waiting for genesis")?
 }
 
-/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] outside any sequencer, resuming
-/// from no checkpoint.
-pub async fn spawn_standalone_bedrock_actor(
-    bedrock_config: sequencer_bedrock_actor::config::Config,
+/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` outside any sequencer.
+///
+/// It can't publish until it receives
+/// [`sequencer_bedrock_actor::protocol::InitializeChannelPublisher`].
+pub fn spawn_standalone_bedrock_actor(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
 ) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
-    mock_storage
-        .expect_handle_get_zone_checkpoint_bytes()
-        .returning(|_msg, _ctx| Ok(None));
-    let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
-
     let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock =
-        sequencer_bedrock_actor::BedrockActor::new(bedrock_config, mock_storage_ref, broker_ref)
-            .await
-            .context("Failed to setup Bedrock Actor")?;
+    let bedrock = sequencer_bedrock_actor::BedrockActor::new(
+        config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+        None,
+        channel_id,
+        broker_ref,
+    );
     Ok(sequencer_bedrock_actor::BedrockActor::spawn(bedrock))
 }
 
 /// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` for tests to
 /// query the channel through. It never publishes.
-pub async fn spawn_channel_observer(
+pub fn spawn_channel_observer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
 ) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
-        node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-        basic_auth: None,
-        channel_id,
-        bedrock_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
-            &config::SEQUENCER_BEDROCK_SIGNING_KEY,
-        ),
-        funding_pk: config::bedrock_funding_key(),
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        resubmit_interval: Duration::from_secs(2),
-    })
-    .await
+    spawn_standalone_bedrock_actor(bedrock_addr, channel_id)
 }
 
 async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
     log::info!("Waiting for the channel to land on Bedrock");
 
-    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id).await?;
+    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id)?;
 
     let wait = async {
         loop {

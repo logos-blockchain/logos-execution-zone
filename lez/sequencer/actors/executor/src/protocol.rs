@@ -6,12 +6,11 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
 };
+pub use sequencer_bedrock_actor::protocol::ChannelId;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
-
-pub type ChannelId = [u8; 32];
 
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;

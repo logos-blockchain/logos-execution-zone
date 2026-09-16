@@ -51,7 +51,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let stake_key_b = sequencer_stake_core::SequencerKey::new(key_b.to_bytes())
         .context("Sequencer B's Bedrock key is not a valid Ed25519 point")?;
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_key(1)?;

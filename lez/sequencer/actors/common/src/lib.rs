@@ -52,12 +52,12 @@ impl<M, E> SendErrorExt for SendError<M, E> {
         Self::Error: SendErrorMarker<Message = Self::Message>,
     {
         match self {
-            SendError::HandlerError(send_error) => send_error.into_send_error(),
-            SendError::ActorNotRunning(msg) => SendError::ActorNotRunning(msg),
-            SendError::ActorStopped => SendError::ActorStopped,
-            SendError::ActorRestarting(msg) => SendError::ActorRestarting(msg),
-            SendError::MailboxFull(msg) => SendError::MailboxFull(msg),
-            SendError::Timeout(msg) => SendError::Timeout(msg),
+            Self::HandlerError(send_error) => send_error.into_send_error(),
+            Self::ActorNotRunning(msg) => SendError::ActorNotRunning(msg),
+            Self::ActorStopped => SendError::ActorStopped,
+            Self::ActorRestarting(msg) => SendError::ActorRestarting(msg),
+            Self::MailboxFull(msg) => SendError::MailboxFull(msg),
+            Self::Timeout(msg) => SendError::Timeout(msg),
         }
     }
 }

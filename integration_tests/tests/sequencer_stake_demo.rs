@@ -146,7 +146,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
 
     let channel_id = bedrock_channel_id();
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel_id).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel_id)?;
 
     // The committee-config update is a separate tx from the block's own
     // publish, so it may land a moment later — poll a few times before failing.

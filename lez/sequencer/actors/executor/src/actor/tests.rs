@@ -7,7 +7,10 @@ use common::{
     block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
     transaction::LeeTransaction,
 };
-use kameo::{actor::Spawn as _, error::SendError};
+use kameo::{
+    actor::{ActorRef, Spawn as _},
+    error::SendError,
+};
 use lee::{
     Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
     public_transaction::{Message, WitnessSet},
@@ -20,13 +23,14 @@ use sequencer_core::{
     config::{BedrockConfig, SequencerConfig},
 };
 use sequencer_storage_actor::mock::MockStorageActor;
+use sharding_pool_actor::ShardingPoolActor;
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
 use crate::{
     ExecutorActor,
     actor::BlockedAttempts,
-    protocol::{self, TransactionOrigin},
+    protocol::{self, ChannelId, TransactionOrigin},
 };
 
 mod reconstruction;
@@ -85,7 +89,7 @@ fn test_transaction() -> LeeTransaction {
 }
 
 /// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
-fn prepare_mock_bedrock_with_empty_channel() -> MockBedrockActor {
+fn prepare_mock_bedrock_with_empty_channel(_channel_id: &ChannelId) -> MockBedrockActor {
     let mut mock_bedrock = MockBedrockActor::default();
     mock_bedrock
         .expect_handle_check_channel_exists()
@@ -231,6 +235,12 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
     mock_storage
 }
 
+fn spawn_bedrock_pool(
+    ctr: impl Fn(&ChannelId) -> MockBedrockActor + Send + 'static,
+) -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
+    ShardingPoolActor::spawn(ShardingPoolActor::new(ctr))
+}
+
 /// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.
 #[test]
 async fn a_blocked_run_restarts_whenever_the_channel_tip_changes() {
@@ -285,16 +295,18 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
         .expect_handle_get_pending_deposit_events()
         .returning(|_msg, _ctx| Ok(Vec::new()));
     let storage_ref = MockStorageActor::spawn(mock_storage);
-    let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel();
-    mock_bedrock
-        .expect_handle_get_accredited_keys()
-        .returning(|_msg, _ctx| Ok(None));
 
     let executor = ExecutorActor::spawn(
         ExecutorActor::new(
             config,
             storage_ref.clone(),
-            MockBedrockActor::spawn(mock_bedrock),
+            spawn_bedrock_pool(|channel_id| {
+                let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel(channel_id);
+                mock_bedrock
+                    .expect_handle_get_accredited_keys()
+                    .returning(|_msg, _ctx| Ok(None));
+                mock_bedrock
+            }),
         )
         .await?,
     );
@@ -328,7 +340,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         ExecutorActor::new(
             config,
             storage_ref.clone(),
-            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
         )
         .await?,
     );
@@ -403,7 +415,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
         ExecutorActor::new(
             config,
             storage_ref.clone(),
-            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
         )
         .await?,
     );
@@ -452,7 +464,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
         ExecutorActor::new(
             config,
             storage_ref.clone(),
-            MockBedrockActor::spawn(prepare_mock_bedrock_with_empty_channel()),
+            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
         )
         .await?,
     );

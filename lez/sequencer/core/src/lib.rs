@@ -52,6 +52,7 @@ use sequencer_storage_actor::{
         WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
+use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
 use tokio_retry::{Retry, strategy::FixedInterval};
 
@@ -181,7 +182,7 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     storage_ref: ActorRef<S>,
-    bedrock_ref: ActorRef<B>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
@@ -301,7 +302,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     pub async fn start_from_config(
         config: SequencerConfig,
         storage_ref: ActorRef<S>,
-        bedrock_ref: ActorRef<B>,
+        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     ) -> Result<(Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>)> {
         sequencer_core_metrics::init();
 
@@ -334,7 +335,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let channel_probe_retry_strategy =
             FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
         let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
-            bedrock_ref
+            bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::CheckChannelExists { channel_id })
                 .await
                 .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
@@ -416,7 +417,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // (e.g. from other sequencers).
         let channel_absent = Self::verify_and_reconstruct(
             channel_id,
-            &bedrock_ref,
+            &bedrock_pool_ref,
             &storage_ref,
             &chain,
             is_fresh_start,
@@ -479,7 +480,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let mut last_checkpoint = None;
             for block in &pending_blocks {
                 let outcome = match &founding_committee {
-                    Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => bedrock_ref
+                    Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => bedrock_pool_ref
                         .ask(sequencer_bedrock_actor::protocol::CreateChannel {
                             channel_id,
                             genesis: block.clone(),
@@ -490,7 +491,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         .unwrap_or_else(|err| {
                             panic!("Failed to create channel with genesis: {err:#}",)
                         }),
-                    _ => bedrock_ref
+                    _ => bedrock_pool_ref
                         .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                             channel_id,
                             block: block.clone(),
@@ -541,7 +542,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             mempool,
             mempool_handle: mempool_handle.clone(),
             sequencer_config: config,
-            bedrock_ref,
+            bedrock_pool_ref,
             watchers,
             last_committee_submission_slot: None,
             slasher,
@@ -566,7 +567,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// this sequencer is the one that must bootstrap-publish its own blocks.
     async fn verify_and_reconstruct(
         channel_id: ChannelId,
-        bedrock_ref: &ActorRef<B>,
+        bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
         storage_ref: &ActorRef<S>,
         chain: &Mutex<ChainState>,
         is_fresh_start: bool,
@@ -579,7 +580,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let after_slot = anchor_record
             .and_then(|record| record.slot.checked_sub(1))
             .map(Slot::from);
-        let channel_tip_slot = bedrock_ref
+        let channel_tip_slot = bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot { channel_id })
             .await
             .context("Failed to read channel tip slot")?;
@@ -643,7 +644,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         // Verify each message against the anchor and replay the
         // blocks (applying the ones we miss, checking the ones we hold).
-        let mut messages = bedrock_ref
+        let mut messages = bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::ReadChannel {
                 channel_id,
                 after: after_slot,
@@ -1092,7 +1093,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             checkpoint,
             released_notes,
         } = self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                 channel_id: self.channel_id,
                 block: block.clone(),
@@ -1131,7 +1132,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// committee updates. `None` if the channel is missing or unreadable.
     async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
         match self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::GetAccreditedKeys {
                 channel_id: self.channel_id,
             })
@@ -1194,7 +1195,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             return;
         };
         let tip_slot = match self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot {
                 channel_id: self.channel_id,
             })
@@ -1230,7 +1231,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         self.last_committee_submission_slot = tip_slot;
         if let Err(err) = self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::ChangeChannelConfig {
                 channel_id: self.channel_id,
                 new_keys,
@@ -2060,7 +2061,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             chain.pin_parent()?
         };
         match self
-            .bedrock_ref
+            .bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::GetChannelTipMessageId {
                 channel_id: self.channel_id,
             })

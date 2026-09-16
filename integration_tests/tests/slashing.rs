@@ -17,7 +17,9 @@ use integration_tests::{assert_same_chain, committee, get_account, init_logger, 
 use lee::AccountId;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_bedrock_actor::protocol::{CheckIsOurTurn, PublishRawInscription};
+use sequencer_bedrock_actor::protocol::{
+    CheckIsOurTurn, InitializeChannelPublisher, PublishRawInscription,
+};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
@@ -122,7 +124,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
     let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id().into());
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // An unaccredited key writes nothing that L1 accepts.
     wait_until("the offender's key to be accredited", || async {
@@ -167,17 +169,18 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         .sequencer_client_by_node_ids(channel, OFFENDER_SEED)
         .context("The follower has no sequencer client")?;
     // The offender's node never publishes, so this is the only writer with its key.
-    let offender = spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
-        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
-        basic_auth: None,
-        channel_id: channel,
-        bedrock_signing_key: offender_key.into(),
-        funding_pk: config::bedrock_funding_key(),
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        resubmit_interval: Duration::from_secs(5),
-    })
-    .await
-    .context("Failed to open a publisher for the offender")?;
+    let offender = spawn_standalone_bedrock_actor(ctx.bedrock_addr(), channel)?;
+    offender
+        .ask(InitializeChannelPublisher {
+            channel_id: channel,
+            bedrock_signing_key: offender_key.into(),
+            funding_pk: config::bedrock_funding_key(),
+            priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+            initial_checkpoint: None,
+            resubmit_interval: Duration::from_secs(5),
+        })
+        .await
+        .context("Failed to open a publisher for the offender")?;
 
     // Only admissible on the offender's turn, so keep offering.
     wait_for_slash(|| async {

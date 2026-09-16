@@ -59,31 +59,30 @@ async fn main() -> Result<()> {
         .map(|key| parse_key(key))
         .collect::<Result<Vec<_>>>()?;
 
-    let bedrock_config = sequencer_bedrock_actor::config::Config {
-        node_url: config.bedrock_config.node_url,
-        basic_auth: config.bedrock_config.auth.map(Into::into),
-        channel_id: config.bedrock_config.channel_id,
-        bedrock_signing_key,
-        funding_pk: config.bedrock_config.funding_key,
-        priority_fee_percent: config.bedrock_config.priority_fee_percent,
-        resubmit_interval: config.retry_pending_blocks_timeout,
-    };
-
-    let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
-    mock_storage
-        .expect_handle_get_zone_checkpoint_bytes()
-        .returning(|_msg, _ctx| Ok(None));
-    let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
-
     let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock =
-        sequencer_bedrock_actor::BedrockActor::new(bedrock_config, mock_storage_ref, broker_ref)
-            .await
-            .context("Failed to setup Bedrock Actor")?;
+    let bedrock = sequencer_bedrock_actor::BedrockActor::new(
+        config.bedrock_config.node_url,
+        config.bedrock_config.auth.map(Into::into),
+        config.bedrock_config.channel_id,
+        broker_ref,
+    );
     let bedrock_ref = sequencer_bedrock_actor::BedrockActor::spawn(bedrock);
+    bedrock_ref
+        .ask(
+            sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
+                channel_id: config.bedrock_config.channel_id,
+                bedrock_signing_key,
+                funding_pk: config.bedrock_config.funding_key,
+                priority_fee_percent: config.bedrock_config.priority_fee_percent,
+                initial_checkpoint: None,
+                resubmit_interval: config.retry_pending_blocks_timeout,
+            },
+        )
+        .await
+        .context("Failed to initialize Bedrock channel publisher")?;
 
     bedrock_ref
         .ask(sequencer_bedrock_actor::protocol::ChangeChannelConfig {

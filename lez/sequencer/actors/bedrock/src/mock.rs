@@ -8,18 +8,51 @@ use kameo::{
     actor::ActorRef,
     message::{Context, Message},
 };
-pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
+pub use sequencer_actors_common::mock::ReplaceReply;
+use sharding_pool_actor::ShardingKey;
 
 use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, MsgId, PublishBlock, PublishOutcome, ReadChannel, Slot,
-        ZoneMessage,
+        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelId, CheckChannelExists,
+        CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelTipMessageId,
+        GetChannelTipSlot, InitializeChannelPublisher, MsgId, PublishBlock, PublishOutcome,
+        ReadChannel, Slot, ZoneMessage,
     },
 };
+
+/// Special message to trigger mockall's checkpoint mechanism.
+///
+/// Carries `channel_id` to be routable through [`sharding_pool_actor::ShardingPoolActor`].
+pub struct Checkpoint {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for Checkpoint {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Special message to [`std::mem::replace()`] the mock serving `channel_id` with a new one,
+/// returning the old one.
+///
+/// Carries `channel_id` to be routable through [`sharding_pool_actor::ShardingPoolActor`].
+pub struct Replace {
+    pub channel_id: ChannelId,
+    pub mock: MockBedrockActor,
+}
+
+impl ShardingKey for Replace {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
 
 mockall::mock! {
     pub BedrockActor {
@@ -101,19 +134,22 @@ impl Message<Checkpoint> for MockBedrockActor {
 
     async fn handle(
         &mut self,
-        Checkpoint: Checkpoint,
+        Checkpoint { channel_id: _ }: Checkpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.checkpoint();
     }
 }
 
-impl Message<Replace<Self>> for MockBedrockActor {
+impl Message<Replace> for MockBedrockActor {
     type Reply = ReplaceReply<Self>;
 
     async fn handle(
         &mut self,
-        Replace { mock }: Replace<Self>,
+        Replace {
+            channel_id: _,
+            mock,
+        }: Replace,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);

@@ -41,6 +41,7 @@ use sequencer_storage_actor::{
         PendingDepositEventRecord,
     },
 };
+use sharding_pool_actor::ShardingPoolActor;
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
@@ -131,8 +132,9 @@ async fn start_sequencer_on(
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
     let storage_ref = StorageActor::spawn(storage);
-    let bedrock_ref = MockBedrockActor::spawn(channel.into_mock());
-    SequencerCore::start_from_config(config, storage_ref, bedrock_ref)
+    let bedrock_pool = ShardingPoolActor::new(move |_channel_id| channel.clone().into_mock());
+    let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
+    SequencerCore::start_from_config(config, storage_ref, bedrock_pool_ref)
         .await
         .expect("Failed to start the sequencer")
 }
@@ -144,8 +146,9 @@ async fn serve_channel(
     channel: CannedChannel,
 ) {
     let replaced = sequencer
-        .bedrock_ref
+        .bedrock_pool_ref
         .ask(Replace {
+            channel_id: sequencer.channel_id(),
             mock: channel.into_mock(),
         })
         .await;

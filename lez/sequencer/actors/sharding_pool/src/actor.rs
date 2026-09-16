@@ -18,6 +18,11 @@ mod tests;
 #[derive(Actor)]
 pub struct ShardingPoolActor<A: Actor, K: Send + 'static> {
     actors: HashMap<K, ActorRef<A>>,
+
+    #[expect(
+        clippy::type_complexity,
+        reason = "More readable than using a type alias"
+    )]
     ctr: Box<dyn Fn(&K) -> A::Args + Send + 'static>,
 }
 

@@ -234,7 +234,6 @@ async fn committee_is_active(
         .collect::<Result<Vec<_>, StepError>>()?;
     let channel_id = config::bedrock_channel_id();
     let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
-        .await
         .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
@@ -293,7 +292,6 @@ async fn sequencer_becomes_posting_turn(
     let expected_key: Ed25519PublicKey = Ed25519Key::from_bytes(&signing_key).public_key();
     let channel_id = config::bedrock_channel_id();
     let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
-        .await
         .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {

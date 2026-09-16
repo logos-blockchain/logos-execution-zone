@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use common::block::Block;
 use kameo::Reply;
-pub use logos_blockchain_common_http_client::BasicAuthCredentials;
-pub use logos_blockchain_core::mantle::NoteId;
+pub use logos_blockchain_core::{codec::DeserializeOp, mantle::NoteId};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 pub use logos_blockchain_zone_sdk::{
     Ed25519PublicKey, Slot, ZoneMessage,
@@ -15,7 +14,6 @@ pub use logos_blockchain_zone_sdk::{
 };
 pub use sequencer_stake_core::ChannelParams;
 use sharding_pool_actor::ShardingKey;
-pub use url::Url;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
@@ -55,6 +53,10 @@ pub struct ChannelUpdate {
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
+/// Initialize the channel publisher. This will make using messages like [`PublishBlock`] possible.
+///
+/// If no previous channel publisher exists, this will initialize it and return `true`; otherwise,
+/// it will just return `false` without reinitializing the channel publisher.
 pub struct InitializeChannelPublisher {
     pub channel_id: ChannelId,
     pub bedrock_signing_key: Ed25519Key,
