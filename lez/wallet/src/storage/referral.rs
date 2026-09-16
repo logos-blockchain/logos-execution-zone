@@ -157,3 +157,49 @@ fn random_bytes() -> [u8; 32] {
     bytes
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_use_replays_only_once_it_is_signed() {
+        let mut intent = ReferralIntent::new(AccountId::new([9; 32]));
+        assert!(intent.first_use().is_none());
+
+        intent.first_use = Some(PendingFirstUse {
+            node: NodeId::new([7; 32]),
+            referrer: Some(NodeId::new([4; 32])),
+            signature: None,
+        });
+        assert!(
+            intent.first_use().is_none(),
+            "an unsigned first use is not replayable"
+        );
+
+        intent.first_use.as_mut().unwrap().signature = Some(Signature::from_bytes(&[1; 64]));
+        let first_use = intent.first_use().expect("now replayable");
+        assert_eq!(first_use.node, NodeId::new([7; 32]));
+        assert_eq!(first_use.referrer, Some(NodeId::new([4; 32])));
+    }
+
+    #[test]
+    fn credit_reservations_are_recorded_once_and_cleared_on_settlement() {
+        let mut intent = ReferralIntent::new(AccountId::new([9; 32]));
+        let seed = random_seed();
+
+        intent.record_credit(seed);
+        intent.record_credit(seed);
+        assert_eq!(
+            intent.pending_credits.len(),
+            1,
+            "a retry is not a new credit"
+        );
+
+        let other = random_seed();
+        intent.record_credit(other);
+        assert_eq!(intent.pending_credits.len(), 2);
+
+        intent.settle_credit(seed);
+        assert_eq!(intent.pending_credits, vec![other]);
+    }
+}

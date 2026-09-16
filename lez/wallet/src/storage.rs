@@ -201,3 +201,168 @@ impl Storage {
     }
 }
 
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn save_load_roundtrip() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+
+        let (account_id, _) = storage
+            .key_chain_mut()
+            .generate_new_public_transaction_private_key(None);
+
+        let label = Label::new("test_label");
+        storage
+            .add_label(label, AccountIdWithPrivacy::Public(account_id))
+            .unwrap();
+
+        let _ = storage
+            .key_chain_mut()
+            .generate_new_privacy_preserving_transaction_key_chain(None);
+
+        let private_key = lee::PrivateKey::new_os_random();
+        storage
+            .key_chain_mut()
+            .add_imported_public_account(private_key);
+
+        let key_chain = key_protocol::key_management::KeyChain::new_os_random();
+        let account = lee::Account::default();
+        storage
+            .key_chain_mut()
+            .add_imported_private_account(key_chain, None, 0, account);
+
+        storage.set_last_synced_block(42);
+
+        let program_account = lee::AccountId::new([9; 32]);
+        let participant = lee::AccountId::new([5; 32]);
+        let reference = [7; 32];
+        let mut intent = referral::ReferralIntent::new(program_account);
+        intent.first_use = Some(referral::PendingFirstUse {
+            node: referral_core::NodeId::new([7; 32]),
+            referrer: Some(referral_core::NodeId::new([8; 32])),
+            signature: Some(referral_core::ed25519_dalek::Signature::from_bytes(
+                &[3; 64],
+            )),
+        });
+        intent.record_credit(referral::random_seed());
+        intent.invitation = Some(referral_core::Invitation::new(
+            program_account,
+            referral_core::NodeId::new([8; 32]),
+            lee_core::NullifierPublicKey([1; 32]),
+            lee_core::encryption::ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
+        ));
+        storage.referral_mut().intents.insert(participant, intent);
+        storage
+            .referral_mut()
+            .record_operation(grant_operation(reference, program_account));
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+
+        storage.save_to_path(&storage_path).unwrap();
+        let loaded_store = Storage::from_path(&storage_path).unwrap();
+
+        assert_eq!(loaded_store, storage);
+        let restored = &loaded_store.referral().intents[&participant];
+        assert_eq!(restored.pending_credits.len(), 1);
+        assert!(restored.first_use().is_some());
+        assert!(restored.invitation.is_some());
+        assert_eq!(
+            loaded_store
+                .referral()
+                .operation(reference)
+                .map(|operation| operation.status),
+            Some(referral::SubmissionStatus::Pending)
+        );
+    }
+
+    fn grant_operation(
+        reference: [u8; 32],
+        program_account: lee::AccountId,
+    ) -> referral::PendingOperation {
+        let key = lee::PrivateKey::new_os_random();
+        let message = lee::public_transaction::Message::try_new(
+            program_account,
+            vec![lee::ProgramShardSelector::balance(lee::AccountId::new(
+                [4; 32],
+            ))],
+            vec![lee_core::account::Nonce::default()],
+            referral_core::Instruction::Grant {
+                node: referral_core::NodeId::new([8; 32]),
+                amount: 5,
+            },
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&key]);
+        let transaction = common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            witness_set,
+        ));
+
+        referral::PendingOperation {
+            reference,
+            program_account,
+            operation: referral::OperationKind::Grant {
+                node: referral_core::NodeId::new([8; 32]),
+                amount: 5,
+            },
+            transaction,
+            pinned_public_views: Vec::new(),
+            pinned_private_inputs: Vec::new(),
+            destination: None,
+            status: referral::SubmissionStatus::Pending,
+        }
+    }
+
+    #[test]
+    fn resolve_label_works() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+
+        let label = Label::new("test_label");
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
+
+        storage.add_label(label.clone(), account_id).unwrap();
+        assert_eq!(storage.resolve_label(&label), Some(account_id));
+    }
+
+    #[test]
+    fn resolve_label_returns_none_for_unknown_label() {
+        let (storage, _) = Storage::new("test_pass").unwrap();
+
+        let label = Label::new("test_label");
+        assert_eq!(storage.resolve_label(&label), None);
+    }
+
+    #[test]
+    fn labels_for_account_works() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+
+        let label = Label::new("test_label");
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
+
+        storage.add_label(label.clone(), account_id).unwrap();
+        let another_label = Label::new("another_label");
+        storage
+            .add_label(another_label.clone(), account_id)
+            .unwrap();
+        assert_eq!(
+            storage.labels_for_account(account_id).collect::<Vec<_>>(),
+            vec![&another_label, &label]
+        );
+    }
+
+    #[test]
+    fn check_label_availability_works() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+
+        let label = Label::new("test_label");
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
+
+        assert!(storage.check_label_availability(&label).is_ok());
+        storage.add_label(label.clone(), account_id).unwrap();
+        assert!(storage.check_label_availability(&label).is_err());
+    }
+}
