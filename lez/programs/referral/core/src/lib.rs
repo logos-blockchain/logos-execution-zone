@@ -454,3 +454,281 @@ pub fn credit_account_id(
     AccountId::for_private_pda(&program_account, seed, npk, vpk, CREDIT_IDENTIFIER)
 }
 
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const PROGRAM: AccountId = AccountId::new([9; 32]);
+    const NODE: NodeId = NodeId::new([7; 32]);
+    const PARTICIPANT: AccountId = AccountId::new([3; 32]);
+
+    fn viewing_key(seed: u8) -> ViewingPublicKey {
+        ViewingPublicKey::from_seed(&[seed; 32], &[seed.wrapping_add(1); 32])
+    }
+
+    fn descriptor(seed: u8) -> ParticipantDescriptor {
+        ParticipantDescriptor {
+            npk: NullifierPublicKey([seed; 32]),
+            vpk: viewing_key(seed),
+            identifier: u128::from(seed),
+        }
+    }
+
+    fn registry_bytes(buckets: &[(L1Epoch, Vec<NodeId>)]) -> Vec<u8> {
+        let mut bytes = u32::try_from(buckets.len()).unwrap().to_le_bytes().to_vec();
+        for (epoch, nodes) in buckets {
+            bytes.extend_from_slice(&epoch.to_le_bytes());
+            bytes.extend_from_slice(&u32::try_from(nodes.len()).unwrap().to_le_bytes());
+            for node in nodes {
+                bytes.extend_from_slice(&node.to_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn sequential_nodes(count: usize) -> Vec<NodeId> {
+        (0..count)
+            .map(|index| {
+                let mut bytes = [0; 32];
+                bytes[..8].copy_from_slice(&u64::try_from(index).unwrap().to_le_bytes());
+                NodeId::new(bytes)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn seeds_and_account_ids_match_pinned_vectors() {
+        assert_eq!(
+            registry_seed().as_bytes(),
+            &[
+                0x5b, 0x5f, 0x5b, 0x0d, 0xc5, 0x71, 0xf5, 0xa7, 0x39, 0x9a, 0x7a, 0x17, 0xff, 0xaf,
+                0x58, 0xcb, 0xed, 0x6a, 0x0c, 0x8b, 0x46, 0x75, 0x17, 0x4f, 0x2b, 0x3d, 0x7e, 0x1a,
+                0xf9, 0xf3, 0x29, 0x44,
+            ]
+        );
+        assert_eq!(
+            ticket_seed(NODE).as_bytes(),
+            &[
+                0x1c, 0x5b, 0xe2, 0x43, 0x18, 0x80, 0x87, 0xdf, 0x32, 0xf1, 0x58, 0xd7, 0x54, 0x66,
+                0x52, 0x25, 0x04, 0x35, 0x70, 0x39, 0x2b, 0x8f, 0xfb, 0xff, 0x12, 0xb7, 0x1f, 0xb7,
+                0xe1, 0x32, 0xb0, 0x31,
+            ]
+        );
+        assert_eq!(
+            registry_account_id(PROGRAM).to_bytes(),
+            [
+                0x5b, 0x22, 0x68, 0x7a, 0x43, 0xa8, 0xef, 0x41, 0x97, 0x7f, 0x0d, 0xc8, 0xcf, 0x55,
+                0x40, 0xb9, 0x6d, 0xfa, 0xba, 0x95, 0x18, 0xb8, 0x1a, 0xcd, 0x22, 0x87, 0xf3, 0x87,
+                0x6e, 0x4d, 0x53, 0x0d,
+            ]
+        );
+        assert_eq!(
+            ticket_account_id(PROGRAM, NODE).to_bytes(),
+            [
+                0x68, 0x70, 0x83, 0x11, 0x8b, 0xfe, 0xb2, 0xb2, 0x85, 0xff, 0x11, 0xbc, 0x00, 0x76,
+                0x82, 0x5a, 0xb1, 0x15, 0x02, 0x7b, 0x12, 0x9c, 0x90, 0xfb, 0x00, 0xe0, 0x83, 0xd3,
+                0xbf, 0x97, 0x5f, 0xf2,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_authorization_message_is_the_prefixed_encoding_itself() {
+        let authorization = ParticipantAuthorizationV1::new(PROGRAM, NODE, PARTICIPANT, None);
+        let message = authorization.message();
+
+        assert_eq!(message.len(), 166);
+        assert_eq!(&message[..37], AUTHORIZATION_DOMAIN);
+        assert_eq!(&message[37..69], &DEPLOYMENT_CONTEXT);
+        assert_eq!(
+            sha256(&message),
+            [
+                0x27, 0xdb, 0xe7, 0x7b, 0xb8, 0x4d, 0xb7, 0x91, 0x8b, 0x4e, 0x5b, 0xd7, 0x2a, 0x30,
+                0x6e, 0xfe, 0xc9, 0xf0, 0x6a, 0x9c, 0xb0, 0x63, 0x86, 0x19, 0x2c, 0x92, 0x5a, 0xfc,
+                0x6a, 0xc2, 0x8d, 0x02,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_signature_over_the_bare_digest_is_rejected() {
+        let key = SigningKey::from_bytes(&[1; 32]);
+        let node = NodeId::new(key.verifying_key().to_bytes());
+        let authorization = ParticipantAuthorizationV1::new(PROGRAM, node, PARTICIPANT, None);
+
+        assert!(authorization.verify(&key.sign(&authorization.message()).to_bytes()));
+        assert!(!authorization.verify(&key.sign(&sha256(&authorization.message())).to_bytes()));
+    }
+
+    #[test]
+    fn authorization_rejects_every_tampered_field() {
+        let key = SigningKey::from_bytes(&[1; 32]);
+        let node = NodeId::new(key.verifying_key().to_bytes());
+        let parent = NodeId::new(SigningKey::from_bytes(&[2; 32]).verifying_key().to_bytes());
+        let authorization =
+            ParticipantAuthorizationV1::new(PROGRAM, node, PARTICIPANT, Some(parent));
+        let signature = key.sign(&authorization.message()).to_bytes();
+
+        assert!(authorization.verify(&signature));
+
+        let tampered = [
+            ParticipantAuthorizationV1 {
+                program_account: AccountId::new([10; 32]),
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                participant_account: AccountId::new([4; 32]),
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                referrer: None,
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                referrer: Some(node),
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                deployment_context: [0; 32],
+                ..authorization
+            },
+        ];
+        for candidate in tampered {
+            assert!(!candidate.verify(&signature));
+        }
+
+        let other = SigningKey::from_bytes(&[2; 32]);
+        assert!(!authorization.verify(&other.sign(&authorization.message()).to_bytes()));
+    }
+
+    #[test]
+    fn registry_insertion_owns_uniqueness_and_capacity() {
+        let mut registry = Registry::default();
+        assert!(registry.is_empty());
+        assert!(registry.insert_batch(10, &[NodeId::new([1; 32]), NodeId::new([2; 32])]));
+        assert!(registry.insert_batch(10, &[NodeId::new([3; 32])]));
+        assert!(registry.insert_batch(5, &[NodeId::new([4; 32])]));
+
+        assert_eq!(registry.len(), 4);
+        assert_eq!(registry.first_used(NodeId::new([1; 32])), Some(10));
+        assert_eq!(registry.first_used(NodeId::new([4; 32])), Some(5));
+        assert_eq!(registry.first_used(NodeId::new([9; 32])), None);
+
+        assert!(!registry.insert_batch(20, &[]));
+        assert!(!registry.insert_batch(20, &[NodeId::new([5; 32]), NodeId::new([5; 32])]));
+        assert!(!registry.insert_batch(20, &[NodeId::new([1; 32])]));
+        assert!(!registry.insert_batch(10, &[NodeId::new([1; 32])]));
+        assert_eq!(registry.len(), 4);
+
+        let encoded = borsh::to_vec(&registry).unwrap();
+        assert_eq!(borsh::from_slice::<Registry>(&encoded).unwrap(), registry);
+    }
+
+    #[test]
+    fn registry_insertion_stops_at_capacity() {
+        let mut registry = Registry::default();
+        assert!(registry.insert_batch(1, &sequential_nodes(MAX_OBSERVED_NODES)));
+        assert_eq!(registry.len(), MAX_OBSERVED_NODES);
+        assert!(!registry.insert_batch(2, &[NodeId::new([0xff; 32])]));
+    }
+
+    #[test]
+    fn registry_decoding_rejects_malformed_structure() {
+        let cases = [
+            registry_bytes(&[(1, vec![])]),
+            registry_bytes(&[
+                (2, vec![NodeId::new([1; 32])]),
+                (1, vec![NodeId::new([2; 32])]),
+            ]),
+            registry_bytes(&[
+                (1, vec![NodeId::new([1; 32])]),
+                (1, vec![NodeId::new([2; 32])]),
+            ]),
+            registry_bytes(&[(1, sequential_nodes(MAX_OBSERVED_NODES + 1))]),
+        ];
+        for bytes in cases {
+            assert!(borsh::from_slice::<Registry>(&bytes).is_err());
+        }
+
+        let mut trailing = registry_bytes(&[(1, vec![NodeId::new([1; 32])])]);
+        trailing.push(0);
+        assert!(borsh::from_slice::<Registry>(&trailing).is_err());
+
+        let over_capacity = u32::try_from(MAX_OBSERVED_NODES).unwrap().saturating_add(1);
+        assert!(borsh::from_slice::<Registry>(&over_capacity.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn registry_decoding_does_not_repeat_the_uniqueness_audit() {
+        let repeated = registry_bytes(&[
+            (1, vec![NodeId::new([1; 32])]),
+            (2, vec![NodeId::new([1; 32])]),
+        ]);
+        let registry: Registry = borsh::from_slice(&repeated).unwrap();
+
+        assert_eq!(registry.first_used(NodeId::new([1; 32])), Some(1));
+    }
+
+    #[test]
+    fn stored_state_rejects_empty_unknown_version_and_trailing_bytes() {
+        let state = StoredState::new(State::Credit {
+            recipient_node: NODE,
+            amount: 5,
+        });
+        let data = state.to_data();
+        assert_eq!(StoredState::decode(&data), Some(state));
+        assert_eq!(StoredState::decode(&ShardData::empty()), None);
+
+        let mut wrong_version = data.to_vec();
+        wrong_version[..2].copy_from_slice(&(STATE_VERSION + 1).to_le_bytes());
+        assert_eq!(
+            StoredState::decode(&wrong_version.try_into().unwrap()),
+            None
+        );
+
+        let mut trailing = data.to_vec();
+        trailing.push(0);
+        assert_eq!(StoredState::decode(&trailing.try_into().unwrap()), None);
+
+        let mut unknown_variant = data.to_vec();
+        unknown_variant[2] = 0xff;
+        assert_eq!(
+            StoredState::decode(&unknown_variant.try_into().unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_viewing_key_length_prefix_is_checked_before_its_body_is_read() {
+        let valid = borsh::to_vec(&descriptor(1)).unwrap();
+        assert!(borsh::from_slice::<ParticipantDescriptor>(&valid).is_ok());
+
+        let mut overlong = [0; 32].to_vec();
+        overlong.extend_from_slice(
+            &u32::try_from(ViewingPublicKey::LEN + 1)
+                .unwrap()
+                .to_le_bytes(),
+        );
+        assert!(borsh::from_slice::<ParticipantDescriptor>(&overlong).is_err());
+
+        let mut short = [0; 32].to_vec();
+        short.extend_from_slice(&3_u32.to_le_bytes());
+        short.extend_from_slice(&[0; 3]);
+        short.extend_from_slice(&0_u128.to_le_bytes());
+        assert!(borsh::from_slice::<ParticipantDescriptor>(&short).is_err());
+    }
+
+    #[test]
+    fn a_node_batch_rejects_an_oversized_length_prefix() {
+        let batch = NodeBatch::new(sequential_nodes(3)).unwrap();
+        let encoded = borsh::to_vec(&batch).unwrap();
+        assert_eq!(borsh::from_slice::<NodeBatch>(&encoded).unwrap(), batch);
+
+        assert!(NodeBatch::new(sequential_nodes(MAX_OBSERVED_NODES + 1)).is_none());
+
+        let oversized = u32::try_from(MAX_OBSERVED_NODES + 1).unwrap().to_le_bytes();
+        assert!(borsh::from_slice::<NodeBatch>(&oversized).is_err());
+    }
+}
