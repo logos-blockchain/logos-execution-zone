@@ -73,10 +73,11 @@ impl CannedChannel {
         // finalized, so the committee reads as final.
         mock.expect_handle_get_accredited_keys()
             .returning(move |_msg, _ctx| {
-                Ok(tip_slot.map(|_| AccreditedKeys {
+                Ok(tip_slot.map(|tip_slot| AccreditedKeys {
                     keys: Vec::new(),
                     config_tip: MsgId::root(),
                     tip_sequencer: 0,
+                    tip_slot,
                 }))
             });
         mock.expect_handle_change_channel_config()

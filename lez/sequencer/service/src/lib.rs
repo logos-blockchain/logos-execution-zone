@@ -473,6 +473,7 @@ fn setup_bedrock_actor(
                 keys: Vec::new(),
                 config_tip: MsgId::root(),
                 tip_sequencer: 0,
+                tip_slot: Slot::from(0),
             }))
         });
 

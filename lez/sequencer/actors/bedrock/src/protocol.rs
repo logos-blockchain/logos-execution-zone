@@ -214,6 +214,8 @@ pub struct AccreditedKeys {
     pub config_tip: MsgId,
     /// Position in `keys` of the sequencer whose turn the tip was written on.
     pub tip_sequencer: u16,
+    /// Channel frontier slot at the time the keys were read.
+    pub tip_slot: Slot,
 }
 
 impl AccreditedKeys {

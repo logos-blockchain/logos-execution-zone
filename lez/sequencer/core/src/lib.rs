@@ -406,10 +406,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .as_ref()
             .map_or_else(TaskGroup::default, |cross_zone| {
                 cross_zone_watcher::spawn_watchers(
-                    &config.bedrock_config,
+                    channel_id,
                     cross_zone,
                     config.block_create_timeout,
                     &storage_ref,
+                    &bedrock_pool_ref,
                 )
             });
         // Before producing, verify our local state still belongs to the chain
@@ -1142,6 +1143,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 keys,
                 config_tip,
                 tip_sequencer: _,
+                tip_slot: _,
             })) => Some(LiveCommittee {
                 keys: keys
                     .iter()

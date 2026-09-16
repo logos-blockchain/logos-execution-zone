@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use chain_state::zone_indexer::ZoneIndexer;
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -17,10 +16,9 @@ use futures::{Stream, StreamExt as _};
 use kameo::actor::ActorRef;
 use lee::PublicKey;
 use log::{debug, error, warn};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{
-    CommonHttpClient, Slot, ZoneMessage,
-    adapter::{Node as _, NodeHttpClient},
+use sequencer_bedrock_actor::{
+    BedrockActorTrait,
+    protocol::{AccreditedKeys, ChannelId, GetAccreditedKeys, ReadChannel, Slot, ZoneMessage},
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -30,11 +28,9 @@ use sequencer_storage_actor::{
         SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
     },
 };
+use sharding_pool_actor::ShardingPoolActor;
 
-use crate::{
-    config::{BedrockConfig, CrossZoneConfig},
-    task_group::TaskGroup,
-};
+use crate::{config::CrossZoneConfig, task_group::TaskGroup};
 
 /// The per-peer settings one watcher pass needs.
 struct PeerContext {
@@ -44,9 +40,6 @@ struct PeerContext {
     /// Below this live committee size the watcher suspends; 0 disables the
     /// floor and skips the committee read entirely.
     min_committee_size: u32,
-    /// The watcher's own handle for the committee read; the connection inside
-    /// `ZoneIndexer` is consumed by the message stream.
-    node: NodeHttpClient,
 }
 
 /// Why one pass over a peer's stream ended.
@@ -208,40 +201,33 @@ async fn clear_cross_zone_peer_floor<S: StorageActorTrait>(
 /// [`TaskGroup::shutdown`](crate::task_group::TaskGroup::shutdown) is what
 /// proves they have stopped.
 #[must_use]
-pub fn spawn_watchers<S: StorageActorTrait>(
-    bedrock_config: &BedrockConfig,
+pub fn spawn_watchers<S: StorageActorTrait, B: BedrockActorTrait>(
+    self_channel_id: ChannelId,
     cross_zone: &CrossZoneConfig,
     poll_interval: Duration,
     storage_ref: &ActorRef<S>,
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
 ) -> TaskGroup {
-    let self_zone: [u8; 32] = *bedrock_config.channel_id.as_ref();
+    let self_zone: [u8; 32] = *self_channel_id.as_ref();
     let mut tasks = Vec::new();
 
     for peer in cross_zone.peers.clone() {
-        let node = NodeHttpClient::new(
-            CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
-            bedrock_config.node_url.clone(),
-        );
         let expected_pubkeys = pinned_keys(&peer);
-        // The indexer consumes `node` for its message stream; this clone is the
-        // watcher's own handle for the committee-floor read.
-        let floor_node = node.clone();
         // Zero per peer up front, so a never-suspended peer still has a series.
         sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
             hex::encode(peer.channel_id),
             false,
         );
         tasks.push(tokio::spawn(watch_peer(
-            ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
                 expected_pubkeys,
                 min_committee_size: peer.min_committee_size,
-                node: floor_node,
             },
             poll_interval,
             storage_ref.clone(),
+            bedrock_pool_ref.clone(),
         )));
     }
 
@@ -252,13 +238,14 @@ pub fn spawn_watchers<S: StorageActorTrait>(
     clippy::infinite_loop,
     reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
-async fn watch_peer<S: StorageActorTrait>(
-    zone_indexer: ZoneIndexer<NodeHttpClient>,
+async fn watch_peer<S: StorageActorTrait, B: BedrockActorTrait>(
     peer: PeerContext,
     poll_interval: Duration,
     storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
 ) {
     let peer_zone = peer.peer_zone;
+    let peer_channel_id = ChannelId::from(peer_zone);
     log::info!(
         "Cross-zone watcher started for peer {}",
         hex::encode(peer_zone)
@@ -324,18 +311,24 @@ async fn watch_peer<S: StorageActorTrait>(
     // been suspended on the committee floor.
     let mut state = WatcherState::new(peer.min_committee_size);
     loop {
-        // Above `next_messages`, so a suspended watcher reads nothing at all,
+        // Above the channel read, so a suspended watcher reads nothing at all,
         // and below the startup loads, so suspension never masks their
         // fail-stop paths.
-        if held_below_committee_floor(&mut state.committee_floor, &peer).await {
+        if held_below_committee_floor(&mut state.committee_floor, &peer, &bedrock_pool_ref).await {
             tokio::time::sleep(poll_interval).await;
             continue;
         }
-        let stream = match zone_indexer.next_messages(cursor).await {
+        let read = bedrock_pool_ref
+            .ask(ReadChannel {
+                channel_id: peer_channel_id,
+                after: cursor,
+            })
+            .await;
+        let stream = match read {
             Ok(stream) => stream,
             Err(err) => {
                 error!(
-                    "Watcher next_messages failed for peer {}: {err}",
+                    "Watcher failed to read the channel of peer {}: {err:#}",
                     hex::encode(peer_zone)
                 );
                 tokio::time::sleep(poll_interval).await;
@@ -390,11 +383,15 @@ async fn report_pass_alerts<S: StorageActorTrait>(
 /// Folds one committee read into the floor latch and reports the outcome:
 /// gauge and log on the suspend and resume edges, the suspend line again on
 /// the [`alerts_at`] cadence. True while the pass must be skipped.
-async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &PeerContext) -> bool {
+async fn held_below_committee_floor<B: BedrockActorTrait>(
+    floor: &mut CommitteeFloorState,
+    peer: &PeerContext,
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+) -> bool {
     if !floor.enforced() {
         return false;
     }
-    let read = peer_committee(&peer.node, peer.peer_zone).await;
+    let read = peer_committee(bedrock_pool_ref, peer.peer_zone).await;
     match floor.after_read(read) {
         FloorVerdict::Suspended { passes, last_read } => {
             sequencer_core_metrics::record_cross_zone_peer_committee_suspended(
@@ -431,12 +428,17 @@ async fn held_below_committee_floor(floor: &mut CommitteeFloorState, peer: &Peer
 /// failure or an absent channel, both unknown rather than zero. The indexer's
 /// verifier holds the twin of this helper; the policy folding it is
 /// [`CommitteeFloorState`].
-async fn peer_committee(node: &NodeHttpClient, peer_zone: [u8; 32]) -> Option<(usize, u64)> {
-    let state = node
-        .channel_state(ChannelId::from(peer_zone))
+async fn peer_committee<B: BedrockActorTrait>(
+    bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+    peer_zone: [u8; 32],
+) -> Option<(usize, u64)> {
+    let AccreditedKeys { keys, tip_slot, .. } = bedrock_pool_ref
+        .ask(GetAccreditedKeys {
+            channel_id: ChannelId::from(peer_zone),
+        })
         .await
         .ok()??;
-    Some((state.accredited_keys.len(), state.tip_slot.into_inner()))
+    Some((keys.len(), tip_slot.into_inner()))
 }
 
 /// The committee behind a floor verdict, for the suspension report.
@@ -753,6 +755,7 @@ mod tests {
     use kameo::actor::Spawn as _;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
+    use sequencer_bedrock_actor::{error::Error as BedrockError, mock::MockBedrockActor};
     use sequencer_storage_actor::{
         StorageActor,
         mock::MockStorageActor,
@@ -771,11 +774,21 @@ mod tests {
             self_zone: SELF_ZONE,
             expected_pubkeys: Vec::new(),
             min_committee_size: 0,
-            node: NodeHttpClient::new(
-                CommonHttpClient::new(None),
-                "http://127.0.0.1:0".parse().expect("valid url"),
-            ),
         }
+    }
+
+    /// A Bedrock pool whose every committee read fails.
+    fn unreachable_bedrock_pool() -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
+        ShardingPoolActor::spawn(ShardingPoolActor::new(|_channel_id| {
+            let mut mock = MockBedrockActor::default();
+            mock.expect_handle_get_accredited_keys()
+                .returning(|_msg, _ctx| {
+                    Err(BedrockError::NodeRequestFailed(anyhow::anyhow!(
+                        "node unreachable"
+                    )))
+                });
+            mock
+        }))
     }
 
     /// The gate itself, on the two paths the latch tests cannot see: a
@@ -783,10 +796,11 @@ mod tests {
     /// is unreachable fails closed before the first read.
     #[tokio::test]
     async fn the_floor_gate_fails_closed_on_an_unreachable_node() {
+        let bedrock_pool_ref = unreachable_bedrock_pool();
         let peer = peer_context();
         let mut floorless = CommitteeFloorState::new(0);
         assert!(
-            !held_below_committee_floor(&mut floorless, &peer).await,
+            !held_below_committee_floor(&mut floorless, &peer, &bedrock_pool_ref).await,
             "no floor, no gate, no read"
         );
 
@@ -796,7 +810,7 @@ mod tests {
         };
         let mut floor = CommitteeFloorState::new(floored.min_committee_size);
         assert!(
-            held_below_committee_floor(&mut floor, &floored).await,
+            held_below_committee_floor(&mut floor, &floored, &bedrock_pool_ref).await,
             "an unreadable committee before the first read suspends"
         );
     }

@@ -278,6 +278,7 @@ impl Message<GetAccreditedKeys> for BedrockActor {
                 keys: state.accredited_keys.to_vec(),
                 config_tip: state.config_tip_hash,
                 tip_sequencer: state.tip_sequencer,
+                tip_slot: state.tip_slot,
             }))
     }
 }
