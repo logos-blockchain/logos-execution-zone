@@ -4798,6 +4798,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bip39",
  "borsh",
  "bridge_core",
  "bridge_lock_core",
@@ -4825,8 +4826,10 @@ dependencies = [
  "ping_core",
  "program_loader_core",
  "programs",
+ "referral_core",
  "sequencer_core",
  "sequencer_service",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "serde_json",

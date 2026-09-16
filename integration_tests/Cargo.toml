@@ -29,17 +29,19 @@ token_core.workspace = true
 wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 indexer_service.workspace = true
-sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_service_rpc = { workspace = true, features = ["client", "server"] }
+sequencer_service_protocol.workspace = true
 sequencer_service.workspace = true
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
+referral_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
 test_methods.workspace = true
-jsonrpsee = { workspace = true, features = ["jsonrpsee-types"] }
+jsonrpsee = { workspace = true, features = ["jsonrpsee-types", "server"] }
 testnet_initial_state.workspace = true
 program_loader_core.workspace = true
 
@@ -53,6 +55,7 @@ testing-framework-core.workspace = true
 # External dependencies.
 anyhow.workspace = true
 async-trait.workspace = true
+bip39.workspace = true
 bytesize.workspace = true
 cucumber = { features = [
   "macros",
