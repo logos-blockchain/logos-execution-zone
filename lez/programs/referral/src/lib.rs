@@ -345,3 +345,5 @@ fn decode_state(account: &AccountInput, program: AccountId) -> State {
 fn write_state(account: AccountInput, state: State) -> ShardStateDiff {
     ShardStateDiff::new(account, StoredState::new(state).to_data())
 }
+
+mod tests;

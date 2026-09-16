@@ -10,3 +10,6 @@ workspace = true
 [dependencies]
 lee_core.workspace = true
 referral_core.workspace = true
+
+[dev-dependencies]
+lee_core = { workspace = true, features = ["host"] }
