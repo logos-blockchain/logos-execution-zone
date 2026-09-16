@@ -2104,12 +2104,13 @@ async fn apply_follow_update<S: StorageActorTrait>(
         let none_back_on_channel = orphans_above_head
             .iter()
             .all(|block| !adopted.iter().any(|a| a.header.hash == block.header.hash));
-        // An adoption that parked sits above the head without being orphaned.
-        let all_adopted_applied = outcomes.iter().all(|outcome| {
+        // Only a parked adoption above the head still claims a height we would
+        // free; one below it is a duplicate the channel already carries.
+        let all_adopted_applied = adopted.iter().zip(&outcomes).all(|(block, outcome)| {
             matches!(
                 outcome,
                 AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
-            )
+            ) || head_height.is_some_and(|id| block.header.block_id <= id)
         });
         let lower_published_high_water =
             (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)

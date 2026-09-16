@@ -3734,6 +3734,233 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
     assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
 
+/// A peer inscribing a second block at a height the head already passed must
+/// not drag the head back to it: the block parks and the head keeps producing.
+#[tokio::test]
+async fn a_duplicate_height_on_the_channel_does_not_rewind_the_head() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
+    for _ in 0..3 {
+        sequencer.run_production_turn().await.unwrap();
+    }
+    let block2 = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    let tip = sequencer.store.block_at_id(4).await.unwrap().unwrap();
+    let mark = sequencer.store.published_high_water().await.unwrap();
+    assert_eq!(mark, Some(4));
+
+    // A peer's second block 2, valid on genesis, lands with nothing orphaned.
+    let duplicate = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    assert_ne!(duplicate.header.hash, block2.header.hash);
+    let channel_tip = MsgId::from([7_u8; 32]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(channel_tip),
+            adopted: vec![duplicate.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let head_tip = sequencer
+        .chain()
+        .lock()
+        .await
+        .head_tip()
+        .expect("head tip set");
+    assert_eq!(head_tip.hash, tip.header.hash, "the head keeps its own tip");
+    assert_eq!(
+        sequencer
+            .store
+            .block_at_id(2)
+            .await
+            .unwrap()
+            .unwrap()
+            .header
+            .hash,
+        block2.header.hash,
+        "the duplicate must not overwrite the block the head holds"
+    );
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "a parked block requeues nothing"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        mark,
+        "no height was freed, so the mark holds"
+    );
+    assert_eq!(
+        sequencer.chain().lock().await.channel_cursor(),
+        Some(channel_tip),
+        "the pin still follows the channel past the duplicate"
+    );
+
+    // The head still takes the next real block.
+    let next = common::test_utils::produce_dummy_block(5, Some(tip.header.hash), vec![]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::from([8_u8; 32])),
+            adopted: vec![next.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+    assert_eq!(
+        sequencer
+            .chain()
+            .lock()
+            .await
+            .head_tip()
+            .expect("head tip set")
+            .hash,
+        next.header.hash
+    );
+}
+
+/// A node writing on a head of its own keeps going, so its whole branch parks
+/// here rather than the first block of it.
+#[tokio::test]
+async fn a_whole_duplicate_branch_parks() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
+    for _ in 0..3 {
+        sequencer.run_production_turn().await.unwrap();
+    }
+    let tip = sequencer.store.block_at_id(4).await.unwrap().unwrap();
+
+    // A second 2 and the 3 chained on it, both from a node that rewound. They
+    // chain on the channel after the blocks they duplicate, which stay on it.
+    let duplicate = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let successor = common::test_utils::produce_dummy_block(3, Some(duplicate.header.hash), vec![]);
+    let channel_tip = MsgId::from([7_u8; 32]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(channel_tip),
+            adopted: vec![duplicate, successor],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let chain = sequencer.chain();
+    let chain = chain.lock().await;
+    assert_eq!(
+        chain.head_tip().expect("head tip set").hash,
+        tip.header.hash,
+        "the head keeps its own tip"
+    );
+    assert_eq!(
+        chain.channel_cursor(),
+        Some(channel_tip),
+        "the pin follows the channel past the parked branch"
+    );
+}
+
+/// The channel picking a peer's block over ours is a reported orphan, so the
+/// head still rebases onto the winner.
+#[tokio::test]
+async fn a_lost_race_still_rebases_the_head() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    let ours = sequencer.store.block_at_id(2).await.unwrap().unwrap();
+    assert!(
+        sequencer.chain().lock().await.pin_is_ours(),
+        "the pin names our unreported inscription"
+    );
+
+    // The channel took a peer's block 2 instead; the sdk sheds ours as orphaned.
+    let peer = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let channel_tip = MsgId::from([7_u8; 32]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(channel_tip),
+            orphaned: vec![ours],
+            adopted: vec![peer.clone()],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    let chain = sequencer.chain();
+    let chain = chain.lock().await;
+    assert_eq!(
+        chain.head_tip().expect("head tip set").hash,
+        peer.header.hash,
+        "the peer's block is the head"
+    );
+    assert!(
+        !chain.pin_is_ours(),
+        "our shed inscription is no longer the pin"
+    );
+    assert_eq!(chain.channel_cursor(), Some(channel_tip));
+}
+
+/// The mark frees heights an orphan left above the head; a duplicate parked
+/// below the head claims none of them and must not hold it up.
+#[tokio::test]
+async fn a_parked_duplicate_does_not_hold_the_published_mark() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
+
+    let genesis = sequencer.store.block_at_id(1).await.unwrap().unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(3)
+    );
+
+    // One update drops our block 3 for good and carries a second block 2.
+    let ours = sequencer.store.block_at_id(3).await.unwrap().unwrap();
+    let duplicate = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    apply_follow_update(
+        sequencer.block_store().storage_ref(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            checkpoint: checkpoint_at(MsgId::from([7_u8; 32])),
+            orphaned: vec![ours],
+            adopted: vec![duplicate],
+            ..empty_follow_update()
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain_height().await,
+        2,
+        "the orphan rewound the head to 2"
+    );
+    assert_eq!(
+        sequencer.store.published_high_water().await.unwrap(),
+        Some(2),
+        "height 3 is writable again"
+    );
+    assert!(
+        sequencer.rewound_below_published().await.is_none(),
+        "the next turn must still be allowed to run"
+    );
+}
+
 #[tokio::test]
 async fn record_produced_block_skips_persistence_on_lost_race() {
     let config = setup_sequencer_config();

@@ -39,7 +39,8 @@ pub struct FollowOutcome {
 /// `head_state` is given by `final_state` replayed through `head_blocks`.
 ///
 /// Only the final tier stalls: an invalid `adopted` block just freezes the
-/// head tip and self-heals via reorg or finalization.
+/// head tip and self-heals via a reported orphan, a valid successor, or
+/// finalization.
 pub struct ChainState {
     final_state: Arc<V03State>,
     final_tip: Option<Tip>,
@@ -198,9 +199,9 @@ impl ChainState {
 
     /// Applies an adopted head block.
     ///
-    /// The adopted stream is authoritative: a competitor at a height
-    /// the head already holds reorgs the head back to that height with
-    /// no orphan event required.
+    /// Only an extension of the head applies. A block at a height the head
+    /// already holds parks: the channel is append-only, so the head only
+    /// shortens through a reported orphan.
     ///
     /// On failure the head stays unchanged and no stall is recorded.
     pub fn apply_adopted(&mut self, block: &Block) -> AcceptOutcome {
@@ -224,27 +225,9 @@ impl ChainState {
             return AcceptOutcome::AlreadyApplied;
         }
 
-        // A tip extension applies on the current head state, a lower-or-equal
-        // id rebuilds the state at the competitor's parent instead.
-        //
-        // If adoptions are over the current head, `reorg_at` is None.
-        let reorg_at = self
-            .head_blocks
-            .iter()
-            .position(|held| held.header.block_id >= block.header.block_id);
-        let (mut scratch, tip) = match reorg_at {
-            // continue from the tip
-            None => (Arc::clone(&self.head_state), self.head_tip()),
-            // reorg upto `idx`
-            Some(idx) => self.replay_head_prefix(idx),
-        };
-
-        match apply_block(tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
+        let mut scratch = Arc::clone(&self.head_state);
+        match apply_block(self.head_tip().as_ref(), block, Arc::make_mut(&mut scratch)) {
             Ok(()) => {
-                // now that `apply_block` succeeded, actually reorg the head
-                if let Some(idx) = reorg_at {
-                    self.head_blocks.truncate(idx);
-                }
                 self.head_state = scratch;
                 self.head_blocks.push(block.to_owned());
                 AcceptOutcome::Applied
@@ -255,10 +238,9 @@ impl ChainState {
 
     /// Applies a block we produced ourselves.
     ///
-    /// Unlike [`Self::apply_adopted`] this never reorgs: our block is not on
-    /// the channel yet, so it may only *extend* the head. A head already at
-    /// (or past) this height means a peer's block won the race on the
-    /// channel — ours is stale and the caller drops it.
+    /// Our block is not on the channel yet, so a head already at (or past)
+    /// this height means a peer's block won the race — ours is stale and the
+    /// caller drops it, without the parked outcome an adoption would get.
     pub fn apply_produced(&mut self, block: &Block, this_msg: MsgId) -> AcceptOutcome {
         if self
             .head_tip()
@@ -781,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn adopted_only_channel_update_replaces_suffix() {
+    fn adopted_only_channel_update_does_not_replace_suffix() {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -798,8 +780,7 @@ mod tests {
         let (block3, _s3) = settled(&s2, 3, block2.header.hash, vec![tx3]);
         chain.apply_adopted(&block3);
 
-        // The replacement branch arrives with no orphan events: the adopted
-        // list alone reorgs the head.
+        // A competing branch arrives with no orphan events, so it parks.
         let tx2_prime = create_transaction_native_token_transfer(from, 0, to, 20, &sign_key);
         let (block2_prime, s2_prime) = settled(&s1, 2, genesis.header.hash, vec![tx2_prime]);
         let tx3_prime = create_transaction_native_token_transfer(from, 1, to, 30, &sign_key);
@@ -810,12 +791,21 @@ mod tests {
 
         assert!(matches!(
             outcomes.as_slice(),
-            [AcceptOutcome::Applied, AcceptOutcome::Applied]
+            [
+                AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                    expected: 4,
+                    got: 2
+                }),
+                AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                    expected: 4,
+                    got: 3
+                })
+            ]
         ));
-        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
+        assert_eq!(chain.head_tip().expect("head tip").hash, block3.header.hash);
         assert_eq!(
             chain.head_state().get_account_by_id(to).balance,
-            INITIAL_TO_BALANCE + 50
+            INITIAL_TO_BALANCE + 20
         );
         assert_head_matches_replay(&chain);
     }
@@ -838,7 +828,30 @@ mod tests {
     }
 
     #[test]
-    fn adopted_competitor_reorgs_head_without_orphan_event() {
+    fn orphaning_a_duplicate_at_a_held_height_leaves_the_head() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_adopted(&block2);
+        chain.apply_adopted(&block3);
+
+        // The channel drops a second block 2 we never held: same height as ours,
+        // different hash, so it must not match the block 2 on the head.
+        let duplicate = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
+        assert_ne!(duplicate.header.hash, block2.header.hash);
+        let outcomes = chain.apply_channel_update(&[duplicate], &[]);
+
+        assert!(outcomes.is_empty());
+        let tip = chain.head_tip().expect("head tip");
+        assert_eq!(tip.block_id, 3);
+        assert_eq!(tip.hash, block3.header.hash);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn adopted_competitor_without_orphan_event_parks() {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -855,19 +868,21 @@ mod tests {
         let (block3, _s3) = settled(&s2, 3, block2.header.hash, vec![tx3]);
         chain.apply_adopted(&block3);
 
-        // A valid competitor at height 2, no orphan events: the head reorgs
-        // back onto it, dropping the old 2..=3 suffix and its transfers.
+        // A second block 2 lands after block 3 with nothing orphaned: it parks.
         let block2_prime = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block2_prime),
-            AcceptOutcome::Applied
+            AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                expected: 4,
+                got: 2
+            })
         ));
         let tip = chain.head_tip().expect("head tip");
-        assert_eq!(tip.block_id, 2);
-        assert_eq!(tip.hash, block2_prime.header.hash);
+        assert_eq!(tip.block_id, 3);
+        assert_eq!(tip.hash, block3.header.hash);
         assert_eq!(
             chain.head_state().get_account_by_id(to).balance,
-            INITIAL_TO_BALANCE
+            INITIAL_TO_BALANCE + 20
         );
         assert_head_matches_replay(&chain);
     }
@@ -887,8 +902,8 @@ mod tests {
         let peer = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_adopted(&peer);
 
-        // Our own block at that height is not on the channel, so — unlike an
-        // adopted competitor — it must not reorg the head onto itself.
+        // Our own block at that height is not on the channel, so it must not
+        // reorg the head onto itself.
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
         let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
@@ -915,27 +930,6 @@ mod tests {
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, ours.header.hash);
-        assert_head_matches_replay(&chain);
-    }
-
-    #[test]
-    fn invalid_adopted_competitor_leaves_head_intact() {
-        let mut chain = ChainState::new(claimed_initial_state());
-        let genesis = produce_dummy_block(1, None, vec![]);
-        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
-        chain.apply_adopted(&genesis);
-        chain.apply_adopted(&block2);
-        chain.apply_adopted(&block3);
-
-        // A competitor at height 2 with a bogus parent parks; the truncation
-        // is not committed, so the 2..=3 suffix survives.
-        let bad = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
-        assert!(matches!(
-            chain.apply_adopted(&bad),
-            AcceptOutcome::Parked(BlockIngestError::BrokenChainLink { .. })
-        ));
-        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
         assert_head_matches_replay(&chain);
     }
 

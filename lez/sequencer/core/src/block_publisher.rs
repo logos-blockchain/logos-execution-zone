@@ -66,7 +66,8 @@ pub struct FollowUpdate {
     /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: SequencerCheckpoint,
     /// Blocks newly on the followed L1 branch, in channel order; they extend
-    /// or replace part of the `head` tier. Non-block entries (garbage, a
+    /// the `head` tier, or replace part of it together with `orphaned`.
+    /// Non-block entries (garbage, a
     /// config op) surface only through the checkpoint's tip. No inscription
     /// ids ride along: blocks correlate by hash (a re-inscription changes the
     /// id, never the hash), and the only publishable id is the checkpoint's.
