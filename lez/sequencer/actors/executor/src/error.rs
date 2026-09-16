@@ -1,4 +1,5 @@
-use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
+use kameo::error::SendError;
+use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -15,14 +16,10 @@ pub enum Error {
     SequencerStartFailed(#[source] anyhow::Error),
 
     #[error("Storage request failed")]
-    StorageRequestFailed(
-        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
-    ),
+    StorageRequestFailed(#[source] SendError<ErasedMessage, sequencer_storage_actor::error::Error>),
 
     #[error("Bedrock request failed")]
-    BedrockRequestFailed(
-        #[source] kameo::error::SendError<ErasedMessage, sequencer_bedrock_actor::error::Error>,
-    ),
+    BedrockRequestFailed(#[source] SendError<ErasedMessage, sequencer_bedrock_actor::error::Error>),
 
     #[error("Failed to read the cross-zone dead letter")]
     CrossZoneDeadLettersUnavailable(#[source] anyhow::Error),
@@ -34,14 +31,14 @@ pub enum Error {
     IncorrectFee(#[source] anyhow::Error),
 }
 
-impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {
-    fn from(err: kameo::error::SendError<M, sequencer_storage_actor::error::Error>) -> Self {
+impl<M> From<SendError<M, sequencer_storage_actor::error::Error>> for Error {
+    fn from(err: SendError<M, sequencer_storage_actor::error::Error>) -> Self {
         Self::StorageRequestFailed(err.erase_message())
     }
 }
 
-impl<M> From<kameo::error::SendError<M, sequencer_bedrock_actor::error::Error>> for Error {
-    fn from(err: kameo::error::SendError<M, sequencer_bedrock_actor::error::Error>) -> Self {
+impl<M> From<SendError<M, sequencer_bedrock_actor::error::Error>> for Error {
+    fn from(err: SendError<M, sequencer_bedrock_actor::error::Error>) -> Self {
         Self::BedrockRequestFailed(err.erase_message())
     }
 }

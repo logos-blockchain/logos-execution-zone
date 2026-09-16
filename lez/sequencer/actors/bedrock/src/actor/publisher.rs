@@ -28,7 +28,7 @@ use logos_blockchain_zone_sdk::{
         ZoneSequencer,
     },
 };
-use sequencer_actors_common::EraseMessage as _;
+use sequencer_actors_common::SendErrorExt as _;
 use sequencer_stake_core::ChannelParams;
 
 use crate::{
