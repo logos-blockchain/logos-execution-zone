@@ -10056,6 +10056,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "referral_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "referral_core",
+]
+
+[[package]]
 name = "regex"
 version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

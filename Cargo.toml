@@ -56,6 +56,7 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/referral",
   "lez/programs/referral/core",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
@@ -126,6 +127,7 @@ wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 referral_core = { path = "lez/programs/referral/core" }
+referral_program = { path = "lez/programs/referral" }
 program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
