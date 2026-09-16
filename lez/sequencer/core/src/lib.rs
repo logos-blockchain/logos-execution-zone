@@ -5,8 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use borsh::BorshDeserialize;
+pub use chain_state::PublishVerdict;
 use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
     FollowOutcome, Tip,
@@ -51,7 +52,7 @@ use crate::{
     gossip::{
         AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
     },
-    logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
+    logging::{log_drained, log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
 
@@ -500,7 +501,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 chain
                     .lock()
                     .await
-                    .record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
+                    .record_own_inscription(outcome.checkpoint.last_msg_id, block);
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -1203,6 +1204,17 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             parent,
         ) = {
             let chain = self.chain.lock().await;
+            // The pin must chain back to our head with no block in between, or
+            // this turn would pair a stale height with the live channel tip.
+            match chain.publishing_verdict() {
+                PublishVerdict::Allowed => {}
+                PublishVerdict::HeadTrailsPin { block_id } => bail!(
+                    "Skipping turn: block {block_id} is on the channel between our head and the pin"
+                ),
+                PublishVerdict::LineageGap => bail!(
+                    "Skipping turn: the channel entries between our head and the pin are missing"
+                ),
+            }
             let tip = chain.head_tip();
             let parent = chain.pin_parent();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
@@ -1780,6 +1792,18 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         (self.next_block_height().await <= high_water).then_some(high_water)
     }
 
+    /// Why the next publish is not allowed, if the pin no longer chains back to
+    /// the head. `None` when the turn may run.
+    pub async fn publish_blocker(&self) -> Option<PublishVerdict> {
+        let verdict = self.chain.lock().await.publishing_verdict();
+        match verdict {
+            PublishVerdict::Allowed => None,
+            verdict @ (PublishVerdict::HeadTrailsPin { .. } | PublishVerdict::LineageGap) => {
+                Some(verdict)
+            }
+        }
+    }
+
     /// Our pin and the live channel tip when the tip has moved past it, meaning
     /// the next publish would be refused and the caller should skip its turn.
     pub async fn pin_behind_channel_tip(&self) -> Option<PinBehindTip> {
@@ -1974,6 +1998,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
         deposits,
         withdrawals,
         undecodable: _,
+        lineage,
+        finalized_entry,
     } = update;
 
     let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)
@@ -2001,6 +2027,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
 
         let head_before = chain.head_tip().map(|tip| tip.block_id);
         log_update(&orphaned, &adopted, &finalized, head_before);
+        chain.set_channel_lineage(lineage, finalized_entry);
 
         // A pin that stops moving while the channel keeps going is a wedge, so
         // log each move.
@@ -2009,6 +2036,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // The whole delta in one call. Outcomes align with the blocks passed in.
         let FollowOutcome {
             adopted: outcomes,
+            drained,
             finalized: finalized_outcomes,
             cursor_moved: _,
         } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
@@ -2031,6 +2059,10 @@ async fn apply_follow_update<S: StorageActorTrait>(
             .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
             .map(|(block, _)| block)
             .collect();
+        // Parked by an earlier update and applied now, so the store gets them
+        // with the head they are part of.
+        to_persist.extend(&drained);
+        log_drained(&drained);
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
         // one never became irreversible, so marking blocks finalized through it
@@ -2104,12 +2136,13 @@ async fn apply_follow_update<S: StorageActorTrait>(
         let none_back_on_channel = orphans_above_head
             .iter()
             .all(|block| !adopted.iter().any(|a| a.header.hash == block.header.hash));
-        // An adoption that parked sits above the head without being orphaned.
-        let all_adopted_applied = outcomes.iter().all(|outcome| {
+        // Only a parked adoption above the head still claims a height we would
+        // free; one below it is a duplicate the channel already carries.
+        let all_adopted_applied = adopted.iter().zip(&outcomes).all(|(block, outcome)| {
             matches!(
                 outcome,
                 AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
-            )
+            ) || head_height.is_some_and(|id| block.header.block_id <= id)
         });
         let lower_published_high_water =
             (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)

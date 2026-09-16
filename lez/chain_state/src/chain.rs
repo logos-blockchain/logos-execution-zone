@@ -12,7 +12,12 @@ use logos_blockchain_zone_sdk::Slot;
 use crate::{
     AcceptOutcome, BlockIngestError, StallReason,
     apply::{Tip, apply_block},
+    lineage::{ChannelLineage, PublishVerdict},
 };
+
+/// How many adopted blocks that did not apply are held for a later hole to
+/// fill. Past this the furthest from the head is dropped.
+const MAX_PARKED_BLOCKS: usize = 256;
 
 /// An inscription of ours the channel has not reported on yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,6 +32,8 @@ struct OwnPublish {
 pub struct FollowOutcome {
     /// One per adopted block, in order.
     pub adopted: Vec<AcceptOutcome>,
+    /// Blocks parked by an earlier update that this one let through, in order.
+    pub drained: Vec<Block>,
     /// One per finalized block, in order.
     pub finalized: Vec<AcceptOutcome>,
     /// Whether the update's channel tip was believed and became the new pin.
@@ -39,7 +46,8 @@ pub struct FollowOutcome {
 /// `head_state` is given by `final_state` replayed through `head_blocks`.
 ///
 /// Only the final tier stalls: an invalid `adopted` block just freezes the
-/// head tip and self-heals via reorg or finalization.
+/// head tip and self-heals via a reported orphan, a valid successor, or
+/// finalization.
 pub struct ChainState {
     final_state: Arc<V03State>,
     final_tip: Option<Tip>,
@@ -57,6 +65,18 @@ pub struct ChainState {
     /// Our own inscriptions the channel has not reported on yet, keyed by the
     /// block each carried.
     own_publishes: HashMap<HashType, OwnPublish>,
+
+    /// The unfinalized channel entries the last sdk snapshot reported, for
+    /// [`Self::publishing_verdict`].
+    lineage: ChannelLineage,
+
+    /// The newest entry the channel reported finalized, where the unfinalized
+    /// entries end.
+    finalized_entry: Option<MsgId>,
+
+    /// Adopted blocks the head could not apply yet, waiting for the block in
+    /// front of them.
+    parked: Vec<Block>,
 }
 
 impl ChainState {
@@ -78,6 +98,9 @@ impl ChainState {
             final_stall: None,
             channel_cursor: None,
             own_publishes: HashMap::new(),
+            lineage: ChannelLineage::default(),
+            finalized_entry: None,
+            parked: Vec::new(),
         }
     }
 
@@ -161,9 +184,21 @@ impl ChainState {
 
     /// Records an inscription of ours over a block the head already holds, and
     /// pins on it. The entry it chained on is whatever the pin was.
-    pub fn record_own_inscription(&mut self, msg: MsgId, block: HashType) {
+    pub fn record_own_inscription(&mut self, msg: MsgId, block: &Block) {
         let parent = self.channel_cursor.unwrap_or_else(MsgId::root);
-        self.own_publishes.insert(block, OwnPublish { parent, msg });
+        self.own_publishes
+            .insert(block.header.hash, OwnPublish { parent, msg });
+        self.lineage.insert(
+            msg,
+            crate::lineage::LineageEntry {
+                parent,
+                block: Some(crate::lineage::InscribedBlock {
+                    block_id: block.header.block_id,
+                    hash: block.header.hash,
+                    prev_hash: block.header.prev_block_hash,
+                }),
+            },
+        );
         self.channel_cursor = Some(msg);
     }
 
@@ -186,6 +221,73 @@ impl ChainState {
         self.final_stall.as_ref()
     }
 
+    /// Replaces the unfinalized entries with the ones this sdk snapshot reports,
+    /// and moves the finalized boundary they sit above.
+    pub fn set_channel_lineage(&mut self, lineage: ChannelLineage, finalized_entry: Option<MsgId>) {
+        self.lineage = lineage;
+        if finalized_entry.is_some() {
+            self.finalized_entry = finalized_entry;
+        }
+    }
+
+    /// Whether the next block may be published: the pin must chain back to the
+    /// entry carrying the head tip with no other block on the way, or a block
+    /// the head has yet to apply is already on the channel.
+    ///
+    /// An empty lineage reports nothing either way, as before a run's first
+    /// update or on a channel whose entries have all finalized.
+    #[must_use]
+    pub fn publishing_verdict(&self) -> PublishVerdict {
+        let (Some(pin), Some(head)) = (self.channel_cursor, self.head_tip()) else {
+            return PublishVerdict::Allowed;
+        };
+        if self.lineage.is_empty() {
+            return PublishVerdict::Allowed;
+        }
+        let target = self.lineage.entry_carrying(head.block_id, head.hash);
+        let head_finalized = self
+            .final_tip
+            .as_ref()
+            .is_some_and(|tip| tip.block_id >= head.block_id);
+
+        // Bounded by the reported entries, so a cycle in them cannot spin here.
+        let mut current = pin;
+        for _ in 0..=self.lineage.len() {
+            if Some(current) == target {
+                return PublishVerdict::Allowed;
+            }
+            let Some(entry) = self.lineage.get(&current) else {
+                // Off the end of the unfinalized entries is only safe at the
+                // finalized boundary, or with no boundary reported at all.
+                return if Some(current) == self.finalized_entry
+                    || (self.finalized_entry.is_none() && target.is_none() && head_finalized)
+                {
+                    PublishVerdict::Allowed
+                } else {
+                    PublishVerdict::LineageGap
+                };
+            };
+            // Only a block we are waiting for holds the turn: a duplicate at a
+            // height we passed, or one we already tried and could not apply, is
+            // the channel's problem and never becomes our head.
+            if let Some(block) = entry.block {
+                if block.block_id == head.block_id && block.hash == head.hash {
+                    return PublishVerdict::Allowed;
+                }
+                if block.block_id == head.block_id.saturating_add(1)
+                    && block.prev_hash == head.hash
+                    && !self.parked_rejected(block.hash)
+                {
+                    return PublishVerdict::HeadTrailsPin {
+                        block_id: block.block_id,
+                    };
+                }
+            }
+            current = entry.parent;
+        }
+        PublishVerdict::LineageGap
+    }
+
     /// Position of a head entry, matched by block hash at the same claimed
     /// height: a hash collision with a different `block_id` is malformed and
     /// must fall through to validation. Channel `MsgId`s are not part of the
@@ -198,9 +300,9 @@ impl ChainState {
 
     /// Applies an adopted head block.
     ///
-    /// The adopted stream is authoritative: a competitor at a height
-    /// the head already holds reorgs the head back to that height with
-    /// no orphan event required.
+    /// Only an extension of the head applies. A block at a height the head
+    /// already holds parks: the channel is append-only, so the head only
+    /// shortens through a reported orphan.
     ///
     /// On failure the head stays unchanged and no stall is recorded.
     pub fn apply_adopted(&mut self, block: &Block) -> AcceptOutcome {
@@ -224,27 +326,9 @@ impl ChainState {
             return AcceptOutcome::AlreadyApplied;
         }
 
-        // A tip extension applies on the current head state, a lower-or-equal
-        // id rebuilds the state at the competitor's parent instead.
-        //
-        // If adoptions are over the current head, `reorg_at` is None.
-        let reorg_at = self
-            .head_blocks
-            .iter()
-            .position(|held| held.header.block_id >= block.header.block_id);
-        let (mut scratch, tip) = match reorg_at {
-            // continue from the tip
-            None => (Arc::clone(&self.head_state), self.head_tip()),
-            // reorg upto `idx`
-            Some(idx) => self.replay_head_prefix(idx),
-        };
-
-        match apply_block(tip.as_ref(), block, Arc::make_mut(&mut scratch)) {
+        let mut scratch = Arc::clone(&self.head_state);
+        match apply_block(self.head_tip().as_ref(), block, Arc::make_mut(&mut scratch)) {
             Ok(()) => {
-                // now that `apply_block` succeeded, actually reorg the head
-                if let Some(idx) = reorg_at {
-                    self.head_blocks.truncate(idx);
-                }
                 self.head_state = scratch;
                 self.head_blocks.push(block.to_owned());
                 AcceptOutcome::Applied
@@ -255,10 +339,9 @@ impl ChainState {
 
     /// Applies a block we produced ourselves.
     ///
-    /// Unlike [`Self::apply_adopted`] this never reorgs: our block is not on
-    /// the channel yet, so it may only *extend* the head. A head already at
-    /// (or past) this height means a peer's block won the race on the
-    /// channel — ours is stale and the caller drops it.
+    /// Our block is not on the channel yet, so a head already at (or past)
+    /// this height means a peer's block won the race — ours is stale and the
+    /// caller drops it, without the parked outcome an adoption would get.
     pub fn apply_produced(&mut self, block: &Block, this_msg: MsgId) -> AcceptOutcome {
         if self
             .head_tip()
@@ -269,7 +352,7 @@ impl ChainState {
         let outcome = self.apply_adopted(block);
         // Only a block that became the head is ours to pin on.
         if matches!(outcome, AcceptOutcome::Applied) {
-            self.record_own_inscription(this_msg, block.header.hash);
+            self.record_own_inscription(this_msg, block);
         }
         outcome
     }
@@ -297,10 +380,74 @@ impl ChainState {
             self.head_blocks.truncate(idx);
             self.rederive_head();
         }
-        adopted
+        for block in orphaned {
+            self.parked
+                .retain(|held| !(held.header.hash == block.header.hash));
+        }
+        let outcomes: Vec<AcceptOutcome> = adopted
             .iter()
             .map(|block| self.apply_adopted(block))
-            .collect()
+            .collect();
+        for (block, outcome) in adopted.iter().zip(&outcomes) {
+            if matches!(outcome, AcceptOutcome::Parked(_)) {
+                self.park(block);
+            }
+        }
+        outcomes
+    }
+
+    /// Whether this block is one we already held and failed to apply. Every
+    /// parked block the head has caught up to is drained first, so one left at
+    /// the head's next height did not apply on its own merits.
+    fn parked_rejected(&self, hash: HashType) -> bool {
+        self.parked.iter().any(|held| held.header.hash == hash)
+    }
+
+    /// Holds an adopted block the head could not apply, for a later update to
+    /// fill the hole in front of it.
+    fn park(&mut self, block: &Block) {
+        if self
+            .parked
+            .iter()
+            .any(|held| held.header.hash == block.header.hash)
+        {
+            return;
+        }
+        self.parked.push(block.to_owned());
+        if self.parked.len() > MAX_PARKED_BLOCKS {
+            let furthest = self
+                .parked
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, held)| held.header.block_id)
+                .map(|(idx, _)| idx);
+            if let Some(idx) = furthest {
+                self.parked.remove(idx);
+            }
+        }
+    }
+
+    /// Applies every parked block the head has since caught up to, in chain
+    /// order, and drops the ones the final tier settled.
+    fn drain_parked(&mut self) -> Vec<Block> {
+        if let Some(final_tip) = &self.final_tip {
+            let settled = final_tip.block_id;
+            self.parked.retain(|held| held.header.block_id > settled);
+        }
+        let mut drained = Vec::new();
+        while let Some(idx) = self.head_tip().and_then(|tip| {
+            self.parked.iter().position(|held| {
+                held.header.block_id == tip.block_id.saturating_add(1)
+                    && held.header.prev_block_hash == tip.hash
+            })
+        }) {
+            let block = self.parked.remove(idx);
+            if !matches!(self.apply_adopted(&block), AcceptOutcome::Applied) {
+                break;
+            }
+            drained.push(block);
+        }
+        drained
     }
 
     /// A finalized block replayed off the channel at startup. The channel
@@ -345,6 +492,7 @@ impl ChainState {
             .iter()
             .map(|(block, l1_slot)| self.apply_finalized(block, *l1_slot))
             .collect();
+        let drained = self.drain_parked();
 
         let cursor_moved = self.cursor_may_move_to(channel_tip);
         if cursor_moved {
@@ -352,6 +500,7 @@ impl ChainState {
         }
         FollowOutcome {
             adopted: adopted_outcomes,
+            drained,
             finalized: finalized_outcomes,
             cursor_moved,
         }
@@ -781,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn adopted_only_channel_update_replaces_suffix() {
+    fn adopted_only_channel_update_does_not_replace_suffix() {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -798,8 +947,7 @@ mod tests {
         let (block3, _s3) = settled(&s2, 3, block2.header.hash, vec![tx3]);
         chain.apply_adopted(&block3);
 
-        // The replacement branch arrives with no orphan events: the adopted
-        // list alone reorgs the head.
+        // A competing branch arrives with no orphan events, so it parks.
         let tx2_prime = create_transaction_native_token_transfer(from, 0, to, 20, &sign_key);
         let (block2_prime, s2_prime) = settled(&s1, 2, genesis.header.hash, vec![tx2_prime]);
         let tx3_prime = create_transaction_native_token_transfer(from, 1, to, 30, &sign_key);
@@ -810,12 +958,21 @@ mod tests {
 
         assert!(matches!(
             outcomes.as_slice(),
-            [AcceptOutcome::Applied, AcceptOutcome::Applied]
+            [
+                AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                    expected: 4,
+                    got: 2
+                }),
+                AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                    expected: 4,
+                    got: 3
+                })
+            ]
         ));
-        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
+        assert_eq!(chain.head_tip().expect("head tip").hash, block3.header.hash);
         assert_eq!(
             chain.head_state().get_account_by_id(to).balance,
-            INITIAL_TO_BALANCE + 50
+            INITIAL_TO_BALANCE + 20
         );
         assert_head_matches_replay(&chain);
     }
@@ -837,8 +994,303 @@ mod tests {
         assert_head_matches_replay(&chain);
     }
 
+    /// Entries in channel order, each chaining on the one before it.
+    fn lineage_of(entries: &[(MsgId, Option<&Block>)]) -> ChannelLineage {
+        let mut map = HashMap::new();
+        let mut parent = MsgId::root();
+        for (msg, block) in entries {
+            map.insert(
+                *msg,
+                crate::lineage::LineageEntry {
+                    parent,
+                    block: block.map(|b| crate::lineage::InscribedBlock {
+                        block_id: b.header.block_id,
+                        hash: b.header.hash,
+                        prev_hash: b.header.prev_block_hash,
+                    }),
+                },
+            );
+            parent = *msg;
+        }
+        ChannelLineage::new(map)
+    }
+
+    fn chain_with_head(blocks: &[Block]) -> ChainState {
+        let mut chain = ChainState::new(claimed_initial_state());
+        for block in blocks {
+            assert!(matches!(chain.apply_adopted(block), AcceptOutcome::Applied));
+        }
+        chain
+    }
+
     #[test]
-    fn adopted_competitor_reorgs_head_without_orphan_event() {
+    fn publishing_is_clean_when_the_pin_carries_the_head() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis.clone(), block2.clone()]);
+
+        chain.set_channel_lineage(
+            lineage_of(&[(msg(1), Some(&genesis)), (msg(2), Some(&block2))]),
+            None,
+        );
+        chain.set_channel_cursor(msg(2));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::Allowed);
+    }
+
+    #[test]
+    fn publishing_is_clean_through_an_entry_carrying_no_block() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis.clone(), block2.clone()]);
+
+        // A peer's garbage took the tip after our block.
+        chain.set_channel_lineage(
+            lineage_of(&[
+                (msg(1), Some(&genesis)),
+                (msg(2), Some(&block2)),
+                (msg(3), None),
+            ]),
+            None,
+        );
+        chain.set_channel_cursor(msg(3));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::Allowed);
+    }
+
+    #[test]
+    fn publishing_waits_while_a_block_sits_between_the_head_and_the_pin() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis.clone(), block2.clone()]);
+
+        // Block 3 landed on the channel but never reached the head.
+        chain.set_channel_lineage(
+            lineage_of(&[
+                (msg(1), Some(&genesis)),
+                (msg(2), Some(&block2)),
+                (msg(3), Some(&block3)),
+            ]),
+            None,
+        );
+        chain.set_channel_cursor(msg(3));
+
+        assert_eq!(
+            chain.publishing_verdict(),
+            PublishVerdict::HeadTrailsPin { block_id: 3 }
+        );
+    }
+
+    #[test]
+    fn publishing_is_clean_past_a_successor_we_could_not_apply() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut chain = chain_with_head(std::slice::from_ref(&genesis));
+
+        // A successor that chains on our head but does not apply: the header
+        // says block 2 on genesis, the contents do not match it.
+        let mut invalid = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        invalid.header.timestamp = invalid.header.timestamp.saturating_add(1);
+        assert!(matches!(
+            chain
+                .apply_channel_update(&[], std::slice::from_ref(&invalid))
+                .as_slice(),
+            [AcceptOutcome::Parked(_)]
+        ));
+
+        chain.set_channel_lineage(
+            lineage_of(&[(msg(1), Some(&genesis)), (msg(2), Some(&invalid))]),
+            None,
+        );
+        chain.set_channel_cursor(msg(2));
+
+        assert_eq!(
+            chain.publishing_verdict(),
+            PublishVerdict::Allowed,
+            "a block we already failed to apply never becomes our head"
+        );
+    }
+
+    #[test]
+    fn publishing_is_clean_past_a_duplicate_at_a_height_we_passed() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis.clone(), block2.clone(), block3.clone()]);
+
+        // A peer wrote a second block 2 after our 3; our head cannot apply it.
+        let duplicate = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
+        chain.set_channel_lineage(
+            lineage_of(&[
+                (msg(1), Some(&genesis)),
+                (msg(2), Some(&block2)),
+                (msg(3), Some(&block3)),
+                (msg(4), Some(&duplicate)),
+            ]),
+            None,
+        );
+        chain.set_channel_cursor(msg(4));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::Allowed);
+    }
+
+    #[test]
+    fn publishing_waits_when_the_entries_end_away_from_the_finalized_tip() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = ChainState::new(claimed_initial_state());
+        chain.apply_finalized(&genesis, slot(10));
+        chain.apply_finalized(&block2, slot(20));
+
+        // The channel reports where the unfinalized entries start, and the pin
+        // does not chain back to it.
+        chain.set_channel_lineage(lineage_of(&[(msg(3), None)]), Some(msg(2)));
+        chain.set_channel_cursor(msg(3));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::LineageGap);
+    }
+
+    #[test]
+    fn publishing_waits_when_the_walk_leaves_the_reported_entries() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis, block2]);
+
+        // The sdk dropped everything between our head and the tip it reports.
+        chain.set_channel_lineage(lineage_of(&[(msg(9), None)]), None);
+        chain.set_channel_cursor(msg(9));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::LineageGap);
+    }
+
+    #[test]
+    fn publishing_is_clean_when_nothing_is_reported_unfinalized() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis, block2]);
+        chain.set_channel_cursor(msg(2));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::Allowed);
+    }
+
+    #[test]
+    fn publishing_is_clean_off_the_end_of_a_finalized_head() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = ChainState::new(claimed_initial_state());
+        chain.apply_finalized(&genesis, slot(10));
+        chain.apply_finalized(&block2, slot(20));
+
+        // Our head finalized, so its entry is gone; only later junk is reported.
+        chain.set_channel_lineage(lineage_of(&[(msg(3), None)]), None);
+        chain.set_channel_cursor(msg(3));
+
+        assert_eq!(chain.publishing_verdict(), PublishVerdict::Allowed);
+    }
+
+    #[test]
+    fn a_parked_block_applies_once_the_hole_in_front_of_it_is_filled() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let block4 = produce_dummy_block(4, Some(block3.header.hash), vec![]);
+        chain.apply_adopted(&genesis);
+
+        // 3 and 4 arrive without 2, then 2 arrives.
+        let outcomes = chain.apply_channel_update(&[], &[block3, block4.clone()]);
+        assert!(matches!(
+            outcomes.as_slice(),
+            [AcceptOutcome::Parked(_), AcceptOutcome::Parked(_)]
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 1);
+
+        let outcome = chain.apply_follow(&[], &[block2], &[], msg(2));
+        assert!(matches!(
+            outcome.adopted.as_slice(),
+            [AcceptOutcome::Applied]
+        ));
+        assert_eq!(
+            outcome
+                .drained
+                .iter()
+                .map(|block| block.header.block_id)
+                .collect::<Vec<_>>(),
+            vec![3, 4],
+            "both parked blocks follow the one that filled the hole"
+        );
+        assert_eq!(chain.head_tip().expect("head tip").hash, block4.header.hash);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn a_parked_block_the_channel_drops_is_not_kept() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_channel_update(&[], std::slice::from_ref(&block3));
+
+        // The channel orphans the block we parked, then fills the hole.
+        let outcome = chain.apply_follow(&[block3], &[block2], &[], msg(2));
+        assert!(
+            outcome.drained.is_empty(),
+            "an orphaned block must not come back off the parked set"
+        );
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+    }
+
+    #[test]
+    fn a_parked_block_below_the_final_tier_is_dropped() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let competitor = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_channel_update(&[], &[competitor]);
+
+        // Finality settles 2 and 3, so the parked competitor at 3 is dead.
+        let outcome = chain.apply_follow(
+            &[],
+            &[],
+            &[(block2, slot(10)), (block3.clone(), slot(20))],
+            msg(3),
+        );
+        assert!(outcome.drained.is_empty());
+        assert_eq!(
+            chain.final_tip().expect("final tip").hash,
+            block3.header.hash
+        );
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn orphaning_a_duplicate_at_a_held_height_leaves_the_head() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        chain.apply_adopted(&genesis);
+        chain.apply_adopted(&block2);
+        chain.apply_adopted(&block3);
+
+        // The channel drops a second block 2 we never held: same height as ours,
+        // different hash, so it must not match the block 2 on the head.
+        let duplicate = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
+        assert_ne!(duplicate.header.hash, block2.header.hash);
+        let outcomes = chain.apply_channel_update(&[duplicate], &[]);
+
+        assert!(outcomes.is_empty());
+        let tip = chain.head_tip().expect("head tip");
+        assert_eq!(tip.block_id, 3);
+        assert_eq!(tip.hash, block3.header.hash);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn adopted_competitor_without_orphan_event_parks() {
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -855,19 +1307,21 @@ mod tests {
         let (block3, _s3) = settled(&s2, 3, block2.header.hash, vec![tx3]);
         chain.apply_adopted(&block3);
 
-        // A valid competitor at height 2, no orphan events: the head reorgs
-        // back onto it, dropping the old 2..=3 suffix and its transfers.
+        // A second block 2 lands after block 3 with nothing orphaned: it parks.
         let block2_prime = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
             chain.apply_adopted(&block2_prime),
-            AcceptOutcome::Applied
+            AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                expected: 4,
+                got: 2
+            })
         ));
         let tip = chain.head_tip().expect("head tip");
-        assert_eq!(tip.block_id, 2);
-        assert_eq!(tip.hash, block2_prime.header.hash);
+        assert_eq!(tip.block_id, 3);
+        assert_eq!(tip.hash, block3.header.hash);
         assert_eq!(
             chain.head_state().get_account_by_id(to).balance,
-            INITIAL_TO_BALANCE
+            INITIAL_TO_BALANCE + 20
         );
         assert_head_matches_replay(&chain);
     }
@@ -887,8 +1341,8 @@ mod tests {
         let peer = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         chain.apply_adopted(&peer);
 
-        // Our own block at that height is not on the channel, so — unlike an
-        // adopted competitor — it must not reorg the head onto itself.
+        // Our own block at that height is not on the channel, so it must not
+        // reorg the head onto itself.
         let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
         let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
@@ -915,27 +1369,6 @@ mod tests {
             AcceptOutcome::Applied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, ours.header.hash);
-        assert_head_matches_replay(&chain);
-    }
-
-    #[test]
-    fn invalid_adopted_competitor_leaves_head_intact() {
-        let mut chain = ChainState::new(claimed_initial_state());
-        let genesis = produce_dummy_block(1, None, vec![]);
-        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
-        chain.apply_adopted(&genesis);
-        chain.apply_adopted(&block2);
-        chain.apply_adopted(&block3);
-
-        // A competitor at height 2 with a bogus parent parks; the truncation
-        // is not committed, so the 2..=3 suffix survives.
-        let bad = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
-        assert!(matches!(
-            chain.apply_adopted(&bad),
-            AcceptOutcome::Parked(BlockIngestError::BrokenChainLink { .. })
-        ));
-        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
         assert_head_matches_replay(&chain);
     }
 
@@ -1017,7 +1450,7 @@ mod tests {
                 .cursor_moved
         );
 
-        chain.record_own_inscription(msg(1), genesis.header.hash);
+        chain.record_own_inscription(msg(1), &genesis);
 
         let outcome = chain.apply_follow(&[], &[], &[], MsgId::root());
         assert!(!outcome.cursor_moved);

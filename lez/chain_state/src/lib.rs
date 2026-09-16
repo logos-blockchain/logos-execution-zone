@@ -8,6 +8,7 @@ pub use consistency::{
     Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, verify_chain_consistency,
 };
 pub use ingest_error::BlockIngestError;
+pub use lineage::{ChannelLineage, InscribedBlock, LineageEntry, PublishVerdict};
 pub use stall_reason::StallReason;
 
 pub mod apply;
@@ -15,5 +16,6 @@ pub mod chain;
 pub mod classify;
 pub mod consistency;
 pub mod ingest_error;
+pub mod lineage;
 pub mod stall_reason;
 pub mod zone_indexer;

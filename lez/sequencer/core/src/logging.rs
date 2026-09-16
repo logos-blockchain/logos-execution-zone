@@ -72,6 +72,13 @@ pub(crate) fn log_parked(
     }
 }
 
+/// Blocks a hole in front of them held back until now.
+pub(crate) fn log_drained(drained: &[Block]) {
+    if !drained.is_empty() {
+        info!("Applied {} parked blocks", id_span(&block_ids(drained)));
+    }
+}
+
 pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: Option<MsgId>) {
     if let (Some(before), Some(after)) = (before, after)
         && after < before
