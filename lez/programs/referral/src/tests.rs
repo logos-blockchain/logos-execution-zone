@@ -7,7 +7,10 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::AccountInput,
 };
-use referral_core::ed25519_dalek::{Signer as _, SigningKey};
+use referral_core::{
+    MAX_REGISTERED_NODES,
+    ed25519_dalek::{Signer as _, SigningKey},
+};
 
 use super::*;
 
@@ -570,5 +573,124 @@ fn collect_rejects_an_outgoing_credit_that_aliases_its_source() {
             note(0x41, alice_node, 10),
         ],
         collect(&alice),
+    );
+}
+
+#[test]
+#[should_panic(expected = "node is already registered")]
+fn register_rejects_an_already_registered_node() {
+    let (bob_key, bob_node) = node(1);
+    let bob = participant(11);
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![
+            account(bob.account_id(), None, true),
+            registered(&[bob_node]),
+        ],
+        register(
+            &bob,
+            bob_node,
+            None,
+            signature(&bob_key, bob_node, &bob, None),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "referrer node is not registered")]
+fn register_requires_a_registered_referrer() {
+    let (bob_key, bob_node) = node(1);
+    let (_alice_key, alice_node) = node(2);
+    let bob = participant(11);
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![account(bob.account_id(), None, true), registered(&[])],
+        register(
+            &bob,
+            bob_node,
+            Some(alice_node),
+            signature(&bob_key, bob_node, &bob, Some(alice_node)),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "participant is already initialized")]
+fn register_rejects_an_initialized_participant() {
+    let (bob_key, bob_node) = node(1);
+    let (_alice_key, alice_node) = node(2);
+    let bob = participant(11);
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![
+            initialized(&bob, bob_node, None, 0),
+            registered(&[alice_node]),
+        ],
+        register(
+            &bob,
+            bob_node,
+            Some(alice_node),
+            signature(&bob_key, bob_node, &bob, Some(alice_node)),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "account holds initialized referral state")]
+fn collect_rejects_an_unregistered_participant() {
+    let (_bob_key, bob_node) = node(1);
+    let bob = participant(11);
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![account(bob.account_id(), None, true), tickets(bob_node, 1)],
+        collect(&bob),
+    );
+}
+
+#[test]
+#[should_panic(expected = "referrer node is not registered")]
+fn register_rejects_a_self_referrer() {
+    let (bob_key, bob_node) = node(1);
+    let bob = participant(11);
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![account(bob.account_id(), None, true), registered(&[])],
+        register(
+            &bob,
+            bob_node,
+            Some(bob_node),
+            signature(&bob_key, bob_node, &bob, Some(bob_node)),
+        ),
+    );
+}
+
+#[test]
+#[should_panic(expected = "the registry is full")]
+fn register_rejects_a_full_registry() {
+    let (bob_key, bob_node) = node(1);
+    let bob = participant(11);
+    let capacity = u64::try_from(MAX_REGISTERED_NODES).expect("the capacity fits in u64");
+    let filler: Vec<NodeId> = (0..capacity)
+        .map(|index| {
+            let mut bytes = [0; 32];
+            bytes[..8].copy_from_slice(&index.to_le_bytes());
+            NodeId::new(bytes)
+        })
+        .collect();
+
+    let _diffs = execute(
+        PROGRAM,
+        vec![account(bob.account_id(), None, true), registered(&filler)],
+        register(
+            &bob,
+            bob_node,
+            None,
+            signature(&bob_key, bob_node, &bob, None),
+        ),
     );
 }
