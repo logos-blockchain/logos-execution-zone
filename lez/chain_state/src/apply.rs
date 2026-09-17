@@ -426,7 +426,8 @@ fn settle_charged_transaction(
     // This does NOT advance the nonce, invalidates the tx if the payer cannot afford it.
     let reserved = fee_reserve(view, opening);
     let reserve_msg = fee_reserve_invocation(payer, reserved);
-    let payer_authorized = HashSet::from([payer]);
+    // The reserve moves balance only.
+    let payer_authorized = HashSet::from([lee::ProgramShardSelector::balance(payer)]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
         reserve_msg.program_account_id,
         &reserve_msg.shard_selectors,

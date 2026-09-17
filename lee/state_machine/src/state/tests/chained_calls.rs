@@ -1,6 +1,12 @@
 use super::*;
 use crate::AccountData;
 
+/// An optional own-shard write, then one chained call per triple.
+type ForwarderInstruction = (
+    Option<(AccountId, Vec<u8>)>,
+    Vec<(AccountId, ProgramShardSelector, Vec<u8>)>,
+);
+
 #[test]
 fn public_chained_call() {
     let program = crate::test_methods::chain_caller();
@@ -296,4 +302,79 @@ fn private_chained_call(number_of_calls: u32) {
             .get_proof_for_commitment(&to_expected_commitment)
             .is_some()
     );
+}
+
+/// A callee cannot borrow the signature for another program's shard of the same signer.
+#[test]
+fn a_chained_call_cannot_borrow_a_signature_for_another_program_s_shard() {
+    let forwarder = crate::test_methods::shard_forwarder();
+    let forwarder_id: AccountId = forwarder.id().into();
+    let callee_id: AccountId = crate::test_methods::auth_asserting_noop().id().into();
+
+    let key = PrivateKey::try_new([1; 32]).unwrap();
+    let signer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = V03State::new()
+        .with_public_account_balances([(signer, 100)])
+        .with_test_programs();
+
+    let instruction: ForwarderInstruction = (
+        None,
+        vec![(
+            callee_id,
+            ProgramShardSelector::new(signer, callee_id),
+            Program::serialize_instruction(()).unwrap(),
+        )],
+    );
+
+    let message = public_transaction::Message::try_new(
+        forwarder_id,
+        vec![ProgramShardSelector::new(signer, forwarder_id)],
+        vec![Nonce(0)],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    assert!(
+        state.transition_from_public_transaction(&tx, 1, 0).is_err(),
+        "a signature for one shard must not authorize another program's shard"
+    );
+}
+
+/// The shard the signature named stays authorized down the chain.
+#[test]
+fn a_chained_call_keeps_the_signature_for_the_shard_it_named() {
+    let forwarder = crate::test_methods::shard_forwarder();
+    let forwarder_id: AccountId = forwarder.id().into();
+    let callee_id: AccountId = crate::test_methods::auth_asserting_noop().id().into();
+
+    let key = PrivateKey::try_new([1; 32]).unwrap();
+    let signer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = V03State::new()
+        .with_public_account_balances([(signer, 100)])
+        .with_test_programs();
+
+    let instruction: ForwarderInstruction = (
+        None,
+        vec![(
+            callee_id,
+            ProgramShardSelector::new(signer, forwarder_id),
+            Program::serialize_instruction(()).unwrap(),
+        )],
+    );
+
+    let message = public_transaction::Message::try_new(
+        forwarder_id,
+        vec![ProgramShardSelector::new(signer, forwarder_id)],
+        vec![Nonce(0)],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("the shard the signature named stays authorized through the chain");
 }
