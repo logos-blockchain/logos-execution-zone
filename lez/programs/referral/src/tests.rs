@@ -12,9 +12,6 @@ use referral_core::ed25519_dalek::{Signer as _, SigningKey};
 use super::*;
 
 const PROGRAM: AccountId = AccountId::new([9; 32]);
-const CAROL_EPOCH: L1Epoch = 10;
-const ALICE_EPOCH: L1Epoch = 20;
-const BOB_EPOCH: L1Epoch = 30;
 
 fn node(seed: u8) -> (SigningKey, NodeId) {
     let key = SigningKey::from_bytes(&[seed; 32]);
@@ -30,19 +27,15 @@ fn participant(seed: u8) -> ParticipantDescriptor {
     }
 }
 
-fn first_use(
+fn signature(
     key: &SigningKey,
     node: NodeId,
     descriptor: &ParticipantDescriptor,
     referrer: Option<NodeId>,
-) -> FirstUse {
+) -> [u8; 64] {
     let authorization =
         ParticipantAuthorizationV1::new(PROGRAM, node, descriptor.account_id(), referrer);
-    FirstUse {
-        node,
-        referrer,
-        node_signature: key.sign(&authorization.message()).to_bytes(),
-    }
+    key.sign(&authorization.message()).to_bytes()
 }
 
 fn account(id: AccountId, state: Option<State>, authorized: bool) -> AccountInput {
@@ -54,22 +47,39 @@ fn oracle() -> AccountInput {
     AccountInput::balance(ORACLE_ACCOUNT_ID, true, 0)
 }
 
-fn registry_account(entries: &[(&[NodeId], L1Epoch)]) -> AccountInput {
+fn registry(nodes: &[NodeId]) -> Registry {
     let mut registry = Registry::default();
-    for (nodes, epoch) in entries {
-        assert!(registry.insert_batch(*epoch, nodes));
+    for node in nodes {
+        assert!(registry.register(*node));
     }
+    registry
+}
+
+fn registered(nodes: &[NodeId]) -> AccountInput {
     account(
         registry_account_id(PROGRAM),
-        Some(State::Registry(registry)),
+        Some(State::Registry(registry(nodes))),
         false,
     )
 }
 
-fn collect(participant: &ParticipantDescriptor, first_use: Option<FirstUse>) -> Instruction {
+fn register(
+    participant: &ParticipantDescriptor,
+    node: NodeId,
+    referrer: Option<NodeId>,
+    node_signature: [u8; 64],
+) -> Instruction {
+    Instruction::Register {
+        participant: participant.clone(),
+        node,
+        referrer,
+        node_signature,
+    }
+}
+
+fn collect(participant: &ParticipantDescriptor) -> Instruction {
     Instruction::Collect {
         participant: participant.clone(),
-        first_use,
     }
 }
 
@@ -156,33 +166,93 @@ fn balance_of(state: &State) -> u128 {
 }
 
 #[test]
-fn first_use_pays_one_for_one_and_leaves_the_registry_unchanged() {
+fn a_registered_chain_pays_one_for_one() {
     let (bob_key, bob_node) = node(1);
     let (alice_key, alice_node) = node(2);
-    let (_carol_key, carol_node) = node(3);
+    let (carol_key, carol_node) = node(3);
     let bob = participant(11);
     let alice = participant(12);
-    let registry = [
-        (&[carol_node][..], CAROL_EPOCH),
-        (&[alice_node][..], ALICE_EPOCH),
-        (&[bob_node][..], BOB_EPOCH),
-    ];
+    let carol = participant(13);
+
+    let diffs = execute(
+        PROGRAM,
+        vec![
+            account(carol.account_id(), None, true),
+            account(registry_account_id(PROGRAM), None, false),
+        ],
+        register(
+            &carol,
+            carol_node,
+            None,
+            signature(&carol_key, carol_node, &carol, None),
+        ),
+    );
+
+    assert_eq!(
+        written(&diffs, carol.account_id()),
+        State::Participant {
+            node: carol_node,
+            referrer: None,
+            reward_balance: 0,
+        }
+    );
+    assert_eq!(
+        written(&diffs, registry_account_id(PROGRAM)),
+        State::Registry(registry(&[carol_node]))
+    );
+
+    let diffs = execute(
+        PROGRAM,
+        vec![
+            account(alice.account_id(), None, true),
+            registered(&[carol_node]),
+        ],
+        register(
+            &alice,
+            alice_node,
+            Some(carol_node),
+            signature(&alice_key, alice_node, &alice, Some(carol_node)),
+        ),
+    );
+
+    assert_eq!(
+        written(&diffs, registry_account_id(PROGRAM)),
+        State::Registry(registry(&[carol_node, alice_node]))
+    );
 
     let diffs = execute(
         PROGRAM,
         vec![
             account(bob.account_id(), None, true),
-            tickets(bob_node, 5),
-            fresh(0x41),
-            registry_account(&registry),
+            registered(&[carol_node, alice_node]),
         ],
-        collect(
+        register(
             &bob,
-            Some(first_use(&bob_key, bob_node, &bob, Some(alice_node))),
+            bob_node,
+            Some(alice_node),
+            signature(&bob_key, bob_node, &bob, Some(alice_node)),
         ),
     );
 
-    assert!(unchanged(&diffs, registry_account_id(PROGRAM)));
+    assert_eq!(
+        written(&diffs, bob.account_id()),
+        State::Participant {
+            node: bob_node,
+            referrer: Some(alice_node),
+            reward_balance: 0,
+        }
+    );
+
+    let diffs = execute(
+        PROGRAM,
+        vec![
+            initialized(&bob, bob_node, Some(alice_node), 0),
+            tickets(bob_node, 5),
+            fresh(0x41),
+        ],
+        collect(&bob),
+    );
+
     assert_eq!(balance_of(&written(&diffs, bob.account_id())), 5);
     assert_eq!(
         written(&diffs, ticket_account_id(PROGRAM, bob_node)),
@@ -196,18 +266,13 @@ fn first_use_pays_one_for_one_and_leaves_the_registry_unchanged() {
     let diffs = execute(
         PROGRAM,
         vec![
-            account(alice.account_id(), None, true),
+            initialized(&alice, alice_node, Some(carol_node), 0),
             note(0x41, alice_node, 5),
             fresh(0x42),
-            registry_account(&registry),
         ],
-        collect(
-            &alice,
-            Some(first_use(&alice_key, alice_node, &alice, Some(carol_node))),
-        ),
+        collect(&alice),
     );
 
-    assert!(unchanged(&diffs, registry_account_id(PROGRAM)));
     assert_eq!(balance_of(&written(&diffs, alice.account_id())), 5);
     assert_eq!(
         written(&diffs, AccountId::new([0x41; 32])),
@@ -230,7 +295,7 @@ fn a_later_collect_uses_neither_the_registry_nor_a_signature() {
             initialized(&bob, bob_node, None, 7),
             note(0x41, bob_node, 3),
         ],
-        collect(&bob, None),
+        collect(&bob),
     );
 
     assert_eq!(balance_of(&written(&diffs, bob.account_id())), 10);
@@ -252,105 +317,10 @@ fn a_same_node_participant_with_other_keys_collects_its_nodes_credit() {
             initialized(&other, alice_node, None, 0),
             note(0x41, alice_node, 4),
         ],
-        collect(&other, None),
+        collect(&other),
     );
 
     assert_eq!(balance_of(&written(&diffs, other.account_id())), 4);
-}
-
-#[test]
-fn add_epoch_data_appends_batches_in_any_epoch_order() {
-    let (_key, first) = node(1);
-    let (_key, second) = node(2);
-    let (_key, third) = node(3);
-
-    let diffs = add_epoch_data(
-        PROGRAM,
-        vec![oracle(), account(registry_account_id(PROGRAM), None, false)],
-        0,
-        &[first, second],
-    );
-    let State::Registry(registry) = written(&diffs, registry_account_id(PROGRAM)) else {
-        panic!("registry was not written");
-    };
-    assert_eq!(registry.first_used(first), Some(0));
-    assert_eq!(registry.first_used(second), Some(0));
-
-    let diffs = add_epoch_data(
-        PROGRAM,
-        vec![
-            oracle(),
-            account(
-                registry_account_id(PROGRAM),
-                Some(State::Registry(registry)),
-                false,
-            ),
-        ],
-        0,
-        &[third],
-    );
-    let State::Registry(registry) = written(&diffs, registry_account_id(PROGRAM)) else {
-        panic!("registry was not written");
-    };
-    assert_eq!(registry.len(), 3);
-    assert!(unchanged(&diffs, ORACLE_ACCOUNT_ID));
-}
-
-#[test]
-#[should_panic(expected = "already registered node")]
-fn add_epoch_data_rejects_a_node_already_registered_under_another_epoch() {
-    let (_key, existing) = node(1);
-    let (_key, newcomer) = node(2);
-
-    let _diffs = add_epoch_data(
-        PROGRAM,
-        vec![
-            oracle(),
-            registry_account(&[(&[existing][..], CAROL_EPOCH)]),
-        ],
-        BOB_EPOCH,
-        &[newcomer, existing],
-    );
-}
-
-#[test]
-#[should_panic(expected = "repeats a node")]
-fn add_epoch_data_rejects_a_batch_that_repeats_an_id() {
-    let (_key, repeated) = node(1);
-
-    let _diffs = add_epoch_data(
-        PROGRAM,
-        vec![oracle(), account(registry_account_id(PROGRAM), None, false)],
-        BOB_EPOCH,
-        &[repeated, repeated],
-    );
-}
-
-#[test]
-#[should_panic(expected = "batch is empty")]
-fn add_epoch_data_rejects_an_empty_batch() {
-    let _diffs = add_epoch_data(
-        PROGRAM,
-        vec![oracle(), account(registry_account_id(PROGRAM), None, false)],
-        BOB_EPOCH,
-        &[],
-    );
-}
-
-#[test]
-#[should_panic(expected = "oracle authorization is missing")]
-fn add_epoch_data_rejects_an_unauthorized_oracle() {
-    let (_key, newcomer) = node(1);
-
-    let _diffs = add_epoch_data(
-        PROGRAM,
-        vec![
-            AccountInput::balance(ORACLE_ACCOUNT_ID, false, 0),
-            account(registry_account_id(PROGRAM), None, false),
-        ],
-        BOB_EPOCH,
-        &[newcomer],
-    );
 }
 
 #[test]
@@ -453,91 +423,21 @@ fn grant_rejects_another_nodes_ticket_account() {
 }
 
 #[test]
-#[should_panic(expected = "strictly earlier epoch")]
-fn first_use_rejects_a_same_epoch_referrer() {
-    let (bob_key, bob_node) = node(1);
-    let (_alice_key, alice_node) = node(2);
-    let bob = participant(11);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![
-            account(bob.account_id(), None, true),
-            tickets(bob_node, 1),
-            fresh(0x41),
-            registry_account(&[(&[alice_node, bob_node][..], BOB_EPOCH)]),
-        ],
-        collect(
-            &bob,
-            Some(first_use(&bob_key, bob_node, &bob, Some(alice_node))),
-        ),
-    );
-}
-
-#[test]
-#[should_panic(expected = "node is absent from the registry")]
-fn a_credit_alone_cannot_initialize_an_unregistered_node() {
-    let (bob_key, bob_node) = node(1);
-    let (_other_key, other_node) = node(2);
-    let bob = participant(11);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![
-            account(bob.account_id(), None, true),
-            tickets(bob_node, 5),
-            registry_account(&[(&[other_node][..], ALICE_EPOCH)]),
-        ],
-        collect(&bob, Some(first_use(&bob_key, bob_node, &bob, None))),
-    );
-}
-
-#[test]
 #[should_panic(expected = "node authorization signature is invalid")]
-fn first_use_rejects_a_signature_addressed_to_another_participant() {
+fn register_rejects_a_signature_addressed_to_another_participant() {
     let (bob_key, bob_node) = node(1);
     let bob = participant(11);
     let other = participant(14);
 
     let _diffs = execute(
         PROGRAM,
-        vec![
-            account(bob.account_id(), None, true),
-            tickets(bob_node, 1),
-            registry_account(&[(&[bob_node][..], BOB_EPOCH)]),
-        ],
-        collect(&bob, Some(first_use(&bob_key, bob_node, &other, None))),
-    );
-}
-
-#[test]
-#[should_panic(expected = "an initialized participant takes no first-use arguments")]
-fn an_initialized_participant_rejects_replacement_first_use_arguments() {
-    let (bob_key, bob_node) = node(1);
-    let (_other_key, other_node) = node(2);
-    let bob = participant(11);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![
-            initialized(&bob, bob_node, None, 0),
-            tickets(bob_node, 1),
-            registry_account(&[(&[other_node, bob_node][..], BOB_EPOCH)]),
-        ],
-        collect(&bob, Some(first_use(&bob_key, bob_node, &bob, None))),
-    );
-}
-
-#[test]
-#[should_panic(expected = "an empty participant requires first-use arguments")]
-fn an_empty_participant_cannot_collect_without_first_use() {
-    let (_key, bob_node) = node(1);
-    let bob = participant(11);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![account(bob.account_id(), None, true), tickets(bob_node, 1)],
-        collect(&bob, None),
+        vec![account(bob.account_id(), None, true), registered(&[])],
+        register(
+            &bob,
+            bob_node,
+            None,
+            signature(&bob_key, bob_node, &other, None),
+        ),
     );
 }
 
@@ -550,7 +450,7 @@ fn an_unauthorized_participant_cannot_collect() {
     let _diffs = execute(
         PROGRAM,
         vec![unauthorized(&bob, bob_node), tickets(bob_node, 1)],
-        collect(&bob, None),
+        collect(&bob),
     );
 }
 
@@ -567,7 +467,7 @@ fn collect_rejects_a_credit_for_another_node() {
             initialized(&alice, alice_node, None, 0),
             note(0x41, bob_node, 10),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -583,7 +483,7 @@ fn collect_rejects_a_second_collection() {
             initialized(&alice, alice_node, None, 0),
             note(0x41, alice_node, 0),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -599,7 +499,7 @@ fn collect_rejects_an_overflowing_reward_balance() {
             initialized(&alice, alice_node, None, u128::MAX),
             note(0x41, alice_node, 1),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -616,7 +516,7 @@ fn a_root_collect_rejects_an_outgoing_credit_account() {
             note(0x41, alice_node, 10),
             fresh(0x42),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -633,7 +533,7 @@ fn a_referred_collect_requires_an_outgoing_credit_account() {
             initialized(&alice, alice_node, Some(carol_node), 0),
             note(0x41, alice_node, 10),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -651,7 +551,7 @@ fn collect_rejects_a_consumed_account_as_its_outgoing_credit() {
             note(0x41, alice_node, 10),
             note(0x42, carol_node, 0),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }
 
@@ -669,6 +569,6 @@ fn collect_rejects_an_outgoing_credit_that_aliases_its_source() {
             note(0x41, alice_node, 10),
             note(0x41, alice_node, 10),
         ],
-        collect(&alice, None),
+        collect(&alice),
     );
 }

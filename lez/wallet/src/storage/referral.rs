@@ -4,7 +4,7 @@ use common::transaction::LeeTransaction;
 use lee::{Account, AccountId};
 use lee_core::{Commitment, Identifier, account::ProgramShardSelector, program::PdaSeed};
 use rand::{RngCore as _, rngs::OsRng};
-use referral_core::{FirstUse, Invitation, L1Epoch, NodeId, ed25519_dalek::Signature};
+use referral_core::{Invitation, NodeId, ed25519_dalek::Signature};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +16,7 @@ pub struct ReferralStore {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReferralIntent {
     pub program_account: AccountId,
-    pub first_use: Option<PendingFirstUse>,
+    pub registration: Option<PendingRegistration>,
     #[serde(default)]
     pub pending_credits: Vec<PdaSeed>,
     #[serde(default)]
@@ -24,7 +24,7 @@ pub struct ReferralIntent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingFirstUse {
+pub struct PendingRegistration {
     pub node: NodeId,
     pub referrer: Option<NodeId>,
     pub signature: Option<Signature>,
@@ -32,9 +32,8 @@ pub struct PendingFirstUse {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OperationKind {
-    AddEpochData {
-        epoch: L1Epoch,
-        nodes: Vec<NodeId>,
+    Register {
+        participant: AccountId,
     },
     Grant {
         node: NodeId,
@@ -91,20 +90,20 @@ impl ReferralIntent {
     pub const fn new(program_account: AccountId) -> Self {
         Self {
             program_account,
-            first_use: None,
+            registration: None,
             pending_credits: Vec::new(),
             invitation: None,
         }
     }
 
     #[must_use]
-    pub fn first_use(&self) -> Option<FirstUse> {
-        let pending = self.first_use.as_ref()?;
-        Some(FirstUse {
-            node: pending.node,
-            referrer: pending.referrer,
-            node_signature: pending.signature?.to_bytes(),
-        })
+    pub fn registration(&self) -> Option<(NodeId, Option<NodeId>, [u8; 64])> {
+        let pending = self.registration.as_ref()?;
+        Some((
+            pending.node,
+            pending.referrer,
+            pending.signature?.to_bytes(),
+        ))
     }
 
     pub fn record_credit(&mut self, seed: PdaSeed) {
@@ -122,8 +121,10 @@ impl OperationKind {
     #[must_use]
     pub const fn participant(&self) -> Option<AccountId> {
         match self {
-            Self::AddEpochData { .. } | Self::Grant { .. } => None,
-            Self::Collect { participant, .. } => Some(*participant),
+            Self::Grant { .. } => None,
+            Self::Register { participant } | Self::Collect { participant, .. } => {
+                Some(*participant)
+            }
         }
     }
 }
@@ -162,24 +163,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_use_replays_only_once_it_is_signed() {
+    fn a_registration_replays_only_once_it_is_signed() {
         let mut intent = ReferralIntent::new(AccountId::new([9; 32]));
-        assert!(intent.first_use().is_none());
+        assert!(intent.registration().is_none());
 
-        intent.first_use = Some(PendingFirstUse {
+        intent.registration = Some(PendingRegistration {
             node: NodeId::new([7; 32]),
             referrer: Some(NodeId::new([4; 32])),
             signature: None,
         });
         assert!(
-            intent.first_use().is_none(),
-            "an unsigned first use is not replayable"
+            intent.registration().is_none(),
+            "an unsigned registration is not replayable"
         );
 
-        intent.first_use.as_mut().unwrap().signature = Some(Signature::from_bytes(&[1; 64]));
-        let first_use = intent.first_use().expect("now replayable");
-        assert_eq!(first_use.node, NodeId::new([7; 32]));
-        assert_eq!(first_use.referrer, Some(NodeId::new([4; 32])));
+        intent.registration.as_mut().unwrap().signature = Some(Signature::from_bytes(&[1; 64]));
+        let (node, referrer, _signature) = intent.registration().expect("now replayable");
+        assert_eq!(node, NodeId::new([7; 32]));
+        assert_eq!(referrer, Some(NodeId::new([4; 32])));
     }
 
     #[test]

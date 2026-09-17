@@ -7,8 +7,8 @@ use lee_core::{
 };
 pub use referral_core as core;
 use referral_core::{
-    FirstUse, Instruction, L1Epoch, NodeId, ORACLE_ACCOUNT_ID, ParticipantAuthorizationV1,
-    ParticipantDescriptor, Registry, State, StoredState, registry_account_id, ticket_account_id,
+    Instruction, NodeId, ORACLE_ACCOUNT_ID, ParticipantAuthorizationV1, ParticipantDescriptor,
+    Registry, State, StoredState, registry_account_id, ticket_account_id,
 };
 
 #[must_use]
@@ -18,28 +18,48 @@ pub fn execute(
     instruction: Instruction,
 ) -> Vec<ShardStateDiff> {
     match instruction {
-        Instruction::AddEpochData {
-            epoch,
-            new_node_ids,
-        } => add_epoch_data(program, pre_states, epoch, &new_node_ids),
-        Instruction::Grant { node, amount } => grant(program, pre_states, node, amount),
-        Instruction::Collect {
+        Instruction::Register {
             participant,
-            first_use,
-        } => collect(program, pre_states, &participant, first_use),
+            node,
+            referrer,
+            node_signature,
+        } => register(
+            program,
+            pre_states,
+            &participant,
+            node,
+            referrer,
+            node_signature,
+        ),
+        Instruction::Grant { node, amount } => grant(program, pre_states, node, amount),
+        Instruction::Collect { participant } => collect(program, pre_states, &participant),
     }
 }
 
-fn add_epoch_data(
+fn register(
     program: AccountId,
     pre_states: Vec<AccountInput>,
-    epoch: L1Epoch,
-    new_node_ids: &[NodeId],
+    descriptor: &ParticipantDescriptor,
+    node: NodeId,
+    referrer: Option<NodeId>,
+    node_signature: [u8; 64],
 ) -> Vec<ShardStateDiff> {
-    let [oracle, registry_account] = <[AccountInput; 2]>::try_from(pre_states)
-        .expect("AddEpochData requires the oracle and the registry");
+    let [participant, registry_account] = <[AccountInput; 2]>::try_from(pre_states)
+        .expect("Register requires the participant and the registry");
 
-    assert_oracle(&oracle);
+    assert!(
+        participant.is_authorized,
+        "participant authorization is missing"
+    );
+    let participant_id = descriptor.account_id();
+    assert_eq!(
+        participant.account_id, participant_id,
+        "participant is not the regular private account its descriptor derives"
+    );
+    assert!(
+        participant.shard_of(program).is_empty(),
+        "participant is already initialized"
+    );
     assert_eq!(
         registry_account.account_id,
         registry_account_id(program),
@@ -53,13 +73,26 @@ fn add_epoch_data(
             panic!("registry account does not hold the registry")
         }
     };
+    assert!(!registry.contains(node), "node is already registered");
+    if let Some(parent) = referrer {
+        assert!(registry.contains(parent), "referrer node is not registered");
+    }
     assert!(
-        registry.insert_batch(epoch, new_node_ids),
-        "batch is empty, repeats a node, contains an already registered node, or exceeds capacity"
+        ParticipantAuthorizationV1::new(program, node, participant_id, referrer)
+            .verify(&node_signature),
+        "node authorization signature is invalid"
     );
+    assert!(registry.register(node), "the registry is full");
 
     vec![
-        ShardStateDiff::unchanged(oracle),
+        write_state(
+            participant,
+            State::Participant {
+                node,
+                referrer,
+                reward_balance: 0,
+            },
+        ),
         write_state(registry_account, State::Registry(registry)),
     ]
 }
@@ -116,10 +149,8 @@ fn collect(
     program: AccountId,
     pre_states: Vec<AccountInput>,
     descriptor: &ParticipantDescriptor,
-    first_use: Option<FirstUse>,
 ) -> Vec<ShardStateDiff> {
-    let (accounts, registry_account) = split_registry(pre_states, first_use.is_some());
-    let mut accounts = accounts.into_iter();
+    let mut accounts = pre_states.into_iter();
     let participant = accounts
         .next()
         .expect("Collect requires the participant and its source");
@@ -132,17 +163,20 @@ fn collect(
         "Collect takes at most one outgoing credit account"
     );
 
+    assert!(
+        participant.is_authorized,
+        "participant authorization is missing"
+    );
+    assert_eq!(
+        participant.account_id,
+        descriptor.account_id(),
+        "participant is not the regular private account its descriptor derives"
+    );
     let State::Participant {
         node,
         referrer,
         reward_balance,
-    } = resolve_participant(
-        program,
-        &participant,
-        descriptor,
-        first_use,
-        registry_account.as_ref(),
-    )
+    } = decode_state(&participant, program)
     else {
         panic!("participant state must be a participant");
     };
@@ -212,104 +246,7 @@ fn collect(
         ));
     }
 
-    if let Some(registry_account) = registry_account {
-        diffs.push(ShardStateDiff::unchanged(registry_account));
-    }
     diffs
-}
-
-fn split_registry(
-    mut pre_states: Vec<AccountInput>,
-    first_use: bool,
-) -> (Vec<AccountInput>, Option<AccountInput>) {
-    let registry_account = first_use.then(|| pre_states.pop()).flatten();
-    assert!(
-        !first_use || registry_account.is_some(),
-        "first use requires the registry as its last account"
-    );
-    (pre_states, registry_account)
-}
-
-fn resolve_participant(
-    program: AccountId,
-    participant: &AccountInput,
-    descriptor: &ParticipantDescriptor,
-    first_use: Option<FirstUse>,
-    registry_account: Option<&AccountInput>,
-) -> State {
-    assert!(
-        participant.is_authorized,
-        "participant authorization is missing"
-    );
-    let participant_id = descriptor.account_id();
-    assert_eq!(
-        participant.account_id, participant_id,
-        "participant is not the regular private account its descriptor derives"
-    );
-
-    match (
-        decode_optional_state(participant, program),
-        first_use,
-        registry_account,
-    ) {
-        (Some(state @ State::Participant { .. }), None, None) => state,
-        (Some(_), _, _) => {
-            panic!("an initialized participant takes no first-use arguments or registry")
-        }
-        (None, Some(first_use), Some(registry_account)) => {
-            initialize(program, participant_id, &first_use, registry_account)
-        }
-        (None, _, _) => {
-            panic!("an empty participant requires first-use arguments and the registry")
-        }
-    }
-}
-
-fn initialize(
-    program: AccountId,
-    participant_id: AccountId,
-    first_use: &FirstUse,
-    registry_account: &AccountInput,
-) -> State {
-    let &FirstUse {
-        node,
-        referrer,
-        node_signature,
-    } = first_use;
-
-    assert_eq!(
-        registry_account.account_id,
-        registry_account_id(program),
-        "the last account must be the referral registry"
-    );
-    let State::Registry(registry) = decode_state(registry_account, program) else {
-        panic!("registry account does not hold the registry");
-    };
-
-    let own_epoch = registry
-        .first_used(node)
-        .expect("node is absent from the registry");
-    if let Some(parent) = referrer {
-        let parent_epoch = registry
-            .first_used(parent)
-            .expect("referrer node is absent from the registry");
-        assert!(
-            parent_epoch < own_epoch,
-            "referrer node must have been first used in a strictly earlier epoch"
-        );
-    }
-
-    assert!(
-        ParticipantAuthorizationV1::new(program, node, participant_id, referrer)
-            .verify(&node_signature),
-        "node authorization signature is invalid"
-    );
-
-    State::Participant {
-        node,
-        referrer,
-        reward_balance: 0,
-    }
 }
 
 fn assert_oracle(oracle: &AccountInput) {

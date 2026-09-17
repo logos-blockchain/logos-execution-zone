@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use ed25519_dalek;
 use lee_core::{
@@ -10,9 +8,9 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const MAX_OBSERVED_NODES: usize = 4096;
+pub const MAX_REGISTERED_NODES: usize = 4096;
 
-pub const STATE_VERSION: u16 = 2;
+pub const STATE_VERSION: u16 = 3;
 pub const CREDIT_IDENTIFIER: Identifier = 0;
 
 pub const DEPLOYMENT_CONTEXT: [u8; 32] = [
@@ -30,8 +28,6 @@ pub const PROTOTYPE_ORACLE_SIGNING_KEY: [u8; 32] = [11; 32];
 const REGISTRY_SEED_DOMAIN: &[u8; 26] = b"LEZ/Referral/FirstSeen/v1\0";
 const TICKET_SEED_DOMAIN: &[u8; 24] = b"LEZ/Referral/Tickets/v1\0";
 const AUTHORIZATION_DOMAIN: &[u8; 37] = b"LEZ/Referral/AuthorizeParticipant/v1\0";
-
-pub type L1Epoch = u64;
 
 #[derive(
     Clone,
@@ -69,45 +65,6 @@ impl NodeId {
 impl AsRef<[u8]> for NodeId {
     fn as_ref(&self) -> &[u8] {
         &self.0
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct NodeBatch(Vec<NodeId>);
-
-impl NodeBatch {
-    #[must_use]
-    pub fn new(values: Vec<NodeId>) -> Option<Self> {
-        (values.len() <= MAX_OBSERVED_NODES).then_some(Self(values))
-    }
-}
-
-impl std::ops::Deref for NodeBatch {
-    type Target = [NodeId];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl BorshSerialize for NodeBatch {
-    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        BorshSerialize::serialize(&self.0, writer)
-    }
-}
-
-impl BorshDeserialize for NodeBatch {
-    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let len = read_bounded_len(
-            reader,
-            MAX_OBSERVED_NODES,
-            "node batch exceeds its maximum length",
-        )?;
-        let mut values = Vec::with_capacity(len);
-        for _ in 0..len {
-            values.push(NodeId::deserialize_reader(reader)?);
-        }
-        Ok(Self(values))
     }
 }
 
@@ -161,94 +118,37 @@ impl ParticipantDescriptor {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Registry {
-    introduced: BTreeMap<L1Epoch, Vec<NodeId>>,
-}
+pub struct Registry(Vec<NodeId>);
 
 impl Registry {
     #[must_use]
-    pub fn first_used(&self, node: NodeId) -> Option<L1Epoch> {
-        self.introduced
-            .iter()
-            .find_map(|(epoch, nodes)| nodes.contains(&node).then_some(*epoch))
+    pub fn contains(&self, node: NodeId) -> bool {
+        self.0.contains(&node)
     }
 
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.introduced.values().map(Vec::len).sum()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.introduced.is_empty()
-    }
-
-    pub fn insert_batch(&mut self, epoch: L1Epoch, nodes: &[NodeId]) -> bool {
-        let batch: BTreeSet<NodeId> = nodes.iter().copied().collect();
-        if nodes.is_empty() || batch.len() != nodes.len() {
+    pub fn register(&mut self, node: NodeId) -> bool {
+        if self.contains(node) || self.0.len() >= MAX_REGISTERED_NODES {
             return false;
         }
-        if self
-            .len()
-            .checked_add(nodes.len())
-            .is_none_or(|total| total > MAX_OBSERVED_NODES)
-        {
-            return false;
-        }
-        if self
-            .introduced
-            .values()
-            .any(|recorded| recorded.iter().any(|node| batch.contains(node)))
-        {
-            return false;
-        }
-
-        self.introduced
-            .entry(epoch)
-            .or_default()
-            .extend_from_slice(nodes);
+        self.0.push(node);
         true
     }
 }
 
 impl BorshSerialize for Registry {
     fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        BorshSerialize::serialize(&self.introduced, writer)
+        BorshSerialize::serialize(&self.0, writer)
     }
 }
 
 impl BorshDeserialize for Registry {
     fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let buckets = read_bounded_len(
-            reader,
-            MAX_OBSERVED_NODES,
-            "registry bucket count exceeds capacity",
-        )?;
-
-        let mut introduced = BTreeMap::new();
-        let mut previous: Option<L1Epoch> = None;
-        let mut total = 0_usize;
-        for _ in 0..buckets {
-            let epoch = L1Epoch::deserialize_reader(reader)?;
-            if previous.is_some_and(|last| epoch <= last) {
-                return Err(invalid_data("registry epochs must strictly ascend"));
-            }
-            previous = Some(epoch);
-
-            let remaining = MAX_OBSERVED_NODES.saturating_sub(total);
-            let len = read_bounded_len(reader, remaining, "registry exceeds capacity")?;
-            if len == 0 {
-                return Err(invalid_data("registry bucket is empty"));
-            }
-            total = total.saturating_add(len);
-
-            let mut nodes = Vec::with_capacity(len);
-            for _ in 0..len {
-                nodes.push(NodeId::deserialize_reader(reader)?);
-            }
-            introduced.insert(epoch, nodes);
+        let len = read_bounded_len(reader, MAX_REGISTERED_NODES, "registry exceeds capacity")?;
+        let mut nodes = Vec::with_capacity(len);
+        for _ in 0..len {
+            nodes.push(NodeId::deserialize_reader(reader)?);
         }
-        Ok(Self { introduced })
+        Ok(Self(nodes))
     }
 }
 
@@ -356,17 +256,12 @@ impl ParticipantAuthorizationV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct FirstUse {
-    pub node: NodeId,
-    pub referrer: Option<NodeId>,
-    pub node_signature: [u8; 64],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    AddEpochData {
-        epoch: L1Epoch,
-        new_node_ids: NodeBatch,
+    Register {
+        participant: ParticipantDescriptor,
+        node: NodeId,
+        referrer: Option<NodeId>,
+        node_signature: [u8; 64],
     },
     Grant {
         node: NodeId,
@@ -374,7 +269,6 @@ pub enum Instruction {
     },
     Collect {
         participant: ParticipantDescriptor,
-        first_use: Option<FirstUse>,
     },
 }
 
@@ -476,14 +370,10 @@ mod tests {
         }
     }
 
-    fn registry_bytes(buckets: &[(L1Epoch, Vec<NodeId>)]) -> Vec<u8> {
-        let mut bytes = u32::try_from(buckets.len()).unwrap().to_le_bytes().to_vec();
-        for (epoch, nodes) in buckets {
-            bytes.extend_from_slice(&epoch.to_le_bytes());
-            bytes.extend_from_slice(&u32::try_from(nodes.len()).unwrap().to_le_bytes());
-            for node in nodes {
-                bytes.extend_from_slice(&node.to_bytes());
-            }
+    fn registry_bytes(nodes: &[NodeId]) -> Vec<u8> {
+        let mut bytes = u32::try_from(nodes.len()).unwrap().to_le_bytes().to_vec();
+        for node in nodes {
+            bytes.extend_from_slice(&node.to_bytes());
         }
         bytes
     }
@@ -604,71 +494,40 @@ mod tests {
     }
 
     #[test]
-    fn registry_insertion_owns_uniqueness_and_capacity() {
+    fn registration_owns_uniqueness_and_roundtrips() {
         let mut registry = Registry::default();
-        assert!(registry.is_empty());
-        assert!(registry.insert_batch(10, &[NodeId::new([1; 32]), NodeId::new([2; 32])]));
-        assert!(registry.insert_batch(10, &[NodeId::new([3; 32])]));
-        assert!(registry.insert_batch(5, &[NodeId::new([4; 32])]));
+        assert!(registry.register(NodeId::new([1; 32])));
+        assert!(registry.register(NodeId::new([2; 32])));
+        assert!(!registry.register(NodeId::new([1; 32])));
 
-        assert_eq!(registry.len(), 4);
-        assert_eq!(registry.first_used(NodeId::new([1; 32])), Some(10));
-        assert_eq!(registry.first_used(NodeId::new([4; 32])), Some(5));
-        assert_eq!(registry.first_used(NodeId::new([9; 32])), None);
-
-        assert!(!registry.insert_batch(20, &[]));
-        assert!(!registry.insert_batch(20, &[NodeId::new([5; 32]), NodeId::new([5; 32])]));
-        assert!(!registry.insert_batch(20, &[NodeId::new([1; 32])]));
-        assert!(!registry.insert_batch(10, &[NodeId::new([1; 32])]));
-        assert_eq!(registry.len(), 4);
+        assert!(registry.contains(NodeId::new([1; 32])));
+        assert!(!registry.contains(NodeId::new([9; 32])));
 
         let encoded = borsh::to_vec(&registry).unwrap();
         assert_eq!(borsh::from_slice::<Registry>(&encoded).unwrap(), registry);
     }
 
     #[test]
-    fn registry_insertion_stops_at_capacity() {
+    fn registration_stops_at_capacity() {
         let mut registry = Registry::default();
-        assert!(registry.insert_batch(1, &sequential_nodes(MAX_OBSERVED_NODES)));
-        assert_eq!(registry.len(), MAX_OBSERVED_NODES);
-        assert!(!registry.insert_batch(2, &[NodeId::new([0xff; 32])]));
-    }
-
-    #[test]
-    fn registry_decoding_rejects_malformed_structure() {
-        let cases = [
-            registry_bytes(&[(1, vec![])]),
-            registry_bytes(&[
-                (2, vec![NodeId::new([1; 32])]),
-                (1, vec![NodeId::new([2; 32])]),
-            ]),
-            registry_bytes(&[
-                (1, vec![NodeId::new([1; 32])]),
-                (1, vec![NodeId::new([2; 32])]),
-            ]),
-            registry_bytes(&[(1, sequential_nodes(MAX_OBSERVED_NODES + 1))]),
-        ];
-        for bytes in cases {
-            assert!(borsh::from_slice::<Registry>(&bytes).is_err());
+        for node in sequential_nodes(MAX_REGISTERED_NODES) {
+            assert!(registry.register(node));
         }
 
-        let mut trailing = registry_bytes(&[(1, vec![NodeId::new([1; 32])])]);
-        trailing.push(0);
-        assert!(borsh::from_slice::<Registry>(&trailing).is_err());
-
-        let over_capacity = u32::try_from(MAX_OBSERVED_NODES).unwrap().saturating_add(1);
-        assert!(borsh::from_slice::<Registry>(&over_capacity.to_le_bytes()).is_err());
+        assert!(!registry.register(NodeId::new([0xff; 32])));
     }
 
     #[test]
-    fn registry_decoding_does_not_repeat_the_uniqueness_audit() {
-        let repeated = registry_bytes(&[
-            (1, vec![NodeId::new([1; 32])]),
-            (2, vec![NodeId::new([1; 32])]),
-        ]);
-        let registry: Registry = borsh::from_slice(&repeated).unwrap();
+    fn registry_decoding_is_bounded_by_capacity() {
+        let full = registry_bytes(&sequential_nodes(MAX_REGISTERED_NODES));
+        assert!(borsh::from_slice::<Registry>(&full).is_ok());
 
-        assert_eq!(registry.first_used(NodeId::new([1; 32])), Some(1));
+        let over_capacity = registry_bytes(&sequential_nodes(MAX_REGISTERED_NODES + 1));
+        assert!(borsh::from_slice::<Registry>(&over_capacity).is_err());
+
+        let mut trailing = registry_bytes(&[NodeId::new([1; 32])]);
+        trailing.push(0);
+        assert!(borsh::from_slice::<Registry>(&trailing).is_err());
     }
 
     #[test]
@@ -718,17 +577,5 @@ mod tests {
         short.extend_from_slice(&[0; 3]);
         short.extend_from_slice(&0_u128.to_le_bytes());
         assert!(borsh::from_slice::<ParticipantDescriptor>(&short).is_err());
-    }
-
-    #[test]
-    fn a_node_batch_rejects_an_oversized_length_prefix() {
-        let batch = NodeBatch::new(sequential_nodes(3)).unwrap();
-        let encoded = borsh::to_vec(&batch).unwrap();
-        assert_eq!(borsh::from_slice::<NodeBatch>(&encoded).unwrap(), batch);
-
-        assert!(NodeBatch::new(sequential_nodes(MAX_OBSERVED_NODES + 1)).is_none());
-
-        let oversized = u32::try_from(MAX_OBSERVED_NODES + 1).unwrap().to_le_bytes();
-        assert!(borsh::from_slice::<NodeBatch>(&oversized).is_err());
     }
 }

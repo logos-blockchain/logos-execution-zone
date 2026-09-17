@@ -43,10 +43,6 @@ use wallet::{
     storage::referral::{OperationKind, PendingOperation, SubmissionStatus},
 };
 
-const BOB_EPOCH: u64 = 30;
-const ALICE_EPOCH: u64 = 20;
-const CAROL_EPOCH: u64 = 10;
-
 struct Ledger {
     state: V03State,
     height: BlockId,
@@ -308,18 +304,34 @@ impl Member {
         referral::Referral::new(&mut self.wallet, programs::referral(), program_account())
     }
 
-    fn authorize(&mut self, referrer: Option<NodeId>) {
+    async fn authorize(&mut self, referrer: Option<NodeId>) {
         let account = self.account;
         let node = self.node;
         let key = self.key.clone();
         let authorization = self
             .facade()
-            .prepare_first_use(account, node, referrer)
-            .expect("a first use can be started");
+            .prepare_registration(account, node, referrer)
+            .await
+            .expect("a registration can be started");
         let signature = key.sign(&authorization.message()).to_bytes();
         self.facade()
             .attach_node_signature(account, signature)
             .expect("the node's signature is accepted");
+    }
+
+    async fn register(&mut self) {
+        let account = self.account;
+        let reference = self.node.to_bytes();
+        self.facade()
+            .submit(reference, register(account))
+            .await
+            .expect("the registration is broadcast");
+        assert_eq!(
+            self.reconcile(reference).await,
+            SubmissionStatus::Settled,
+            "the registration settles on its effects"
+        );
+        self.sync().await;
     }
 
     fn restored_as(&self, home: WalletHome, wallet: WalletCore, account: AccountId) -> Self {
@@ -504,19 +516,26 @@ impl Scenario {
         import_oracle(&mut oracle);
         let mut bob = member_with(config.clone(), 1).await;
         let mut alice = if referred {
-            Some(member_with(config, 2).await)
+            Some(member_with(config.clone(), 2).await)
         } else {
             None
         };
 
         oracle_setup(&mut oracle, bob.node, amount).await;
 
-        let referrer = alice.as_mut().map(|parent| {
-            let invitation = parent.invitation();
-            bob.import(invitation);
-            parent.node
-        });
-        bob.authorize(referrer);
+        let referrer = alice.as_ref().map(|parent| parent.node);
+        if let Some(parent) = alice.as_mut() {
+            let (_carol_key, carol_node) = node(3);
+            let mut carol = member_with(config, 3).await;
+            carol.authorize(None).await;
+            carol.register().await;
+            parent.import(foreign_invitation(0x44, carol_node));
+            parent.authorize(Some(carol_node)).await;
+            parent.register().await;
+            bob.import(parent.invitation());
+        }
+        bob.authorize(referrer).await;
+        bob.register().await;
 
         Self {
             ledger,
@@ -724,6 +743,10 @@ const fn grant(node: NodeId, amount: u128) -> OperationKind {
     OperationKind::Grant { node, amount }
 }
 
+const fn register(participant: AccountId) -> OperationKind {
+    OperationKind::Register { participant }
+}
+
 fn foreign_invitation(seed: u8, node: NodeId) -> Invitation {
     let holder = SecretSpendingKey([seed; 32]).produce_private_key_holder(None);
     Invitation::new(
@@ -739,23 +762,6 @@ fn oracle_facade(oracle: &mut WalletCore) -> referral::Referral<'_> {
 }
 
 async fn oracle_setup(oracle: &mut WalletCore, granted: NodeId, amount: u128) {
-    let epochs = [
-        (CAROL_EPOCH, node(3).1),
-        (ALICE_EPOCH, node(2).1),
-        (BOB_EPOCH, node(1).1),
-    ];
-    for (index, (epoch, id)) in epochs.into_iter().enumerate() {
-        oracle_submit(
-            oracle,
-            reference(0x10, index),
-            OperationKind::AddEpochData {
-                epoch,
-                nodes: vec![id],
-            },
-        )
-        .await
-        .expect("the epoch is published");
-    }
     oracle_grant(oracle, [0x20; 32], granted, amount).await;
 }
 
@@ -771,10 +777,6 @@ async fn oracle_grant(oracle: &mut WalletCore, reference: [u8; 32], node: NodeId
     oracle_submit(oracle, reference, grant(node, amount))
         .await
         .expect("the node is granted its tickets");
-}
-
-fn reference(tag: u8, index: usize) -> [u8; 32] {
-    [tag.wrapping_add(u8::try_from(index).expect("the index fits in a byte")); 32]
 }
 
 async fn member(address: SocketAddr, node_seed: u8) -> Member {
@@ -819,7 +821,26 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
     bob.import(alice_invitation);
     alice.import(carol_invitation.clone());
 
-    bob.authorize(Some(alice.node));
+    let abandoned = carol.account;
+    let carol_node = carol.node;
+    let mut carol = carol.restore_with_a_new_participant().await;
+    let carol_account = carol.account;
+    assert_ne!(
+        carol_account, abandoned,
+        "an identifier that was never broadcast is not recoverable from the seed"
+    );
+    assert!(
+        carol.facade().intent(carol_account).is_none(),
+        "a restore recovers notes, not the wallet-local intents that preceded them"
+    );
+
+    carol.authorize(None).await;
+    carol.register().await;
+    alice.authorize(Some(carol_node)).await;
+    alice.register().await;
+    bob.authorize(Some(alice.node)).await;
+    bob.register().await;
+
     let bob_account = bob.account;
     let bob_source = ticket_account_id(program_account(), bob.node);
     let alice_seed = bob.reserve();
@@ -839,18 +860,24 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
         alice
             .facade()
             .state(incoming)
-            .expect("Alice discovers a credit before her participant exists"),
+            .expect("Alice discovers the credit her registration entitled her to"),
         State::Credit {
             recipient_node: alice_node,
             amount: 5,
         }
     );
-    assert!(
-        alice.facade().state(alice_account).is_err(),
-        "Alice has no participant state yet"
+    assert_eq!(
+        alice
+            .facade()
+            .state(alice_account)
+            .expect("Alice registered before the credit arrived"),
+        State::Participant {
+            node: alice_node,
+            referrer: Some(carol_node),
+            reward_balance: 0,
+        }
     );
 
-    alice.authorize(Some(carol.node));
     let carol_seed = alice.reserve();
     alice
         .submit([6; 32], incoming, Some(carol_seed))
@@ -875,14 +902,7 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
         "and so was the private note, with the same instruction"
     );
 
-    let abandoned = carol.account;
-    let carol_node = carol.node;
-    let mut carol = carol.restore_with_a_new_participant().await;
-    let carol_account = carol.account;
-    assert_ne!(
-        carol_account, abandoned,
-        "an identifier that was never broadcast is not recoverable from the seed"
-    );
+    carol.sync().await;
     let forwarded = carol.credit(carol_seed);
     assert_eq!(
         carol
@@ -894,12 +914,7 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
             amount: 5,
         }
     );
-    assert!(
-        carol.facade().intent(carol_account).is_none(),
-        "a restore recovers notes, not the wallet-local intents that preceded them"
-    );
 
-    carol.authorize(None);
     carol
         .submit([7; 32], forwarded, None)
         .await
@@ -914,12 +929,12 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
         .expect("the intent survives")
         .clone();
     assert!(
-        alice.facade().pending_first_use(alice_account).is_none(),
-        "a settled collection clears the first-use material it carried"
+        alice.facade().pending_registration(alice_account).is_none(),
+        "the registration that preceded the collection settled with its own operation"
     );
     assert!(
         settled.pending_credits.is_empty(),
-        "and the credit seed it accounted for"
+        "and the collection cleared the credit seed it accounted for"
     );
     assert!(
         settled.invitation.is_some(),
@@ -974,13 +989,13 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
     assert_eq!(kept.pending_credits, vec![onward_seed]);
     assert!(kept.invitation.is_some());
     assert!(
-        restarted.pending_first_use(alice_account).is_none(),
-        "reserving against an initialized participant needs no new node authorization"
+        restarted.pending_registration(alice_account).is_none(),
+        "reserving against a registered participant needs no new node authorization"
     );
 }
 
 #[test]
-async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart() {
+async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart() {
     let (_ledger, address, _handle) = start_sequencer().await;
     let mut bob = member(address, 1).await;
     let mut alice = member(address, 2).await;
@@ -990,8 +1005,9 @@ async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart(
 
     let authorization = bob
         .facade()
-        .prepare_first_use(account, bob_node, None)
-        .expect("a first use can be started");
+        .prepare_registration(account, bob_node, None)
+        .await
+        .expect("a registration can be started");
     let signature = bob.key.sign(&authorization.message()).to_bytes();
     bob.facade()
         .attach_node_signature(account, signature)
@@ -999,13 +1015,15 @@ async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart(
 
     let resumed = bob
         .facade()
-        .prepare_first_use(account, bob_node, None)
+        .prepare_registration(account, bob_node, None)
+        .await
         .expect("the same configuration resumes");
     assert_eq!(resumed.message(), authorization.message());
-    assert!(bob.facade().pending_first_use(account).is_some());
+    assert!(bob.facade().pending_registration(account).is_some());
     assert!(
         bob.facade()
-            .prepare_first_use(account, alice.node, None)
+            .prepare_registration(account, alice.node, None)
+            .await
             .is_err(),
         "a conflicting configuration is rejected"
     );
@@ -1016,15 +1034,17 @@ async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart(
             programs::referral(),
             AccountId::new([0xAB; 32])
         )
-        .prepare_first_use(account, bob_node, None)
+        .prepare_registration(account, bob_node, None)
+        .await
         .is_err(),
         "another deployment with the same node is a conflict"
     );
-    let kept = bob
+    let (kept_node, _kept_referrer, kept_signature) = bob
         .facade()
-        .pending_first_use(account)
-        .expect("the original first use survives");
-    assert_eq!(kept.node_signature, signature);
+        .pending_registration(account)
+        .expect("the original registration survives");
+    assert_eq!(kept_node, bob_node);
+    assert_eq!(kept_signature, signature);
     assert_eq!(
         bob.facade()
             .intent(account)
@@ -1038,7 +1058,8 @@ async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart(
     alice.import(foreign_invitation(0x44, carol_node));
     alice
         .facade()
-        .prepare_first_use(alice_account, alice_node, Some(carol_node))
+        .prepare_registration(alice_account, alice_node, Some(carol_node))
+        .await
         .expect("the imported invitation admits its node as the referrer");
     let bob_invitation = bob.invitation();
     assert!(
@@ -1051,18 +1072,37 @@ async fn first_use_bookkeeping_resumes_refuses_conflicts_and_survives_a_restart(
     assert!(
         alice
             .facade()
-            .prepare_first_use(alice_account, alice_node, Some(bob_node))
+            .prepare_registration(alice_account, alice_node, Some(bob_node))
+            .await
             .is_err(),
-        "and a first use for a referrer without an invitation is refused"
+        "and a registration for a referrer without an invitation is refused"
     );
 
     bob.restart().await;
-    let survived = bob
+    let (survived_node, _survived_referrer, survived_signature) = bob
         .facade()
-        .pending_first_use(account)
-        .expect("the first use survives a restart");
-    assert_eq!(survived.node, bob_node);
-    assert_eq!(survived.node_signature, signature);
+        .pending_registration(account)
+        .expect("the registration survives a restart");
+    assert_eq!(survived_node, bob_node);
+    assert_eq!(survived_signature, signature);
+
+    bob.register().await;
+    assert!(
+        bob.facade()
+            .prepare_registration(account, bob_node, None)
+            .await
+            .is_err(),
+        "a registered participant refuses a second registration"
+    );
+    let mut twin = member(address, 1).await;
+    let twin_account = twin.account;
+    assert!(
+        twin.facade()
+            .prepare_registration(twin_account, bob_node, None)
+            .await
+            .is_err(),
+        "a fresh participant for a node the registry already holds is refused before it is built"
+    );
 }
 
 #[test]
@@ -1175,16 +1215,9 @@ async fn a_grant_dropped_before_admission_is_seen_or_replaced_exactly_once() {
         "the replacement's first attempt is dropped before admission too"
     );
 
-    oracle_submit(
-        &mut oracle,
-        [0xD2; 32],
-        OperationKind::AddEpochData {
-            epoch: ALICE_EPOCH,
-            nodes: vec![alice_node],
-        },
-    )
-    .await
-    .expect("another oracle transaction consumes the nonce");
+    oracle_submit(&mut oracle, [0xD2; 32], grant(alice_node, 5))
+        .await
+        .expect("another oracle transaction consumes the nonce");
 
     let mut facade = oracle_facade(&mut oracle);
     assert_eq!(
@@ -1249,8 +1282,12 @@ async fn a_private_collect_settles_on_its_effects_when_its_history_is_lost() {
     );
     assert_eq!(scenario.tickets(), 0);
     assert!(
-        scenario.bob.facade().pending_first_use(account).is_none(),
-        "settling clears the first-use material"
+        scenario
+            .bob
+            .facade()
+            .pending_registration(account)
+            .is_none(),
+        "a collect carries no registration material"
     );
     scenario.bob.sync().await;
 
@@ -1465,8 +1502,6 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
     scenario.bob.sync().await;
 
     alice.sync().await;
-    alice.import(carol_invitation.clone());
-    alice.authorize(Some(carol_node));
     let alice_account = alice.account;
     let first_source = alice.credit(first_seed);
     let first_output = alice.reserve();
@@ -1595,36 +1630,40 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
 
 #[test]
 async fn a_settlement_that_cannot_be_persisted_keeps_the_intent_it_would_have_cleared() {
-    let mut scenario = Scenario::referred(5).await;
-    let account = scenario.bob.account;
+    let (_ledger, address, _handle) = start_sequencer().await;
+    let mut carol = member(address, 3).await;
+    let mut bob = member(address, 1).await;
+    let account = bob.account;
     let reference = [0xE2; 32];
 
-    let seed = scenario.bob.reserve();
-    scenario
-        .collect(reference, Some(seed))
+    carol.authorize(None).await;
+    carol.register().await;
+    bob.import(carol.invitation());
+    bob.authorize(Some(carol.node)).await;
+    let seed = bob.reserve();
+    bob.facade()
+        .submit(reference, register(account))
         .await
-        .expect("the collection is broadcast");
-    assert_eq!(scenario.tickets(), 0);
+        .expect("the registration is broadcast");
 
-    let (_config, storage, _statistics) = scenario.bob.home.paths();
+    let (_config, storage, _statistics) = bob.home.paths();
     std::fs::remove_file(&storage).expect("the storage file exists");
     std::fs::create_dir_all(&storage).expect("a directory now blocks the storage path");
 
     assert!(
-        scenario.bob.facade().reconcile(reference).await.is_err(),
+        bob.facade().reconcile(reference).await.is_err(),
         "a settlement that cannot be recorded fails"
     );
     assert_eq!(
-        scenario.bob.status(reference),
+        bob.status(reference),
         Some(SubmissionStatus::Pending),
         "the operation keeps the status it was last persisted with"
     );
     assert!(
-        scenario.bob.facade().pending_first_use(account).is_some(),
-        "the first-use material the settlement would have cleared survives"
+        bob.facade().pending_registration(account).is_some(),
+        "the registration the settlement would have cleared survives"
     );
-    let rolled_back = scenario
-        .bob
+    let rolled_back = bob
         .facade()
         .intent(account)
         .expect("the intent survives")
@@ -1641,25 +1680,26 @@ async fn a_settlement_that_cannot_be_persisted_keeps_the_intent_it_would_have_cl
 
     std::fs::remove_dir(&storage).expect("the blocking directory is removed");
     assert_eq!(
-        scenario
-            .bob
-            .facade()
+        bob.facade()
             .reconcile(reference)
             .await
             .expect("the settlement is recorded once the path is writable again"),
         SubmissionStatus::Settled,
         "the failed write was a settlement, not an inconclusive inclusion"
     );
-    assert!(scenario.bob.facade().pending_first_use(account).is_none());
-    let settled = scenario
-        .bob
+    assert!(bob.facade().pending_registration(account).is_none());
+    let settled = bob
         .facade()
         .intent(account)
         .expect("the intent survives")
         .clone();
-    assert!(settled.pending_credits.is_empty());
+    assert_eq!(
+        settled.pending_credits,
+        vec![seed],
+        "a settled registration consumes no reserved credit"
+    );
     assert!(
         settled.invitation.is_some(),
-        "the referrer's keys outlive the settlement that consumed the seed"
+        "the referrer's keys outlive the settlement that cleared the registration"
     );
 }

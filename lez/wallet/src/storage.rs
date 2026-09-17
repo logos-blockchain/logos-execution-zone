@@ -240,7 +240,7 @@ mod tests {
         let participant = lee::AccountId::new([5; 32]);
         let reference = [7; 32];
         let mut intent = referral::ReferralIntent::new(program_account);
-        intent.first_use = Some(referral::PendingFirstUse {
+        intent.registration = Some(referral::PendingRegistration {
             node: referral_core::NodeId::new([7; 32]),
             referrer: Some(referral_core::NodeId::new([8; 32])),
             signature: Some(referral_core::ed25519_dalek::Signature::from_bytes(
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(loaded_store, storage);
         let restored = &loaded_store.referral().intents[&participant];
         assert_eq!(restored.pending_credits.len(), 1);
-        assert!(restored.first_use().is_some());
+        assert!(restored.registration().is_some());
         assert!(restored.invitation.is_some());
         assert_eq!(
             loaded_store

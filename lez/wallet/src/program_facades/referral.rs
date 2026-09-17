@@ -11,7 +11,7 @@ use lee_core::{
     program::{InstructionData, PdaSeed},
 };
 use referral_core::{
-    CREDIT_IDENTIFIER, FirstUse, Instruction, Invitation, NodeBatch, NodeId, ORACLE_ACCOUNT_ID,
+    CREDIT_IDENTIFIER, Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID,
     ParticipantAuthorizationV1, ParticipantDescriptor, State, StoredState, credit_account_id,
     ed25519_dalek::Signature, registry_account_id, ticket_account_id,
 };
@@ -22,7 +22,7 @@ use crate::{
     storage::{
         key_chain::FoundPrivateAccount,
         referral::{
-            OperationKind, PendingFirstUse, PendingOperation, ReferralIntent, ReferralStore,
+            OperationKind, PendingOperation, PendingRegistration, ReferralIntent, ReferralStore,
             SubmissionStatus, random_identifier, random_seed,
         },
     },
@@ -92,8 +92,11 @@ impl<'wallet> Referral<'wallet> {
     }
 
     #[must_use]
-    pub fn pending_first_use(&self, participant: AccountId) -> Option<FirstUse> {
-        self.intent(participant)?.first_use()
+    pub fn pending_registration(
+        &self,
+        participant: AccountId,
+    ) -> Option<(NodeId, Option<NodeId>, [u8; 64])> {
+        self.intent(participant)?.registration()
     }
 
     #[must_use]
@@ -131,8 +134,8 @@ impl<'wallet> Referral<'wallet> {
             .intent(participant)
             .cloned()
             .unwrap_or_else(|| ReferralIntent::new(self.program_account()));
-        let recorded = intent.first_use.as_ref().map_or_else(
-            || self.referrer(participant, None).ok(),
+        let recorded = intent.registration.as_ref().map_or_else(
+            || self.referrer(participant).ok(),
             |pending| Some(pending.referrer),
         );
         if recorded.is_some_and(|referrer| referrer != Some(parent)) {
@@ -145,7 +148,7 @@ impl<'wallet> Referral<'wallet> {
         self.store_intent(participant, intent)
     }
 
-    pub fn prepare_first_use(
+    pub async fn prepare_registration(
         &mut self,
         participant: AccountId,
         node: NodeId,
@@ -165,23 +168,32 @@ impl<'wallet> Referral<'wallet> {
                 != Some(parent)
         {
             return Err(conflict(
-                "the referrer's invitation is needed before its first use",
+                "the referrer's invitation is needed before its registration",
             ));
         }
+        if matches!(
+            self.cached_state(participant),
+            Ok(State::Participant { .. })
+        ) {
+            return Err(conflict("this participant is already registered"));
+        }
+        if self.is_registered(node).await? {
+            return Err(conflict("this node is already registered"));
+        }
 
-        match &intent.first_use {
+        match &intent.registration {
             Some(pending)
                 if intent.program_account == program_account
                     && pending.node == node
                     && pending.referrer == referrer => {}
             Some(_pending) => {
                 return Err(conflict(
-                    "a pending first use for another deployment, node or referrer is unresolved",
+                    "a pending registration for another deployment, node or referrer is unresolved",
                 ));
             }
             None => {
                 intent.program_account = program_account;
-                intent.first_use = Some(PendingFirstUse {
+                intent.registration = Some(PendingRegistration {
                     node,
                     referrer,
                     signature: None,
@@ -202,13 +214,13 @@ impl<'wallet> Referral<'wallet> {
         &mut self,
         participant: AccountId,
         signature: [u8; 64],
-    ) -> Result<FirstUse, ExecutionFailureKind> {
+    ) -> Result<(NodeId, Option<NodeId>, [u8; 64]), ExecutionFailureKind> {
         let mut intent = self
             .intent(participant)
             .cloned()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let pending = intent
-            .first_use
+            .registration
             .as_mut()
             .ok_or(ExecutionFailureKind::AccountDataError(participant))?;
         pending.signature = Some(Signature::from_bytes(&signature));
@@ -223,11 +235,11 @@ impl<'wallet> Referral<'wallet> {
             return Err(ExecutionFailureKind::AccountDataError(participant));
         }
 
-        let first_use = intent
-            .first_use()
+        let registration = intent
+            .registration()
             .ok_or(ExecutionFailureKind::AccountDataError(participant))?;
         self.store_intent(participant, intent)?;
-        Ok(first_use)
+        Ok(registration)
     }
 
     pub fn reserve_credit(
@@ -378,22 +390,7 @@ impl<'wallet> Referral<'wallet> {
     ) -> Result<PendingOperation, ExecutionFailureKind> {
         let program_account = self.program_account();
         let (accounts, instruction, destination) = match &operation {
-            OperationKind::AddEpochData { epoch, nodes } => {
-                let new_node_ids = NodeBatch::new(nodes.clone())
-                    .ok_or_else(|| conflict("the registry batch exceeds its maximum length"))?;
-                (
-                    vec![
-                        AccountIdentity::Public(ORACLE_ACCOUNT_ID).balance(),
-                        AccountIdentity::PublicNoSign(registry_account_id(program_account))
-                            .select_program_shard(program_account),
-                    ],
-                    instruction_data(Instruction::AddEpochData {
-                        epoch: *epoch,
-                        new_node_ids,
-                    }),
-                    None,
-                )
-            }
+            OperationKind::Register { participant } => self.register_request(*participant)?,
             OperationKind::Grant { node, amount } => (
                 vec![
                     AccountIdentity::Public(ORACLE_ACCOUNT_ID).balance(),
@@ -479,6 +476,34 @@ impl<'wallet> Referral<'wallet> {
         })
     }
 
+    fn register_request(
+        &self,
+        participant: AccountId,
+    ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
+    {
+        let program_account = self.program_account();
+        let descriptor = self.descriptor(participant)?;
+        let (node, referrer, node_signature) = self
+            .pending_registration(participant)
+            .ok_or_else(|| conflict("this participant has no signed registration"))?;
+
+        Ok((
+            vec![
+                self.own_private(participant)?
+                    .select_program_shard(program_account),
+                AccountIdentity::PublicNoSign(registry_account_id(program_account))
+                    .select_program_shard(program_account),
+            ],
+            instruction_data(Instruction::Register {
+                participant: descriptor,
+                node,
+                referrer,
+                node_signature,
+            }),
+            None,
+        ))
+    }
+
     fn collect_request(
         &self,
         participant: AccountId,
@@ -488,8 +513,7 @@ impl<'wallet> Referral<'wallet> {
     {
         let program_account = self.program_account();
         let descriptor = self.descriptor(participant)?;
-        let first_use = self.pending_first_use(participant);
-        let referrer = self.referrer(participant, first_use.as_ref())?;
+        let referrer = self.referrer(participant)?;
 
         let mut accounts = vec![
             self.own_private(participant)?
@@ -525,13 +549,11 @@ impl<'wallet> Referral<'wallet> {
                 ))
             })
             .transpose()?;
-        self.push_registry(&mut accounts, first_use.is_some());
 
         Ok((
             accounts,
             instruction_data(Instruction::Collect {
                 participant: descriptor,
-                first_use,
             }),
             destination,
         ))
@@ -573,23 +595,27 @@ impl<'wallet> Referral<'wallet> {
                 return;
             };
             recorded.status = status;
-            let OperationKind::Collect {
-                participant,
-                output_seed,
-                ..
-            } = recorded.operation
-            else {
-                return;
-            };
             if status != SubmissionStatus::Settled {
                 return;
             }
-            let Some(intent) = store.intents.get_mut(&participant) else {
-                return;
-            };
-            intent.first_use = None;
-            if let Some(seed) = output_seed {
-                intent.settle_credit(seed);
+            match recorded.operation {
+                OperationKind::Grant { .. } => {}
+                OperationKind::Register { participant } => {
+                    if let Some(intent) = store.intents.get_mut(&participant) {
+                        intent.registration = None;
+                    }
+                }
+                OperationKind::Collect {
+                    participant,
+                    output_seed,
+                    ..
+                } => {
+                    if let Some(seed) = output_seed
+                        && let Some(intent) = store.intents.get_mut(&participant)
+                    {
+                        intent.settle_credit(seed);
+                    }
+                }
             }
         })?;
         Ok(status)
@@ -628,28 +654,31 @@ impl<'wallet> Referral<'wallet> {
             .map_err(ExecutionFailureKind::SequencerError)
     }
 
-    fn push_registry(&self, accounts: &mut Vec<AccountMention>, first_use: bool) {
-        if first_use {
-            let program_account = self.program_account();
-            accounts.push(
-                AccountIdentity::PublicNoSign(registry_account_id(program_account))
-                    .select_program_shard(program_account),
-            );
-        }
-    }
-
-    fn referrer(
-        &self,
-        participant: AccountId,
-        first_use: Option<&FirstUse>,
-    ) -> Result<Option<NodeId>, ExecutionFailureKind> {
-        if let Some(first_use) = first_use {
-            return Ok(first_use.referrer);
-        }
-        let State::Participant { referrer, .. } = self.cached_state(participant)? else {
-            return Err(ExecutionFailureKind::AccountDataError(participant));
+    fn referrer(&self, participant: AccountId) -> Result<Option<NodeId>, ExecutionFailureKind> {
+        let Ok(State::Participant { referrer, .. }) = self.cached_state(participant) else {
+            return Err(conflict("this participant is not registered yet"));
         };
         Ok(referrer)
+    }
+
+    async fn is_registered(&self, node: NodeId) -> Result<bool, ExecutionFailureKind> {
+        let program_account = self.program_account();
+        let account = self
+            .wallet
+            .get_account_view(ProgramShardSelector::new(
+                registry_account_id(program_account),
+                program_account,
+            ))
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        let Some(StoredState {
+            state: State::Registry(registry),
+            ..
+        }) = StoredState::decode(account.data.shard(program_account))
+        else {
+            return Ok(false);
+        };
+        Ok(registry.contains(node))
     }
 
     fn intent_or_recovered(
