@@ -11,5 +11,7 @@ workspace = true
 lee_core.workspace = true
 borsh.workspace = true
 serde.workspace = true
-risc0-zkvm.workspace = true
 ed25519-dalek.workspace = true
+
+[dev-dependencies]
+risc0-zkvm.workspace = true
