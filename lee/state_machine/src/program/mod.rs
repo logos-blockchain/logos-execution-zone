@@ -66,6 +66,13 @@ impl Program {
         &self.elf
     }
 
+    pub fn user_elf(&self) -> Result<Vec<u8>, LeeError> {
+        Ok(risc0_binfmt::ProgramBinary::decode(&self.elf)
+            .map_err(LeeError::InvalidProgramBytecode)?
+            .user_elf
+            .to_vec())
+    }
+
     pub fn serialize_instruction<T: BorshSerialize>(
         instruction: T,
     ) -> Result<InstructionData, LeeError> {
@@ -203,4 +210,10 @@ pub(crate) fn check_exit_code(
             Err(on_failure(format!("unexpected exit {exit_code:?}")))
         }
     }
+}
+
+/// Re-attaches the protocol's fixed kernel ELF to `user_elf`, producing a full `ProgramBinary`
+/// blob ready to decode and execute.
+pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
+    risc0_binfmt::ProgramBinary::new(user_elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode()
 }

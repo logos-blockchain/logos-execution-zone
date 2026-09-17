@@ -68,7 +68,12 @@ fn insert_program() {
             .shard(PROGRAM_LOADER_ACCOUNT_ID),
     )
     .expect("the segment lands in the loader's shard at the address the header names");
-    assert_eq!(segment.bytecode, program_to_insert.elf());
+    assert_eq!(
+        segment.bytecode,
+        program_to_insert
+            .user_elf()
+            .expect("a builtin decodes as a ProgramBinary")
+    );
     assert_eq!(segment.next_segment, None);
 }
 

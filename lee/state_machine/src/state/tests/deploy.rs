@@ -18,11 +18,15 @@ use super::*;
 fn manually_segmented_program_reconstructs_and_executes_identically() {
     let program = crate::test_methods::noop();
     let full_binary = program.elf();
+    // Segments only ever hold `user_elf`.
+    let user_elf = risc0_binfmt::ProgramBinary::decode(full_binary)
+        .unwrap()
+        .user_elf;
 
     // However many chunks, as long as it's more than one — this is testing reconstruction
     // across several accounts, not any particular chunk size.
-    let chunk_size = full_binary.len().div_ceil(4).max(1);
-    let chunks: Vec<&[u8]> = full_binary.chunks(chunk_size).collect();
+    let chunk_size = user_elf.len().div_ceil(4).max(1);
+    let chunks: Vec<&[u8]> = user_elf.chunks(chunk_size).collect();
     assert!(
         chunks.len() > 1,
         "test needs a real multi-chunk split, got {} chunk(s)",
@@ -114,6 +118,25 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         .expect("execution against the manually-reconstructed binary should succeed");
 
     assert_eq!(direct_output, reconstructed_output);
+}
+
+/// Unlike the round-trip above, which builds its program in-tree, this checks a real committed
+/// artifact, so it can catch its embedded kernel drifting from the protocol's current one.
+#[test]
+fn a_committed_artifacts_kernel_has_not_drifted() {
+    let user_elf = risc0_binfmt::ProgramBinary::decode(crate::PRIVACY_PRESERVING_CIRCUIT_ELF)
+        .expect("a committed artifact decodes")
+        .user_elf;
+    let reattached = crate::program::attach_kernel(user_elf);
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&reattached)
+        .expect("re-attaching the current kernel must still decode")
+        .into();
+    assert_eq!(
+        image_id,
+        crate::PRIVACY_PRESERVING_CIRCUIT_ID,
+        "the committed artifact's embedded kernel no longer matches attach_kernel's current one \
+         \u{2014} rebuild artifacts (`just build-artifacts`)"
+    );
 }
 
 /// A segment chain longer than `MAX_PROGRAM_SEGMENTS` is rejected. The cap trips before the walk
@@ -248,6 +271,10 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
 
     let segment_key = PrivateKey::try_new([1; 32]).unwrap();
     let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+        .unwrap()
+        .user_elf
+        .to_vec();
     let write_segment_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
         vec![ProgramShardSelector::new(
@@ -256,7 +283,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         )],
         vec![Nonce(0)],
         Instruction::WriteSegment {
-            bytecode: program.elf().to_vec(),
+            bytecode: user_elf,
             next_segment: None,
         },
     )
