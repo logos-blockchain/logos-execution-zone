@@ -9512,6 +9512,8 @@ dependencies = [
  "lee",
  "lee_core",
  "ping_core",
+ "referral_core",
+ "referral_program",
  "sequencer_stake_core",
  "token_core",
  "token_program",

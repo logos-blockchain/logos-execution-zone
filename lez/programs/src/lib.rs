@@ -13,8 +13,8 @@ mod inner {
         BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
         FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF,
-        WRAPPED_TOKEN_ID,
+        REFERRAL_ELF, REFERRAL_ID, SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID,
+        WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -109,6 +109,12 @@ mod inner {
         Program::new_unchecked(SEQUENCER_STAKE_ID, Cow::Borrowed(SEQUENCER_STAKE_ELF))
     }
 
+    #[must_use]
+    #[inline]
+    pub const fn referral() -> Program {
+        Program::new_unchecked(REFERRAL_ID, Cow::Borrowed(REFERRAL_ELF))
+    }
+
     #[cfg(test)]
     mod tests {
         use lee::{
@@ -187,6 +193,7 @@ mod inner {
             let faucet_program = faucet();
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
+            let referral_program = referral();
 
             assert_eq!(token_program.id(), TOKEN_ID);
             assert_eq!(token_program.elf(), TOKEN_ELF);
@@ -196,6 +203,8 @@ mod inner {
             assert_eq!(bridge_program.elf(), BRIDGE_ELF);
             assert_eq!(sequencer_stake_program.id(), SEQUENCER_STAKE_ID);
             assert_eq!(sequencer_stake_program.elf(), SEQUENCER_STAKE_ELF);
+            assert_eq!(referral_program.id(), REFERRAL_ID);
+            assert_eq!(referral_program.elf(), REFERRAL_ELF);
         }
 
         #[test]
@@ -215,6 +224,7 @@ mod inner {
                 (BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID),
                 (WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID),
                 (SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID),
+                (REFERRAL_ELF, REFERRAL_ID),
             ];
             for (elf, expected_id) in cases {
                 let program = Program::new((*elf).into()).unwrap();
