@@ -66,6 +66,12 @@ pub fn write_segment(
         "WriteSegment requires exactly {expected_len} account(s)"
     );
     let (target, rest) = pre_states.split_first().expect("length checked above");
+    // A program at this address would run as the loader, and so could rewrite any program's
+    // header or segments.
+    assert_ne!(
+        target.account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
+    );
     assert!(
         target.shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "segment target already deployed"
@@ -109,6 +115,10 @@ pub fn create_header(
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
+    );
+    assert_ne!(
+        pre_states[0].account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
     );
     assert!(
         pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),

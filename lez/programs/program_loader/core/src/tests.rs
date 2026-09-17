@@ -259,3 +259,29 @@ fn update_header_rejects_an_unauthorized_caller() {
         false,
     );
 }
+
+/// A program at this address would run as the loader and could rewrite any program.
+#[test]
+#[should_panic(expected = "the loader's own dispatch address")]
+fn a_segment_cannot_be_written_at_the_loader_address() {
+    let _diffs = write_segment(
+        &[empty_target(PROGRAM_LOADER_ACCOUNT_ID, true)],
+        vec![0_u8; 32],
+        None,
+    );
+}
+
+/// Segments too: a minimal one is header-length and decodes as a header.
+#[test]
+#[should_panic(expected = "the loader's own dispatch address")]
+fn a_header_cannot_be_created_at_the_loader_address() {
+    let first_segment = AccountId::new([3; 32]);
+    let _diffs = create_header(
+        &[
+            empty_target(PROGRAM_LOADER_ACCOUNT_ID, true),
+            segment_pre(first_segment, vec![0_u8; 32], None),
+        ],
+        first_segment,
+        true,
+    );
+}
