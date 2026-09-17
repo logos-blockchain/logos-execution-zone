@@ -5,7 +5,9 @@ use futures::never::Never;
 use kameo::actor::{ActorRef, Recipient, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
 use log::info;
-use sequencer_channel_config_actor::{ChannelConfigActor, SetPublisher};
+use sequencer_channel_config_actor::{
+    ChannelConfigActor, SetPublisher, SetSubmitter, SubmitConfig,
+};
 pub use sequencer_core::config::*;
 use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
@@ -210,6 +212,15 @@ pub fn run(
         let staked_keys_rx = executor.staked_keys_watch();
         let executor_ref = ExecutorActor::spawn(executor);
         info!("Executor Actor spawned");
+
+        // A config needs no turn, so the actor tells the executor to submit it
+        // the moment the signatures are in. Weak, because the executor owns
+        // the actor that holds this.
+        config_manager_ref
+            .tell(SetSubmitter(
+                executor_ref.clone().recipient::<SubmitConfig>().downgrade(),
+            ))
+            .await?;
 
         let scheduler_ref = Scheduler::spawn(Scheduler::new());
 

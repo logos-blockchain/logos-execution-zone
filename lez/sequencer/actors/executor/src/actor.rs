@@ -19,7 +19,7 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    PinBehindTip, SequencerCore, TransactionOrigin,
+    PinBehindTip, SequencerCore, SubmitConfig, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     gossip::AccreditedKeysReceiver,
@@ -214,6 +214,20 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
         if self.blocked_attempts.clear() {
             sequencer_executor_actor_metrics::record_publish_blocked_attempts(0);
         }
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<SubmitConfig>
+    for ExecutorActor<S, BP>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SubmitConfig(submission): SubmitConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.sequencer.submit_signed_config(*submission).await;
     }
 }
 
