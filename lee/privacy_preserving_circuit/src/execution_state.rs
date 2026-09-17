@@ -10,9 +10,9 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall, DeferReads,
-        DEFAULT_PROGRAM_OWNER, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow, UnsupportedCallKind, is_ownership_settled, post_state,
-        pre_states_match_accounts, validate_execution,
+        DEFAULT_PROGRAM_OWNER, IncrementalCall, InstructionData, MAX_NUMBER_CHAINED_CALLS,
+        PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow, UnsupportedCallKind,
+        is_ownership_settled, post_state, pre_states_match_accounts, validate_execution,
     },
 };
 use risc0_zkvm::guest::env;
@@ -255,6 +255,7 @@ impl ExecutionState {
                 chained_call.program_account_id,
                 caller_data,
                 &chained_call.pda_seeds,
+                &program_output.instruction_data,
                 program_output.state_diffs,
                 &image_id_by_account_id,
                 &mut program_outputs_iter,
@@ -355,6 +356,7 @@ impl ExecutionState {
         program_account_id: AccountId,
         caller: CallerData,
         caller_pda_seeds: &[PdaSeed],
+        instruction_data: &InstructionData,
         output_state_diffs: Vec<AccountStateDiff>,
         image_id_by_account_id: &HashMap<AccountId, ProgramId>,
         program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
@@ -391,6 +393,7 @@ impl ExecutionState {
             verify_probe_receipt(
                 program_account_id,
                 caller.account_id,
+                instruction_data,
                 image_id_by_account_id,
                 program_outputs_iter,
             )
@@ -645,6 +648,7 @@ impl ExecutionState {
 fn verify_probe_receipt(
     executing_account_id: AccountId,
     caller_account_id: Option<AccountId>,
+    instruction_data: &InstructionData,
     image_id_by_account_id: &HashMap<AccountId, ProgramId>,
     program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
 ) -> Option<DeferReads> {
@@ -664,6 +668,16 @@ fn verify_probe_receipt(
     assert_eq!(
         probe_output.caller_account_id, caller_account_id,
         "Probe output for program {executing_account_id:?} has the wrong caller"
+    );
+    let Ok(IncrementalCall::Probe(probed_instruction_data)) =
+        borsh::from_slice::<IncrementalCall>(&probe_output.instruction_data)
+    else {
+        panic!("Probe output for program {executing_account_id:?} is not a Probe envelope");
+    };
+    assert_eq!(
+        probed_instruction_data, *instruction_data,
+        "Probe output for program {executing_account_id:?} was answered for a different \
+         instruction than its Execute call received"
     );
 
     let image_id = image_id_by_account_id

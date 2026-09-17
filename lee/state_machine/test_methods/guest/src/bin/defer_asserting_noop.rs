@@ -1,6 +1,6 @@
 use lee_core::program::{
-    AccountStateDiff, CallKind, DeferReads, IncrementalCall, ProgramCall, ProgramEvent,
-    ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+    AccountStateDiff, DeferReads, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_probe, respond_unsupported_call,
 };
 
 type Instruction = ();
@@ -32,28 +32,8 @@ fn main() {
             )
             .write();
         }
-        ProgramCall::Incremental(ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: instruction_data,
-        }) => {
-            let Ok(IncrementalCall::Probe(_)) = borsh::from_slice::<IncrementalCall>(&instruction_data)
-            else {
-                respond_unsupported_call(ProgramCall::<Instruction>::Incremental(ProgramInput {
-                    self_account_id,
-                    caller_account_id,
-                    pre_states,
-                    instruction: instruction_data,
-                }));
-            };
-            ProgramOutput::new(self_account_id, caller_account_id, instruction_data, vec![])
-                .with_call_kind(CallKind::Incremental)
-                .with_events(vec![ProgramEvent {
-                    selector: DeferReads::SELECTOR,
-                    data: DeferReads::All.to_bytes(),
-                }])
-                .write();
+        ProgramCall::Probe(input) => {
+            respond_probe(&input, Some(DeferReads::All));
         }
         ProgramCall::Unsupported(..) | _ => respond_unsupported_call(call),
     }

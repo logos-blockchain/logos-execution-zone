@@ -3,7 +3,7 @@ use lee_core::{
     account::{AccountId, BalanceDiff},
     program::{
         AccountStateDiff, CallKind, ChainedCall, DeferReads, IncrementalCall, InstructionData,
-        ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, read_lee_call, respond_probe,
         respond_unsupported_call,
     },
 };
@@ -92,52 +92,47 @@ fn main() {
             .with_chained_calls(vec![chained_call])
             .write();
         }
-        ProgramCall::Incremental(ProgramInput {
+        ProgramCall::Probe(input) => {
+            match &input.instruction.3 {
+                ProbeAssertion::None => respond_probe(&input, None),
+                ProbeAssertion::Real(claim) => {
+                    let claim = *claim;
+                    respond_probe(&input, Some(claim));
+                }
+                // A made-up event unrelated to `DeferReads` - `respond_probe` only ever emits a
+                // `DeferReads` event (or none), so this case is built manually.
+                ProbeAssertion::Unrelated => {
+                    let instruction_data = borsh::to_vec(&IncrementalCall::Probe(
+                        borsh::to_vec(&input.instruction).expect("instruction serializes"),
+                    ))
+                    .expect("IncrementalCall serializes");
+                    ProgramOutput::new(
+                        input.self_account_id,
+                        input.caller_account_id,
+                        instruction_data,
+                        Vec::new(),
+                    )
+                    .with_call_kind(CallKind::Incremental)
+                    .with_events(vec![ProgramEvent {
+                        selector: UnrelatedEvent::SELECTOR,
+                        data: Vec::new(),
+                    }])
+                    .write();
+                }
+            }
+        }
+        ProgramCall::Update(ProgramInput {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: instruction_data,
+            instruction: delta_bytes,
         }) => {
-            let Ok(incremental_call) = borsh::from_slice::<IncrementalCall>(&instruction_data) else {
-                respond_unsupported_call(ProgramCall::<Instruction>::Incremental(ProgramInput {
-                    self_account_id,
-                    caller_account_id,
-                    pre_states,
-                    instruction: instruction_data,
-                }));
-            };
-            let delta_bytes = match incremental_call {
-                // Decodes the same `instruction_data` `Execute` received to decide what to
-                // assert.
-                IncrementalCall::Probe(probe_instruction_data) => {
-                    let probe_assertion = borsh::from_slice::<Instruction>(&probe_instruction_data)
-                        .map(|(_, _, _, probe_assertion)| probe_assertion)
-                        .unwrap_or(ProbeAssertion::None);
-                    let events = match probe_assertion {
-                        ProbeAssertion::None => vec![],
-                        ProbeAssertion::Real(claim) => vec![ProgramEvent {
-                            selector: DeferReads::SELECTOR,
-                            data: claim.to_bytes(),
-                        }],
-                        ProbeAssertion::Unrelated => vec![ProgramEvent {
-                            selector: UnrelatedEvent::SELECTOR,
-                            data: Vec::new(),
-                        }],
-                    };
-                    ProgramOutput::new(self_account_id, caller_account_id, instruction_data, vec![])
-                        .with_call_kind(CallKind::Incremental)
-                        .with_events(events)
-                        .write();
-                    return;
-                }
-                IncrementalCall::Update(delta_bytes) => delta_bytes,
-            };
             let Ok(TokenDiff::Add(amount)) = borsh::from_slice(&delta_bytes) else {
-                respond_unsupported_call(ProgramCall::<Instruction>::Incremental(ProgramInput {
+                respond_unsupported_call(ProgramCall::<Instruction>::Update(ProgramInput {
                     self_account_id,
                     caller_account_id,
                     pre_states,
-                    instruction: instruction_data,
+                    instruction: delta_bytes,
                 }));
             };
             let [pre]: [_; 1] = pre_states
@@ -162,6 +157,8 @@ fn main() {
             .expect("token account data fits under the size limit");
             let diff_output = AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data);
 
+            let instruction_data = borsh::to_vec(&IncrementalCall::Update(delta_bytes))
+                .expect("IncrementalCall serializes");
             ProgramOutput::new(
                 self_account_id,
                 caller_account_id,

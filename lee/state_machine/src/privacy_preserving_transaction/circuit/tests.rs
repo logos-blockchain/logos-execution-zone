@@ -67,11 +67,22 @@ fn decrypt_kind(
 /// what a legitimate guest needs.
 #[test]
 fn probe_cycles_stay_within_budget_for_every_incremental_capable_test_method() {
-    for (name, program) in [
-        ("stripped_token", crate::test_methods::stripped_token()),
+    let stripped_token_and_forward_instruction: (Vec<u8>, AccountId, Vec<u8>, ProbeAssertion) = (
+        Vec::new(),
+        AccountId::new([0; 32]),
+        Vec::new(),
+        ProbeAssertion::None,
+    );
+    for (name, program, probe_instruction) in [
+        (
+            "stripped_token",
+            crate::test_methods::stripped_token(),
+            borsh::to_vec(&StrippedTokenInstruction::Initialize { balance: 0 }).unwrap(),
+        ),
         (
             "stripped_token_and_forward",
             crate::test_methods::stripped_token_and_forward(),
+            borsh::to_vec(&stripped_token_and_forward_instruction).unwrap(),
         ),
     ] {
         let pre_state =
@@ -85,7 +96,7 @@ fn probe_cycles_stay_within_budget_for_every_incremental_capable_test_method() {
             self_account_id: program.id().into(),
             caller_account_id: None,
             pre_states: vec![pre_state],
-            instruction: borsh::to_vec(&IncrementalCall::Probe(Vec::new())).unwrap(),
+            instruction: borsh::to_vec(&IncrementalCall::Probe(probe_instruction)).unwrap(),
         };
         env_builder.write_slice(&lee_core::to_frame(&borsh::to_vec(&input).unwrap()));
 
