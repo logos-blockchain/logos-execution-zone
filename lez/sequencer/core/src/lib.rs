@@ -1091,8 +1091,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .submit_channel_config(prepared, submission.signatures)
             .await
         {
-            // Left unsubmitted: zone-sdk never took it, so the next signature
-            // or turn submits it again.
+            // Left unsubmitted: zone-sdk never took it, so the next turn
+            // discards it and funds another.
             warn!("Failed to submit the committee channel-config update: {err:#}");
             return;
         }

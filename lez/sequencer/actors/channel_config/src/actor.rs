@@ -42,6 +42,8 @@ struct OwnDraft {
     tx_hash: [u8; 32],
     /// Signatures by accredited-key index, so the choice below is ordered.
     signatures: BTreeMap<u16, Ed25519Signature>,
+    /// Handed to the submitter already; a further signature changes nothing.
+    submission_sent: bool,
 }
 
 pub struct ChannelConfigActor {
@@ -81,15 +83,20 @@ impl ChannelConfigActor {
         }
     }
 
-    /// Hands the core a draft to submit; the next turn submits what a dropped
-    /// send would have.
-    fn send_submission(&self, submission: Box<Submission>) {
+    /// Hands the core a draft to submit, reporting whether it arrived.
+    ///
+    /// Fire and forget on purpose: an `ask` here deadlocks, since the core
+    /// asks this actor and a kameo handler blocks its own mailbox.
+    fn send_submission(&self, submission: Box<Submission>) -> bool {
         let Some(submitter) = self.submitter.as_ref().and_then(WeakRecipient::upgrade) else {
-            return;
+            return false;
         };
         if let Err(err) = submitter.tell(SubmitConfig(submission)).try_send() {
             debug!("Dropped a signed channel config: {err}");
+            return false;
         }
+
+        true
     }
 
     /// This node's index in the live accredited list, which is what a
@@ -205,15 +212,17 @@ impl ChannelConfigActor {
             return;
         }
 
-        // On crossing the threshold, not on standing above it: a further
-        // signature changes nothing.
-        let was_short = draft.signatures.len() < required;
+        let already_sent = draft.submission_sent;
         draft.signatures.insert(index, msg.signature.signature);
-        if was_short
+        // Only set on a submission that arrived, so a dropped send is retried
+        // by the next signature rather than waiting for a turn to re-fund.
+        if !already_sent
             && draft.signatures.len() >= required
             && let Action::Submit(submission) = self.next_action()
+            && self.send_submission(submission)
+            && let Some(in_flight) = &mut self.draft
         {
-            self.send_submission(submission);
+            in_flight.submission_sent = true;
         }
     }
 }
@@ -268,6 +277,12 @@ impl Message<FundedTx> for ChannelConfigActor {
         let Some(view) = &self.view else {
             return Action::Idle;
         };
+        // The target can move while funding is in flight, and a draft on the
+        // one we asked for would no longer land.
+        if view.target.as_ref() != Some(&*target) {
+            debug!("The channel-config target moved while funding; dropping the draft");
+            return Action::Idle;
+        }
         if config_op(&tx).is_none_or(|op| !matches(&target, op))
             || accredited_keys != view.live_keys
             || signing_threshold != view.required_signatures
@@ -287,6 +302,7 @@ impl Message<FundedTx> for ChannelConfigActor {
             tx: *tx,
             tx_hash,
             signatures: BTreeMap::from([(index, signature)]),
+            submission_sent: false,
         });
 
         self.next_action()
