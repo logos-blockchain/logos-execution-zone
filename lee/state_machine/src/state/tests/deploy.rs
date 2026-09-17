@@ -86,11 +86,12 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "get_program must recompute the same image_id as the original"
     );
     assert_eq!(
-        reconstructed_binary, full_binary,
+        reconstructed_binary, user_elf,
         "get_program must concatenate the segments back in order to reproduce the original exactly"
     );
 
-    let reconstructed_program = Program::new(reconstructed_binary.into()).unwrap();
+    let reconstructed_program =
+        Program::new(crate::program::attach_kernel(&reconstructed_binary).into()).unwrap();
     assert_eq!(
         reconstructed_program.id(),
         program.id(),

@@ -640,8 +640,14 @@ mod tests {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
         // `deploy_emitter_txs` burns one payer nonce per `WriteSegment` chunk plus one for the
-        // final `CreateHeader`; this invoke is the payer's next use after that.
-        let chunk_count = test_methods::EVENT_EMITTER_ELF
+        // final `CreateHeader`; this invoke is the payer's next use after that. Segments only
+        // ever hold `user_elf`, so the chunk count is over the same bytes `deploy_emitter_txs`
+        // splits.
+        let user_elf = risc0_binfmt::ProgramBinary::decode(test_methods::EVENT_EMITTER_ELF)
+            .expect("EVENT_EMITTER_ELF must be a valid ProgramBinary")
+            .user_elf
+            .to_vec();
+        let chunk_count = user_elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .count();
         let payer_nonce = u128::try_from(chunk_count.saturating_add(1)).unwrap();
