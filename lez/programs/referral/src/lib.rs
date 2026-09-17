@@ -6,7 +6,7 @@ use lee_core::{
 pub use referral_core as core;
 use referral_core::{
     Instruction, NodeId, ORACLE_ACCOUNT_ID, ParticipantAuthorizationV1, Registry, State,
-    StoredState, registry_account_id, ticket_account_id,
+    registry_account_id, ticket_account_id,
 };
 
 #[must_use]
@@ -68,13 +68,13 @@ fn register(
     vec![
         write_state(
             participant,
-            State::Participant {
+            &State::Participant {
                 node,
                 referrer,
                 reward_balance: 0,
             },
         ),
-        write_state(registry_account, State::Registry(registry)),
+        write_state(registry_account, &State::Registry(registry)),
     ]
 }
 
@@ -111,7 +111,7 @@ fn grant(
         ShardStateDiff::unchanged(oracle),
         write_state(
             ticket_account,
-            State::Credit {
+            &State::Credit {
                 recipient_node: node,
                 amount: granted,
             },
@@ -163,7 +163,7 @@ fn collect(program: AccountId, pre_states: Vec<AccountInput>) -> Vec<ShardStateD
     let mut diffs = vec![
         write_state(
             participant,
-            State::Participant {
+            &State::Participant {
                 node,
                 referrer,
                 reward_balance: reward_balance
@@ -173,7 +173,7 @@ fn collect(program: AccountId, pre_states: Vec<AccountInput>) -> Vec<ShardStateD
         ),
         write_state(
             source,
-            State::Credit {
+            &State::Credit {
                 recipient_node,
                 amount: 0,
             },
@@ -187,7 +187,7 @@ fn collect(program: AccountId, pre_states: Vec<AccountInput>) -> Vec<ShardStateD
         );
         diffs.push(write_state(
             credit,
-            State::Credit {
+            &State::Credit {
                 recipient_node: parent,
                 amount,
             },
@@ -222,11 +222,7 @@ fn decode_optional_state(account: &AccountInput, program: AccountId) -> Option<S
     if shard.is_empty() {
         None
     } else {
-        Some(
-            StoredState::decode(shard)
-                .expect("account holds a decodable referral state")
-                .state,
-        )
+        Some(State::decode(shard).expect("account holds a decodable referral state"))
     }
 }
 
@@ -234,8 +230,8 @@ fn decode_state(account: &AccountInput, program: AccountId) -> State {
     decode_optional_state(account, program).expect("account holds initialized referral state")
 }
 
-fn write_state(account: AccountInput, state: State) -> ShardStateDiff {
-    ShardStateDiff::new(account, StoredState::new(state).to_data())
+fn write_state(account: AccountInput, state: &State) -> ShardStateDiff {
+    ShardStateDiff::new(account, state.to_data())
 }
 
 mod tests;

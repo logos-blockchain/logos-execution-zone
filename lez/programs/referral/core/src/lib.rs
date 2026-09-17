@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_REGISTERED_NODES: usize = 4096;
 
-pub const STATE_VERSION: u16 = 3;
 pub const CREDIT_IDENTIFIER: Identifier = 0;
 
 pub const DEPLOYMENT_CONTEXT: [u8; 32] = [
@@ -145,21 +144,7 @@ pub enum State {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize)]
-pub struct StoredState {
-    pub version: u16,
-    pub state: State,
-}
-
-impl StoredState {
-    #[must_use]
-    pub const fn new(state: State) -> Self {
-        Self {
-            version: STATE_VERSION,
-            state,
-        }
-    }
-
+impl State {
     #[must_use]
     pub fn to_data(&self) -> ShardData {
         borsh::to_vec(self)
@@ -173,19 +158,6 @@ impl StoredState {
         (!data.is_empty())
             .then(|| borsh::from_slice(data.as_ref()).ok())
             .flatten()
-    }
-}
-
-impl BorshDeserialize for StoredState {
-    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let version = u16::deserialize_reader(reader)?;
-        if version != STATE_VERSION {
-            return Err(invalid_data("unknown referral state version"));
-        }
-        Ok(Self {
-            version,
-            state: State::deserialize_reader(reader)?,
-        })
     }
 }
 
@@ -495,32 +467,18 @@ mod tests {
     }
 
     #[test]
-    fn stored_state_rejects_empty_unknown_version_and_trailing_bytes() {
-        let state = StoredState::new(State::Credit {
+    fn state_decoding_rejects_empty_and_trailing_bytes() {
+        let state = State::Credit {
             recipient_node: NODE,
             amount: 5,
-        });
+        };
         let data = state.to_data();
-        assert_eq!(StoredState::decode(&data), Some(state));
-        assert_eq!(StoredState::decode(&ShardData::empty()), None);
-
-        let mut wrong_version = data.to_vec();
-        wrong_version[..2].copy_from_slice(&(STATE_VERSION + 1).to_le_bytes());
-        assert_eq!(
-            StoredState::decode(&wrong_version.try_into().unwrap()),
-            None
-        );
+        assert_eq!(State::decode(&data), Some(state));
+        assert_eq!(State::decode(&ShardData::empty()), None);
 
         let mut trailing = data.to_vec();
         trailing.push(0);
-        assert_eq!(StoredState::decode(&trailing.try_into().unwrap()), None);
-
-        let mut unknown_variant = data.to_vec();
-        unknown_variant[2] = 0xff;
-        assert_eq!(
-            StoredState::decode(&unknown_variant.try_into().unwrap()),
-            None
-        );
+        assert_eq!(State::decode(&trailing.try_into().unwrap()), None);
     }
 
     #[test]

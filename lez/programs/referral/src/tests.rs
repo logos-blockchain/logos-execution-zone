@@ -35,7 +35,7 @@ fn signature(
 }
 
 fn account(id: AccountId, state: Option<State>, authorized: bool) -> AccountInput {
-    let data = state.map_or_else(ShardData::empty, |state| StoredState::new(state).to_data());
+    let data = state.map_or_else(ShardData::empty, |state| state.to_data());
     AccountInput::with_shard(id, authorized, PROGRAM, data)
 }
 
@@ -132,9 +132,8 @@ fn written(diffs: &[ShardStateDiff], id: AccountId) -> State {
         .iter()
         .find(|diff| diff.pre_state.account_id == id)
         .expect("account is among the diffs");
-    StoredState::decode(diff.post_data.as_ref().expect("account was written"))
+    State::decode(diff.post_data.as_ref().expect("account was written"))
         .expect("written state decodes")
-        .state
 }
 
 fn unchanged(diffs: &[ShardStateDiff], id: AccountId) -> bool {

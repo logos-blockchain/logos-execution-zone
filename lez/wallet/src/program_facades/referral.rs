@@ -12,7 +12,7 @@ use lee_core::{
 };
 use referral_core::{
     CREDIT_IDENTIFIER, Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID,
-    ParticipantAuthorizationV1, State, StoredState, credit_account_id, ed25519_dalek::Signature,
+    ParticipantAuthorizationV1, State, credit_account_id, ed25519_dalek::Signature,
     registry_account_id, ticket_account_id,
 };
 
@@ -72,11 +72,8 @@ impl<'wallet> Referral<'wallet> {
 
     pub fn state(&self, account: AccountId) -> Result<State, ExecutionFailureKind> {
         let found = self.found(account)?;
-        Ok(
-            StoredState::decode(found.account.data.shard(self.program_account()))
-                .ok_or(ExecutionFailureKind::AccountDataError(account))?
-                .state,
-        )
+        State::decode(found.account.data.shard(self.program_account()))
+            .ok_or(ExecutionFailureKind::AccountDataError(account))
     }
 
     #[must_use]
@@ -650,10 +647,7 @@ impl<'wallet> Referral<'wallet> {
             ))
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
-        let Some(StoredState {
-            state: State::Registry(registry),
-            ..
-        }) = StoredState::decode(account.data.shard(program_account))
+        let Some(State::Registry(registry)) = State::decode(account.data.shard(program_account))
         else {
             return Ok(false);
         };

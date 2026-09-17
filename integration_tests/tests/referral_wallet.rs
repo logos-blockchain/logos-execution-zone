@@ -26,8 +26,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce, program::PdaSeed,
 };
 use referral_core::{
-    Invitation, NodeId, ORACLE_ACCOUNT_ID, PROTOTYPE_ORACLE_SIGNING_KEY, State, StoredState,
-    credit_account_id,
+    Invitation, NodeId, ORACLE_ACCOUNT_ID, PROTOTYPE_ORACLE_SIGNING_KEY, State, credit_account_id,
     ed25519_dalek::{Signature, Signer as _, SigningKey},
     ticket_account_id,
 };
@@ -684,7 +683,7 @@ fn ticket_amount(ledger: &Arc<Mutex<Ledger>>, node: NodeId) -> u128 {
     let account = ledger
         .state
         .get_account_by_id(ticket_account_id(program_account(), node));
-    match StoredState::decode(account.data.shard(program_account())).map(|stored| stored.state) {
+    match State::decode(account.data.shard(program_account())) {
         None => 0,
         Some(State::Credit { amount, .. }) => amount,
         Some(other @ (State::Registry(_) | State::Participant { .. })) => {
