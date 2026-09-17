@@ -688,7 +688,6 @@ fn incremental_update_cycles_are_folded_into_the_total() {
     let (_, incremental_cycles) = program
         .execute_incremental(
             program_id,
-            None,
             &pre_states[0],
             &post_data,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
@@ -809,7 +808,6 @@ fn incremental_update_cycles_accumulate_across_diffs_in_the_same_call() {
     let (_, sender_update_cycles) = program
         .execute_incremental(
             program_id,
-            None,
             &sender_pre_state,
             &sender_post_data,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,

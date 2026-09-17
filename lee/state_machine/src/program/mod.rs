@@ -180,10 +180,13 @@ impl Program {
     /// Resolves `post_data` against current `pre_state`. A program that hasn't implemented
     /// `Incremental` responds with a no-op plus an `UnsupportedCallKind` event instead of an
     /// error; the caller checks for that event to fall back to copy/replace.
+    ///
+    /// No caller is passed: `Update` is never caller-gated by any program (whitelisting belongs
+    /// at `Execute` time, before a proof is even generated), and threading the real caller
+    /// through here would only risk leaking call-chain identity for no benefit.
     pub(crate) fn execute_incremental(
         &self,
         self_account_id: AccountId,
-        caller_account_id: Option<AccountId>,
         pre_state: &AccountWithMetadata,
         post_data: &Data,
         cycle_budget: Cycles,
@@ -194,7 +197,7 @@ impl Program {
 
         let input = ProgramInput {
             self_account_id,
-            caller_account_id,
+            caller_account_id: None,
             pre_states: vec![pre_state.clone()],
             instruction: borsh::to_vec(&IncrementalCall::Update(post_data.to_vec()))
                 .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,

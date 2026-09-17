@@ -898,12 +898,8 @@ fn resolve_diff(
     };
     let program = Program::new_unchecked(program_id, Cow::Owned(elf));
 
-    // `Update` is never caller-gated (whitelisting belongs at `Execute` time) and, on the
-    // circuit's proving path, is proven with no caller for exactly that reason — kept consistent
-    // here rather than exposing the real caller to a guest that has no legitimate use for it.
     let (incremental_output, incremental_cycles) = program.execute_incremental(
         executing_account_id,
-        None,
         &real_pre_state,
         post_data,
         cycle_budget.saturating_sub(*cycles_used),
