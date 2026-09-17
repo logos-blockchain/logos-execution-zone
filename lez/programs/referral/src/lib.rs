@@ -5,39 +5,30 @@ use lee_core::{
 };
 pub use referral_core as core;
 use referral_core::{
-    Instruction, NodeId, ORACLE_ACCOUNT_ID, ParticipantAuthorizationV1, ParticipantDescriptor,
-    Registry, State, StoredState, registry_account_id, ticket_account_id,
+    Instruction, NodeId, ORACLE_ACCOUNT_ID, ParticipantAuthorizationV1, Registry, State,
+    StoredState, registry_account_id, ticket_account_id,
 };
 
 #[must_use]
 pub fn execute(
     program: AccountId,
     pre_states: Vec<AccountInput>,
-    instruction: Instruction,
+    instruction: &Instruction,
 ) -> Vec<ShardStateDiff> {
-    match instruction {
+    match *instruction {
         Instruction::Register {
-            participant,
             node,
             referrer,
             node_signature,
-        } => register(
-            program,
-            pre_states,
-            &participant,
-            node,
-            referrer,
-            node_signature,
-        ),
+        } => register(program, pre_states, node, referrer, node_signature),
         Instruction::Grant { node, amount } => grant(program, pre_states, node, amount),
-        Instruction::Collect { participant } => collect(program, pre_states, &participant),
+        Instruction::Collect => collect(program, pre_states),
     }
 }
 
 fn register(
     program: AccountId,
     pre_states: Vec<AccountInput>,
-    descriptor: &ParticipantDescriptor,
     node: NodeId,
     referrer: Option<NodeId>,
     node_signature: [u8; 64],
@@ -45,7 +36,7 @@ fn register(
     let [participant, registry_account] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("Register requires the participant and the registry");
 
-    let participant_id = assert_participant(&participant, descriptor);
+    assert_participant(&participant);
     assert!(
         participant.shard_of(program).is_empty(),
         "participant is already initialized"
@@ -68,7 +59,7 @@ fn register(
         assert!(registry.contains(parent), "referrer node is not registered");
     }
     assert!(
-        ParticipantAuthorizationV1::new(program, node, participant_id, referrer)
+        ParticipantAuthorizationV1::new(program, node, participant.account_id, referrer)
             .verify(&node_signature),
         "node authorization signature is invalid"
     );
@@ -107,17 +98,10 @@ fn grant(
     let granted = match decode_optional_state(&ticket_account, program) {
         None => amount,
         Some(State::Credit {
-            recipient_node,
-            amount: available,
-        }) => {
-            assert_eq!(
-                recipient_node, node,
-                "ticket account holds another node's credit"
-            );
-            available
-                .checked_add(amount)
-                .expect("granted credit fits in u128")
-        }
+            amount: available, ..
+        }) => available
+            .checked_add(amount)
+            .expect("granted credit fits in u128"),
         Some(State::Registry(_) | State::Participant { .. }) => {
             panic!("ticket account does not hold a credit")
         }
@@ -135,11 +119,7 @@ fn grant(
     ]
 }
 
-fn collect(
-    program: AccountId,
-    pre_states: Vec<AccountInput>,
-    descriptor: &ParticipantDescriptor,
-) -> Vec<ShardStateDiff> {
+fn collect(program: AccountId, pre_states: Vec<AccountInput>) -> Vec<ShardStateDiff> {
     let mut accounts = pre_states.into_iter();
     let participant = accounts
         .next()
@@ -153,7 +133,7 @@ fn collect(
         "Collect takes at most one outgoing credit account"
     );
 
-    assert_participant(&participant, descriptor);
+    assert_participant(&participant);
     let State::Participant {
         node,
         referrer,
@@ -217,17 +197,11 @@ fn collect(
     diffs
 }
 
-fn assert_participant(participant: &AccountInput, descriptor: &ParticipantDescriptor) -> AccountId {
+fn assert_participant(participant: &AccountInput) {
     assert!(
         participant.is_authorized,
         "participant authorization is missing"
     );
-    let participant_id = descriptor.account_id();
-    assert_eq!(
-        participant.account_id, participant_id,
-        "participant is not the regular private account its descriptor derives"
-    );
-    participant_id
 }
 
 fn assert_oracle(oracle: &AccountInput) {

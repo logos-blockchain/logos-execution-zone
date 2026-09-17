@@ -249,10 +249,6 @@ impl WalletHome {
         )
     }
 
-    async fn create(address: SocketAddr) -> (Self, WalletCore, Mnemonic) {
-        Self::create_with(overrides(&[address])).await
-    }
-
     async fn create_with(overrides: WalletConfigOverrides) -> (Self, WalletCore, Mnemonic) {
         let home = Self {
             directory: tempfile::tempdir().expect("a temp wallet home"),
@@ -454,12 +450,8 @@ impl Member {
     }
 
     fn credit(&mut self, seed: PdaSeed) -> AccountId {
-        let account = self.account;
-        let descriptor = self
-            .facade()
-            .descriptor(account)
-            .expect("the participant's keys are known");
-        credit_account_id(program_account(), &seed, &descriptor.npk, &descriptor.vpk)
+        let invitation = self.invitation();
+        credit_account_id(program_account(), &seed, &invitation.npk, &invitation.vpk)
     }
 
     fn reserve(&mut self) -> PdaSeed {
@@ -687,14 +679,12 @@ fn import_oracle(wallet: &mut WalletCore) {
         .expect("the oracle key is persisted");
 }
 
-fn stored_state(ledger: &Arc<Mutex<Ledger>>, account_id: AccountId) -> Option<State> {
-    let ledger = ledger.lock().expect("ledger is not poisoned");
-    let account = ledger.state.get_account_by_id(account_id);
-    StoredState::decode(account.data.shard(program_account())).map(|stored| stored.state)
-}
-
 fn ticket_amount(ledger: &Arc<Mutex<Ledger>>, node: NodeId) -> u128 {
-    match stored_state(ledger, ticket_account_id(program_account(), node)) {
+    let ledger = ledger.lock().expect("ledger is not poisoned");
+    let account = ledger
+        .state
+        .get_account_by_id(ticket_account_id(program_account(), node));
+    match StoredState::decode(account.data.shard(program_account())).map(|stored| stored.state) {
         None => 0,
         Some(State::Credit { amount, .. }) => amount,
         Some(other @ (State::Registry(_) | State::Participant { .. })) => {
@@ -772,7 +762,7 @@ async fn member_with(overrides: WalletConfigOverrides, node_seed: u8) -> Member 
 }
 
 async fn oracle_wallet(address: SocketAddr) -> (WalletHome, WalletCore) {
-    let (home, mut wallet, _mnemonic) = WalletHome::create(address).await;
+    let (home, mut wallet, _mnemonic) = WalletHome::create_with(overrides(&[address])).await;
     import_oracle(&mut wallet);
     (home, wallet)
 }

@@ -27,7 +27,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        referral_program::execute(self_account_id, pre_states, instruction),
+        referral_program::execute(self_account_id, pre_states, &instruction),
     )
     .write();
 }

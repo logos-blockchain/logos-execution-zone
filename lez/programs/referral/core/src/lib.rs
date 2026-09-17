@@ -62,12 +62,6 @@ impl NodeId {
     }
 }
 
-impl AsRef<[u8]> for NodeId {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Invitation {
     pub deployment_context: [u8; 32],
@@ -99,21 +93,6 @@ impl Invitation {
     pub fn parent_node(&self, program_account: AccountId) -> Option<NodeId> {
         (self.deployment_context == DEPLOYMENT_CONTEXT && self.program_account == program_account)
             .then_some(self.parent_node)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct ParticipantDescriptor {
-    pub npk: NullifierPublicKey,
-    #[borsh(deserialize_with = "read_viewing_key")]
-    pub vpk: ViewingPublicKey,
-    pub identifier: Identifier,
-}
-
-impl ParticipantDescriptor {
-    #[must_use]
-    pub fn account_id(&self) -> AccountId {
-        AccountId::for_regular_private_account(&self.npk, &self.vpk, self.identifier)
     }
 }
 
@@ -258,7 +237,6 @@ impl ParticipantAuthorizationV1 {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     Register {
-        participant: ParticipantDescriptor,
         node: NodeId,
         referrer: Option<NodeId>,
         node_signature: [u8; 64],
@@ -267,9 +245,7 @@ pub enum Instruction {
         node: NodeId,
         amount: u128,
     },
-    Collect {
-        participant: ParticipantDescriptor,
-    },
+    Collect,
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -360,14 +336,6 @@ mod tests {
 
     fn viewing_key(seed: u8) -> ViewingPublicKey {
         ViewingPublicKey::from_seed(&[seed; 32], &[seed.wrapping_add(1); 32])
-    }
-
-    fn descriptor(seed: u8) -> ParticipantDescriptor {
-        ParticipantDescriptor {
-            npk: NullifierPublicKey([seed; 32]),
-            vpk: viewing_key(seed),
-            identifier: u128::from(seed),
-        }
     }
 
     fn registry_bytes(nodes: &[NodeId]) -> Vec<u8> {
@@ -557,21 +525,26 @@ mod tests {
 
     #[test]
     fn a_viewing_key_length_prefix_is_checked_before_its_body_is_read() {
-        let valid = borsh::to_vec(&descriptor(1)).unwrap();
-        assert!(borsh::from_slice::<ParticipantDescriptor>(&valid).is_ok());
+        let valid = borsh::to_vec(&Invitation::new(
+            PROGRAM,
+            NODE,
+            NullifierPublicKey([1; 32]),
+            viewing_key(1),
+        ))
+        .unwrap();
+        assert!(borsh::from_slice::<Invitation>(&valid).is_ok());
 
-        let mut overlong = [0; 32].to_vec();
+        let mut overlong = [0; 128].to_vec();
         overlong.extend_from_slice(
             &u32::try_from(ViewingPublicKey::LEN + 1)
                 .unwrap()
                 .to_le_bytes(),
         );
-        assert!(borsh::from_slice::<ParticipantDescriptor>(&overlong).is_err());
+        assert!(borsh::from_slice::<Invitation>(&overlong).is_err());
 
-        let mut short = [0; 32].to_vec();
+        let mut short = [0; 128].to_vec();
         short.extend_from_slice(&3_u32.to_le_bytes());
         short.extend_from_slice(&[0; 3]);
-        short.extend_from_slice(&0_u128.to_le_bytes());
-        assert!(borsh::from_slice::<ParticipantDescriptor>(&short).is_err());
+        assert!(borsh::from_slice::<Invitation>(&short).is_err());
     }
 }

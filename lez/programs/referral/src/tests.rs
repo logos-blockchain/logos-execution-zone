@@ -2,9 +2,7 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use lee_core::{
-    NullifierPublicKey,
     account::{AccountId, ShardData},
-    encryption::ViewingPublicKey,
     program::AccountInput,
 };
 use referral_core::{
@@ -22,22 +20,17 @@ fn node(seed: u8) -> (SigningKey, NodeId) {
     (key, id)
 }
 
-fn participant(seed: u8) -> ParticipantDescriptor {
-    ParticipantDescriptor {
-        npk: NullifierPublicKey([seed; 32]),
-        vpk: ViewingPublicKey::from_seed(&[seed; 32], &[seed.wrapping_add(1); 32]),
-        identifier: u128::from(seed),
-    }
+const fn participant(seed: u8) -> AccountId {
+    AccountId::new([seed; 32])
 }
 
 fn signature(
     key: &SigningKey,
     node: NodeId,
-    descriptor: &ParticipantDescriptor,
+    participant: AccountId,
     referrer: Option<NodeId>,
 ) -> [u8; 64] {
-    let authorization =
-        ParticipantAuthorizationV1::new(PROGRAM, node, descriptor.account_id(), referrer);
+    let authorization = ParticipantAuthorizationV1::new(PROGRAM, node, participant, referrer);
     key.sign(&authorization.message()).to_bytes()
 }
 
@@ -66,24 +59,16 @@ fn registered(nodes: &[NodeId]) -> AccountInput {
     )
 }
 
-fn register(
-    participant: &ParticipantDescriptor,
-    node: NodeId,
-    referrer: Option<NodeId>,
-    node_signature: [u8; 64],
-) -> Instruction {
+const fn register(node: NodeId, referrer: Option<NodeId>, node_signature: [u8; 64]) -> Instruction {
     Instruction::Register {
-        participant: participant.clone(),
         node,
         referrer,
         node_signature,
     }
 }
 
-fn collect(participant: &ParticipantDescriptor) -> Instruction {
-    Instruction::Collect {
-        participant: participant.clone(),
-    }
+const fn collect() -> Instruction {
+    Instruction::Collect
 }
 
 const fn credit(recipient_node: NodeId, amount: u128) -> State {
@@ -114,13 +99,13 @@ fn fresh(id: u8) -> AccountInput {
 }
 
 fn initialized(
-    descriptor: &ParticipantDescriptor,
+    participant: AccountId,
     node: NodeId,
     referrer: Option<NodeId>,
     reward_balance: u128,
 ) -> AccountInput {
     account(
-        descriptor.account_id(),
+        participant,
         Some(State::Participant {
             node,
             referrer,
@@ -130,9 +115,9 @@ fn initialized(
     )
 }
 
-fn unauthorized(descriptor: &ParticipantDescriptor, node: NodeId) -> AccountInput {
+fn unauthorized(participant: AccountId, node: NodeId) -> AccountInput {
     account(
-        descriptor.account_id(),
+        participant,
         Some(State::Participant {
             node,
             referrer: None,
@@ -180,19 +165,18 @@ fn a_registered_chain_pays_one_for_one() {
     let diffs = execute(
         PROGRAM,
         vec![
-            account(carol.account_id(), None, true),
+            account(carol, None, true),
             account(registry_account_id(PROGRAM), None, false),
         ],
-        register(
-            &carol,
+        &register(
             carol_node,
             None,
-            signature(&carol_key, carol_node, &carol, None),
+            signature(&carol_key, carol_node, carol, None),
         ),
     );
 
     assert_eq!(
-        written(&diffs, carol.account_id()),
+        written(&diffs, carol),
         State::Participant {
             node: carol_node,
             referrer: None,
@@ -206,15 +190,11 @@ fn a_registered_chain_pays_one_for_one() {
 
     let diffs = execute(
         PROGRAM,
-        vec![
-            account(alice.account_id(), None, true),
-            registered(&[carol_node]),
-        ],
-        register(
-            &alice,
+        vec![account(alice, None, true), registered(&[carol_node])],
+        &register(
             alice_node,
             Some(carol_node),
-            signature(&alice_key, alice_node, &alice, Some(carol_node)),
+            signature(&alice_key, alice_node, alice, Some(carol_node)),
         ),
     );
 
@@ -226,19 +206,18 @@ fn a_registered_chain_pays_one_for_one() {
     let diffs = execute(
         PROGRAM,
         vec![
-            account(bob.account_id(), None, true),
+            account(bob, None, true),
             registered(&[carol_node, alice_node]),
         ],
-        register(
-            &bob,
+        &register(
             bob_node,
             Some(alice_node),
-            signature(&bob_key, bob_node, &bob, Some(alice_node)),
+            signature(&bob_key, bob_node, bob, Some(alice_node)),
         ),
     );
 
     assert_eq!(
-        written(&diffs, bob.account_id()),
+        written(&diffs, bob),
         State::Participant {
             node: bob_node,
             referrer: Some(alice_node),
@@ -249,14 +228,14 @@ fn a_registered_chain_pays_one_for_one() {
     let diffs = execute(
         PROGRAM,
         vec![
-            initialized(&bob, bob_node, Some(alice_node), 7),
+            initialized(bob, bob_node, Some(alice_node), 7),
             tickets(bob_node, 5),
             fresh(0x41),
         ],
-        collect(&bob),
+        &collect(),
     );
 
-    assert_eq!(balance_of(&written(&diffs, bob.account_id())), 12);
+    assert_eq!(balance_of(&written(&diffs, bob)), 12);
     assert_eq!(
         written(&diffs, ticket_account_id(PROGRAM, bob_node)),
         credit(bob_node, 0)
@@ -270,14 +249,14 @@ fn a_registered_chain_pays_one_for_one() {
     let diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, Some(carol_node), 0),
+            initialized(alice, alice_node, Some(carol_node), 0),
             note(0x41, alice_node, 5),
             fresh(0x42),
         ],
-        collect(&alice),
+        &collect(),
     );
 
-    assert_eq!(balance_of(&written(&diffs, alice.account_id())), 5);
+    assert_eq!(balance_of(&written(&diffs, alice)), 5);
     assert_eq!(
         written(&diffs, AccountId::new([0x41; 32])),
         credit(alice_node, 0)
@@ -351,13 +330,8 @@ fn register_rejects_a_signature_addressed_to_another_participant() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![account(bob.account_id(), None, true), registered(&[])],
-        register(
-            &bob,
-            bob_node,
-            None,
-            signature(&bob_key, bob_node, &other, None),
-        ),
+        vec![account(bob, None, true), registered(&[])],
+        &register(bob_node, None, signature(&bob_key, bob_node, other, None)),
     );
 }
 
@@ -369,8 +343,8 @@ fn an_unauthorized_participant_cannot_collect() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![unauthorized(&bob, bob_node), tickets(bob_node, 1)],
-        collect(&bob),
+        vec![unauthorized(bob, bob_node), tickets(bob_node, 1)],
+        &collect(),
     );
 }
 
@@ -384,10 +358,10 @@ fn collect_rejects_a_credit_for_another_node() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, None, 0),
+            initialized(alice, alice_node, None, 0),
             note(0x41, bob_node, 10),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -400,10 +374,10 @@ fn collect_rejects_a_second_collection() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, None, 0),
+            initialized(alice, alice_node, None, 0),
             note(0x41, alice_node, 0),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -416,10 +390,10 @@ fn collect_rejects_an_overflowing_reward_balance() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, None, u128::MAX),
+            initialized(alice, alice_node, None, u128::MAX),
             note(0x41, alice_node, 1),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -432,11 +406,11 @@ fn a_root_collect_rejects_an_outgoing_credit_account() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, None, 0),
+            initialized(alice, alice_node, None, 0),
             note(0x41, alice_node, 10),
             fresh(0x42),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -450,10 +424,10 @@ fn a_referred_collect_requires_an_outgoing_credit_account() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, Some(carol_node), 0),
+            initialized(alice, alice_node, Some(carol_node), 0),
             note(0x41, alice_node, 10),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -467,11 +441,11 @@ fn collect_rejects_a_consumed_account_as_its_outgoing_credit() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&alice, alice_node, Some(carol_node), 0),
+            initialized(alice, alice_node, Some(carol_node), 0),
             note(0x41, alice_node, 10),
             note(0x42, carol_node, 0),
         ],
-        collect(&alice),
+        &collect(),
     );
 }
 
@@ -483,16 +457,8 @@ fn register_rejects_an_already_registered_node() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![
-            account(bob.account_id(), None, true),
-            registered(&[bob_node]),
-        ],
-        register(
-            &bob,
-            bob_node,
-            None,
-            signature(&bob_key, bob_node, &bob, None),
-        ),
+        vec![account(bob, None, true), registered(&[bob_node])],
+        &register(bob_node, None, signature(&bob_key, bob_node, bob, None)),
     );
 }
 
@@ -505,12 +471,11 @@ fn register_requires_a_registered_referrer() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![account(bob.account_id(), None, true), registered(&[])],
-        register(
-            &bob,
+        vec![account(bob, None, true), registered(&[])],
+        &register(
             bob_node,
             Some(alice_node),
-            signature(&bob_key, bob_node, &bob, Some(alice_node)),
+            signature(&bob_key, bob_node, bob, Some(alice_node)),
         ),
     );
 }
@@ -525,14 +490,13 @@ fn register_rejects_an_initialized_participant() {
     let _diffs = execute(
         PROGRAM,
         vec![
-            initialized(&bob, bob_node, None, 0),
+            initialized(bob, bob_node, None, 0),
             registered(&[alice_node]),
         ],
-        register(
-            &bob,
+        &register(
             bob_node,
             Some(alice_node),
-            signature(&bob_key, bob_node, &bob, Some(alice_node)),
+            signature(&bob_key, bob_node, bob, Some(alice_node)),
         ),
     );
 }
@@ -545,8 +509,8 @@ fn collect_rejects_an_unregistered_participant() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![account(bob.account_id(), None, true), tickets(bob_node, 1)],
-        collect(&bob),
+        vec![account(bob, None, true), tickets(bob_node, 1)],
+        &collect(),
     );
 }
 
@@ -566,12 +530,7 @@ fn register_rejects_a_full_registry() {
 
     let _diffs = execute(
         PROGRAM,
-        vec![account(bob.account_id(), None, true), registered(&filler)],
-        register(
-            &bob,
-            bob_node,
-            None,
-            signature(&bob_key, bob_node, &bob, None),
-        ),
+        vec![account(bob, None, true), registered(&filler)],
+        &register(bob_node, None, signature(&bob_key, bob_node, bob, None)),
     );
 }

@@ -12,8 +12,8 @@ use lee_core::{
 };
 use referral_core::{
     CREDIT_IDENTIFIER, Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID,
-    ParticipantAuthorizationV1, ParticipantDescriptor, State, StoredState, credit_account_id,
-    ed25519_dalek::Signature, registry_account_id, ticket_account_id,
+    ParticipantAuthorizationV1, State, StoredState, credit_account_id, ed25519_dalek::Signature,
+    registry_account_id, ticket_account_id,
 };
 
 use crate::{
@@ -70,18 +70,6 @@ impl<'wallet> Referral<'wallet> {
         Ok(participant)
     }
 
-    pub fn descriptor(
-        &self,
-        participant: AccountId,
-    ) -> Result<ParticipantDescriptor, ExecutionFailureKind> {
-        let found = self.found(participant)?;
-        Ok(ParticipantDescriptor {
-            npk: found.key_chain.nullifier_public_key,
-            vpk: found.key_chain.viewing_public_key.clone(),
-            identifier: found.kind.identifier(),
-        })
-    }
-
     pub fn state(&self, account: AccountId) -> Result<State, ExecutionFailureKind> {
         let found = self.found(account)?;
         Ok(
@@ -115,12 +103,12 @@ impl<'wallet> Referral<'wallet> {
         participant: AccountId,
         node: NodeId,
     ) -> Result<Invitation, ExecutionFailureKind> {
-        let descriptor = self.descriptor(participant)?;
+        let found = self.found(participant)?;
         Ok(Invitation::new(
             self.program_account(),
             node,
-            descriptor.npk,
-            descriptor.vpk,
+            found.key_chain.nullifier_public_key,
+            found.key_chain.viewing_public_key.clone(),
         ))
     }
 
@@ -474,7 +462,6 @@ impl<'wallet> Referral<'wallet> {
     ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
     {
         let program_account = self.program_account();
-        let descriptor = self.descriptor(participant)?;
         let (node, referrer, node_signature) = self
             .pending_registration(participant)
             .and_then(|pending| Some((pending.node, pending.referrer, pending.signed()?)))
@@ -491,7 +478,6 @@ impl<'wallet> Referral<'wallet> {
                     .select_program_shard(program_account),
             ],
             instruction_data(Instruction::Register {
-                participant: descriptor,
                 node,
                 referrer,
                 node_signature,
@@ -508,7 +494,6 @@ impl<'wallet> Referral<'wallet> {
     ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
     {
         let program_account = self.program_account();
-        let descriptor = self.descriptor(participant)?;
         let referrer = self.referrer(participant)?;
 
         let mut accounts = vec![
@@ -548,9 +533,7 @@ impl<'wallet> Referral<'wallet> {
 
         Ok((
             accounts,
-            instruction_data(Instruction::Collect {
-                participant: descriptor,
-            }),
+            instruction_data(Instruction::Collect),
             destination,
         ))
     }
