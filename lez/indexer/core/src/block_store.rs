@@ -557,12 +557,17 @@ mod tests {
         let header_key = emitter_header_key();
         let header_id = emitter_header_account_id();
 
+        // Segments only ever hold `user_elf`.
+        let user_elf = risc0_binfmt::ProgramBinary::decode(test_methods::EVENT_EMITTER_ELF)
+            .expect("EVENT_EMITTER_ELF must be a valid ProgramBinary")
+            .user_elf
+            .to_vec();
         let segment_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             vec![segment_id],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
             program_loader_core::Instruction::WriteSegment {
-                bytecode: test_methods::EVENT_EMITTER_ELF.to_vec(),
+                bytecode: user_elf,
                 next_segment: None,
             },
             common::test_utils::test_fee_declaration(payer.account_id),
