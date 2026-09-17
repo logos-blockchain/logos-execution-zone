@@ -10,7 +10,7 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
     program::{
-        AccountInput, CallKind, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
+        AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
         TransactionEvent, compute_public_authorized_pdas, get_program_via,
         pre_states_match_shard_selectors, validate_execution,
     },
@@ -137,7 +137,7 @@ impl ValidatedStateDiff {
         };
         let message = tx.message();
         // Signers both authorize the execution and advance their replay nonces.
-        let authorized = authorized_shards(&signers, &message.shard_selectors);
+        let authorized: HashSet<AccountId> = signers.iter().copied().collect();
         let mut cycles_used: u64 = 0;
         let result = Self::execute_authorized(
             message.program_account_id,
@@ -191,7 +191,7 @@ impl ValidatedStateDiff {
         program_account_id: AccountId,
         shard_selectors: &[ProgramShardSelector],
         instruction_data: &[u8],
-        authorized: &HashSet<ProgramShardSelector>,
+        authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
@@ -222,7 +222,7 @@ impl ValidatedStateDiff {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
         // Signers both authorize the execution and advance their replay nonces.
-        let authorized = authorized_shards(&signer_account_ids, &message.shard_selectors);
+        let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
         Self::execute_authorized(
             message.program_account_id,
             &message.shard_selectors,
@@ -249,7 +249,7 @@ impl ValidatedStateDiff {
         program_account_id: AccountId,
         shard_selectors: &[ProgramShardSelector],
         instruction_data: &[u8],
-        authorized: &HashSet<ProgramShardSelector>,
+        authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
         state: &V03State,
         block_id: BlockId,
@@ -289,15 +289,13 @@ impl ValidatedStateDiff {
             pda_seeds: vec![],
         };
 
-        let initial_caller_data = CallerFrame {
+        let initial_caller_data = CallerData {
             account_id: None,
-            authorized_shards: authorized.clone(),
+            authorized_accounts: authorized.clone(),
         };
 
-        let mut chained_calls = VecDeque::<(ChainedCall, CallerFrame)>::from_iter([(
-            initial_call,
-            initial_caller_data,
-        )]);
+        let mut chained_calls =
+            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
@@ -309,16 +307,11 @@ impl ValidatedStateDiff {
             let authorized_pdas =
                 compute_public_authorized_pdas(caller_data.account_id, &chained_call.pda_seeds);
 
-            // Per shard, not per account: a signature names one shard per account, so it
-            // authorizes that shard alone.
-            let is_authorized = |shard_selector: &ProgramShardSelector| {
-                authorized_pdas.contains(&shard_selector.account_id)
-                    || caller_data.authorized_shards.contains(shard_selector)
-                    || (shard_selector.program_account_id.is_none()
-                        && caller_data
-                            .authorized_shards
-                            .iter()
-                            .any(|signed| signed.account_id == shard_selector.account_id))
+            // Account is authorized if it is either in the caller's authorized accounts or in the
+            // list of PDAs the caller has authorized.
+            let is_authorized = |account_id: &AccountId| {
+                authorized_pdas.contains(account_id)
+                    || caller_data.authorized_accounts.contains(account_id)
             };
 
             // The caller only names shard selectors; resolve each one's actual value from the
@@ -346,7 +339,7 @@ impl ValidatedStateDiff {
                     };
                     Ok(AccountInput::at(
                         *shard_selector,
-                        is_authorized(shard_selector),
+                        is_authorized(&account_id),
                         &account.data,
                     ))
                 })
@@ -458,7 +451,7 @@ impl ValidatedStateDiff {
 
                 // Check that the program output pre_states marked as authorized are indeed
                 // authorized, and vice-versa.
-                let is_indeed_authorized = is_authorized(&shard_selector);
+                let is_indeed_authorized = is_authorized(&account_id);
                 ensure!(
                     !pre.is_authorized || is_indeed_authorized,
                     InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
@@ -544,22 +537,24 @@ impl ValidatedStateDiff {
             // already gates program_output's `is_authorized` via the `!pre.is_authorized ||
             // is_indeed_authorized` check.
             //
-            // Monotonic: a shard authorized anywhere in the chain stays authorized downstream.
-            let mut authorized_shards = caller_data.authorized_shards;
-            authorized_shards.extend(
+            // Union with the caller's authorized set so that authorization is monotonically
+            // growing: once an account is authorized at any point in the chain it remains
+            // authorized for all subsequent calls.
+            let mut authorized_accounts = caller_data.authorized_accounts;
+            authorized_accounts.extend(
                 program_output
                     .state_diffs
                     .iter()
                     .map(|diff| &diff.pre_state)
                     .filter(|pre| pre.is_authorized)
-                    .map(ProgramShardSelector::from),
+                    .map(|pre| pre.account_id),
             );
             for new_call in program_output.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
                     new_call,
-                    CallerFrame {
+                    CallerData {
                         account_id: Some(chained_call.program_account_id),
-                        authorized_shards: authorized_shards.clone(),
+                        authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
             }
@@ -723,24 +718,6 @@ impl ValidatedStateDiff {
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
-}
-
-/// Host-side call frame. Not `lee_core::CallerData`, which crosses into the guest.
-struct CallerFrame {
-    account_id: Option<AccountId>,
-    authorized_shards: HashSet<ProgramShardSelector>,
-}
-
-/// The shard each signer's own selector names, which is exactly what its signature covered.
-fn authorized_shards(
-    signers: &[AccountId],
-    shard_selectors: &[ProgramShardSelector],
-) -> HashSet<ProgramShardSelector> {
-    shard_selectors
-        .iter()
-        .filter(|shard_selector| signers.contains(&shard_selector.account_id))
-        .copied()
-        .collect()
 }
 
 /// Runs `program_loader`'s instruction as native Rust rather than a guest ELF, producing the same
