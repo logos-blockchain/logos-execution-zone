@@ -249,13 +249,6 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
-/**
  * Result of a generic transaction operation.
  */
 typedef struct FfiTransactionResult {
@@ -283,11 +276,22 @@ typedef struct FfiProgram {
 } FfiProgram;
 
 /**
+ * A program paired with the account id it's deployed at.
+ *
+ * Intended to be created manually.
+ */
+typedef struct FfiProgramDependency {
+  struct FfiProgram program;
+  struct FfiBytes32 account_id;
+} FfiProgramDependency;
+
+/**
  * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
   struct FfiProgram program;
-  const struct FfiProgram *deps;
+  struct FfiBytes32 self_account_id;
+  const struct FfiProgramDependency *deps;
   uintptr_t deps_size;
 } FfiProgramWithDependencies;
 
@@ -602,6 +606,7 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * - `handle`: Valid pointer to wallet handle
  * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
  * - `instruction_data`: Valid pointer to instruction data bytes
+ * - `program_account_id`: Account id the target program is deployed at
  * - `payer`: Fee payer, or null to self-pay from the first funded signing account in
  *   `account_identities` (the first signing account if none is funded). May be one of those
  *   signing accounts, or any other public account whose signing key the wallet holds (it co-signs
@@ -624,7 +629,7 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
                                                                uintptr_t account_identities_size,
                                                                const uint8_t *instruction_data,
                                                                uintptr_t instruction_data_size,
-                                                               struct FfiProgramId program_id,
+                                                               struct FfiBytes32 program_account_id,
                                                                const struct FfiBytes32 *payer,
                                                                struct FfiTransactionResult *out_result);
 
@@ -919,20 +924,20 @@ enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
  * Produce account id for public PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: Account id of the owner program
  * - `pda_seed`: 32 byte seed
  *
  * # Returns
  * - `FfiBytes32` representing account id bytes
  */
-struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId program_id,
+struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiBytes32 program_account_id,
                                                        FfiPdaSeed pda_seed);
 
 /**
  * Produce account id for private PDA.
  *
  * # Parameters
- * - `program_id`: Id of the owner program
+ * - `program_account_id`: Account id of the owner program
  * - `pda_seed`: 32 byte seed
  * - `npk`: 32 byte nullifier public key (can be obtained from
  *   `wallet_ffi_get_private_account_keys`)
@@ -951,7 +956,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
  * - `viewing_public_key` must be a valid pointer to a `u8`
  * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiBytes32 program_account_id,
                                                           FfiPdaSeed pda_seed,
                                                           FfiNullifierPublicKey npk,
                                                           const uint8_t *viewing_public_key,
