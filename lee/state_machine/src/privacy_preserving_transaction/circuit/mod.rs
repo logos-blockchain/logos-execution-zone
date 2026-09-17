@@ -21,16 +21,11 @@ use crate::{
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
-/// Cycle budget for an `IncrementalCall::Probe` invocation — deliberately far below
-/// `DEFAULT_PUBLIC_CYCLE_BUDGET`. `Probe` is meant to be answerable as a flag ("do you implement
-/// `Incremental` at all?"), needing no real computation and no real account data (the caller
-/// always supplies a minimal placeholder `pre_state` for `Probe`, never the account's real,
-/// possibly up-to-`DATA_MAX_LENGTH`-sized `data` — see the call site), so its cost should be
-/// flat across every implementer, not just small. Measured: the real guests in this repo answer
-/// it in ~7.5–7.8K cycles, identically whether the real account is empty or at the 700 KiB
-/// maximum, confirming the cost really is fixed startup/decode overhead, not program logic. 2^15
-/// (~32.8K) leaves roughly 4x headroom for legitimate variation across implementations while
-/// still leaving no meaningful room to hide real computation behind a `Probe` response.
+/// Cycle budget for an `IncrementalCall::Probe` invocation, deliberately far below
+/// `DEFAULT_PUBLIC_CYCLE_BUDGET` — `Probe` needs no real computation or account data (the caller
+/// sends a minimal placeholder `pre_state`, never the real, possibly `DATA_MAX_LENGTH`-sized
+/// `data`), so its cost should be flat. Measured: real guests answer in ~7.5–7.8K cycles
+/// regardless of account size; 2^15 leaves ~4x headroom without room to hide real computation.
 const PROBE_CYCLE_BUDGET: Cycles = 1 << 15;
 
 /// Proof of the privacy preserving execution circuit.
@@ -250,9 +245,8 @@ pub fn execute_and_prove_with_padded_inputs(
         // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
         let mut authorized_output_accounts = caller_authorized_accounts;
 
-        // Diffs with `post_data` need a matching proven `Incremental` receipt supplied right
-        // after this call's own output, in diff order — mirrors exactly what
-        // `resolve_diff_in_circuit` expects to pop from `program_outputs`.
+        // Matched `Incremental` receipts, supplied right after this call's own output, in diff
+        // order — what `resolve_diff_in_circuit` expects to pop from `program_outputs`.
         let mut incremental_receipts_and_outputs = Vec::new();
 
         for diff in &program_output.state_diffs {
@@ -287,19 +281,15 @@ pub fn execute_and_prove_with_padded_inputs(
                 Some(InputAccountIdentity::Public)
             );
 
-            // Best-effort mirror of the circuit's own resolution (see the comment at the top of
-            // this function): whenever `post_data` is present, resolve it now too, proving the
-            // resolution so the circuit can verify it — unconditionally, regardless of whether
-            // this account ends up `Bound` or `Deferred` in the circuit's own output (that's
-            // decided there, not here; see `ExecutionState`'s accumulation). A program that
-            // hasn't implemented `Incremental` responds with `UnsupportedCallKind`, itself a
-            // valid receipt — the original diff then applies verbatim, exactly like copy/replace.
+            // Whenever `post_data` is present, resolve it now too, proving the resolution so the
+            // circuit can verify it — regardless of whether this account ends up `Bound` or
+            // `Deferred` (decided in the circuit, not here). A program without `Incremental`
+            // responds `UnsupportedCallKind`; the diff then applies verbatim.
             //
-            // A public account's read-only touch (`post_data: None`) still needs a `Probe`
-            // receipt: even a touch that writes nothing can drive a decision elsewhere in the
-            // call chain, and the circuit can only classify this account `Deferred` if every
-            // program that ever touched it — written or not — answers for it. Private accounts
-            // never defer, so no probe is needed for them.
+            // A public account's read-only touch still needs a `Probe` receipt: even a touch
+            // that writes nothing can drive a decision elsewhere in the call chain, so the
+            // account can only be `Deferred` if every program that touched it — written or not —
+            // answers for it. Private accounts never defer, so no probe is needed.
             let incremental_call = match &diff.post_data {
                 Some(post_data) => Some(IncrementalCall::Update(post_data.as_ref().to_vec())),
                 None if is_public => Some(IncrementalCall::Probe(
@@ -466,19 +456,12 @@ fn execute_and_prove_program(
 }
 
 /// Proves a `CallKind::Incremental` invocation of `program` for one account — the wallet-side
-/// counterpart to `resolve_diff_in_circuit`'s expectations: every diff with `post_data` needs a
-/// matching `IncrementalCall::Update` receipt supplied to the circuit, and every other touch on
-/// a public account needs a matching `IncrementalCall::Probe` receipt, whether or not the
-/// program actually implements `Incremental` (an `UnsupportedCallKind` response is itself a
-/// valid, provable outcome the circuit checks for).
+/// counterpart to `resolve_diff_in_circuit`'s expectations. An `UnsupportedCallKind` response is
+/// itself a valid, provable outcome, not a failure.
 ///
-/// A program fully controls how much it computes before answering *any* call kind. `Update`
-/// gets the same budget public `Execute` calls do. `Probe` gets its own, much tighter
-/// `PROBE_CYCLE_BUDGET`: its own output is trivial (no data to resolve), so nothing about a
-/// legitimate answer needs more than startup/decode overhead — and unlike `Update`, `Probe` now
-/// runs on every read-only touch of every public account, not just on writes, so it's reachable
-/// far more often. A tight, kind-specific cap keeps a program from hiding meaningful computation
-/// behind either answer.
+/// `Update` shares `Execute`'s cycle budget; `Probe` uses the much tighter
+/// `PROBE_CYCLE_BUDGET`, since it now runs on every read-only touch of every public account, not
+/// just writes.
 fn execute_and_prove_incremental(
     program: &Program,
     self_account_id: AccountId,
@@ -487,12 +470,10 @@ fn execute_and_prove_incremental(
     call: &IncrementalCall,
 ) -> Result<Receipt, LeeError> {
     let (cycle_budget, pre_states) = match call {
-        // No implementation reads `pre_states` to answer `Probe` (nor does the circuit inspect
-        // a `Probe` receipt's content beyond the `UnsupportedCallKind` event) — real account
-        // `data` can be up to `DATA_MAX_LENGTH` (700 KiB), and shipping it through the guest's
-        // input stream for no reason would make `Probe`'s cost scale with account size instead
-        // of staying flat. Keep `account_id`/`is_authorized` (cheap, fixed-size) for
-        // defensiveness; zero the rest.
+        // No implementation reads `pre_states` to answer `Probe`, and the circuit never inspects
+        // a `Probe` receipt beyond the `UnsupportedCallKind` event — sending the real `data` (up
+        // to `DATA_MAX_LENGTH`) would make cost scale with account size. Keep
+        // `account_id`/`is_authorized`; zero the rest.
         IncrementalCall::Probe(_) => (
             PROBE_CYCLE_BUDGET,
             vec![AccountWithMetadata::new(

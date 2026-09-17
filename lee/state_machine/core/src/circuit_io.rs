@@ -55,9 +55,9 @@ pub struct PrivacyPreservingCircuitInput {
 )]
 pub enum InputAccountIdentity {
     /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier. Whether a given touch ends up `Bound` or `Deferred`
-    /// is never declared here — it's inferred per diff from whether the executing program
-    /// implements `CallKind::Incremental` (see `ExecutionState`'s per-account accumulation).
+    /// commitment, ciphertext, or nullifier. Whether a touch ends up `Bound` or `Deferred` is
+    /// never declared here — it's inferred per diff from whether the executing program
+    /// implements `CallKind::Incremental`.
     Public,
     Private(PrivateWitness),
 }
@@ -186,14 +186,13 @@ pub struct PrivateAction {
 /// One pending, unresolved update to a `Deferred` account's `data`.
 ///
 /// Everything settlement needs to replay `CallKind::Incremental` for real, host-side, against
-/// live state. A `Deferred` account carries a list of these (see `PublicAction::Deferred`), one
-/// per touch by a program that implements `Incremental`, applied in order at settlement.
+/// live state. A `Deferred` account carries a list of these, one per touch by an
+/// `Incremental`-supporting program, applied in order at settlement.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct DeferredResolution {
     /// The program whose ELF resolves this account's `post_data` via `CallKind::Incremental` —
-    /// not necessarily the touched account itself (mirrors `resolve_diff`'s own distinction
-    /// between `executing_account_id` and `diff.pre_state.account_id`).
+    /// not necessarily the touched account itself.
     pub executing_account_id: AccountId,
     pub caller_account_id: Option<AccountId>,
     pub post_balance_diff: BalanceDiff,
@@ -202,23 +201,19 @@ pub struct DeferredResolution {
 
 /// A public account's outcome for one privacy-preserving execution.
 ///
-/// `Bound` and `Deferred` are never declared by a caller — every touch is classified per diff, by
-/// whether the program producing it implements `CallKind::Incremental`; a `Deferred`-eligible
-/// touch that later shares an account with a `Bound`-forced one folds into `Bound` for the rest
-/// of the execution (see `ExecutionState`'s accumulation logic).
+/// `Bound`/`Deferred` are never declared by a caller — inferred per diff from whether the
+/// producing program implements `CallKind::Incremental`.
 #[derive(BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub enum PublicAction {
-    /// Resolved in-circuit, part of what the proof attests to — `pre` anchors the proof's
-    /// validity to that exact starting value, checked against live state at settlement.
+    /// Resolved in-circuit, part of what the proof attests to — `pre` anchors the proof to that
+    /// exact starting value, checked against live state at settlement.
     Bound {
         pre: AccountWithMetadata,
         post: Account,
     },
-    /// Unresolved — no `pre` at all, deliberately: a `Deferred` account's value was never tied
-    /// to any specific starting state in the first place, so there's nothing to anchor or check
-    /// against live state at settlement. `resolutions` are replayed in order, each against
-    /// whatever the account actually holds when it's applied.
+    /// Unresolved, with no `pre` — nothing to anchor or check at settlement. `resolutions` are
+    /// replayed in order, each against whatever the account actually holds when applied.
     Deferred {
         account_id: AccountId,
         resolutions: Vec<DeferredResolution>,

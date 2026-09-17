@@ -12,10 +12,6 @@ use crate::AccountId;
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-/// Mirrors `lee_core::PublicAction`, minus `pre`.
-///
-/// Settlement reconstructs `pre` from live state for `Bound`, and `Deferred` never had one to
-/// carry in the first place (see `PublicAction`'s own doc for why).
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PublicActionWithID {
     Bound {

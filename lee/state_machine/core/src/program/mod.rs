@@ -776,12 +776,21 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Marker event asserting every read-only touch a program makes is safe to leave `Deferred`.
+/// Event asserting that some subset of a program's read-only touches are safe to leave
+/// `Deferred`, scoped by account ownership.
 ///
-/// A self-attested, program-wide claim emitted on a `Probe` response. Absence means the
-/// default: a read-only touch forces `Bound`.
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct DeferReads;
+/// A self-attested claim emitted on a `Probe` response — how much of the program's own logic it
+/// covers is up to the developer, not something the circuit verifies. Absence of this event (or
+/// a decode failure) means no claim at all: a read-only touch forces `Bound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum DeferReads {
+    /// Safe to defer only for accounts this program owns.
+    ProgramOwned,
+    /// Safe to defer only for accounts this program does *not* own.
+    ReadOnly,
+    /// Safe to defer regardless of ownership.
+    All,
+}
 
 impl DeferReads {
     pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
@@ -790,6 +799,17 @@ impl DeferReads {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("DeferReads serializes")
+    }
+
+    /// Whether this claim covers a specific touch, given whether the touched account is owned
+    /// by the program asserting it.
+    #[must_use]
+    pub const fn covers(&self, account_owned_by_program: bool) -> bool {
+        match self {
+            Self::ProgramOwned => account_owned_by_program,
+            Self::ReadOnly => !account_owned_by_program,
+            Self::All => true,
+        }
     }
 }
 

@@ -18,9 +18,25 @@ enum TokenDiff {
     Add(u128),
 }
 
+/// What this program's `Probe` response asserts.
+#[derive(BorshSerialize, BorshDeserialize)]
+enum ProbeAssertion {
+    None,
+    Real(DeferReads),
+    Unrelated,
+}
+
+/// A made-up event, unrelated to `DeferReads`.
+struct UnrelatedEvent;
+
+impl UnrelatedEvent {
+    const SELECTOR: [u8; 8] = [0x17, 0x01, 0xd5, 0xc8, 0xb9, 0xb9, 0x2e, 0xa5];
+}
+
 /// Raw bytes to write as `post_data`, the callee to forward the account to, the callee's
-/// instruction, and whether this program's `Probe` response should assert `DeferReads`.
-type Instruction = (Vec<u8>, AccountId, InstructionData, bool);
+/// instruction, and what this program's `Probe` response should assert. `Execute` also accepts
+/// an optional second, padding account (see `main`'s `Execute` arm).
+type Instruction = (Vec<u8>, AccountId, InstructionData, ProbeAssertion);
 
 /// `stripped_token`'s `Initialize`/`Incremental`, plus a forward on the same account — lets
 /// tests chain a further touch onto an `Incremental`-eligible one, which `stripped_token` alone
@@ -33,12 +49,21 @@ fn main() {
                 self_account_id,
                 caller_account_id,
                 pre_states,
-                instruction: (post_data_bytes, callee, callee_instruction, _defer_reads),
+                instruction: (post_data_bytes, callee, callee_instruction, _probe_assertion),
             },
             instruction_data,
         ) => {
-            let Ok([target]) = <[_; 1]>::try_from(pre_states) else {
-                return;
+            // Accepts an optional second account, untouched and echoed straight through, for
+            // callers that need a padding account to satisfy the privacy-preserving
+            // transaction's "at least one private action" precondition.
+            let (target, padding) = match <[_; 2]>::try_from(pre_states) {
+                Ok([target, padding]) => (target, Some(padding)),
+                Err(pre_states) => {
+                    let Ok([target]) = <[_; 1]>::try_from(pre_states) else {
+                        return;
+                    };
+                    (target, None)
+                }
             };
             let account_id = target.account_id;
 
@@ -54,11 +79,15 @@ fn main() {
                 pda_seeds: vec![],
             };
 
+            let state_diffs = core::iter::once(target_diff)
+                .chain(padding.map(AccountStateDiff::unchanged))
+                .collect();
+
             ProgramOutput::new(
                 self_account_id,
                 caller_account_id,
                 instruction_data,
-                vec![target_diff],
+                state_diffs,
             )
             .with_chained_calls(vec![chained_call])
             .write();
@@ -78,18 +107,22 @@ fn main() {
                 }));
             };
             let delta_bytes = match incremental_call {
-                // Decodes the same `instruction_data` `Execute` received to decide whether to
-                // assert `DeferReads`.
+                // Decodes the same `instruction_data` `Execute` received to decide what to
+                // assert.
                 IncrementalCall::Probe(probe_instruction_data) => {
-                    let defer_reads = borsh::from_slice::<Instruction>(&probe_instruction_data)
-                        .is_ok_and(|(_, _, _, defer_reads)| defer_reads);
-                    let events = if defer_reads {
-                        vec![ProgramEvent {
+                    let probe_assertion = borsh::from_slice::<Instruction>(&probe_instruction_data)
+                        .map(|(_, _, _, probe_assertion)| probe_assertion)
+                        .unwrap_or(ProbeAssertion::None);
+                    let events = match probe_assertion {
+                        ProbeAssertion::None => vec![],
+                        ProbeAssertion::Real(claim) => vec![ProgramEvent {
                             selector: DeferReads::SELECTOR,
-                            data: DeferReads.to_bytes(),
-                        }]
-                    } else {
-                        vec![]
+                            data: claim.to_bytes(),
+                        }],
+                        ProbeAssertion::Unrelated => vec![ProgramEvent {
+                            selector: UnrelatedEvent::SELECTOR,
+                            data: Vec::new(),
+                        }],
                     };
                     ProgramOutput::new(self_account_id, caller_account_id, instruction_data, vec![])
                         .with_call_kind(CallKind::Incremental)

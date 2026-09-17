@@ -20,23 +20,16 @@ use risc0_zkvm::guest::env;
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
-    /// Every touched account's real, genuinely resolved value so far — always run through
-    /// `Incremental` in-circuit when a diff has `post_data`, regardless of whether the touch
-    /// ends up `Bound` or `Deferred`. This is what a downstream chained call's own claimed
-    /// pre-state is checked against, and it's exactly right for that purpose even for a
-    /// currently-`Deferred` account, since `Deferred` only affects what gets *emitted* at the
-    /// end (see `deferred`/`bound_accounts`), never what's tracked internally.
+    /// Every touched account's real, resolved value — always run through `Incremental` when
+    /// applicable, regardless of `Bound`/`Deferred`. What downstream chained calls check their
+    /// pre-state against.
     post_states: HashMap<AccountId, Account>,
-    /// Public accounts still accumulating unresolved deltas, one per touch by a program that
-    /// implements `Incremental`, in order — these are what actually get emitted as
-    /// `PublicAction::Deferred` at the end, in place of `post_states`' resolved value. An
-    /// account leaves this map (folds into `Bound`) the moment any touch of it is produced by a
-    /// program that doesn't implement `Incremental` — see `bound_accounts`.
+    /// Public accounts' unresolved deltas, in touch order — emitted as `PublicAction::Deferred`.
+    /// An account leaves this map (folds into `Bound`) the moment a non-`Incremental` touch
+    /// forces it.
     deferred: HashMap<AccountId, Vec<DeferredResolution>>,
-    /// Public accounts that have had at least one touch forced `Bound` (produced by a program
-    /// without `Incremental` support) or folded in from `deferred` for that reason. Once here,
-    /// an account stays `Bound` for the rest of the execution — a later `Incremental`-eligible
-    /// touch on it resolves immediately rather than re-entering `deferred`.
+    /// Accounts forced `Bound` by a non-`Incremental` touch. Permanent once set — a later
+    /// `Incremental`-eligible touch resolves immediately instead of re-entering `deferred`.
     bound_accounts: HashSet<AccountId>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
@@ -406,6 +399,10 @@ impl ExecutionState {
             let post = post_state(&resolved_diff, program_account_id)
                 .expect("balance diff must be valid; validate_execution already checked it");
 
+            // Whether `DeferReads::ProgramOwned`/`ReadOnly` cover this specific touch depends on
+            // who currently owns the account being read, not just which program is reading it.
+            let account_owned_by_program = pre.account.program_owner == program_account_id;
+
             if is_public {
                 if incremental_supported && let Some(post_data) = raw_post_data {
                     // Deferred-eligible — but only actually deferred if this account hasn't
@@ -422,12 +419,12 @@ impl ExecutionState {
                                 post_data: Some(post_data),
                             });
                     }
-                } else if incremental_supported && defer_reads {
-                    // A read-only touch (nothing to resolve) whose program asserted `DeferReads`
-                    // on its `Probe` response: a self-attested, program-wide claim that every
-                    // read it makes is safe to leave unanchored (see `DeferReads`'s doc). Taken
-                    // at face value — no-op for classification, exactly as if this touch never
-                    // happened.
+                } else if incremental_supported
+                    && defer_reads.is_some_and(|claim| claim.covers(account_owned_by_program))
+                {
+                    // A read-only touch (nothing to resolve) whose program's `DeferReads` claim
+                    // covers this account (see `DeferReads`'s doc). Taken at face value — no-op
+                    // for classification, exactly as if this touch never happened.
                 } else {
                     // Bound-forced: fold in and discard any pending deferred entries — their
                     // effects are already reflected in `post`/`post_states`, since every touch
@@ -616,7 +613,7 @@ fn verify_incremental_receipt(
     caller_account_id: Option<AccountId>,
     image_id_by_account_id: &HashMap<AccountId, ProgramId>,
     program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
-) -> (ProgramOutput, bool, bool) {
+) -> (ProgramOutput, bool, Option<DeferReads>) {
     let incremental_output = program_outputs_iter
         .next()
         .expect("prover must supply an Incremental resolution output for this account");
@@ -650,26 +647,28 @@ fn verify_incremental_receipt(
         .iter()
         .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
     // Only meaningful on a `Probe` response (see `resolve_diff_in_circuit`'s read-only branch) —
-    // a program's self-attested, program-wide claim that every read-only touch it makes is safe
-    // to leave `Deferred` (see `DeferReads`'s doc).
+    // a program's self-attested claim about which of its read-only touches are safe to leave
+    // `Deferred` (see `DeferReads`'s doc). A decode failure is treated the same as absence.
     let defer_reads = incremental_output
         .events
         .iter()
-        .any(|event| event.selector == DeferReads::SELECTOR);
+        .find(|event| event.selector == DeferReads::SELECTOR)
+        .and_then(|event| borsh::from_slice::<DeferReads>(&event.data).ok());
     (incremental_output, supported, defer_reads)
 }
 
 /// Resolves one diff to what should actually be applied, plus whether the program actually
-/// implements `Incremental` and, for a read-only touch, whether it asserted `DeferReads` — the
+/// implements `Incremental` and, for a read-only touch, what it asserted via `DeferReads` — the
 /// in-circuit analog of the host's `resolve_diff`/`Program::execute_incremental`. A diff with no
 /// `post_data` on a private account has nothing to resolve and no `Bound`/`Deferred`
-/// classification to inform — returned unchanged, with `(false, false)`, no receipt required.
+/// classification to inform — returned unchanged, with `(false, None)`, no receipt required.
 /// The same diff on a *public* account still needs an `IncrementalCall::Probe` receipt: a
 /// read-only touch can drive a decision elsewhere in the call chain (see `ExecutionState`'s
 /// Bound-forcing accumulation), so it forces `Bound` unless the program's `Probe` response
-/// carries a `DeferReads` event. If the program hasn't implemented `Incremental` (via either
-/// receipt kind), falls back to the original diff verbatim, same as the host version, also with
-/// `supported: false` — it could never be resolved later either, so it can't be `Deferred`.
+/// carries a `DeferReads` claim covering this account. If the program hasn't implemented
+/// `Incremental` (via either receipt kind), falls back to the original diff verbatim, same as
+/// the host version, also with `supported: false` — it could never be resolved later either, so
+/// it can't be `Deferred`.
 fn resolve_diff_in_circuit(
     diff: AccountStateDiff,
     executing_account_id: AccountId,
@@ -677,12 +676,12 @@ fn resolve_diff_in_circuit(
     is_public: bool,
     image_id_by_account_id: &HashMap<AccountId, ProgramId>,
     program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
-) -> (AccountStateDiff, bool, bool) {
+) -> (AccountStateDiff, bool, Option<DeferReads>) {
     let account_id = diff.pre_state.account_id;
 
     if diff.post_data.is_none() {
         if !is_public {
-            return (diff, false, false);
+            return (diff, false, None);
         }
         let (_probe_output, supported, defer_reads) = verify_incremental_receipt(
             account_id,
@@ -703,7 +702,7 @@ fn resolve_diff_in_circuit(
         program_outputs_iter,
     );
     if !supported {
-        return (diff, false, false);
+        return (diff, false, None);
     }
 
     let [resolved]: [AccountStateDiff; 1] = incremental_output
@@ -723,7 +722,7 @@ fn resolve_diff_in_circuit(
         resolved.pre_state.account, expected_pre_account,
         "Incremental resolution for account {account_id} was run against the wrong pre_state"
     );
-    (resolved, true, false)
+    (resolved, true, None)
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the

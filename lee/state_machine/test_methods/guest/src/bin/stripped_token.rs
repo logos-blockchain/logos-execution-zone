@@ -105,7 +105,7 @@ fn main() {
                         .with_call_kind(CallKind::Incremental)
                         .with_events(vec![ProgramEvent {
                             selector: DeferReads::SELECTOR,
-                            data: DeferReads.to_bytes(),
+                            data: DeferReads::All.to_bytes(),
                         }])
                         .write();
                     return;
@@ -118,8 +118,8 @@ fn main() {
                 .try_into()
                 .unwrap_or_else(|_| panic!("Incremental takes exactly one account"));
 
-            // Empty data means a fresh account nothing has ever initialized — treat it as
-            // starting from a zero balance rather than failing to decode.
+            // Empty data means a fresh, uninitialized account — treat as balance 0 instead of
+            // failing to decode.
             let current_balance = if pre.account.data.is_empty() {
                 0
             } else {

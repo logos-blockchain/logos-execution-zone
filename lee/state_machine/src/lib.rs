@@ -79,6 +79,14 @@ mod test_methods {
         )
     }
 
+    #[must_use]
+    pub const fn defer_asserting_noop() -> Program {
+        Program::new_unchecked(
+            test_methods::DEFER_ASSERTING_NOOP_ID,
+            Cow::Borrowed(test_methods::DEFER_ASSERTING_NOOP_ELF),
+        )
+    }
+
     #[cfg(feature = "prove")]
     #[must_use]
     pub const fn multi_segment_burner() -> Program {

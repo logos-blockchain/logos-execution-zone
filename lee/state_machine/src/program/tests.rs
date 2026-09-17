@@ -270,9 +270,9 @@ fn simple_balance_transfer_survives_the_incremental_call_kind_it_has_not_opted_i
     assert_eq!(decoded.raw_discriminant, 1);
 }
 
-/// `stripped_token_robinhood` doesn't implement `Incremental` at all — confirms the
-/// `UnsupportedCallKind` no-op a circuit-side mode-mismatch check would rely on is real for
-/// this program, though that check isn't wired in yet.
+/// `stripped_token_robinhood` doesn't implement `Incremental` — confirms it declines via
+/// `UnsupportedCallKind`, the signal `Bound`/`Deferred` classification relies on to force
+/// `Bound`.
 #[test]
 fn stripped_token_robinhood_signals_unsupported_on_the_incremental_call_kind() {
     let program = crate::test_methods::stripped_token_robinhood();

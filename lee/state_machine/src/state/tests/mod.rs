@@ -77,6 +77,8 @@ impl V03State {
         self.insert_program(&crate::test_methods::reordering_transfer());
         self.insert_program(&crate::test_methods::stripped_token());
         self.insert_program(&crate::test_methods::stripped_token_robinhood());
+        self.insert_program(&crate::test_methods::stripped_token_and_forward());
+        self.insert_program(&crate::test_methods::defer_asserting_noop());
         self
     }
 

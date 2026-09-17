@@ -711,7 +711,7 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let mut cycles_used = 0;
+        let mut cycles_used: Cycles = 0;
         let public_diff = message
             .public_actions
             .iter()
@@ -804,7 +804,7 @@ fn resolve_public_action(
     action: &PublicActionWithID,
     state: &V03State,
     cycle_budget: Cycles,
-    cycles_used: &mut u64,
+    cycles_used: &mut Cycles,
 ) -> Result<(AccountId, Account), LeeError> {
     let (account_id, resolutions) = match action {
         PublicActionWithID::Bound {
@@ -866,8 +866,8 @@ fn resolve_diff(
     caller_account_id: Option<AccountId>,
     state: &V03State,
     state_diff: &HashMap<AccountId, Account>,
-    cycle_budget: u64,
-    cycles_used: &mut u64,
+    cycle_budget: Cycles,
+    cycles_used: &mut Cycles,
 ) -> Result<AccountStateDiff, LeeError> {
     if executing_account_id == PROGRAM_LOADER_ACCOUNT_ID {
         return Ok(diff.clone());
