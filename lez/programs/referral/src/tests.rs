@@ -5,10 +5,7 @@ use lee_core::{
     account::{AccountId, ShardData},
     program::AccountInput,
 };
-use referral_core::{
-    MAX_REGISTERED_NODES,
-    ed25519_dalek::{Signer as _, SigningKey},
-};
+use referral_core::ed25519_dalek::{Signer as _, SigningKey};
 
 use super::*;
 
@@ -510,26 +507,5 @@ fn collect_rejects_an_unregistered_participant() {
         PROGRAM,
         vec![account(bob, None, true), tickets(bob_node, 1)],
         &collect(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "the registry is full")]
-fn register_rejects_a_full_registry() {
-    let (bob_key, bob_node) = node(1);
-    let bob = participant(11);
-    let capacity = u64::try_from(MAX_REGISTERED_NODES).expect("the capacity fits in u64");
-    let filler: Vec<NodeId> = (0..capacity)
-        .map(|index| {
-            let mut bytes = [0; 32];
-            bytes[..8].copy_from_slice(&index.to_le_bytes());
-            NodeId::new(bytes)
-        })
-        .collect();
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![account(bob, None, true), registered(&filler)],
-        &register(bob_node, None, signature(&bob_key, bob_node, bob, None)),
     );
 }

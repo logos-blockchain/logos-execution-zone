@@ -54,16 +54,15 @@ fn register(
             panic!("registry account does not hold the registry")
         }
     };
-    assert!(!registry.contains(node), "node is already registered");
     if let Some(parent) = referrer {
         assert!(registry.contains(parent), "referrer node is not registered");
     }
+    assert!(registry.register(node), "node is already registered");
     assert!(
         ParticipantAuthorizationV1::new(program, node, participant.account_id, referrer)
             .verify(&node_signature),
         "node authorization signature is invalid"
     );
-    assert!(registry.register(node), "the registry is full");
 
     vec![
         write_state(

@@ -8,8 +8,6 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const MAX_REGISTERED_NODES: usize = 4096;
-
 pub const CREDIT_IDENTIFIER: Identifier = 0;
 
 pub const DEPLOYMENT_CONTEXT: [u8; 32] = [
@@ -95,7 +93,9 @@ impl Invitation {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct Registry(Vec<NodeId>);
 
 impl Registry {
@@ -105,28 +105,11 @@ impl Registry {
     }
 
     pub fn register(&mut self, node: NodeId) -> bool {
-        if self.contains(node) || self.0.len() >= MAX_REGISTERED_NODES {
+        if self.contains(node) {
             return false;
         }
         self.0.push(node);
         true
-    }
-}
-
-impl BorshSerialize for Registry {
-    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        BorshSerialize::serialize(&self.0, writer)
-    }
-}
-
-impl BorshDeserialize for Registry {
-    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let len = read_bounded_len(reader, MAX_REGISTERED_NODES, "registry exceeds capacity")?;
-        let mut nodes = Vec::with_capacity(len);
-        for _ in 0..len {
-            nodes.push(NodeId::deserialize_reader(reader)?);
-        }
-        Ok(Self(nodes))
     }
 }
 
@@ -233,21 +216,6 @@ fn invalid_data(message: &'static str) -> borsh::io::Error {
     borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, message)
 }
 
-fn read_bounded_len<R: borsh::io::Read>(
-    reader: &mut R,
-    max: usize,
-    message: &'static str,
-) -> borsh::io::Result<usize> {
-    let mut bytes = [0_u8; 4];
-    reader.read_exact(&mut bytes)?;
-    let len = usize::try_from(u32::from_le_bytes(bytes))
-        .map_err(|_err| invalid_data("length does not fit in usize"))?;
-    if len > max {
-        return Err(invalid_data(message));
-    }
-    Ok(len)
-}
-
 fn read_viewing_key<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<ViewingPublicKey> {
     let mut encoded = [0_u8; 4 + ViewingPublicKey::LEN];
     reader.read_exact(&mut encoded[..4])?;
@@ -308,24 +276,6 @@ mod tests {
 
     fn viewing_key(seed: u8) -> ViewingPublicKey {
         ViewingPublicKey::from_seed(&[seed; 32], &[seed.wrapping_add(1); 32])
-    }
-
-    fn registry_bytes(nodes: &[NodeId]) -> Vec<u8> {
-        let mut bytes = u32::try_from(nodes.len()).unwrap().to_le_bytes().to_vec();
-        for node in nodes {
-            bytes.extend_from_slice(&node.to_bytes());
-        }
-        bytes
-    }
-
-    fn sequential_nodes(count: usize) -> Vec<NodeId> {
-        (0..count)
-            .map(|index| {
-                let mut bytes = [0; 32];
-                bytes[..8].copy_from_slice(&u64::try_from(index).unwrap().to_le_bytes());
-                NodeId::new(bytes)
-            })
-            .collect()
     }
 
     #[test]
@@ -445,25 +395,6 @@ mod tests {
 
         let encoded = borsh::to_vec(&registry).unwrap();
         assert_eq!(borsh::from_slice::<Registry>(&encoded).unwrap(), registry);
-    }
-
-    #[test]
-    fn registry_is_bounded_by_capacity() {
-        let mut registry = Registry::default();
-        for node in sequential_nodes(MAX_REGISTERED_NODES) {
-            assert!(registry.register(node));
-        }
-        assert!(!registry.register(NodeId::new([0xff; 32])));
-
-        let full = borsh::to_vec(&registry).unwrap();
-        assert_eq!(borsh::from_slice::<Registry>(&full).unwrap(), registry);
-
-        let over_capacity = registry_bytes(&sequential_nodes(MAX_REGISTERED_NODES + 1));
-        assert!(borsh::from_slice::<Registry>(&over_capacity).is_err());
-
-        let mut trailing = registry_bytes(&[NodeId::new([1; 32])]);
-        trailing.push(0);
-        assert!(borsh::from_slice::<Registry>(&trailing).is_err());
     }
 
     #[test]
