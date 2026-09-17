@@ -7,7 +7,7 @@ use crate::{
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiProgramId, FfiSelector, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
             event::FfiEventRecord,
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
 /// `to_block` (defaulting to the current tip when none) is read, capped at
 /// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
 /// past the indexed tip and queries outside the indexer's event-filter history.
-/// `program_id` and `selector` are exact-match filters applied to the result.
+/// `program_account_id` and `selector` are exact-match filters applied to the result.
 ///
 /// # Arguments
 ///
@@ -454,7 +454,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
 /// - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
 ///   `tx_hash` is non-null.
 /// - `tx_hash`: Optional transaction hash; null means absent.
-/// - `program_id`: Optional emitting-program filter; null means absent.
+/// - `program_account_id`: Optional emitting-program filter; null means absent.
 /// - `selector`: Optional event-selector filter; null means absent.
 ///
 /// # Returns
@@ -467,15 +467,15 @@ pub unsafe extern "C" fn query_transactions_by_account(
 /// The caller must ensure that:
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
 /// - if `to_block.is_some`, its `value` points to a valid `u64`.
-/// - each of `tx_hash`, `program_id` and `selector` is either null or a valid pointer to its
-///   respective type.
+/// - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
+///   its respective type.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_events(
     indexer: *const IndexerServiceFFI,
     from_block: u64,
     to_block: FfiOption<u64>,
     tx_hash: *const FfiHashType,
-    program_id: *const FfiProgramId,
+    program_account_id: *const FfiAccountId,
     selector: *const FfiSelector,
 ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus> {
     if indexer.is_null() {
@@ -484,8 +484,7 @@ pub unsafe extern "C" fn query_events(
     }
 
     let indexer = unsafe { &*indexer };
-    let program_id =
-        unsafe { program_id.as_ref() }.map(|id| indexer_service_protocol::ProgramId(id.data));
+    let program_account_id = unsafe { program_account_id.as_ref() }.map(|id| id.data);
     let selector = unsafe { selector.as_ref() }.map(|s| indexer_service_protocol::Selector(s.data));
 
     let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
@@ -503,7 +502,7 @@ pub unsafe extern "C" fn query_events(
                     indexer.core().store.filter_segments(),
                     block_id,
                     block_id,
-                    program_id.map(|id| id.0.into()),
+                    program_account_id.map(lee::AccountId::new),
                     selector.map(|s| s.0),
                 ) {
                     log::error!(
@@ -552,7 +551,7 @@ pub unsafe extern "C" fn query_events(
             indexer.core().store.filter_segments(),
             from_block,
             to_block,
-            program_id.map(|id| id.0.into()),
+            program_account_id.map(lee::AccountId::new),
             selector.map(|s| s.0),
         ) {
             log::error!(
@@ -583,10 +582,12 @@ pub unsafe extern "C" fn query_events(
             PointerResult::from_error(OperationStatus::ClientError)
         },
         |records| {
+            let program_account_id =
+                program_account_id.map(|value| indexer_service_protocol::AccountId { value });
             PointerResult::from_value(
                 records
                     .into_iter()
-                    .filter(|record| record.matches_fields(program_id, selector))
+                    .filter(|record| record.matches_fields(program_account_id, selector))
                     .map(Into::into)
                     .collect::<Vec<FfiEventRecord>>()
                     .into(),

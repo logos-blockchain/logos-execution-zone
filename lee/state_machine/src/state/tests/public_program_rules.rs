@@ -8,16 +8,18 @@ use super::*;
 /// account the caller declared in the transaction must appear somewhere in the final diff.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
-    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_ID with
-    // non-default data would itself violate the protocl rule the moment it's echoed back.
-    // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
+    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_OWNER
+    // with non-default data would itself violate the protocol rule the moment it's echoed back.
+    // `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_OWNER, so use
     // `with_public_accounts` to set it explicitly instead.
     let mut state = V03State::new()
         .with_public_accounts([
             (
                 AccountId::new([1; 32]),
                 Account {
-                    program_owner: crate::test_methods::dropped_account().id().into(),
+                    program_owner: AccountId::from_builtin_program(
+                        crate::test_methods::dropped_account().id(),
+                    ),
                     balance: 100,
                     ..Account::default()
                 },
@@ -25,7 +27,9 @@ fn program_should_fail_if_it_drops_a_declared_account() {
             (
                 AccountId::new([2; 32]),
                 Account {
-                    program_owner: crate::test_methods::dropped_account().id().into(),
+                    program_owner: AccountId::from_builtin_program(
+                        crate::test_methods::dropped_account().id(),
+                    ),
                     balance: 0,
                     ..Account::default()
                 },
@@ -33,7 +37,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         ])
         .with_test_programs();
     let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
-    let program_id: AccountId = crate::test_methods::dropped_account().id().into();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::dropped_account().id());
     let message =
         public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -60,7 +64,8 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
         .with_public_account_balances([(sender_account_id, 100)])
         .with_test_programs();
     let balance_to_move: u128 = 1;
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     assert_ne!(
         state.get_account_by_id(sender_account_id).program_owner,
         program_id
@@ -89,7 +94,8 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
 fn program_should_fail_if_debits_owned_but_unauthorized_account() {
     let sender_account_id = AccountId::new([1; 32]);
     let receiver_account_id = AccountId::new([2; 32]);
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
         sender_account_id,
@@ -125,8 +131,10 @@ fn program_should_transfer_balance_from_authorized_non_owned_account() {
     let sender_key = PrivateKey::try_new([3; 32]).unwrap();
     let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
     let receiver_account_id = AccountId::new([2; 32]);
-    let owner_program_id: AccountId = crate::test_methods::data_changer().id().into();
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let owner_program_id =
+        AccountId::from_builtin_program(crate::test_methods::data_changer().id());
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     assert_ne!(owner_program_id, program_id);
     let mut state = V03State::new().with_test_programs();
     for (account_id, balance) in [(sender_account_id, 100), (receiver_account_id, 0)] {
@@ -162,12 +170,15 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
         .with_public_accounts(initial_data)
         .with_test_programs();
     let account_id = AccountId::new([255; 32]);
-    let program_id: AccountId = crate::test_methods::data_changer().id().into();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
 
     state.force_insert_account(
         account_id,
         Account {
-            program_owner: [0, 1, 2, 3, 4, 5, 6, 7].into(),
+            program_owner: AccountId::new([
+                0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0,
+                7, 0, 0, 0,
+            ]),
             balance: 100,
             ..Account::default()
         },
@@ -199,7 +210,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
         .with_public_accounts(initial_data)
         .with_test_programs();
     let account_id = AccountId::new([1; 32]);
-    let program_id: AccountId = crate::test_methods::minter().id().into();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::minter().id());
 
     let message =
         public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
@@ -225,9 +236,8 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 0)])
         .with_test_programs();
-    let program_id: AccountId = crate::test_methods::references_undeclared_account()
-        .id()
-        .into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::references_undeclared_account().id());
     let callee_id = crate::test_methods::noop().id();
     let instruction: (ProgramId, InstructionData, AccountId) = (
         callee_id,
@@ -263,9 +273,8 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 0)])
         .with_test_programs();
-    let program_id: AccountId = crate::test_methods::injects_undeclared_pre_state()
-        .id()
-        .into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::injects_undeclared_pre_state().id());
     let message = public_transaction::Message::try_new(
         program_id,
         vec![account_id],
@@ -294,7 +303,7 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
 
 #[test]
 fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
-    let program_id: AccountId = crate::test_methods::burner().id().into();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::burner().id());
     let key = PrivateKey::try_new([7; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
     let mut state = V03State::new().with_test_programs();
@@ -335,7 +344,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
 fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
     let owner = crate::test_methods::dropped_account().id();
     let held = |balance| Account {
-        program_owner: owner.into(),
+        program_owner: AccountId::from_builtin_program(owner),
         balance,
         ..Account::default()
     };
@@ -348,7 +357,7 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
 
     // The forwarder names both accounts for the callee; the callee journals only the first.
     let message = public_transaction::Message::try_new(
-        crate::test_methods::non_delegating_forwarder().id().into(),
+        AccountId::from_builtin_program(crate::test_methods::non_delegating_forwarder().id()),
         vec![AccountId::new([1; 32]), AccountId::new([2; 32])],
         vec![],
         (owner, Vec::<u8>::new(), true, Vec::<PdaSeed>::new()),
@@ -364,7 +373,7 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
             result,
             Err(LeeError::InvalidProgramBehavior(
                 InvalidProgramBehaviorError::ChainedCallAccountsMismatch { program_account_id }
-            )) if program_account_id == AccountId::from(owner)
+            )) if program_account_id == AccountId::from_builtin_program(owner)
         ),
         "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
     );
@@ -388,7 +397,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     let recipient_pre = state.get_account_by_id(to);
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         vec![from, to],
         vec![Nonce(0), Nonce(0)],
         amount,
@@ -425,7 +434,7 @@ fn reordered_state_diffs_still_succeed() {
         .with_public_accounts([(
             from,
             Account {
-                program_owner: program.id().into(),
+                program_owner: AccountId::from_builtin_program(program.id()),
                 balance: initial_balance,
                 ..Account::default()
             },
@@ -437,7 +446,7 @@ fn reordered_state_diffs_still_succeed() {
     let amount: u128 = 4;
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         vec![from, to],
         vec![Nonce(0), Nonce(0)],
         amount,

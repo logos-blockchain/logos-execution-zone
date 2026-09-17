@@ -37,7 +37,7 @@ fn main() {
         state_diffs,
     )
     .with_chained_calls(vec![ChainedCall {
-        program_account_id: callee_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
         pre_state_ids: vec![undeclared_account_id],
         pda_seeds: vec![],

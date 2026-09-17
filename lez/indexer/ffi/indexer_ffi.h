@@ -133,13 +133,6 @@ typedef struct FfiBlockHeader {
   FfiSignature signature;
 } FfiBlockHeader;
 
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
 typedef struct FfiBytes32 FfiAccountId;
 
 typedef struct FfiVec_FfiAccountId {
@@ -188,7 +181,7 @@ typedef struct FfiFeeDeclaration {
 } FfiFeeDeclaration;
 
 typedef struct FfiPublicMessage {
-  struct FfiProgramId program_id;
+  FfiAccountId program_account_id;
   FfiAccountIdList account_ids;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
@@ -413,7 +406,7 @@ typedef struct FfiEventRecord {
   FfiBlockId block_id;
   uint32_t tx_index;
   FfiHashType tx_hash;
-  struct FfiProgramId program_id;
+  FfiAccountId program_account_id;
   FfiSelector selector;
   FfiVecU8 data;
 } FfiEventRecord;
@@ -690,7 +683,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * `to_block` (defaulting to the current tip when none) is read, capped at
  * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
  * past the indexed tip and queries outside the indexer's event-filter history.
- * `program_id` and `selector` are exact-match filters applied to the result.
+ * `program_account_id` and `selector` are exact-match filters applied to the result.
  *
  * # Arguments
  *
@@ -699,7 +692,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
  *   `tx_hash` is non-null.
  * - `tx_hash`: Optional transaction hash; null means absent.
- * - `program_id`: Optional emitting-program filter; null means absent.
+ * - `program_account_id`: Optional emitting-program filter; null means absent.
  * - `selector`: Optional event-selector filter; null means absent.
  *
  * # Returns
@@ -712,14 +705,14 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  * - if `to_block.is_some`, its `value` points to a valid `u64`.
- * - each of `tx_hash`, `program_id` and `selector` is either null or a valid pointer to its
- *   respective type.
+ * - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
+ *   its respective type.
  */
 struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(const struct IndexerServiceFFI *indexer,
                                                                             uint64_t from_block,
                                                                             struct FfiOption_u64 to_block,
                                                                             const FfiHashType *tx_hash,
-                                                                            const struct FfiProgramId *program_id,
+                                                                            const FfiAccountId *program_account_id,
                                                                             const FfiSelector *selector);
 
 /**

@@ -1,13 +1,12 @@
 use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicActionWithID, PublicKey,
     PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiU128, FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
     account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
@@ -48,7 +47,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
+                program_account_id: AccountId {
+                    value: value.message.program_account_id.data,
+                },
                 account_ids: {
                     let std_vec: Vec<_> = value.message.account_ids.into();
                     std_vec
@@ -129,7 +130,7 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_id: FfiProgramId,
+    pub program_account_id: FfiAccountId,
     pub account_ids: FfiAccountIdList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
@@ -140,7 +141,7 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -148,7 +149,7 @@ impl From<PublicMessage> for FfiPublicMessage {
         } = value;
 
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             account_ids: account_ids
                 .into_iter()
                 .map(Into::into)
@@ -567,7 +568,7 @@ mod tests {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
             message: PublicMessage {
-                program_id: ProgramId([2; 8]),
+                program_account_id: AccountId { value: [2; 32] },
                 account_ids: vec![AccountId { value: [3; 32] }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],

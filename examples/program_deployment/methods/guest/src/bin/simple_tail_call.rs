@@ -1,38 +1,31 @@
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 // Tail Call example program.
 //
 // This program shows how to chain execution to another program using `ChainedCall`.
-// It reads a single account, emits it unchanged, and then triggers a tail call
-// to the Hello World program with a fixed greeting.
+// It reads a single account, emits it unchanged, and then triggers a tail call to the callee
+// program named in its own instruction data, with a fixed greeting.
+//
+// The callee's `AccountId` is caller-supplied: a deployed program's address isn't known until
+// deploy time, so it can't be a compile-time constant.
 
-/// This needs to be set to the ID of the Hello world program.
-/// To get the ID run **from the root directoy of the repository**:
-/// `cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml`
-/// This compiles the programs and outputs the IDs in hex that can be used to copy here.
-const HELLO_WORLD_PROGRAM_ID_HEX: &str =
-    "e9dfc5a5d03c9afa732adae6e0edfce4bbb44c7a2afb9f148f4309917eb2de6f";
-
-fn hello_world_program_id() -> ProgramId {
-    let hello_world_program_id_bytes: [u8; 32] = hex::decode(HELLO_WORLD_PROGRAM_ID_HEX)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    bytemuck::cast(hello_world_program_id_bytes)
-}
+type Instruction = AccountId;
 
 fn main() {
     // Read inputs
-    let call = read_lee_call::<()>();
+    let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
         ProgramInput {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (),
+            instruction: callee_account_id,
         },
         instruction_data,
     ) = call
@@ -54,7 +47,7 @@ fn main() {
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
     let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
     let chained_call = ChainedCall {
-        program_account_id: hello_world_program_id().into(),
+        program_account_id: callee_account_id,
         instruction_data: chained_call_instruction_data,
         pre_state_ids: vec![pre_state_account_id],
         pda_seeds: vec![],

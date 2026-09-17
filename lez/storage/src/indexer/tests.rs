@@ -78,7 +78,9 @@ fn initial_state() -> lee::V03State {
         (
             id,
             Account {
-                program_owner: programs::authenticated_transfer().id().into(),
+                program_owner: AccountId::from_builtin_program(
+                    programs::authenticated_transfer().id(),
+                ),
                 balance,
                 ..Account::default()
             },

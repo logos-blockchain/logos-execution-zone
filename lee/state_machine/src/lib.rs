@@ -34,6 +34,14 @@ mod state;
 pub mod test_utils;
 mod validated_state_diff;
 
+/// A proxy for "release build," not a guarantee: a `[profile.release] debug-assertions = true`
+/// override leaves this unable to catch a genuine release build with `test-utils` enabled.
+#[cfg(all(feature = "test-utils", not(debug_assertions)))]
+compile_error!(
+    "`test-utils` exposes validation-bypassing state-mutation helpers and must never be \
+     enabled in a release build."
+);
+
 mod privacy_preserving_circuit {
     include!(concat!(
         env!("OUT_DIR"),

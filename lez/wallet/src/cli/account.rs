@@ -643,8 +643,8 @@ impl WalletSubcommand for ImportSubcommand {
 
 /// Formats account details for display, returning (description, `json_view`).
 fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
-    let token_prog_id: AccountId = programs::token().id().into();
+    let auth_tr_prog_id = AccountId::from_builtin_program(programs::authenticated_transfer().id());
+    let token_prog_id = AccountId::from_builtin_program(programs::token().id());
 
     match &account.program_owner {
         o if *o == auth_tr_prog_id => {

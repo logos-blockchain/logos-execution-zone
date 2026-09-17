@@ -33,8 +33,7 @@ use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
-    WalletHandle, error,
+    FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -203,7 +202,7 @@ unsafe extern "C" {
         account_identities_size: usize,
         instruction_data: *const u8,
         instruction_data_size: usize,
-        program_id: FfiProgramId,
+        program_account_id: FfiBytes32,
         payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
@@ -1561,7 +1560,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_id = programs::authenticated_transfer().id();
+    let program_account_id =
+        AccountId::from_builtin_program(programs::authenticated_transfer().id());
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
@@ -1570,7 +1570,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             account_identities_size,
             instruction_data_ptr,
             instruction_data_size,
-            program_id.into(),
+            program_account_id.into(),
             std::ptr::null(),
             &raw mut transaction_result,
         )

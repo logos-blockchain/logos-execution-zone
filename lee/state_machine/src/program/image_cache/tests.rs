@@ -48,7 +48,7 @@ fn env_for(
     builder.session_limit(Some(budget));
     program
         .write_inputs(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             pre_states,
             instruction,
@@ -223,7 +223,7 @@ fn guest_panic_is_not_out_of_gas() {
     builder.session_limit(Some(DEFAULT_PUBLIC_CYCLE_BUDGET));
     builder.write_slice(&to_borsh_frame(&lee_core::program::CallKind::Execute));
     let input = ProgramInput {
-        self_account_id: spoof.id().into(),
+        self_account_id: AccountId::from_builtin_program(spoof.id()),
         caller_account_id: None,
         pre_states: Vec::new(),
         instruction: Vec::<u8>::new(),

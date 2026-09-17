@@ -53,13 +53,13 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
 
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_account_id: programs::ping_sender().id().into(),
+                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
@@ -148,7 +148,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
 /// Counts inbox transactions across `from..=to`, the signature of a re-injected
 /// dispatch.
 async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) -> Result<usize> {
-    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let inbox_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let mut count = 0_usize;
     for block_id in from..=to {
         let Some(block) = client.get_block(block_id).await? else {
@@ -188,7 +188,7 @@ async fn wait_for_block_id(
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
 /// a message carrying a `ping_receiver::Record` instruction for the target zone.
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
-    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let ordinal = 0;
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
@@ -207,7 +207,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         ordinal,
     };
 
-    let sender_id: AccountId = programs::ping_sender().id().into();
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,

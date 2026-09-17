@@ -823,7 +823,9 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE`.
     fn emission() -> LeeTransaction {
-        emission_to(programs::ping_receiver().id().into())
+        emission_to(lee_core::account::AccountId::from_builtin_program(
+            programs::ping_receiver().id(),
+        ))
     }
 
     /// A `ping_sender` emission aimed at `target_program_id`.
@@ -1078,7 +1080,9 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                programs::cross_zone_inbox().id().into(),
+                lee_core::account::AccountId::from_builtin_program(
+                    programs::cross_zone_inbox().id(),
+                ),
             )]),
             &peer_context(),
             &storage_ref,
@@ -1117,7 +1121,7 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                programs::wrapped_token().id().into(),
+                lee_core::account::AccountId::from_builtin_program(programs::wrapped_token().id()),
             )]),
             &peer_context(),
             &storage_ref,
