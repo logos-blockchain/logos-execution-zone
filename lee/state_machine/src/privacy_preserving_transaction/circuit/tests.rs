@@ -545,9 +545,9 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
-/// `Bound`/`Deferred` is inferred purely from whether the executing program supports
-/// `CallKind::Incremental`, never declared upfront. A public account touched by `stripped_token`
-/// comes out `Deferred`, carrying the raw delta for the sequencer to replay.
+/// `Bound`/`Deferred` is decided by the executing program's own `Probe` claim, never declared
+/// upfront by the caller. `stripped_token` unconditionally asserts `DeferReads::All`, so a public
+/// account it touches comes out `Deferred`, carrying the raw delta for the sequencer to replay.
 #[test]
 fn public_account_touched_by_an_incremental_capable_program_is_deferred() {
     let program = crate::test_methods::stripped_token();
@@ -743,59 +743,11 @@ fn a_read_with_defer_reads_all_stays_deferred_when_chained_into_a_genuine_write(
     );
 }
 
-/// `DeferReads::ProgramOwned` only covers accounts the asserting program owns. Account X ends
-/// up owned by `stripped_token`, not `stripped_token_and_forward` — so this claim doesn't cover
-/// X, and it must still force `Bound`, exactly like asserting nothing at all.
+/// `DeferReads::ReadOnly` covers reads, not writes. `stripped_token_and_forward`'s own touch on
+/// X is a read (it collapses to `unchanged`), so `ReadOnly` covers it — X's read is a no-op for
+/// classification, and `stripped_token`'s genuine, separately-called write is left `Deferred`.
 #[test]
-fn a_read_with_defer_reads_program_owned_forces_bound_for_a_non_owned_account() {
-    let program = crate::test_methods::stripped_token_and_forward();
-    let program_id = program.id();
-    let program_account_id: AccountId = program_id.into();
-    let token = crate::test_methods::stripped_token();
-    let token_program_id = token.id();
-    let token_account_id: AccountId = token_program_id.into();
-    let account_id = AccountId::new([1; 32]);
-    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
-    let balance: u128 = 42;
-
-    let program_with_deps =
-        ProgramWithDependencies::new(program, program_account_id, [(token_account_id, token)].into());
-
-    let instruction = Program::serialize_instruction((
-        Vec::<u8>::new(),
-        token_account_id,
-        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
-        ProbeAssertion::Real(DeferReads::ProgramOwned),
-    ))
-    .unwrap();
-
-    let (output, proof) = execute_and_prove(
-        vec![pre],
-        instruction,
-        vec![InputAccountIdentity::Public],
-        &program_with_deps,
-    )
-    .expect("a ProgramOwned claim over a non-owned account must still prove");
-
-    assert!(proof.is_valid_for(&output));
-
-    let [action] = output.public_actions.try_into().unwrap();
-    let PublicAction::Bound { post, .. } = action else {
-        panic!(
-            "X is owned by stripped_token, not stripped_token_and_forward: ProgramOwned doesn't \
-             cover it, expected Bound"
-        );
-    };
-    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
-        .expect("stripped_token's Incremental resolution must still have run");
-    assert_eq!(data.balance, balance);
-}
-
-/// `DeferReads::ReadOnly` only covers accounts the asserting program does *not* own — the
-/// inverse of `ProgramOwned`. Since X ends up owned by `stripped_token`, not
-/// `stripped_token_and_forward`, this claim *does* cover X, and it stays `Deferred`.
-#[test]
-fn a_read_with_defer_reads_read_only_stays_deferred_for_a_non_owned_account() {
+fn a_read_with_defer_reads_read_only_stays_deferred_when_chained_into_a_genuine_write() {
     let program = crate::test_methods::stripped_token_and_forward();
     let program_id = program.id();
     let program_account_id: AccountId = program_id.into();
@@ -823,7 +775,7 @@ fn a_read_with_defer_reads_read_only_stays_deferred_for_a_non_owned_account() {
         vec![InputAccountIdentity::Public],
         &program_with_deps,
     )
-    .expect("a ReadOnly claim over a non-owned account must still prove");
+    .expect("a ReadOnly-asserted read chained into a genuine write must still prove");
 
     assert!(proof.is_valid_for(&output));
 
@@ -834,8 +786,7 @@ fn a_read_with_defer_reads_read_only_stays_deferred_for_a_non_owned_account() {
     } = action
     else {
         panic!(
-            "X is owned by stripped_token, not stripped_token_and_forward: ReadOnly covers it, \
-             expected Deferred"
+            "stripped_token_and_forward's own touch on X is a read, which ReadOnly covers: expected Deferred"
         );
     };
     assert_eq!(deferred_account_id, account_id);
@@ -847,26 +798,225 @@ fn a_read_with_defer_reads_read_only_stays_deferred_for_a_non_owned_account() {
     );
 }
 
-// The "owned" half of `ProgramOwned`/`ReadOnly`'s ownership check can't be reached by simply
-// seeding X as pre-owned by `stripped_token_and_forward`: rule 3 of `validate_execution` forbids
-// a data write to an account that's neither unowned nor already owned by the *writing* program,
-// so `stripped_token`'s `Initialize` (the write X would be chained into) would be rejected
-// outright. `DeferReads::covers`'s own unit tests (`lee/state_machine/core/src/program/tests.rs`)
-// cover the ownership-true branches as a pure boolean function; the two tests below reach the
-// same case through a real, legitimate call chain instead — see their doc comments.
-
-/// The "owned" half of `ProgramOwned`'s ownership check, reached through three legitimate
-/// touches on X, all by `stripped_token_and_forward` or a safe terminator, never by a different
-/// writer: (1) top-level, it genuinely writes `TokenDiff::Add(1)` to X, becoming its owner; (2)
-/// chained into itself again, it echoes X's now-current data verbatim, so this diff collapses to
-/// `post_data: None` and triggers its own `Probe` — this is the assertion under test, now with
-/// `account_owned_by_program: true`; (3) forced onward once more (it always forwards), it lands
-/// on `defer_asserting_noop`, which — unlike plain `noop` — is `Incremental`-aware and asserts
-/// `DeferReads::All`, so it doesn't disturb what (1) and (2) already decided. `ProgramOwned`
-/// covers an account the asserting program owns, so touch (2) is a no-op, and X stays `Deferred`
-/// from touch (1).
+/// The inverse: `DeferReads::WriteOnly` does not cover reads. `stripped_token_and_forward`'s own
+/// touch on X is a read, so `WriteOnly` doesn't cover it — X is forced `Bound`, even though
+/// `stripped_token`'s separately-called write on the same account would itself have been
+/// `Deferred`-eligible.
 #[test]
-fn a_read_with_defer_reads_program_owned_stays_deferred_for_an_owned_account() {
+fn a_read_with_defer_reads_write_only_forces_bound_even_when_chained_into_a_genuine_write() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let token = crate::test_methods::stripped_token();
+    let token_program_id = token.id();
+    let token_account_id: AccountId = token_program_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps =
+        ProgramWithDependencies::new(program, program_account_id, [(token_account_id, token)].into());
+
+    let instruction = Program::serialize_instruction((
+        Vec::<u8>::new(),
+        token_account_id,
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance }).unwrap(),
+        ProbeAssertion::Real(DeferReads::WriteOnly),
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a WriteOnly-asserted read chained into a genuine write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!(
+            "stripped_token_and_forward's own touch on X is a read, which WriteOnly doesn't cover: expected Bound"
+        );
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("stripped_token's Incremental resolution must still have run");
+    assert_eq!(data.balance, balance);
+}
+
+/// `DeferReads::WriteOnly` covers a genuine write by the asserting program itself — no chaining
+/// into a different program needed, since the program whose `Probe` claim is being checked is
+/// the same one writing X. `stripped_token_and_forward` writes X directly (its own `Incremental`
+/// resolves `TokenDiff::Add` too), then is forced onward (it always forwards) to
+/// `defer_asserting_noop`, which only reads X and unconditionally asserts `DeferReads::All` on
+/// its own `Probe`, so it never disturbs this classification.
+#[test]
+fn a_write_only_claim_defers_a_genuine_write() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let terminator = crate::test_methods::defer_asserting_noop();
+    let terminator_id = terminator.id();
+    let terminator_account_id: AccountId = terminator_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        program_account_id,
+        [(terminator_account_id, terminator)].into(),
+    );
+
+    let instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap(),
+        terminator_account_id,
+        Program::serialize_instruction(()).unwrap(),
+        ProbeAssertion::Real(DeferReads::WriteOnly),
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a WriteOnly-asserted genuine write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Deferred {
+        account_id: deferred_account_id,
+        resolutions,
+    } = action
+    else {
+        panic!("stripped_token_and_forward asserted WriteOnly on its own write: expected Deferred");
+    };
+    assert_eq!(deferred_account_id, account_id);
+    let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
+    assert_eq!(resolution.executing_account_id, program_account_id);
+    assert_eq!(
+        resolution.post_data.unwrap().as_ref(),
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap().as_slice()
+    );
+}
+
+/// The inverse of the test above: `DeferReads::ReadOnly` does not cover writes, so even a
+/// genuine write by the asserting program itself is forced `Bound`.
+#[test]
+fn a_read_only_claim_forces_bound_on_a_genuine_write() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let terminator = crate::test_methods::defer_asserting_noop();
+    let terminator_id = terminator.id();
+    let terminator_account_id: AccountId = terminator_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        program_account_id,
+        [(terminator_account_id, terminator)].into(),
+    );
+
+    let instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap(),
+        terminator_account_id,
+        Program::serialize_instruction(()).unwrap(),
+        ProbeAssertion::Real(DeferReads::ReadOnly),
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("a ReadOnly-asserted write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!("stripped_token_and_forward asserted ReadOnly on a write: expected Bound");
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("stripped_token_and_forward's own Incremental resolution must still have run");
+    assert_eq!(data.balance, balance);
+}
+
+/// The behavioral change this redesign introduces: previously a genuine write was
+/// unconditionally `Deferred`-eligible whenever the program implemented `Incremental`, with no
+/// `Probe` claim needed at all. Now every touch — write or read — needs `Probe`'s claim to cover
+/// it; asserting nothing forces `Bound`, even for a write the program's own `Incremental` logic
+/// can resolve perfectly well.
+#[test]
+fn a_write_with_no_probe_claim_forces_bound() {
+    let program = crate::test_methods::stripped_token_and_forward();
+    let program_id = program.id();
+    let program_account_id: AccountId = program_id.into();
+    let terminator = crate::test_methods::defer_asserting_noop();
+    let terminator_id = terminator.id();
+    let terminator_account_id: AccountId = terminator_id.into();
+    let account_id = AccountId::new([1; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+    let balance: u128 = 42;
+
+    let program_with_deps = ProgramWithDependencies::new(
+        program,
+        program_account_id,
+        [(terminator_account_id, terminator)].into(),
+    );
+
+    let instruction = Program::serialize_instruction((
+        borsh::to_vec(&TokenDiff::Add(balance)).unwrap(),
+        terminator_account_id,
+        Program::serialize_instruction(()).unwrap(),
+        ProbeAssertion::None,
+    ))
+    .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .expect("an unclaimed write must still prove");
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!("stripped_token_and_forward asserted no DeferReads claim: expected Bound");
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("stripped_token_and_forward's own Incremental resolution must still have run");
+    assert_eq!(data.balance, balance);
+}
+
+// The two tests below reuse the self-write-then-read shape from the tests above, but with two
+// touches in the same run: `stripped_token_and_forward` (1) writes X itself, then (2) chains
+// into itself again, echoing X's now-current data verbatim, so this second diff collapses to a
+// no-op read and triggers a *second*, independent `Probe` call on the same program. (3) it's
+// then forced onward once more (it always forwards) to `defer_asserting_noop`, which - unlike
+// plain `noop` - is `Incremental`-aware and asserts `DeferReads::All`, so it never disturbs what
+// (1) and (2) already decided. This shows a claim is evaluated per call, not per program: the
+// same program, asked twice in the same run, can get two different answers to `covers()` because
+// the touch kind differs between calls, even when it asserts the identical claim both times.
+
+/// `WriteOnly` covers touch (1) (a write), so it's `Deferred`-eligible - but touch (2) (a read,
+/// a *different* call) asserts the same claim and gets a different answer: `WriteOnly` doesn't
+/// cover a read, so it forces `Bound`, discarding touch (1)'s pending resolution.
+#[test]
+fn a_write_only_claim_does_not_cover_a_later_read_in_a_different_call() {
     let program = crate::test_methods::stripped_token_and_forward();
     let program_id = program.id();
     let program_account_id: AccountId = program_id.into();
@@ -890,22 +1040,22 @@ fn a_read_with_defer_reads_program_owned_stays_deferred_for_an_owned_account() {
     );
 
     // Touch 2 (self-chained): echoes X's post-touch-1 data verbatim, so its diff collapses to
-    // `post_data: None` and triggers `Probe` on `stripped_token_and_forward` again.
+    // `post_data: None` and triggers a second, independent `Probe` on
+    // `stripped_token_and_forward`.
     let touch2_instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenAccountData { balance: 1 }).unwrap(),
         terminator_account_id,
         Program::serialize_instruction(()).unwrap(),
-        ProbeAssertion::Real(DeferReads::ProgramOwned),
+        ProbeAssertion::Real(DeferReads::WriteOnly),
     ))
     .unwrap();
 
-    // Touch 1 (top-level): a genuine `TokenDiff::Add(1)` on a fresh account — establishes
-    // `stripped_token_and_forward` as X's owner, and is unconditionally Deferred-eligible.
+    // Touch 1 (top-level): a genuine `TokenDiff::Add(1)` on a fresh account, `WriteOnly`-covered.
     let instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenDiff::Add(1)).unwrap(),
         program_account_id,
         touch2_instruction,
-        ProbeAssertion::None,
+        ProbeAssertion::Real(DeferReads::WriteOnly),
     ))
     .unwrap();
 
@@ -915,34 +1065,28 @@ fn a_read_with_defer_reads_program_owned_stays_deferred_for_an_owned_account() {
         vec![InputAccountIdentity::Public],
         &program_with_deps,
     )
-    .expect("a self-write followed by a self-read of an owned account must prove");
+    .expect("a WriteOnly-covered write followed by a WriteOnly-uncovered read must prove");
 
     assert!(proof.is_valid_for(&output));
 
     let [action] = output.public_actions.try_into().unwrap();
-    let PublicAction::Deferred {
-        account_id: deferred_account_id,
-        resolutions,
-    } = action
-    else {
+    let PublicAction::Bound { post, .. } = action else {
         panic!(
-            "X is owned by stripped_token_and_forward: ProgramOwned covers it, expected Deferred"
+            "touch (2) is a read, which WriteOnly doesn't cover: expected Bound, touch (1)'s Deferred entry discarded"
         );
     };
-    assert_eq!(deferred_account_id, account_id);
-    let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
-    assert_eq!(resolution.executing_account_id, program_account_id);
-    assert_eq!(
-        resolution.post_data.unwrap().as_ref(),
-        borsh::to_vec(&TokenDiff::Add(1)).unwrap().as_slice()
-    );
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("touch (1)'s Incremental resolution must still be reflected");
+    assert_eq!(data.balance, 1);
+    assert_eq!(post.program_owner, program_account_id);
 }
 
-/// The "owned" half of `ReadOnly`'s ownership check, reached the same way as the `ProgramOwned`
-/// test above. `ReadOnly` only covers accounts the asserting program does *not* own, so touch (2)
-/// no longer covers X, forcing `Bound` and discarding touch (1)'s pending resolution.
+/// The other direction: `ReadOnly` doesn't cover touch (1) (a write), so X is forced `Bound`
+/// immediately - before touch (2) (a read, covered by the same `ReadOnly` claim) ever runs.
+/// Once `Bound`, `Bound` stays: touch (2)'s coverage can't retroactively rescue it back to
+/// `Deferred`.
 #[test]
-fn a_read_with_defer_reads_read_only_forces_bound_for_an_owned_account() {
+fn a_read_only_claim_cannot_rescue_an_earlier_uncovered_write() {
     let program = crate::test_methods::stripped_token_and_forward();
     let program_id = program.id();
     let program_account_id: AccountId = program_id.into();
@@ -977,7 +1121,7 @@ fn a_read_with_defer_reads_read_only_forces_bound_for_an_owned_account() {
         borsh::to_vec(&TokenDiff::Add(1)).unwrap(),
         program_account_id,
         touch2_instruction,
-        ProbeAssertion::None,
+        ProbeAssertion::Real(DeferReads::ReadOnly),
     ))
     .unwrap();
 
@@ -987,16 +1131,16 @@ fn a_read_with_defer_reads_read_only_forces_bound_for_an_owned_account() {
         vec![InputAccountIdentity::Public],
         &program_with_deps,
     )
-    .expect("a self-write followed by a self-read of an owned account must prove");
+    .expect("a ReadOnly-uncovered write followed by a ReadOnly-covered read must prove");
 
     assert!(proof.is_valid_for(&output));
 
     let [action] = output.public_actions.try_into().unwrap();
     let PublicAction::Bound { post, .. } = action else {
-        panic!("X is owned by stripped_token_and_forward: ReadOnly doesn't cover it, expected Bound");
+        panic!("touch (1) is a write, which ReadOnly doesn't cover: expected Bound");
     };
     let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
-        .expect("touch 1's Incremental resolution must still be reflected");
+        .expect("touch (1)'s Incremental resolution must still be reflected");
     assert_eq!(data.balance, 1);
     assert_eq!(post.program_owner, program_account_id);
 }
@@ -1053,10 +1197,12 @@ fn an_unrelated_probe_event_is_not_mistaken_for_defer_reads() {
 /// resolves immediately instead of re-entering `deferred`.
 ///
 /// Ownership rules forbid a *different* program from writing an already-owned account, so the
-/// only way to reach this is the same program declining one touch and accepting another.
-/// `stripped_token_and_forward` chains into itself: the first touch (a bare `TokenAccountData`,
-/// not a `TokenDiff`) is declined as `Unsupported`, forcing `Bound`; the second is a genuine
-/// `TokenDiff::Add`, `Incremental`-eligible but too late to defer.
+/// only way to reach this is the same program touching it twice. `stripped_token_and_forward`
+/// chains into itself: the first touch asserts no `DeferReads` claim at all, forcing `Bound`
+/// regardless of whether it's resolvable (it isn't here either — a bare `TokenAccountData`
+/// encoding, not a valid `TokenDiff`, so `Update` also declines); the second is a genuine
+/// `TokenDiff::Add`, technically `Incremental`-resolvable but too late to defer — `Bound` is
+/// permanent.
 #[test]
 fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferring() {
     let program = crate::test_methods::stripped_token_and_forward();
@@ -1126,9 +1272,10 @@ fn a_later_incremental_touch_on_an_already_bound_account_resolves_without_deferr
 
 /// The inverse: a pending `Deferred` resolution folds permanently into `Bound` the moment a
 /// later touch forces it — the resolution is discarded (already reflected internally; only the
-/// *emission* differs). `stripped_token_and_forward`'s write here adds zero, so it never
-/// acquires ownership, leaving the account free for `acquire_and_forward` to acquire when it
-/// forces `Bound`.
+/// *emission* differs). `stripped_token_and_forward` asserts `WriteOnly` to make its own genuine
+/// write `Deferred`-eligible; that write adds zero, so it never acquires ownership, leaving the
+/// account free for `acquire_and_forward` — which doesn't implement `Incremental` at all, so its
+/// `Probe` declines and it forces `Bound` — to acquire when it overwrites the data.
 #[test]
 fn a_bound_forcing_touch_discards_a_previously_deferred_accounts_pending_resolution() {
     let program = crate::test_methods::stripped_token_and_forward();
@@ -1173,7 +1320,7 @@ fn a_bound_forcing_touch_discards_a_previously_deferred_accounts_pending_resolut
         borsh::to_vec(&TokenDiff::Add(0)).unwrap(),
         forwarder_account_id,
         forwarder_instruction,
-        ProbeAssertion::None,
+        ProbeAssertion::Real(DeferReads::WriteOnly),
     ))
     .unwrap();
 

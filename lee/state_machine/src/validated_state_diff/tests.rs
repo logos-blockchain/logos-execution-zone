@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use lee_core::{
     DeferredResolution,
-    account::{Account, AccountId, BalanceDiff, Nonce},
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiff, Nonce},
 };
 
 use crate::{
@@ -654,4 +654,111 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
+}
+
+/// `resolve_diff`'s `Incremental::Update` call (for a program like `stripped_token`, which
+/// writes real `data`) is a second, separate zkVM session layered on top of `Execute` — this
+/// confirms its cost actually gets folded into the transaction's total cycle count, not run for
+/// free outside the budget.
+#[test]
+fn incremental_update_cycles_are_folded_into_the_total() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+    let pre_states = vec![AccountWithMetadata::new(
+        Account::default(),
+        false,
+        account_id,
+    )];
+    let instruction = StrippedTokenInstruction::Initialize { balance: 100 };
+    let instruction_data = borsh::to_vec(&instruction).unwrap();
+
+    // `Execute` alone, measured directly, bypassing the transaction machinery.
+    let (execute_output, execute_cycles) = program
+        .execute(
+            program_id,
+            None,
+            &pre_states,
+            &instruction_data,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("Execute alone fits comfortably under the default budget");
+    let [diff]: [_; 1] = execute_output.state_diffs.try_into().unwrap();
+    let post_data = diff.post_data.expect("Initialize writes data");
+
+    // The Incremental resolution alone, also measured directly.
+    let (_, incremental_cycles) = program
+        .execute_incremental(
+            program_id,
+            None,
+            &pre_states[0],
+            &post_data,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("Incremental resolution alone fits comfortably under the default budget");
+
+    // The same instruction, through a real public transaction: both Execute and Incremental run.
+    let state = V03State::new().with_programs(std::iter::once(program));
+    let message = Message::try_new(program_id, vec![account_id], vec![], instruction).unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+    let (_, outcome) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .expect("executes");
+
+    assert!(
+        outcome.cycles >= execute_cycles + incremental_cycles,
+        "total cycles ({}) must cover both Execute ({execute_cycles}) and Incremental \
+         ({incremental_cycles})",
+        outcome.cycles
+    );
+}
+
+/// The complementary half: `resolve_diff` must pass `Incremental` only what's *left* of the
+/// budget after `Execute`, not the original total again — confirmed by mutation testing to catch
+/// a distinct bug from the one above (which only catches a dropped post-call cycle count;
+/// forgetting to shrink the pre-call budget here would still pass that one, since it never
+/// reaches the accumulation line at all). A budget sized to fit `Execute` alone plus a small
+/// margin must still run out of gas once `Incremental` is given only that margin to work with.
+#[test]
+fn incremental_update_cycles_are_charged_against_the_same_budget() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+    let pre_states = vec![AccountWithMetadata::new(
+        Account::default(),
+        false,
+        account_id,
+    )];
+    let instruction = StrippedTokenInstruction::Initialize { balance: 100 };
+    let instruction_data = borsh::to_vec(&instruction).unwrap();
+
+    let (_, execute_cycles) = program
+        .execute(
+            program_id,
+            None,
+            &pre_states,
+            &instruction_data,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("Execute alone fits comfortably under the default budget");
+
+    // Enough for Execute plus a small margin — nowhere near enough for a second full guest
+    // invocation to also resolve Incremental.
+    let margin = 10;
+    let budget = execute_cycles + margin;
+
+    let state = V03State::new().with_programs(std::iter::once(program));
+    let message = Message::try_new(program_id, vec![account_id], vec![], instruction).unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+    let result =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, budget);
+
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == margin));
 }

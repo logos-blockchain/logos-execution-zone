@@ -776,19 +776,23 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Event asserting that some subset of a program's read-only touches are safe to leave
-/// `Deferred`, scoped by account ownership.
+/// Event asserting that this program's touches during the current call are safe to leave
+/// `Deferred`, scoped by whether a given touch is a write or a read.
 ///
-/// A self-attested claim emitted on a `Probe` response — how much of the program's own logic it
-/// covers is up to the developer, not something the circuit verifies. Absence of this event (or
-/// a decode failure) means no claim at all: a read-only touch forces `Bound`.
+/// A self-attested claim emitted once per call, on its `Probe` response — how much of the
+/// program's own logic it covers is up to the developer, not something the circuit verifies.
+/// Absence of this event (or a decode failure) means no claim at all: every touch, read or
+/// write, forces `Bound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum DeferReads {
-    /// Safe to defer only for accounts this program owns.
-    ProgramOwned,
-    /// Safe to defer only for accounts this program does *not* own.
+    /// Safe to defer only for accounts this call writes to. Never needs an ownership check of
+    /// its own: a write can only ever land on an account this program owns (or is about to),
+    /// since `validate_execution` forbids writing anything else.
+    WriteOnly,
+    /// Safe to defer only for accounts this call merely reads (touches but does not write),
+    /// regardless of who owns them.
     ReadOnly,
-    /// Safe to defer regardless of ownership.
+    /// Safe to defer regardless of whether the touch is a write or a read.
     All,
 }
 
@@ -801,13 +805,12 @@ impl DeferReads {
         borsh::to_vec(self).expect("DeferReads serializes")
     }
 
-    /// Whether this claim covers a specific touch, given whether the touched account is owned
-    /// by the program asserting it.
+    /// Whether this claim covers a specific touch, given whether that touch is a write.
     #[must_use]
-    pub const fn covers(&self, account_owned_by_program: bool) -> bool {
+    pub const fn covers(&self, is_write: bool) -> bool {
         match self {
-            Self::ProgramOwned => account_owned_by_program,
-            Self::ReadOnly => !account_owned_by_program,
+            Self::WriteOnly => is_write,
+            Self::ReadOnly => !is_write,
             Self::All => true,
         }
     }

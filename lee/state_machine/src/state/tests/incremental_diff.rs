@@ -241,11 +241,10 @@ fn stripped_token_robinhood_does_nothing_when_balances_are_equal() {
 // out of a genuine circuit proof.
 //
 // All three variants are covered, across two account shapes: `deferred_initialize_tx` forwards a
-// write to `stripped_token`, so the account always ends up owned by `stripped_token`, never by
-// the asserting `stripped_token_and_forward` — covering the not-owned half of `ProgramOwned` and
-// `ReadOnly` (plus `All`, which doesn't care about ownership either way).
-// `owned_self_write_then_read_tx` covers the owned half instead: `stripped_token_and_forward`
-// writes the account itself first (becoming its owner), then reads it again — see that
+// write to `stripped_token`, so `stripped_token_and_forward`'s own touch on the account is
+// always a read — covering `ReadOnly` covering it and `WriteOnly` not (plus `All`, which covers
+// either way). `write_then_read_tx` covers the write side instead: `stripped_token_and_forward`
+// writes the account itself, then reads it again in a second, independent call — see that
 // function's doc comment for why a third, forced touch is also needed to reach this safely.
 
 /// Proves a privacy-preserving transaction that forwards `stripped_token`'s
@@ -397,13 +396,14 @@ fn a_deferred_initialize_with_a_read_only_claim_settles_correctly() {
     assert_eq!(token_balance(&state, account_id), balance);
 }
 
-/// `DeferReads::ProgramOwned` on the same non-owned account: the claim doesn't cover it, so the
-/// touch is resolved `Bound` in-circuit instead of `Deferred`. Settlement for `Bound` is just the
+/// `DeferReads::WriteOnly` on the same touch: `stripped_token_and_forward`'s own touch on the
+/// account is a read (it collapses to `unchanged`), which `WriteOnly` doesn't cover, so it's
+/// resolved `Bound` in-circuit instead of `Deferred`. Settlement for `Bound` is just the
 /// message's `post_state` copied through — no `Incremental` re-resolution runs — but this
 /// confirms `transition_from_privacy_preserving_transaction` still lands the right balance
 /// either way, regardless of which path a given `DeferReads` claim routes the account through.
 #[test]
-fn a_program_owned_initialize_forced_bound_settles_correctly() {
+fn a_write_only_initialize_forced_bound_settles_correctly() {
     let mut state = V03State::new().with_test_programs();
     let forward_program_id: AccountId =
         crate::test_methods::stripped_token_and_forward().id().into();
@@ -416,10 +416,10 @@ fn a_program_owned_initialize_forced_bound_settles_correctly() {
         token_program_id,
         account_id,
         balance,
-        lee_core::program::DeferReads::ProgramOwned,
+        lee_core::program::DeferReads::WriteOnly,
     );
     let PublicAction::Bound { pre, post } = action else {
-        panic!("DeferReads::ProgramOwned must not cover a non-owned account, forcing Bound");
+        panic!("DeferReads::WriteOnly must not cover a read touch, forcing Bound");
     };
     assert_eq!(pre.account_id, account_id);
     assert_eq!(pre.account, Account::default());
@@ -487,21 +487,22 @@ fn a_deferred_initialize_reflects_state_mutated_after_proving() {
     assert_eq!(token_balance(&state, account_id), 10 + delta);
 }
 
-/// Proves a privacy-preserving transaction where `stripped_token_and_forward` becomes the
-/// account's own owner, then asserts `claim` on a *second*, self-chained read of that same
-/// account — reaching the owned half of `DeferReads`'s ownership check.
+/// Proves a privacy-preserving transaction where `stripped_token_and_forward` writes an account
+/// itself, then asserts the *same* claim again on a second, self-chained read of that same
+/// account — showing one claim gets checked independently per call, once against a write and
+/// once against a read.
 ///
 /// `stripped_token_and_forward` always forwards, so this needs three touches, all legitimate:
-/// (1) top-level, it genuinely writes `TokenDiff::Add(1)`, becoming the account's owner; (2)
-/// chained into itself again, it echoes the account's now-current data verbatim, so this diff
-/// collapses to a no-op read and triggers its own `Probe` — with `account_owned_by_program: true`
-/// this time, since (1) already made it the owner; (3) forced onward once more, it lands on
-/// `defer_asserting_noop`, which — unlike plain `noop` — is `Incremental`-aware and asserts
-/// `DeferReads::All`, so it doesn't disturb whatever (1) and (2) already decided.
+/// (1) top-level, it genuinely writes `TokenDiff::Add(1)`, asserting `claim` on its own `Probe`;
+/// (2) chained into itself again, it echoes the account's now-current data verbatim, so this diff
+/// collapses to a no-op read, and asserts the *same* `claim` on this call's own, independent
+/// `Probe`; (3) forced onward once more, it lands on `defer_asserting_noop`, which — unlike plain
+/// `noop` — is `Incremental`-aware and asserts `DeferReads::All`, so it doesn't disturb whatever
+/// (1) and (2) already decided.
 ///
-/// Also returns the circuit's own `PublicAction` for touch (2) — callers assert on its exact
+/// Also returns the circuit's own `PublicAction` for the account — callers assert on its exact
 /// shape directly, since touches (1)/(2) settle to the same final balance either way.
-fn owned_self_write_then_read_tx(
+fn write_then_read_tx(
     forward_program_id: AccountId,
     terminator_account_id: AccountId,
     account_id: AccountId,
@@ -526,7 +527,8 @@ fn owned_self_write_then_read_tx(
     let pre = AccountWithMetadata::new(Account::default(), false, account_id);
 
     // Touch 2 (self-chained): echoes the account's post-touch-1 data verbatim, so its diff
-    // collapses to `post_data: None` and triggers `Probe` — the assertion under test.
+    // collapses to `post_data: None` and triggers a second, independent `Probe` — asserting the
+    // same `claim` again, now checked against a read instead of a write.
     let touch2_instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenAccountData { balance: 1 }).unwrap(),
         terminator_account_id,
@@ -535,13 +537,13 @@ fn owned_self_write_then_read_tx(
     ))
     .unwrap();
 
-    // Touch 1 (top-level): a genuine `TokenDiff::Add(1)` on a fresh account — establishes
-    // `stripped_token_and_forward` as the account's owner, unconditionally Deferred-eligible.
+    // Touch 1 (top-level): a genuine `TokenDiff::Add(1)` on a fresh account, asserting `claim`
+    // on its own `Probe`.
     let instruction = Program::serialize_instruction((
         borsh::to_vec(&TokenDiff::Add(1)).unwrap(),
         forward_program_id,
         touch2_instruction,
-        ProbeAssertion::None,
+        ProbeAssertion::Real(claim),
     ))
     .unwrap();
 
@@ -581,12 +583,13 @@ fn owned_self_write_then_read_tx(
     (PrivacyPreservingTransaction::new(message, witness_set), action)
 }
 
-/// End-to-end proof that `DeferReads::ProgramOwned` correctly covers an account the asserting
-/// program owns, all the way through to settlement: the pending `Deferred` resolution from
-/// touch (1) survives, and `transition_from_privacy_preserving_transaction` runs
-/// `stripped_token_and_forward`'s own `Incremental` dispatch on it at apply time.
+/// End-to-end proof that `DeferReads::WriteOnly` covers touch (1) (a write, `Deferred`-eligible)
+/// but not touch (2) (a read, a *different*, independent call asserting the identical claim) —
+/// forcing `Bound` and discarding touch (1)'s pending resolution, all the way through to
+/// settlement. Even forced `Bound`, `transition_from_privacy_preserving_transaction` must still
+/// land touch (1)'s real, `Incremental`-resolved value, not raw `TokenDiff` bytes.
 #[test]
-fn a_program_owned_initialize_over_an_owned_account_stays_deferred_and_settles_correctly() {
+fn a_write_only_claim_settles_bound_once_a_later_read_discards_it() {
     let mut state = V03State::new().with_test_programs();
     let forward_program_id: AccountId =
         crate::test_methods::stripped_token_and_forward().id().into();
@@ -594,27 +597,21 @@ fn a_program_owned_initialize_over_an_owned_account_stays_deferred_and_settles_c
         crate::test_methods::defer_asserting_noop().id().into();
     let account_id = AccountId::new([1; 32]);
 
-    let (tx, action) = owned_self_write_then_read_tx(
+    let (tx, action) = write_then_read_tx(
         forward_program_id,
         terminator_account_id,
         account_id,
-        lee_core::program::DeferReads::ProgramOwned,
+        lee_core::program::DeferReads::WriteOnly,
     );
-    let PublicAction::Deferred {
-        account_id: deferred_account_id,
-        resolutions,
-    } = action
-    else {
-        panic!("DeferReads::ProgramOwned must cover an owned account");
+    let PublicAction::Bound { pre, post } = action else {
+        panic!("touch (2) is a read, which WriteOnly doesn't cover: expected Bound");
     };
-    assert_eq!(deferred_account_id, account_id);
-    let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
-    assert_eq!(resolution.executing_account_id, forward_program_id);
-    assert_eq!(resolution.caller_account_id, None);
-    assert_eq!(
-        resolution.post_data.unwrap().as_ref(),
-        borsh::to_vec(&TokenDiff::Add(1)).unwrap().as_slice()
-    );
+    assert_eq!(pre.account_id, account_id);
+    assert_eq!(pre.account, Account::default());
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("touch (1)'s Incremental resolution must have run in-circuit");
+    assert_eq!(data.balance, 1);
+    assert_eq!(post.program_owner, forward_program_id);
 
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
@@ -627,11 +624,11 @@ fn a_program_owned_initialize_over_an_owned_account_stays_deferred_and_settles_c
     );
 }
 
-/// The inverse: `DeferReads::ReadOnly` does *not* cover an account the asserting program owns, so
-/// touch (2) forces `Bound`, discarding touch (1)'s pending resolution — settlement then just
-/// applies the already-resolved `post_state` from the circuit, no `Incremental` re-resolution.
+/// The other direction: `DeferReads::ReadOnly` doesn't cover touch (1) (a write), forcing
+/// `Bound` immediately — before touch (2) (a read, covered by the identical claim) ever runs.
+/// Settlement lands the same real, resolved value either way.
 #[test]
-fn a_read_only_initialize_over_an_owned_account_forces_bound_and_settles_correctly() {
+fn a_read_only_claim_settles_bound_from_an_uncovered_earlier_write() {
     let mut state = V03State::new().with_test_programs();
     let forward_program_id: AccountId =
         crate::test_methods::stripped_token_and_forward().id().into();
@@ -639,19 +636,19 @@ fn a_read_only_initialize_over_an_owned_account_forces_bound_and_settles_correct
         crate::test_methods::defer_asserting_noop().id().into();
     let account_id = AccountId::new([1; 32]);
 
-    let (tx, action) = owned_self_write_then_read_tx(
+    let (tx, action) = write_then_read_tx(
         forward_program_id,
         terminator_account_id,
         account_id,
         lee_core::program::DeferReads::ReadOnly,
     );
     let PublicAction::Bound { pre, post } = action else {
-        panic!("DeferReads::ReadOnly must not cover an owned account");
+        panic!("touch (1) is a write, which ReadOnly doesn't cover: expected Bound");
     };
     assert_eq!(pre.account_id, account_id);
     assert_eq!(pre.account, Account::default());
     let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
-        .expect("stripped_token_and_forward's Incremental resolution must have run in-circuit");
+        .expect("touch (1)'s Incremental resolution must have run in-circuit");
     assert_eq!(data.balance, 1);
     assert_eq!(post.program_owner, forward_program_id);
 

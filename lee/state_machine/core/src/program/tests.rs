@@ -482,23 +482,20 @@ fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }
 
-// Circuit-level `DeferReads` tests (`privacy_preserving_transaction::circuit::tests`) can only
-// exercise `covers(false)` — see that module's comment on why `covers(true)` isn't reachable
-// there for a touch that's also genuinely written. These are the direct complement.
 #[test]
-fn defer_reads_program_owned_covers_only_owned_accounts() {
-    assert!(DeferReads::ProgramOwned.covers(true));
-    assert!(!DeferReads::ProgramOwned.covers(false));
+fn defer_reads_write_only_covers_only_writes() {
+    assert!(DeferReads::WriteOnly.covers(true));
+    assert!(!DeferReads::WriteOnly.covers(false));
 }
 
 #[test]
-fn defer_reads_read_only_covers_only_non_owned_accounts() {
+fn defer_reads_read_only_covers_only_reads() {
     assert!(!DeferReads::ReadOnly.covers(true));
     assert!(DeferReads::ReadOnly.covers(false));
 }
 
 #[test]
-fn defer_reads_all_covers_regardless_of_ownership() {
+fn defer_reads_all_covers_regardless_of_write_or_read() {
     assert!(DeferReads::All.covers(true));
     assert!(DeferReads::All.covers(false));
 }

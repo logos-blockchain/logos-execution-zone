@@ -359,6 +359,45 @@ impl ExecutionState {
         image_id_by_account_id: &HashMap<AccountId, ProgramId>,
         program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
     ) -> HashSet<AccountId> {
+        // Whether this call touches any public account at all, decided without mutating
+        // `self.pre_states` yet — mirrors the same first-sighting position assignment the loop
+        // below performs, since `is_public` is a function of position. Determines whether a
+        // `Probe` receipt is expected next, before any per-diff `Update` receipts.
+        let touches_public = {
+            let mut next_position = self.pre_states.len();
+            output_state_diffs.iter().any(|diff| {
+                let position = self
+                    .pre_states
+                    .iter()
+                    .position(|acc| acc.account_id == diff.pre_state.account_id)
+                    .unwrap_or_else(|| {
+                        let position = next_position;
+                        next_position = next_position
+                            .checked_add(1)
+                            .expect("account position count cannot overflow usize");
+                        position
+                    });
+                matches!(
+                    account_identities.get(position),
+                    Some(InputAccountIdentity::Public)
+                )
+            })
+        };
+
+        // One `Probe` per call, covering every public touch this call produces — reads and
+        // writes alike (see `DeferReads`'s doc). `None` means no claim at all: every public
+        // touch this call produces forces `Bound`.
+        let defer_reads = if touches_public {
+            verify_probe_receipt(
+                program_account_id,
+                caller.account_id,
+                image_id_by_account_id,
+                program_outputs_iter,
+            )
+        } else {
+            None
+        };
+
         let mut authorized_output_accounts = Vec::new();
         for state_diff in output_state_diffs {
             let mut pre = state_diff.pre_state.clone();
@@ -381,59 +420,55 @@ impl ExecutionState {
             // never the resolved one.
             let raw_post_data = state_diff.post_data.clone();
             let raw_post_balance_diff = state_diff.post_balance_diff;
+            let is_write = raw_post_data.is_some();
 
-            // Always run, regardless of eventual Bound/Deferred classification — the *result*
-            // (whether the program implements `Incremental`) is itself what drives that
-            // classification, and the resolved value is always needed for chain continuity. For
-            // a public account, this runs even when there's no `post_data` to resolve — a
-            // read-only touch still needs its executing program's capability probed, since it
-            // can drive a decision elsewhere in the call chain (see `ExecutionState`'s doc).
-            let (resolved_diff, incremental_supported, defer_reads) = resolve_diff_in_circuit(
-                state_diff,
-                program_account_id,
-                caller.account_id,
-                is_public,
-                image_id_by_account_id,
-                program_outputs_iter,
-            );
+            // Always run for a write, regardless of eventual Bound/Deferred classification —
+            // `post_states` always needs the account's real, resolved value for chain
+            // continuity, and if this write ends up `Bound`, it's the literal final data. A
+            // read has nothing to resolve: `post` is just the diff's own (unchanged) value.
+            let resolved_diff = if is_write {
+                verify_update_receipt(
+                    program_account_id,
+                    caller.account_id,
+                    state_diff,
+                    image_id_by_account_id,
+                    program_outputs_iter,
+                )
+            } else {
+                state_diff
+            };
             let post = post_state(&resolved_diff, program_account_id)
                 .expect("balance diff must be valid; validate_execution already checked it");
 
-            // Whether `DeferReads::ProgramOwned`/`ReadOnly` cover this specific touch depends on
-            // who currently owns the account being read, not just which program is reading it.
-            let account_owned_by_program = pre.account.program_owner == program_account_id;
-
             if is_public {
-                if incremental_supported && let Some(post_data) = raw_post_data {
-                    // Deferred-eligible — but only actually deferred if this account hasn't
-                    // already been forced `Bound` by some other touch; otherwise this touch
-                    // just resolves now too (already done above) and joins the Bound value.
-                    if !self.bound_accounts.contains(&pre_account_id) {
-                        self.deferred
-                            .entry(pre_account_id)
-                            .or_default()
-                            .push(DeferredResolution {
-                                executing_account_id: program_account_id,
-                                caller_account_id: caller.account_id,
-                                post_balance_diff: raw_post_balance_diff,
-                                post_data: Some(post_data),
-                            });
+                if defer_reads.is_some_and(|claim| claim.covers(is_write)) {
+                    if is_write {
+                        // Deferred-eligible — but only actually deferred if this account hasn't
+                        // already been forced `Bound` by some other touch; otherwise this touch
+                        // just resolves now too (already done above) and joins the Bound value.
+                        if !self.bound_accounts.contains(&pre_account_id) {
+                            self.deferred
+                                .entry(pre_account_id)
+                                .or_default()
+                                .push(DeferredResolution {
+                                    executing_account_id: program_account_id,
+                                    caller_account_id: caller.account_id,
+                                    post_balance_diff: raw_post_balance_diff,
+                                    post_data: raw_post_data,
+                                });
+                        }
                     }
-                } else if incremental_supported
-                    && defer_reads.is_some_and(|claim| claim.covers(account_owned_by_program))
-                {
-                    // A read-only touch (nothing to resolve) whose program's `DeferReads` claim
-                    // covers this account (see `DeferReads`'s doc). Taken at face value — no-op
+                    // A read this call's `Probe` claim covers is taken at face value — no-op
                     // for classification, exactly as if this touch never happened.
                 } else {
                     // Bound-forced: fold in and discard any pending deferred entries — their
                     // effects are already reflected in `post`/`post_states`, since every touch
                     // has always been genuinely resolved regardless of classification. This is
-                    // the conservative default: a write declined via `UnsupportedCallKind`, or
-                    // any read-only touch (e.g. a caller inspecting the account before deciding
-                    // what to do) whose program didn't assert `DeferReads` — its decision is
-                    // baked into the proof and never re-verified for a `Deferred` account, so it
-                    // must be anchored (`Bound`) instead.
+                    // the conservative default: no `Probe` claim at all, or a claim that
+                    // doesn't cover this touch's write/read kind — either way it must be
+                    // anchored (`Bound`) instead of carried forward unproven. Note this never
+                    // depends on whether `Update` itself succeeded for a write — that only
+                    // ever affects `post`, never this decision.
                     self.bound_accounts.insert(pre_account_id);
                     self.deferred.remove(&pre_account_id);
                 }
@@ -600,112 +635,103 @@ impl ExecutionState {
     }
 }
 
-/// Pops the next `CallKind::Incremental` receipt from `program_outputs_iter` and verifies it —
-/// produced by `executing_account_id` for `caller_account_id`, checked via recursive proof
-/// composition (`env::verify`) instead of a live re-execution — and reports whether the program
-/// actually implements `Incremental` at all (an `UnsupportedCallKind` event on the verified
-/// receipt means no). Shared by both a real resolution (`IncrementalCall::Update`) and a bare
-/// capability check (`IncrementalCall::Probe`); the caller decides which was expected and what
-/// to do with a supported result.
-fn verify_incremental_receipt(
-    account_id: AccountId,
+/// Pops the next `CallKind::Incremental` receipt from `program_outputs_iter` and verifies it as
+/// this call's single `Probe` response — one per program invocation, covering every public
+/// account it touches this call, reads and writes alike (see `DeferReads`'s doc) — checked via
+/// recursive proof composition (`env::verify`) rather than a live re-execution. Extracts the
+/// program's `DeferReads` claim, if any; `None` covers both a genuine `UnsupportedCallKind`
+/// response and a decode failure, since either way there's no claim to check `covers()` against.
+fn verify_probe_receipt(
     executing_account_id: AccountId,
     caller_account_id: Option<AccountId>,
     image_id_by_account_id: &HashMap<AccountId, ProgramId>,
     program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
-) -> (ProgramOutput, bool, Option<DeferReads>) {
-    let incremental_output = program_outputs_iter
+) -> Option<DeferReads> {
+    let probe_output = program_outputs_iter
         .next()
-        .expect("prover must supply an Incremental resolution output for this account");
+        .expect("prover must supply a Probe receipt for this call");
 
     assert_eq!(
-        incremental_output.call_kind,
+        probe_output.call_kind,
         CallKind::Incremental,
-        "expected an Incremental resolution output for account {account_id}"
+        "expected a Probe output for program {executing_account_id:?}"
     );
     assert_eq!(
-        incremental_output.self_account_id, executing_account_id,
-        "Incremental resolution output for account {account_id} was produced by the wrong program"
+        probe_output.self_account_id, executing_account_id,
+        "Probe output for program {executing_account_id:?} was produced by the wrong program"
     );
     assert_eq!(
-        incremental_output.caller_account_id, caller_account_id,
-        "Incremental resolution output for account {account_id} has the wrong caller"
+        probe_output.caller_account_id, caller_account_id,
+        "Probe output for program {executing_account_id:?} has the wrong caller"
     );
 
     let image_id = image_id_by_account_id
         .get(&executing_account_id)
         .copied()
         .expect("no image_id claim supplied for invoked program account");
-    let output_frame = lee_core::to_borsh_frame(&incremental_output);
+    let output_frame = lee_core::to_borsh_frame(&probe_output);
     env::verify(image_id, &output_frame)
         .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
 
-    // The program may not have implemented `Incremental` at all — signaled by this event,
-    // exactly like the host's own `resolve_diff`.
-    let supported = !incremental_output
-        .events
-        .iter()
-        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
-    // Only meaningful on a `Probe` response (see `resolve_diff_in_circuit`'s read-only branch) —
-    // a program's self-attested claim about which of its read-only touches are safe to leave
-    // `Deferred` (see `DeferReads`'s doc). A decode failure is treated the same as absence.
-    let defer_reads = incremental_output
+    probe_output
         .events
         .iter()
         .find(|event| event.selector == DeferReads::SELECTOR)
-        .and_then(|event| borsh::from_slice::<DeferReads>(&event.data).ok());
-    (incremental_output, supported, defer_reads)
+        .and_then(|event| borsh::from_slice::<DeferReads>(&event.data).ok())
 }
 
-/// Resolves one diff to what should actually be applied, plus whether the program actually
-/// implements `Incremental` and, for a read-only touch, what it asserted via `DeferReads` — the
-/// in-circuit analog of the host's `resolve_diff`/`Program::execute_incremental`. A diff with no
-/// `post_data` on a private account has nothing to resolve and no `Bound`/`Deferred`
-/// classification to inform — returned unchanged, with `(false, None)`, no receipt required.
-/// The same diff on a *public* account still needs an `IncrementalCall::Probe` receipt: a
-/// read-only touch can drive a decision elsewhere in the call chain (see `ExecutionState`'s
-/// Bound-forcing accumulation), so it forces `Bound` unless the program's `Probe` response
-/// carries a `DeferReads` claim covering this account. If the program hasn't implemented
-/// `Incremental` (via either receipt kind), falls back to the original diff verbatim, same as
-/// the host version, also with `supported: false` — it could never be resolved later either, so
-/// it can't be `Deferred`.
-fn resolve_diff_in_circuit(
-    diff: AccountStateDiff,
+/// Pops the next `CallKind::Incremental` receipt from `program_outputs_iter` and verifies it as
+/// the `Update` resolution for one write — the in-circuit analog of the host's
+/// `resolve_diff`/`Program::execute_incremental` — checked via recursive proof composition
+/// (`env::verify`) rather than a live re-execution. If the program declines
+/// (`UnsupportedCallKind`), falls back to `diff` verbatim, same as the host version. `Update`'s
+/// own outcome never affects `Bound`/`Deferred` classification — that's decided entirely by this
+/// call's `Probe` claim (see `verify_probe_receipt`) — it only determines what `post` resolves
+/// to.
+fn verify_update_receipt(
     executing_account_id: AccountId,
     caller_account_id: Option<AccountId>,
-    is_public: bool,
+    diff: AccountStateDiff,
     image_id_by_account_id: &HashMap<AccountId, ProgramId>,
     program_outputs_iter: &mut impl Iterator<Item = ProgramOutput>,
-) -> (AccountStateDiff, bool, Option<DeferReads>) {
+) -> AccountStateDiff {
     let account_id = diff.pre_state.account_id;
+    let update_output = program_outputs_iter
+        .next()
+        .expect("prover must supply an Update resolution output for this account");
 
-    if diff.post_data.is_none() {
-        if !is_public {
-            return (diff, false, None);
-        }
-        let (_probe_output, supported, defer_reads) = verify_incremental_receipt(
-            account_id,
-            executing_account_id,
-            caller_account_id,
-            image_id_by_account_id,
-            program_outputs_iter,
-        );
-        return (diff, supported, defer_reads);
-    }
-
-    let expected_pre_account = diff.pre_state.account.clone();
-    let (incremental_output, supported, _defer_reads) = verify_incremental_receipt(
-        account_id,
-        executing_account_id,
-        caller_account_id,
-        image_id_by_account_id,
-        program_outputs_iter,
+    assert_eq!(
+        update_output.call_kind,
+        CallKind::Incremental,
+        "expected an Update resolution output for account {account_id}"
     );
+    assert_eq!(
+        update_output.self_account_id, executing_account_id,
+        "Update resolution output for account {account_id} was produced by the wrong program"
+    );
+    assert_eq!(
+        update_output.caller_account_id, caller_account_id,
+        "Update resolution output for account {account_id} has the wrong caller"
+    );
+
+    let image_id = image_id_by_account_id
+        .get(&executing_account_id)
+        .copied()
+        .expect("no image_id claim supplied for invoked program account");
+    let output_frame = lee_core::to_borsh_frame(&update_output);
+    env::verify(image_id, &output_frame)
+        .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+
+    let supported = !update_output
+        .events
+        .iter()
+        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
     if !supported {
-        return (diff, false, None);
+        return diff;
     }
 
-    let [resolved]: [AccountStateDiff; 1] = incremental_output
+    let expected_pre_account = diff.pre_state.account;
+    let [resolved]: [AccountStateDiff; 1] = update_output
         .state_diffs
         .try_into()
         .unwrap_or_else(|diffs: Vec<AccountStateDiff>| {
@@ -722,7 +748,7 @@ fn resolve_diff_in_circuit(
         resolved.pre_state.account, expected_pre_account,
         "Incremental resolution for account {account_id} was run against the wrong pre_state"
     );
-    (resolved, true, None)
+    resolved
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the
