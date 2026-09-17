@@ -335,7 +335,6 @@ impl From<lee_core::DeferredResolution> for DeferredResolution {
     fn from(value: lee_core::DeferredResolution) -> Self {
         Self {
             executing_account_id: value.executing_account_id.into(),
-            caller_account_id: value.caller_account_id.map(Into::into),
             post_balance_diff: value.post_balance_diff.into(),
             post_data: value.post_data.map(Into::into),
         }
@@ -348,7 +347,6 @@ impl TryFrom<DeferredResolution> for lee_core::DeferredResolution {
     fn try_from(value: DeferredResolution) -> Result<Self, Self::Error> {
         Ok(Self {
             executing_account_id: value.executing_account_id.into(),
-            caller_account_id: value.caller_account_id.map(Into::into),
             post_balance_diff: value.post_balance_diff.into(),
             post_data: value.post_data.map(TryInto::try_into).transpose()?,
         })

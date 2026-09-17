@@ -254,7 +254,6 @@ pub enum BalanceDiff {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct DeferredResolution {
     pub executing_account_id: AccountId,
-    pub caller_account_id: Option<AccountId>,
     pub post_balance_diff: BalanceDiff,
     pub post_data: Option<Data>,
 }

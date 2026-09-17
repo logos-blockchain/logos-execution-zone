@@ -97,7 +97,6 @@ fn deferred_sub_action(account_id: AccountId, program_id: AccountId, amount: u12
         account_id,
         resolutions: vec![DeferredResolution {
             executing_account_id: program_id,
-            caller_account_id: None,
             post_balance_diff: BalanceDiff::Add(0),
             post_data: Some(
                 borsh::to_vec(&TokenDiff::Sub(amount))
@@ -220,7 +219,6 @@ fn resolve_public_action_falls_back_to_copy_replace_when_incremental_is_unsuppor
         account_id,
         resolutions: vec![DeferredResolution {
             executing_account_id: program_id,
-            caller_account_id: None,
             post_balance_diff: BalanceDiff::Add(42),
             post_data: Some(vec![1, 2, 3].try_into().unwrap()),
         }],

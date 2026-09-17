@@ -258,14 +258,12 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
-/// One pending, unresolved update to a `Deferred` account's `data`. `has_caller_account_id`/
-/// `has_post_data` gate whether `caller_account_id`/`post_data` are meaningful (zeroed/empty
-/// otherwise); `post_balance_diff_is_sub` selects `Add`/`Sub` for `post_balance_diff_amount`.
+/// One pending, unresolved update to a `Deferred` account's `data`. `has_post_data` gates
+/// whether `post_data` is meaningful (empty otherwise); `post_balance_diff_is_sub` selects
+/// `Add`/`Sub` for `post_balance_diff_amount`.
 #[repr(C)]
 pub struct FfiDeferredResolution {
     pub executing_account_id: FfiAccountId,
-    pub has_caller_account_id: bool,
-    pub caller_account_id: FfiAccountId,
     pub post_balance_diff_is_sub: bool,
     pub post_balance_diff_amount: FfiU128,
     pub has_post_data: bool,
@@ -280,8 +278,6 @@ impl From<DeferredResolution> for FfiDeferredResolution {
         };
         Self {
             executing_account_id: value.executing_account_id.into(),
-            has_caller_account_id: value.caller_account_id.is_some(),
-            caller_account_id: value.caller_account_id.map(Into::into).unwrap_or_default(),
             post_balance_diff_is_sub,
             post_balance_diff_amount: post_balance_diff_amount.into(),
             has_post_data: value.post_data.is_some(),
@@ -301,9 +297,6 @@ impl From<FfiDeferredResolution> for DeferredResolution {
             executing_account_id: AccountId {
                 value: value.executing_account_id.data,
             },
-            caller_account_id: value.has_caller_account_id.then(|| AccountId {
-                value: value.caller_account_id.data,
-            }),
             post_balance_diff,
             post_data: value.has_post_data.then(|| Data(value.post_data.into())),
         }

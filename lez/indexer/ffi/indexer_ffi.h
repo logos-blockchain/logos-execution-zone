@@ -248,14 +248,12 @@ typedef struct FfiAccount {
 typedef struct FfiVec_u8 FfiVecU8;
 
 /**
- * One pending, unresolved update to a `Deferred` account's `data`. `has_caller_account_id`/
- * `has_post_data` gate whether `caller_account_id`/`post_data` are meaningful (zeroed/empty
- * otherwise); `post_balance_diff_is_sub` selects `Add`/`Sub` for `post_balance_diff_amount`.
+ * One pending, unresolved update to a `Deferred` account's `data`. `has_post_data` gates
+ * whether `post_data` is meaningful (empty otherwise); `post_balance_diff_is_sub` selects
+ * `Add`/`Sub` for `post_balance_diff_amount`.
  */
 typedef struct FfiDeferredResolution {
   FfiAccountId executing_account_id;
-  bool has_caller_account_id;
-  FfiAccountId caller_account_id;
   bool post_balance_diff_is_sub;
   struct FfiU128 post_balance_diff_amount;
   bool has_post_data;

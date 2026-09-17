@@ -746,9 +746,8 @@ pub enum ProgramCall<T> {
 ///
 /// Shared by every caller and every implementer, so a capability check and a real resolution
 /// can never be confused for one another. `Probe` carries the same `instruction_data` the
-/// originating `Execute` call received, even though nothing reads it yet, so a future
-/// per-instruction answer needs no wire change. A program that doesn't recognize this envelope
-/// at all (decode failure) falls back to `UnsupportedCallKind`, identical to "doesn't implement
+/// originating `Execute` call received. A program that doesn't recognize this envelope at all
+/// (decode failure) falls back to `UnsupportedCallKind`, identical to "doesn't implement
 /// `Incremental`".
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum IncrementalCall {

@@ -577,7 +577,6 @@ fn public_account_touched_by_an_incremental_capable_program_is_deferred() {
     assert_eq!(deferred_account_id, account_id);
     let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
     assert_eq!(resolution.executing_account_id, program_id);
-    assert_eq!(resolution.caller_account_id, None);
     assert_eq!(resolution.post_balance_diff, BalanceDiff::Add(0));
     assert_eq!(
         resolution.post_data.unwrap().as_ref(),

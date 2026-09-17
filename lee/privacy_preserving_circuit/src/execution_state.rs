@@ -28,8 +28,8 @@ pub struct ExecutionState {
     /// An account leaves this map (folds into `Bound`) the moment a non-`Incremental` touch
     /// forces it.
     deferred: HashMap<AccountId, Vec<DeferredResolution>>,
-    /// Accounts forced `Bound` by a non-`Incremental` touch. Permanent once set — a later
-    /// `Incremental`-eligible touch resolves immediately instead of re-entering `deferred`.
+    /// Accounts forced `Bound`. Permanent once set — a later, otherwise-`Deferred`-eligible
+    /// touch just resolves immediately instead of re-entering `deferred`.
     bound_accounts: HashSet<AccountId>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
@@ -452,7 +452,6 @@ impl ExecutionState {
                                 .or_default()
                                 .push(DeferredResolution {
                                     executing_account_id: program_account_id,
-                                    caller_account_id: caller.account_id,
                                     post_balance_diff: raw_post_balance_diff,
                                     post_data: raw_post_data,
                                 });

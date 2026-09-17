@@ -194,7 +194,6 @@ pub struct DeferredResolution {
     /// The program whose ELF resolves this account's `post_data` via `CallKind::Incremental` —
     /// not necessarily the touched account itself.
     pub executing_account_id: AccountId,
-    pub caller_account_id: Option<AccountId>,
     pub post_balance_diff: BalanceDiff,
     pub post_data: Option<Data>,
 }
@@ -315,13 +314,11 @@ mod tests {
                     resolutions: vec![
                         DeferredResolution {
                             executing_account_id: AccountId::new([6; 32]),
-                            caller_account_id: None,
                             post_balance_diff: BalanceDiff::Add(5),
                             post_data: Some(b"delta 1".to_vec().try_into().unwrap()),
                         },
                         DeferredResolution {
                             executing_account_id: AccountId::new([6; 32]),
-                            caller_account_id: Some(AccountId::new([7; 32])),
                             post_balance_diff: BalanceDiff::Sub(2),
                             post_data: None,
                         },

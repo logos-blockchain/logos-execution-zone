@@ -341,7 +341,6 @@ fn a_deferred_initialize_from_a_real_circuit_run_settles_correctly() {
     assert_eq!(deferred_account_id, account_id);
     let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
     assert_eq!(resolution.executing_account_id, token_program_id);
-    assert_eq!(resolution.caller_account_id, Some(forward_program_id));
     assert_eq!(
         resolution.post_data.unwrap().as_ref(),
         borsh::to_vec(&TokenDiff::Add(balance)).unwrap().as_slice()
@@ -383,7 +382,6 @@ fn a_deferred_initialize_with_a_read_only_claim_settles_correctly() {
     assert_eq!(deferred_account_id, account_id);
     let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
     assert_eq!(resolution.executing_account_id, token_program_id);
-    assert_eq!(resolution.caller_account_id, Some(forward_program_id));
     assert_eq!(
         resolution.post_data.unwrap().as_ref(),
         borsh::to_vec(&TokenDiff::Add(balance)).unwrap().as_slice()
@@ -467,7 +465,6 @@ fn a_deferred_initialize_reflects_state_mutated_after_proving() {
     assert_eq!(deferred_account_id, account_id);
     let [resolution] = <[_; 1]>::try_from(resolutions).unwrap();
     assert_eq!(resolution.executing_account_id, token_program_id);
-    assert_eq!(resolution.caller_account_id, Some(forward_program_id));
     assert_eq!(
         resolution.post_data.unwrap().as_ref(),
         borsh::to_vec(&TokenDiff::Add(delta)).unwrap().as_slice()

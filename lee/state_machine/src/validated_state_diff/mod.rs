@@ -830,10 +830,12 @@ fn resolve_public_action(
             post_balance_diff: deferred.post_balance_diff,
             post_data: deferred.post_data.clone(),
         };
+        // `DeferredResolution` doesn't carry a caller — nothing reads it, and settlement has no
+        // record of what it was at proving time anyway.
         let resolved = resolve_diff(
             &diff,
             deferred.executing_account_id,
-            deferred.caller_account_id,
+            None,
             state,
             &resolved_so_far,
             cycle_budget,
