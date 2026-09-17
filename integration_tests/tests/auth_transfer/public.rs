@@ -357,4 +357,3 @@ async fn successful_transfer_using_to_label() -> Result<()> {
 
     Ok(())
 }
-
