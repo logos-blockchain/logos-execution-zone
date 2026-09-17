@@ -7,8 +7,8 @@ use crate::{
     Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt, Data, EncryptedAccountData,
     EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
     Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    PrivateAction, Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Selector, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================

@@ -365,7 +365,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     let identifier: u128 = 7;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account {
-        program_owner: program.id().into(),
+        program_owner: AccountId::from_builtin_program(program.id()),
         data: Data::try_from(vec![9_u8; 200]).unwrap(),
         ..Account::default()
     };

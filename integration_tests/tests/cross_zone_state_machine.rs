@@ -503,7 +503,7 @@ fn a_mint_at_the_cap_is_accepted() {
 }
 
 /// A policy the update tests hand the guest for the canonical source.
-fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
+const fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
     wrapped_token_core::SourcePolicy {
         src_zone: MINT_SRC_ZONE,
         src_account_id: MINT_SRC_ACCOUNT_ID,
