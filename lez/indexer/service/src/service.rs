@@ -381,8 +381,7 @@ impl SubscriptionService {
             let loop_finished = guard
                 .handle
                 .lock()
-                .ok()
-                .is_some_and(|handle| handle.as_ref().is_some_and(JoinHandle::is_finished));
+                .is_ok_and(|handle| handle.as_ref().is_some_and(JoinHandle::is_finished));
             if loop_finished && !self.shutdown.is_cancelled() {
                 // A halt outside the accept-list would only re-derive the same
                 // verdict, so respawning would churn: verify, halt, die, respawn.

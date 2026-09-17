@@ -250,6 +250,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbitrary-int"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ab387a0c4143b4fd3804e193946e78c8ab16cf26c5fde2048e4ac3d618c3b64"
+
+[[package]]
 name = "arc-swap"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -323,7 +329,7 @@ dependencies = [
  "ark-poly",
  "ark-serialize",
  "ark-std",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
  "itertools 0.13.0",
@@ -345,7 +351,7 @@ dependencies = [
  "ark-std",
  "arrayvec",
  "digest 0.10.7",
- "educe",
+ "educe 0.6.0",
  "itertools 0.13.0",
  "num-bigint 0.4.6",
  "num-traits",
@@ -401,7 +407,7 @@ dependencies = [
  "ark-ff",
  "ark-serialize",
  "ark-std",
- "educe",
+ "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
 ]
@@ -416,7 +422,7 @@ dependencies = [
  "ark-ff",
  "ark-relations",
  "ark-std",
- "educe",
+ "educe 0.6.0",
  "num-bigint 0.4.6",
  "num-integer",
  "num-traits",
@@ -1041,7 +1047,7 @@ dependencies = [
  "bitflags 2.12.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2758,7 +2764,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2949,6 +2955,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "educe"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e451fac8dd8dece16234604bf1efce6e90fddd8ab6ad4d66eec0eca5160959dd"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3093,22 +3111,22 @@ dependencies = [
 
 [[package]]
 name = "enum-ordinalize"
-version = "4.3.2"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
+checksum = "89dd01549b09589510cf0647475075d12071456586d70f5c75c98ae2a5537677"
 dependencies = [
  "enum-ordinalize-derive",
 ]
 
 [[package]]
 name = "enum-ordinalize-derive"
-version = "4.3.2"
+version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
+checksum = "a65863d15a4ce2888bd2f0f543cc963d3879c3a022c8ee43f6141d479a3ac815"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3164,7 +3182,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4388,12 +4406,10 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
- "system-configuration 0.7.0",
+ "socket2 0.6.4",
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry",
 ]
 
 [[package]]
@@ -4841,14 +4857,12 @@ dependencies = [
  "lee_core",
  "log",
  "logos-blockchain-core",
- "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
  "program_loader_core",
  "programs",
- "reqwest 0.12.28",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -5583,7 +5597,7 @@ dependencies = [
  "async-broadcast",
  "async-stream",
  "backon",
- "educe",
+ "educe 0.6.0",
  "futures",
  "hashbrown 0.16.1",
  "hostname 0.4.2",
@@ -6439,7 +6453,7 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 [[package]]
 name = "logos-blockchain-api-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6449,6 +6463,7 @@ dependencies = [
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
  "logos-blockchain-log-targets",
@@ -6465,12 +6480,13 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-membership",
@@ -6484,13 +6500,14 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-crypto"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "blake2",
  "logos-blockchain-groth16",
  "logos-blockchain-poq",
  "logos-blockchain-poseidon2",
- "logos-blockchain-utils",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "rs-merkle-tree",
  "thiserror 2.0.18",
 ]
@@ -6498,7 +6515,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-membership"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-key-management-system-keys",
  "multiaddr",
@@ -6509,10 +6526,10 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-message"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "blake2",
- "derivative",
+ "educe 0.7.6",
  "hex",
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
@@ -6524,6 +6541,8 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "serde",
  "serde_with",
  "thiserror 2.0.18",
@@ -6534,7 +6553,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-network"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "either",
  "futures",
@@ -6557,7 +6576,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-proofs"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
@@ -6579,10 +6598,10 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-provers"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
- "derivative",
+ "educe 0.7.6",
  "futures",
  "hex",
  "logos-blockchain-blend-membership",
@@ -6603,7 +6622,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-scheduling"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "fork_stream",
  "futures",
@@ -6613,7 +6632,6 @@ dependencies = [
  "logos-blockchain-blend-provers",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
- "logos-blockchain-utils",
  "rand 0.8.6",
  "thiserror 2.0.18",
  "tokio",
@@ -6624,7 +6642,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-blend-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "fork_stream",
@@ -6633,7 +6651,9 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "logos-blockchain-blend",
+ "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -6652,6 +6672,7 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "rayon",
  "serde",
  "serde_with",
@@ -6664,11 +6685,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-broadcast-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
- "derivative",
+ "educe 0.7.6",
  "logos-blockchain-core",
+ "logos-blockchain-log-targets",
  "overwatch",
  "serde",
  "tokio",
@@ -6678,7 +6700,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-leader-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
@@ -6688,8 +6710,10 @@ dependencies = [
  "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
+ "logos-blockchain-log-targets",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
@@ -6710,7 +6734,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "backon",
@@ -6721,6 +6745,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-cryptarchia-sync",
  "logos-blockchain-ledger",
+ "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
@@ -6743,11 +6768,11 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-chain-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "bytes",
- "derivative",
+ "educe 0.7.6",
  "futures",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-core",
@@ -6755,6 +6780,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-sync",
  "logos-blockchain-groth16",
  "logos-blockchain-ledger",
+ "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
@@ -6774,8 +6800,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -6786,16 +6812,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-poc-sys"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -6804,8 +6830,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -6814,8 +6840,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -6825,15 +6851,15 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-prover"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "rust-rapidsnark",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-signature-sys"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -6842,8 +6868,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.5.6"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.6#07c439356435eb6a2f1f4a8daa973bd04bd0b088"
+version = "0.5.7"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.7#ebf7ddf5b5b625ef4ea7c803171c670beebd05ef"
 dependencies = [
  "bytes",
  "libc",
@@ -6852,7 +6878,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-codec"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "hex",
  "logos-blockchain-codec-macros",
@@ -6864,7 +6890,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-codec-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "hex",
  "proc-macro2",
@@ -6875,7 +6901,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "futures",
  "hex",
@@ -6887,6 +6913,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
+ "logos-blockchain-version",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6898,7 +6925,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-config"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "hex",
  "logos-blockchain-codec",
@@ -6918,13 +6945,12 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-core"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ark-ff",
  "bincode",
  "blake2",
  "bytes",
- "const-hex",
  "hex",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-codec",
@@ -6947,14 +6973,16 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-codec",
+ "logos-blockchain-log-targets",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "rpds",
@@ -6964,12 +6992,13 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
 name = "logos-blockchain-cryptarchia-sync"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "bytes",
  "futures",
@@ -6977,6 +7006,7 @@ dependencies = [
  "libp2p-stream",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-log-targets",
  "rand 0.8.6",
  "serde",
  "serde_with",
@@ -6988,7 +7018,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-dynamic-merkle"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "serde",
 ]
@@ -6996,15 +7026,17 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-groth16"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ark-bn254",
  "ark-ec",
  "ark-ff",
  "ark-groth16",
+ "ark-relations",
  "ark-serialize",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-utils",
  "num-bigint 0.4.6",
  "rand 0.8.6",
  "serde",
@@ -7015,7 +7047,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-http-api-common"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "axum 0.7.9",
  "logos-blockchain-core",
@@ -7036,9 +7068,11 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-keys"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
+ "arbitrary-int",
  "async-trait",
+ "blake2",
  "bytes",
  "ed25519-dalek",
  "generic-array 1.4.3",
@@ -7057,6 +7091,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "utoipa",
  "x25519-dalek",
  "zeroize",
 ]
@@ -7064,7 +7099,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7074,7 +7109,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-operators"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "logos-blockchain-blend-proofs",
@@ -7092,7 +7127,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-key-management-system-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "logos-blockchain-key-management-system-keys",
@@ -7109,9 +7144,9 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-ledger"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
- "derivative",
+ "educe 0.7.6",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
@@ -7119,6 +7154,7 @@ dependencies = [
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-log-targets",
  "logos-blockchain-mmr",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
@@ -7135,7 +7171,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-libp2p"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "backon",
@@ -7164,7 +7200,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-log-targets-macros",
 ]
@@ -7172,7 +7208,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-log-targets-macros"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7182,7 +7218,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-merkle-tree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-dynamic-merkle",
  "rpds",
@@ -7193,7 +7229,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-mmr"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ark-ff",
  "logos-blockchain-groth16",
@@ -7207,7 +7243,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-network-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
@@ -7230,7 +7266,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-node"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -7265,9 +7301,9 @@ dependencies = [
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tracing-service",
- "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-version",
  "logos-blockchain-wallet-service",
  "num-bigint 0.4.6",
  "nutype",
@@ -7293,7 +7329,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poc"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-circuits-poc-sys",
  "logos-blockchain-circuits-prover",
@@ -7310,7 +7346,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pol"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "astro-float",
  "logos-blockchain-circuits-pol-sys",
@@ -7330,7 +7366,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poq"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-circuits-poq-sys",
  "logos-blockchain-circuits-prover",
@@ -7348,7 +7384,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-poseidon2"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -7359,19 +7395,22 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-pow-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
  "logos-blockchain-log-targets",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
+ "logos-blockchain-time-service",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet-service",
  "logos-blockchain-zksign",
  "overwatch",
  "rand 0.8.6",
@@ -7386,7 +7425,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-proofs-error"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-circuits-types",
  "logos-blockchain-groth16",
@@ -7397,12 +7436,14 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-sdp-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-ledger",
+ "logos-blockchain-log-targets",
  "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
  "overwatch",
@@ -7416,7 +7457,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-services-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7432,7 +7473,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-storage-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7454,7 +7495,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-system-sig-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-ctrlc",
  "async-trait",
@@ -7466,7 +7507,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-time-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
@@ -7489,7 +7530,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "flate2",
  "logos-blockchain-log-targets",
@@ -7515,7 +7556,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-tracing-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "logos-blockchain-log-targets",
@@ -7531,34 +7572,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-tui-zone"
-version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
-dependencies = [
- "bincode",
- "chrono",
- "clap",
- "hex",
- "logos-blockchain-codec",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-zone-sdk",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber 0.3.23",
- "uuid",
-]
-
-[[package]]
 name = "logos-blockchain-tx-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
@@ -7583,18 +7599,15 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-utils"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
- "blake2",
- "cipher 0.4.4",
  "const-hex",
  "futures",
  "humantime",
  "logos-blockchain-log-targets",
  "multiaddr",
  "overwatch",
- "rand 0.8.6",
  "serde",
  "serde_ignored",
  "serde_with",
@@ -7603,12 +7616,13 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]
 name = "logos-blockchain-utxotree"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
@@ -7619,9 +7633,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-version"
+version = "0.0.0"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
+dependencies = [
+ "serde",
+ "utoipa",
+]
+
+[[package]]
 name = "logos-blockchain-wallet"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
@@ -7640,7 +7663,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-wallet-service"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -7668,7 +7691,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zksign"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-signature-sys",
@@ -7688,7 +7711,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "async-trait",
  "futures",
@@ -8398,7 +8421,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8535,7 +8558,6 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9415,30 +9437,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-error"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
-dependencies = [
- "proc-macro-error-attr",
- "proc-macro2",
- "quote",
- "syn 1.0.109",
- "version_check",
-]
-
-[[package]]
-name = "proc-macro-error-attr"
-version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
-dependencies = [
- "proc-macro2",
- "quote",
- "version_check",
-]
-
-[[package]]
 name = "proc-macro-error-attr2"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9623,7 +9621,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9636,7 +9634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9734,7 +9732,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9772,7 +9770,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -10108,8 +10106,6 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -10122,7 +10118,6 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
- "mime",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -10343,7 +10338,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tracing",
- "zip 2.4.2",
+ "zip",
 ]
 
 [[package]]
@@ -10801,7 +10796,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12107,6 +12102,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn"
+version = "3.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "syn_derive"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12294,7 +12300,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12476,7 +12482,7 @@ dependencies = [
 [[package]]
 name = "testing-framework"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=da7bd3792df481858400b322a257502f6c45e369#da7bd3792df481858400b322a257502f6c45e369"
+source = "git+https://github.com/logos-blockchain/logos-blockchain.git?rev=54328b50eb47ab4b8fd8044f8db5fbcebed718c0#54328b50eb47ab4b8fd8044f8db5fbcebed718c0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13589,9 +13595,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "utoipa"
-version = "4.2.3"
+version = "5.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5afb1a60e207dca502682537fefcfd9921e71d0b83e9576060f09abc6efab23"
+checksum = "8bde15df68e80b16c7d16b9616e80770ad158988daa56a27dccd1e55558b0160"
 dependencies = [
  "indexmap 2.14.0",
  "serde",
@@ -13601,11 +13607,10 @@ dependencies = [
 
 [[package]]
 name = "utoipa-gen"
-version = "4.3.1"
+version = "5.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20c24e8ab68ff9ee746aad22d39b5535601e6416d1b0feeabf78be986a5c4392"
+checksum = "6ba0b99ee52df3028635d93840c797102da61f8a7bb3cf751032455895b52ef8"
 dependencies = [
- "proc-macro-error",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -13613,20 +13618,20 @@ dependencies = [
 
 [[package]]
 name = "utoipa-swagger-ui"
-version = "7.1.0"
+version = "8.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "943e0ff606c6d57d410fd5663a4d7c074ab2c5f14ab903b9514565e59fa1189e"
+checksum = "db4b5ac679cc6dfc5ea3f2823b0291c777750ffd5e13b21137e0f7ac0e8f9617"
 dependencies = [
  "axum 0.7.9",
+ "base64 0.22.1",
  "mime_guess",
  "regex",
- "reqwest 0.12.28",
  "rust-embed",
  "serde",
  "serde_json",
  "utoipa",
  "utoipa-swagger-ui-vendored",
- "zip 1.1.4",
+ "zip",
 ]
 
 [[package]]
@@ -13643,7 +13648,6 @@ checksum = "d258b83ceec21034727ecee8c382cfa6c3e133699b0742c64571814fb420c9f7"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 
@@ -14033,7 +14037,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14766,22 +14770,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "zip"
-version = "1.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cc23c04387f4da0374be4533ad1208cbb091d5c11d070dfef13676ad6497164"
-dependencies = [
- "arbitrary",
- "crc32fast",
- "crossbeam-utils",
- "displaydoc",
- "flate2",
- "indexmap 2.14.0",
- "num_enum",
- "thiserror 1.0.69",
 ]
 
 [[package]]

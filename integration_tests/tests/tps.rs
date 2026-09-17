@@ -198,7 +198,7 @@ pub async fn tps_test() -> Result<()> {
 
     let tx_processed = tx_hashes.len();
     let actual_tps = tx_processed as u64 / time_elapsed;
-    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)",);
+    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)");
 
     assert_eq!(tx_processed, num_transactions);
 

@@ -8,7 +8,8 @@
 
 pub use actor::{ChannelConfigActor, MAILBOX_CAPACITY};
 pub use protocol::{
-    Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, SetPublisher, Signature, Wire,
+    Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, SetPublisher, Signature,
+    Submission, Wire,
 };
 
 pub mod actor;

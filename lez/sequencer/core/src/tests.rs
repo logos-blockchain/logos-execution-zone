@@ -5109,11 +5109,13 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
 
 mod channel_update_extraction {
     use logos_blockchain_core::mantle::{
+        SignedOps,
+        ledger::verification_mode::StandardMode,
         ops::{
-            Op,
+            Op, OpProof,
             channel::inscribe::{Inscription, InscriptionOp},
         },
-        transactions::{MantleTxBuilder, OpsProofs, SignedMantleTx, states::Unverified},
+        transactions::{MantleTxBuilder, OpProofs, states::Unverified},
     };
     use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
@@ -5124,20 +5126,23 @@ mod channel_update_extraction {
     fn inscribing_tx(
         channel: ChannelId,
         block: &common::block::Block,
-    ) -> SignedMantleTx<Unverified> {
+    ) -> SignedOps<Unverified, StandardMode> {
         let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+        let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
         let op = Op::ChannelInscribe(InscriptionOp {
             channel_id: channel,
             inscription,
             parent: MsgId::root(),
-            signer: Ed25519Key::generate(&mut rand::rngs::OsRng).public_key(),
+            signer: signer.public_key(),
         });
         let raw = MantleTxBuilder::new()
             .extend_ops([op])
             .expect("ops fit")
             .build()
             .expect("tx builds");
-        SignedMantleTx::new(raw, OpsProofs::empty())
+        // Extraction never checks the proof, only that there is one per op.
+        let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
+        SignedOps::from_parts(raw, OpProofs::from([proof])).expect("one proof per op")
     }
 
     #[test]
@@ -5163,7 +5168,9 @@ mod channel_update_extraction {
     fn a_config_tx_yields_nothing() {
         let channel = ChannelId::from([1; 32]);
         let raw = MantleTxBuilder::new().build().expect("tx builds");
-        let config = ChannelUpdateTx::Config(SignedMantleTx::new(raw, OpsProofs::empty()));
+        let config = ChannelUpdateTx::Config(
+            SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
+        );
         assert!(channel_blocks(&config, channel).is_empty());
     }
 }

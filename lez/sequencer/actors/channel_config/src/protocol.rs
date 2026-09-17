@@ -2,12 +2,8 @@ use kameo::Reply;
 use logos_blockchain_codec::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
     mantle::{
-        SignedMantleTx,
-        ops::{
-            OpProof,
-            channel::{Ed25519PublicKey, MsgId},
-        },
-        transactions::{mantle_tx::RawMantleTx, states::Unverified},
+        ops::channel::{Ed25519PublicKey, MsgId},
+        transactions::Ops,
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
@@ -60,24 +56,33 @@ pub enum Action {
     /// No draft covers the target yet. Fund one and hand it back as
     /// [`FundedTx`]; funding needs a node round trip the actor cannot make.
     Build(Box<ConfigTarget>),
-    /// Enough signatures are in. Submit this.
-    Submit(Box<SignedMantleTx<Unverified>>),
+    /// Enough signatures are in. Submit the draft with these.
+    Submit(Box<Submission>),
 }
 
-/// A funded draft built for the target the actor asked to build, already
-/// carrying this node's own signature.
+/// The signatures that complete a funded draft.
+pub struct Submission {
+    /// The draft they were signed over.
+    pub tx_hash: [u8; 32],
+    /// Exactly the threshold, ascending by index.
+    pub signatures: Vec<IndexedSignature>,
+}
+
+/// A draft zone-sdk funded for the target the actor asked to build.
 pub struct FundedTx {
     pub target: Box<ConfigTarget>,
-    pub tx: Box<RawMantleTx>,
-    /// The fee transfer's proof, kept until the draft is assembled.
-    pub transfer_proof: Option<OpProof>,
+    pub tx: Box<Ops>,
+    /// The accredited keys zone-sdk will index the signatures against.
+    pub accredited_keys: Vec<Ed25519PublicKey>,
+    /// The signatures zone-sdk expects the draft to carry.
+    pub signing_threshold: u16,
 }
 
 /// A funded config transaction on the wire, for whoever receives it to
 /// check and sign.
 #[derive(Clone, Debug)]
 pub struct Draft {
-    pub tx: Box<RawMantleTx>,
+    pub tx: Box<Ops>,
 }
 
 /// One accredited key's signature over a draft's transaction hash, carrying
@@ -127,7 +132,7 @@ impl Wire {
         let (tag, payload) = bytes.split_first()?;
         match *tag {
             DRAFT => Some(Self::Draft(Draft {
-                tx: Box::new(RawMantleTx::decode_all(payload).ok()?),
+                tx: Box::new(Ops::decode_all(payload).ok()?),
             })),
             SIGNATURE => {
                 let (tx_hash, rest) = payload.split_at_checked(32)?;

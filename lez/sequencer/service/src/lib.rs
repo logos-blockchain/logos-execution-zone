@@ -313,7 +313,7 @@ async fn setup_gossip(
     // note on `Box::pin` here: the swarm construction makes this awaited future large,
     // and it would otherwise sit inline in every future that awaits the service start.
     //
-    // see: https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#large_futures
+    // see: https://rust-lang.github.io/rust-clippy/rust-1.98.1/index.html#large_futures
     let gossip_actor = Box::pin(GossipActor::new(
         gossip_config,
         channel_id,
