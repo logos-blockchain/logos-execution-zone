@@ -624,13 +624,19 @@ impl ValidatedStateDiff {
             )
         );
 
+        // Check that there are no duplicate signers
+        let signer_account_ids = tx.signer_account_ids();
+        ensure!(
+            n_unique(&signer_account_ids) == signer_account_ids.len(),
+            LeeError::InvalidInput("Duplicate signers found in witness set".into())
+        );
+
         // Check the signatures are valid
         ensure!(
             witness_set.signatures_are_valid_for(message),
             LeeError::InvalidInput("Invalid signature for given message and public key".into())
         );
 
-        let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
             let current_nonce = state.get_account_by_id(*account_id).nonce;
@@ -767,12 +773,18 @@ fn authenticate_public_transaction_signers(
         )
     );
 
+    // A repeated signer would advance its nonce once per entry.
+    let signer_account_ids = tx.signer_account_ids();
+    ensure!(
+        n_unique(&signer_account_ids) == signer_account_ids.len(),
+        LeeError::InvalidInput("Duplicate signers found in witness set".into())
+    );
+
     ensure!(
         witness_set.is_valid_for(message),
         LeeError::InvalidInput("Invalid signature for given message and public key".into())
     );
 
-    let signer_account_ids = tx.signer_account_ids();
     for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
         let current_nonce = state.get_account_by_id(*account_id).nonce;
         ensure!(
