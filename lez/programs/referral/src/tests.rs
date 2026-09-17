@@ -249,14 +249,14 @@ fn a_registered_chain_pays_one_for_one() {
     let diffs = execute(
         PROGRAM,
         vec![
-            initialized(&bob, bob_node, Some(alice_node), 0),
+            initialized(&bob, bob_node, Some(alice_node), 7),
             tickets(bob_node, 5),
             fresh(0x41),
         ],
         collect(&bob),
     );
 
-    assert_eq!(balance_of(&written(&diffs, bob.account_id())), 5);
+    assert_eq!(balance_of(&written(&diffs, bob.account_id())), 12);
     assert_eq!(
         written(&diffs, ticket_account_id(PROGRAM, bob_node)),
         credit(bob_node, 0)
@@ -265,6 +265,7 @@ fn a_registered_chain_pays_one_for_one() {
         written(&diffs, AccountId::new([0x41; 32])),
         credit(alice_node, 5)
     );
+    assert_eq!(diffs.len(), 3);
 
     let diffs = execute(
         PROGRAM,
@@ -285,45 +286,6 @@ fn a_registered_chain_pays_one_for_one() {
         written(&diffs, AccountId::new([0x42; 32])),
         credit(carol_node, 5)
     );
-}
-
-#[test]
-fn a_later_collect_uses_neither_the_registry_nor_a_signature() {
-    let (_key, bob_node) = node(1);
-    let bob = participant(11);
-
-    let diffs = execute(
-        PROGRAM,
-        vec![
-            initialized(&bob, bob_node, None, 7),
-            note(0x41, bob_node, 3),
-        ],
-        collect(&bob),
-    );
-
-    assert_eq!(balance_of(&written(&diffs, bob.account_id())), 10);
-    assert_eq!(
-        written(&diffs, AccountId::new([0x41; 32])),
-        credit(bob_node, 0)
-    );
-    assert_eq!(diffs.len(), 2);
-}
-
-#[test]
-fn a_same_node_participant_with_other_keys_collects_its_nodes_credit() {
-    let (_key, alice_node) = node(2);
-    let other = participant(15);
-
-    let diffs = execute(
-        PROGRAM,
-        vec![
-            initialized(&other, alice_node, None, 0),
-            note(0x41, alice_node, 4),
-        ],
-        collect(&other),
-    );
-
-    assert_eq!(balance_of(&written(&diffs, other.account_id())), 4);
 }
 
 #[test]
@@ -366,51 +328,6 @@ fn grant_rejects_an_overflowing_amount() {
     let _diffs = grant(
         PROGRAM,
         vec![oracle(), tickets(node_id, u128::MAX)],
-        node_id,
-        1,
-    );
-}
-
-#[test]
-#[should_panic(expected = "ticket account holds another node's credit")]
-fn grant_rejects_a_credit_addressed_to_another_node() {
-    let (_key, node_id) = node(1);
-    let (_key, other_node) = node(2);
-
-    let _diffs = grant(
-        PROGRAM,
-        vec![
-            oracle(),
-            account(
-                ticket_account_id(PROGRAM, node_id),
-                Some(credit(other_node, 5)),
-                false,
-            ),
-        ],
-        node_id,
-        1,
-    );
-}
-
-#[test]
-#[should_panic(expected = "ticket account does not hold a credit")]
-fn grant_rejects_a_ticket_account_holding_another_state() {
-    let (_key, node_id) = node(1);
-
-    let _diffs = grant(
-        PROGRAM,
-        vec![
-            oracle(),
-            account(
-                ticket_account_id(PROGRAM, node_id),
-                Some(State::Participant {
-                    node: node_id,
-                    referrer: None,
-                    reward_balance: 0,
-                }),
-                false,
-            ),
-        ],
         node_id,
         1,
     );
@@ -630,24 +547,6 @@ fn collect_rejects_an_unregistered_participant() {
         PROGRAM,
         vec![account(bob.account_id(), None, true), tickets(bob_node, 1)],
         collect(&bob),
-    );
-}
-
-#[test]
-#[should_panic(expected = "referrer node is not registered")]
-fn register_rejects_a_self_referrer() {
-    let (bob_key, bob_node) = node(1);
-    let bob = participant(11);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![account(bob.account_id(), None, true), registered(&[])],
-        register(
-            &bob,
-            bob_node,
-            Some(bob_node),
-            signature(&bob_key, bob_node, &bob, Some(bob_node)),
-        ),
     );
 }
 

@@ -508,19 +508,15 @@ mod tests {
     }
 
     #[test]
-    fn registration_stops_at_capacity() {
+    fn registry_is_bounded_by_capacity() {
         let mut registry = Registry::default();
         for node in sequential_nodes(MAX_REGISTERED_NODES) {
             assert!(registry.register(node));
         }
-
         assert!(!registry.register(NodeId::new([0xff; 32])));
-    }
 
-    #[test]
-    fn registry_decoding_is_bounded_by_capacity() {
-        let full = registry_bytes(&sequential_nodes(MAX_REGISTERED_NODES));
-        assert!(borsh::from_slice::<Registry>(&full).is_ok());
+        let full = borsh::to_vec(&registry).unwrap();
+        assert_eq!(borsh::from_slice::<Registry>(&full).unwrap(), registry);
 
         let over_capacity = registry_bytes(&sequential_nodes(MAX_REGISTERED_NODES + 1));
         assert!(borsh::from_slice::<Registry>(&over_capacity).is_err());

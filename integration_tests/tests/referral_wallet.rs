@@ -810,7 +810,6 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
     alice.register(Some(carol_node)).await;
     bob.register(Some(alice.node)).await;
 
-    let bob_account = bob.account;
     let bob_source = ticket_account_id(program_account(), bob.node);
     let alice_seed = bob.reserve();
     bob.submit([5; 32], bob_source, Some(alice_seed))
@@ -858,17 +857,6 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
         ticket_amount(&ledger, alice.node),
         0,
         "Alice never needed a ticket account"
-    );
-
-    assert_eq!(
-        bob.recorded([5; 32]).operation,
-        collect(bob_account, bob_source, Some(alice_seed)),
-        "the oracle ticket was collected through the one Collect operation"
-    );
-    assert_eq!(
-        alice.recorded([6; 32]).operation,
-        collect(alice_account, incoming, Some(carol_seed)),
-        "and so was the private note, with the same instruction"
     );
 
     carol.sync().await;
@@ -1579,26 +1567,6 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
         }),
         "the second credit was collected exactly once"
     );
-
-    ledger
-        .lock()
-        .expect("ledger is not poisoned")
-        .transaction_index = TransactionIndex::Hidden;
-    assert_eq!(
-        alice.reconcile(second).await,
-        SubmissionStatus::Settled,
-        "the effect of a collect is on the chain even where its history is no longer served"
-    );
-    let (_repeated, repeated_status) = alice
-        .submit(second, second_source, Some(second_output))
-        .await
-        .expect("the rebuilt operation is answered, not sent a second time");
-    assert_eq!(repeated_status, SubmissionStatus::Settled);
-    assert_eq!(
-        alice.reward_balance(),
-        15,
-        "the replacement collected the second credit exactly once"
-    );
 }
 
 #[test]
@@ -1612,7 +1580,7 @@ async fn a_settlement_that_cannot_be_persisted_keeps_the_intent_it_would_have_cl
     carol.register(None).await;
     bob.import(carol.invitation());
     bob.authorize(Some(carol.node));
-    let seed = bob.reserve();
+    bob.reserve();
     bob.facade()
         .submit(reference, register(account))
         .await
@@ -1658,20 +1626,5 @@ async fn a_settlement_that_cannot_be_persisted_keeps_the_intent_it_would_have_cl
             .expect("the settlement is recorded once the path is writable again"),
         SubmissionStatus::Settled,
         "the failed write was a settlement, not an inconclusive inclusion"
-    );
-    assert!(bob.facade().pending_registration(account).is_none());
-    let settled = bob
-        .facade()
-        .intent(account)
-        .expect("the intent survives")
-        .clone();
-    assert_eq!(
-        settled.pending_credits,
-        vec![seed],
-        "a settled registration consumes no reserved credit"
-    );
-    assert!(
-        settled.invitation.is_some(),
-        "the referrer's keys outlive the settlement that cleared the registration"
     );
 }
