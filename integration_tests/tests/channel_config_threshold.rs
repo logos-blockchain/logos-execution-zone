@@ -96,7 +96,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
             .with_gossip()
             .with_genesis(vec![GenesisAction::SupplyAccount {
                 account_id: funding_id,
-                balance: FUNDING_BALANCE,
+                balance: u64::try_from(FUNDING_BALANCE).expect("funding balance fits u64"),
             }]),
         )
         .build()

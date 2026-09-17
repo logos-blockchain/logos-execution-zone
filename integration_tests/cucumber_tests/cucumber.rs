@@ -19,9 +19,7 @@ use integration_tests::cucumber::{
     },
     world::CucumberWorld,
 };
-use logos_blockchain_testing_framework::{
-    hash_str, is_truthy_env, reap_all_stale_port_blocks, release_reserved_port_block,
-};
+use logos_blockchain_testing_framework::{hash_str, is_truthy_env, release_reserved_port_block};
 use tracing::{info, warn};
 use wallet::SUPPRESS_VERBOSE_PRINTS;
 
@@ -42,7 +40,6 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main() -> anyhow::Result<()> {
     integration_tests::cucumber::default::init_tracing();
-    reap_all_stale_port_blocks();
     info!(target: TARGET, "args: {:?}", std::env::args());
 
     let scenario_attempts: ScenarioAttempts = Arc::new(Mutex::new(HashMap::new()));

@@ -8,18 +8,14 @@ use kameo::{
 use log::{debug, warn};
 use logos_blockchain_core::{
     mantle::{
-        SignedMantleTx,
         ops::{
-            Op, OpProof,
+            Op,
             channel::{Ed25519PublicKey, config::ChannelConfigOp},
         },
         traits::Hashable as _,
-        transactions::{
-            OpsProofs,
-            mantle_tx::{MantleTx as _, RawMantleTx},
-        },
+        transactions::Ops,
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::mpsc;
@@ -27,7 +23,8 @@ use tokio::sync::mpsc;
 use crate::{
     error::Error,
     protocol::{
-        Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, SetPublisher, Signature, Wire,
+        Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, SetPublisher, Signature,
+        Submission, Wire,
     },
 };
 
@@ -41,9 +38,7 @@ pub const MAILBOX_CAPACITY: usize = 256;
 /// A draft this node funded and is collecting signatures for.
 struct OwnDraft {
     target: ConfigTarget,
-    tx: RawMantleTx,
-    /// The fee transfer's proof, reattached when the draft is assembled.
-    transfer_proof: Option<OpProof>,
+    tx: Ops,
     tx_hash: [u8; 32],
     /// Signatures by accredited-key index, so the choice below is ordered.
     signatures: BTreeMap<u16, Ed25519Signature>,
@@ -92,7 +87,7 @@ impl ChannelConfigActor {
         u16::try_from(index).ok()
     }
 
-    fn sign(&self, tx: &RawMantleTx) -> Ed25519Signature {
+    fn sign(&self, tx: &Ops) -> Ed25519Signature {
         self.signing_key
             .sign_payload(tx.hash().as_signing_bytes().as_ref())
     }
@@ -126,30 +121,17 @@ impl ChannelConfigActor {
 
         // Bedrock wants exactly the threshold, never more, so take the lowest
         // indices and leave the rest.
-        let signatures: Vec<IndexedSignature> = draft
+        let signatures = draft
             .signatures
             .iter()
             .take(required)
             .map(|(index, signature)| IndexedSignature::new(*index, *signature))
             .collect();
-        let Ok(signatures) = signatures.try_into() else {
-            warn!("Too many channel-config signatures to prove");
-            return Action::Idle;
-        };
-        let Ok(proof) = ChannelMultiSigProof::try_new(signatures) else {
-            warn!("Failed to assemble the channel-config multi-sig proof");
-            return Action::Idle;
-        };
 
-        let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(proof).into();
-        if let Some(transfer_proof) = draft.transfer_proof.clone()
-            && ops_proofs.try_push(transfer_proof).is_err()
-        {
-            warn!("Too many operation proofs for the channel-config transaction");
-            return Action::Idle;
-        }
-
-        Action::Submit(Box::new(SignedMantleTx::new(draft.tx.clone(), ops_proofs)))
+        Action::Submit(Box::new(Submission {
+            tx_hash: draft.tx_hash,
+            signatures,
+        }))
     }
 
     /// A peer's draft, from gossip or from a direct send.
@@ -201,10 +183,7 @@ impl ChannelConfigActor {
             return;
         };
         if key
-            .verify(
-                draft.tx.hash().as_signing_bytes().as_ref(),
-                &msg.signature.signature,
-            )
+            .verify(&draft.tx_hash, &msg.signature.signature)
             .is_err()
         {
             debug!("Dropping a channel-config signature that does not verify");
@@ -257,8 +236,21 @@ impl Message<FundedTx> for ChannelConfigActor {
         let FundedTx {
             target,
             tx,
-            transfer_proof,
+            accredited_keys,
+            signing_threshold,
         } = msg;
+        // zone-sdk picks the parent and indexes the signatures from its own
+        // view, so a draft built off a different one would never land.
+        let Some(view) = &self.view else {
+            return Action::Idle;
+        };
+        if config_op(&tx).is_none_or(|op| !matches(&target, op))
+            || accredited_keys != view.live_keys
+            || signing_threshold != view.required_signatures
+        {
+            warn!("zone-sdk funded a channel-config draft off another view; dropping it");
+            return Action::Idle;
+        }
         let Some(index) = self.own_index() else {
             warn!("Not in the live accredited list; dropping our channel-config draft");
             return Action::Idle;
@@ -269,7 +261,6 @@ impl Message<FundedTx> for ChannelConfigActor {
         self.draft = Some(OwnDraft {
             target: *target,
             tx: *tx,
-            transfer_proof,
             tx_hash,
             signatures: BTreeMap::from([(index, signature)]),
         });
@@ -324,10 +315,10 @@ impl Message<SetPublisher> for ChannelConfigActor {
 /// A signature covers the whole transaction, and the same signatures satisfy
 /// any other op in it that takes a multi-sig proof, so a draft may carry
 /// nothing beyond the config and the transfer that pays for it.
-fn config_op(tx: &RawMantleTx) -> Option<&ChannelConfigOp> {
+fn config_op(tx: &Ops) -> Option<&ChannelConfigOp> {
     let mut config = None;
     let mut funded = false;
-    for op in tx.ops() {
+    for op in tx {
         match op {
             Op::ChannelConfig(config_op) => {
                 if config.replace(config_op).is_some() {
@@ -378,7 +369,6 @@ mod tests {
                 channel::{ChannelId, MsgId, config::Keys, withdraw::ChannelWithdrawOp},
                 transfer::TransferOp,
             },
-            transactions::Ops,
         },
     };
 
@@ -420,7 +410,7 @@ mod tests {
     }
 
     /// A transaction carrying exactly the config `target` asks for.
-    fn draft_tx(target: &ConfigTarget) -> RawMantleTx {
+    fn draft_tx(target: &ConfigTarget) -> Ops {
         let op = ChannelConfigOp {
             channel: ChannelId::from(CHANNEL),
             parent: target.parent,
@@ -430,10 +420,7 @@ mod tests {
             configuration_threshold: target.configuration_threshold,
             transfer_threshold: target.transfer_threshold,
         };
-        let mut ops = Ops::default();
-        ops.try_push(Op::ChannelConfig(op)).expect("one op fits");
-
-        RawMantleTx(ops)
+        Ops::from([Op::ChannelConfig(op)])
     }
 
     fn actor(secret: [u8; 32]) -> ActorRef<ChannelConfigActor> {
@@ -457,12 +444,13 @@ mod tests {
         rx
     }
 
-    async fn hold(actor: &ActorRef<ChannelConfigActor>, tx: RawMantleTx) {
+    async fn hold(actor: &ActorRef<ChannelConfigActor>, tx: Ops) {
         actor
             .tell(FundedTx {
                 target: Box::new(target()),
                 tx: Box::new(tx),
-                transfer_proof: None,
+                accredited_keys: live_keys(),
+                signing_threshold: 2,
             })
             .await
             .expect("the actor should accept a draft");
@@ -496,9 +484,9 @@ mod tests {
 
     /// The config `target` asks for, made unique to `proposer` the way funding
     /// from each node's own wallet makes every proposer's transaction unique.
-    fn rival_tx(target: &ConfigTarget, proposer: u8) -> RawMantleTx {
+    fn rival_tx(target: &ConfigTarget, proposer: u8) -> Ops {
         let mut tx = draft_tx(target);
-        tx.0.try_push(Op::Transfer(TransferOp::new(
+        tx.try_push(Op::Transfer(TransferOp::new(
             Inputs::new([NoteId(ZkHash::from(u64::from(proposer)))]),
             Outputs::empty(),
         )))
@@ -561,7 +549,8 @@ mod tests {
                         .ask(FundedTx {
                             target,
                             tx: Box::new(tx),
-                            transfer_proof: None,
+                            accredited_keys: committee_keys(),
+                            signing_threshold: 3,
                         })
                         .await
                         .expect("a draft");
@@ -681,7 +670,8 @@ mod tests {
             .ask(FundedTx {
                 target: Box::new(target()),
                 tx: Box::new(draft_tx(&target())),
-                transfer_proof: None,
+                accredited_keys: live_keys(),
+                signing_threshold: 2,
             })
             .await
             .expect("a reply");
@@ -721,6 +711,62 @@ mod tests {
             actor.ask(Propose).await.expect("a reply"),
             Action::Submit(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_submission_carries_exactly_the_threshold_in_index_order() {
+        let actor = actor(OWN_SECRET);
+        tell_view(&actor, view(Some(target()))).await;
+        let tx = draft_tx(&target());
+        hold(&actor, tx.clone()).await;
+        let signature = key(PEER_SECRET).sign_payload(tx.hash().as_signing_bytes().as_ref());
+        actor
+            .tell(Signature {
+                tx_hash: tx.hash().0,
+                signature: IndexedSignature::new(1, signature),
+            })
+            .await
+            .expect("the actor should accept a signature");
+
+        let Action::Submit(submission) = actor.ask(Propose).await.expect("a reply") else {
+            panic!("two of two signatures should submit");
+        };
+
+        assert_eq!(submission.tx_hash, tx.hash().0);
+        let indices: Vec<u16> = submission
+            .signatures
+            .iter()
+            .map(|indexed| indexed.channel_key_index)
+            .collect();
+        assert_eq!(indices, vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn a_draft_funded_off_another_view_is_dropped() {
+        let actor = actor(OWN_SECRET);
+        tell_view(&actor, view(Some(target()))).await;
+        let mut outbound = publisher(&actor).await;
+
+        // zone-sdk chained the config on a tip this node does not see.
+        let stale = ConfigTarget {
+            parent: MsgId::from([7; 32]),
+            ..target()
+        };
+        let action = actor
+            .ask(FundedTx {
+                target: Box::new(target()),
+                tx: Box::new(draft_tx(&stale)),
+                accredited_keys: live_keys(),
+                signing_threshold: 2,
+            })
+            .await
+            .expect("a reply");
+
+        assert!(matches!(action, Action::Idle));
+        assert!(
+            outbound.try_recv().is_err(),
+            "a draft that cannot land must not be announced"
+        );
     }
 
     #[tokio::test]
@@ -815,7 +861,7 @@ mod tests {
         let mut outbound = publisher(&actor).await;
 
         let mut tx = draft_tx(&target());
-        tx.0.try_push(Op::ChannelWithdraw(ChannelWithdrawOp {
+        tx.try_push(Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id: ChannelId::from(CHANNEL),
             inputs: Inputs::new([NoteId(ZkHash::from(7_u64))]),
         }))
@@ -838,10 +884,10 @@ mod tests {
         let mut outbound = publisher(&actor).await;
 
         let mut tx = draft_tx(&target());
-        let Some(Op::ChannelConfig(config)) = tx.0.iter().next().cloned() else {
+        let Some(Op::ChannelConfig(config)) = tx.iter().next().cloned() else {
             unreachable!("the first op is the config")
         };
-        tx.0.try_push(Op::ChannelConfig(config))
+        tx.try_push(Op::ChannelConfig(config))
             .expect("a second op fits");
         actor
             .ask(Draft { tx: Box::new(tx) })

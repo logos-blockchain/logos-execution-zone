@@ -195,6 +195,9 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     bedrock_signing_key: block_publisher::Ed25519Key,
     /// Collects the accredited signatures a channel config update needs.
     config_manager: ActorRef<ChannelConfigActor>,
+    /// The config draft zone-sdk last funded for us, submitted once its
+    /// signatures are in.
+    config_draft: Option<logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig>,
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
@@ -547,6 +550,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             staked_keys_tx,
             config_manager,
             bedrock_signing_key,
+            config_draft: None,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height().await);
@@ -972,14 +976,16 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         };
         let target = match action {
             channel_config::Action::Idle => return,
-            channel_config::Action::Submit(tx) => return self.submit_signed_config(tx).await,
+            channel_config::Action::Submit(submission) => {
+                return self.submit_config(*submission).await;
+            }
             channel_config::Action::Build(target) => target,
         };
 
         // Funding is a node round trip, which is why the actor asks for it
         // instead of doing it: the signatures are over the funded transaction.
-        let funded = match self.block_publisher.fund_channel_config(&target).await {
-            Ok(funded) => funded,
+        let prepared = match self.block_publisher.prepare_channel_config(&target).await {
+            Ok(prepared) => prepared,
             Err(err) => {
                 warn!("Failed to fund a channel-config draft: {err:#}");
                 return;
@@ -987,26 +993,28 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         };
         let message = channel_config::FundedTx {
             target,
-            tx: Box::new(funded.tx),
-            transfer_proof: funded.transfer_proof,
+            tx: Box::new(prepared.tx().clone()),
+            accredited_keys: prepared.accredited_keys.clone(),
+            signing_threshold: prepared.signing_threshold,
         };
+        self.config_draft = Some(prepared);
         // Answers as `Propose` would, so a single-signer channel is already
         // over its threshold on our own signature and lands this turn.
         match self.config_manager.ask(message).await {
-            Ok(channel_config::Action::Submit(tx)) => self.submit_signed_config(tx).await,
+            Ok(channel_config::Action::Submit(submission)) => self.submit_config(*submission).await,
             Ok(_) => {}
             Err(err) => warn!("The channel-config actor is gone; dropping the draft: {err}"),
         }
     }
 
-    async fn submit_signed_config(
-        &mut self,
-        tx: Box<
-            logos_blockchain_core::mantle::SignedMantleTx<
-                logos_blockchain_core::mantle::transactions::states::Unverified,
-            >,
-        >,
-    ) {
+    async fn submit_config(&mut self, submission: channel_config::Submission) {
+        let Some(prepared) = self.config_draft.as_ref().filter(|prepared| {
+            logos_blockchain_core::mantle::traits::Hashable::hash(prepared.tx()).0
+                == submission.tx_hash
+        }) else {
+            warn!("No funded channel-config draft matches the signatures; dropping them");
+            return;
+        };
         let tip_slot = match self.block_publisher.channel_tip_slot().await {
             Ok(tip_slot) => tip_slot,
             Err(err) => {
@@ -1018,7 +1026,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             return;
         }
         self.last_committee_submission_slot = tip_slot;
-        if let Err(err) = self.block_publisher.submit_signed_channel_config(tx).await {
+        if let Err(err) = self
+            .block_publisher
+            .submit_channel_config(prepared.clone(), submission.signatures)
+            .await
+        {
             warn!("Failed to submit the committee channel-config update: {err:#}");
         }
     }
@@ -2156,11 +2168,11 @@ async fn apply_follow_update<S: StorageActorTrait>(
         log_parked(&adopted, &outcomes, head_after, chain.channel_cursor());
         log_rewind(head_before, head_after, chain.channel_cursor());
 
-        let mut to_persist: Vec<&Block> = adopted
+        let mut to_persist: Vec<Block> = adopted
             .iter()
             .zip(&outcomes)
             .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
-            .map(|(block, _)| block)
+            .map(|(block, _)| block.clone())
             .collect();
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
@@ -2171,7 +2183,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         for ((block, _), outcome) in finalized.iter().zip(&finalized_outcomes) {
             match outcome {
                 AcceptOutcome::Applied => {
-                    to_persist.push(block);
+                    to_persist.push(block.clone());
                     irreversible.push(block);
                     final_advanced = true;
                 }
@@ -2278,7 +2290,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         let outcome = storage_ref
             .ask(AtomicUpdate {
                 checkpoint: Some(checkpoint_bytes),
-                blocks: to_persist.into_iter().cloned().collect(),
+                blocks: to_persist,
                 channel_cursor: chain.channel_cursor().map(Into::into),
                 head_tip,
                 head_state: chain.share_head_state(),

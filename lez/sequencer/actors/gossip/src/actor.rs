@@ -82,9 +82,9 @@ pub struct GossipActor {
     approvals_topic: gossipsub::IdentTopic,
     /// Where verified inbound approvals go; the slasher decides what to keep.
     approval_sink: Recipient<Approval>,
-    /// The committee the follow path last read; `None` filters nothing.
+    /// The committee the follow path last read.
     accredited_keys_rx: AccreditedKeysReceiver,
-    /// Keys with stake on record at head; `None` filters nothing.
+    /// Keys with stake on record at head.
     staked_keys_rx: AccreditedKeysReceiver,
     /// Channel-config candidates and signatures ride their own topic, so the
     /// transaction wire format is untouched.
@@ -826,6 +826,9 @@ pub(crate) fn peer_id_from_ed25519(
 
 /// The Ed25519 key an Ed25519 peer id carries inline, so an originator several
 /// hops away needs no Identify exchange.
+///
+/// Only an identity-multihash peer id keeps that key readable; any other code
+/// hashes it, and this returns `None`.
 fn inlined_ed25519_key(peer_id: &PeerId) -> Option<[u8; 32]> {
     /// The identity multihash, which keeps the encoded key verbatim.
     const IDENTITY: u64 = 0;

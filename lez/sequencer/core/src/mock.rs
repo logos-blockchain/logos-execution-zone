@@ -170,20 +170,17 @@ impl BlockPublisherTrait for MockBlockPublisher {
         Ok(self.tip_slot.map(|_| (Vec::new(), MsgId::root())))
     }
 
-    async fn fund_channel_config(
+    async fn prepare_channel_config(
         &self,
         _target: &sequencer_channel_config_actor::ConfigTarget,
-    ) -> Result<crate::block_publisher::FundedConfig> {
-        anyhow::bail!("MockBlockPublisher does not fund channel configs")
+    ) -> Result<logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig> {
+        anyhow::bail!("MockBlockPublisher does not prepare channel configs")
     }
 
-    async fn submit_signed_channel_config(
+    async fn submit_channel_config(
         &self,
-        _tx: Box<
-            logos_blockchain_core::mantle::SignedMantleTx<
-                logos_blockchain_core::mantle::transactions::states::Unverified,
-            >,
-        >,
+        _prepared: logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig,
+        _signatures: Vec<logos_blockchain_zone_sdk::sequencer::IndexedSignature>,
     ) -> Result<()> {
         Ok(())
     }

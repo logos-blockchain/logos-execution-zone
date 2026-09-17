@@ -222,15 +222,15 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
+logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "54328b50eb47ab4b8fd8044f8db5fbcebed718c0" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
 
@@ -390,6 +390,12 @@ clippy.let-underscore-untyped = "allow"
 clippy.unneeded-field-pattern = "allow"
 # Reason: this lint makes no sense for us.
 clippy.error_impl_error = "allow"
+# Reason: inline `mod tests` is our convention.
+clippy.inline-modules = "allow"
+# Reason: we write short bounds inline.
+clippy.inline-trait-bounds = "allow"
+# Reason: actor message handlers are async by trait signature.
+clippy.unused-async-trait-impl = "allow"
 
 # Nursery
 clippy.nursery = { level = "deny", priority = -1 }

@@ -38,14 +38,13 @@ cryptarchia:
     reward:
       reward_pool_genesis: 1000000000
       epoch_reward_genesis: 1000000
-      initial_difficulty_seed: 1000
+      initial_difficulty: 26
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       target_claims_per_block: 100
       rate_num: 0
       rate_den: 1
       target_claim_per_block: 1
-      expected_blocks_per_epoch: 1
       slot_window: 100
   sdp_config:
     service_params:

@@ -337,7 +337,7 @@ mod tests {
     fn default_account_id() {
         let default_account_id = AccountId::default();
         let expected_account_id = AccountId::new([0; 32]);
-        assert!(default_account_id == expected_account_id);
+        assert_eq!(default_account_id, expected_account_id);
     }
 
     #[test]
