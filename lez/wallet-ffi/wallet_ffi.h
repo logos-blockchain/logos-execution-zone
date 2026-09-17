@@ -645,9 +645,9 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * - `account_mentions`: Valid pointer to list of `FfiAccountMention`
  * - `instruction_data`: Valid pointer to instruction data bytes
  * - `payer`: Fee payer, or null to self-pay from the first funded signing account in
- *   `account_identities` (the first signing account if none is funded). May be one of those
- *   signing accounts, or any other public account whose signing key the wallet holds (it co-signs
- *   without joining the account list).
+ *   `account_mentions` (the first signing account if none is funded). May be one of those signing
+ *   accounts, or any other public account whose signing key the wallet holds (it co-signs without
+ *   joining the account list).
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
  * # Returns

@@ -968,7 +968,7 @@ impl WalletCore {
                     invalid_input("Fee payer's signing key is not held by this wallet")
                 })?;
                 let account = self
-                    .get_account_public(payer)
+                    .get_account_view(ProgramShardSelector::balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 nonces.push(account.nonce);
