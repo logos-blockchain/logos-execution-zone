@@ -4,10 +4,11 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
     test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
-    transaction::clock_invocation,
+    transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{Account, AccountId, V03State};
+use lee_core::program::{ProgramEvent, TransactionEvent};
 
 use crate::{
     StorageActor,
@@ -18,14 +19,15 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock, GetBlockHashToBlockIdMapItem,
-        GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
-        GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock, GetBlockEvents,
+        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetTransactionByHash, GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RaisePublishedHighWater, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        WithdrawalReconciliationKey,
     },
 };
 
@@ -259,6 +261,59 @@ async fn recorded_transaction_is_looked_up_by_hash() {
             .expect("Failed to look the transaction up"),
         Some((transaction, 1))
     );
+}
+
+#[tokio::test]
+async fn recorded_events_is_looked_up_by_block_id() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let transaction = produce_dummy_empty_transaction();
+    let block = produce_dummy_block(1, None, vec![transaction.clone()]);
+    let storage_ref =
+        spawn_with_blocks(dir.path(), vec![produce_dummy_block(0, None, vec![])]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetTransactionByHash {
+                hash: transaction.hash()
+            })
+            .await
+            .expect("Failed to look the transaction up"),
+        None,
+        "A transaction outside the chain has nowhere to be found"
+    );
+
+    let block_id = block.header.block_id;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block,
+            Arc::new(V03State::new()),
+            vec![(
+                block_id,
+                vec![TxEvents {
+                    tx_index: 0,
+                    tx_hash: HashType([42; 32]),
+                    events: vec![TransactionEvent {
+                        account_id: AccountId::new([43; 32]),
+                        event: ProgramEvent {
+                            selector: [1; 8],
+                            data: vec![1; 4],
+                        },
+                    }],
+                }],
+            )],
+        ))
+        .await
+        .expect("Failed to record the block");
+
+    let block_events = storage_ref
+        .ask(GetBlockEvents { block_id })
+        .await
+        .expect("Failed to look the events up")
+        .expect("There should be one event");
+
+    assert_eq!(block_events[0].events[0].event.data, vec![1; 4]);
+    assert_eq!(block_events[0].events[0].event.selector, [1; 8]);
 }
 
 /// The index lives only in memory, so a fresh actor has to build it off the
@@ -925,6 +980,13 @@ async fn an_unseeded_store_reports_no_chain() {
             .expect("Failed to get block id by map")
             .is_none()
     );
+    assert!(
+        storage_ref
+            .ask(GetBlockEvents { block_id: 1 })
+            .await
+            .expect("Failed to get events for block id")
+            .is_none()
+    )
 }
 
 /// The property that lets a genesis go in as an ordinary block write.

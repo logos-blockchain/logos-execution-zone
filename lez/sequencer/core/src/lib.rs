@@ -60,6 +60,7 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod event_filter;
 pub mod fees;
 pub mod gossip;
 pub mod logging;

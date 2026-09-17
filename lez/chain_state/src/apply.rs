@@ -520,16 +520,44 @@ fn settle_charged_transaction(
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use common::{
         block::HashableBlockData,
         test_utils::{
             create_transaction_native_token_transfer, produce_dummy_block,
-            produce_dummy_empty_transaction, sequencer_sign_key_for_testing,
+            produce_dummy_empty_transaction, sequencer_sign_key_for_testing, test_fee_declaration,
         },
+    };
+    use lee::{AccountId, PublicTransaction, program::Program, public_transaction};
+    use lee_core::{
+        account::Nonce,
+        program::{InstructionData, ProgramEvent},
     };
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
+
+    #[must_use]
+    const fn event_emitter() -> Program {
+        Program::new_unchecked(
+            test_methods::EVENT_EMITTER_ID,
+            Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
+        )
+    }
+
+    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+    struct EmitterInstruction {
+        events: Vec<ProgramEvent>,
+        chain: Vec<(AccountId, InstructionData)>,
+    }
+
+    fn emitted(n: u8) -> ProgramEvent {
+        ProgramEvent {
+            selector: [n; 8],
+            data: vec![n; 4],
+        }
+    }
 
     fn tip_of(block: &Block) -> Tip {
         Tip::from(block)
@@ -967,6 +995,52 @@ mod tests {
         let err = apply_block(Some(&tip), &block, &mut state)
             .expect_err("a reward to a system account is rejected");
         assert!(matches!(err, BlockIngestError::InvalidRewardTarget { .. }));
+    }
+
+    #[test]
+    fn creates_events_for_transactions() {
+        // The producer's reward account is claimed from genesis, simulating the
+        // stake a real sequencer holds before producing, so the charged blocks
+        // below can credit it (crediting an unclaimed account is rejected).
+        let mut state = initial_state(true)
+            .with_public_accounts([common::test_utils::claimed_producer_seed()])
+            .with_programs(vec![event_emitter()]);
+
+        // Genesis (block 1): fee/clock only.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+        let emitter_id = event_emitter().id().into();
+
+        let message = public_transaction::Message::try_new_with_fees(
+            emitter_id,
+            vec![from],
+            vec![Nonce(0)],
+            EmitterInstruction {
+                events: vec![emitted(5)],
+                chain: vec![],
+            },
+            test_fee_declaration(from),
+        )
+        .expect("test instruction must serialize");
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sign_key]);
+        let pub_tx = PublicTransaction::new(message, witness_set).into();
+
+        let block = settled_block(2, tip.hash, vec![pub_tx], &state);
+        let events = apply_block(Some(&tip), &block, &mut state).expect("transfer applies");
+
+        assert_eq!(events.len(), 1, "There should be exactly one event emitted");
+        assert_eq!(
+            events[0].events.len(),
+            1,
+            "There should be exactly one transaction event emitted"
+        );
+        assert_eq!(events[0].events[0].event.data, vec![5; 4]);
+        assert_eq!(events[0].events[0].event.selector, [5; 8]);
     }
 
     /// A block whose forced fee transaction carries the summary its user

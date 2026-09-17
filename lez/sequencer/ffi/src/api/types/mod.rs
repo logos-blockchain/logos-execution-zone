@@ -4,7 +4,7 @@ use lee_core::account::Nonce;
 
 pub mod account;
 pub mod block;
-// pub mod event;
+pub mod event;
 pub mod transaction;
 pub mod vectors;
 

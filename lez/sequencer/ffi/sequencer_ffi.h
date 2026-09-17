@@ -686,6 +686,26 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
                                                                                                            uint64_t limit);
 
 /**
+ * Query the block by transaction hash from sequencer.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `hash`: `FfiHashType` - hash of a transaction
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ */
+struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
+                                                                                       FfiHashType tx_hash);
+
+/**
  * Frees the resources associated with the given ffi account.
  *
  * Takes ownership of the whole allocation produced by a `query_*` call: the

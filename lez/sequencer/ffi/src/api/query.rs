@@ -5,6 +5,7 @@ use sequencer_executor_actor::protocol::{
     GetBlockHashToBlockIdMapItem, GetBlockRange, GetLastBlockId, GetTransaction,
     MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
 };
+use sequencer_storage_actor::protocol::GetTxHashToBlockIdMapItem;
 
 use crate::{
     SequencerServiceFFI,
@@ -561,7 +562,59 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     }
 }
 
-// ToDo: Current sequenсer does not know about events yet. Also needs database updates.
+/// Query the block by transaction hash from sequencer.
+///
+/// # Arguments
+///
+/// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+/// - `hash`: `FfiHashType` - hash of a transaction
+///
+/// # Returns
+///
+/// A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
+    sequencer: *const SequencerServiceFFI,
+    tx_hash: FfiHashType,
+) -> PointerResult<FfiBlockOpt, OperationStatus> {
+    if sequencer.is_null() {
+        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
+    }
+
+    let sequencer = unsafe { &*sequencer };
+
+    let map_resp = sequencer
+        .runtime()
+        .block_on(
+            sequencer
+                .storage_ref()
+                .ask(GetTxHashToBlockIdMapItem {
+                    tx_hash: tx_hash.into(),
+                })
+                .send(),
+        )
+        .inspect_err(|e| {
+            log::error!("Failed to query block by id: {e:#}");
+        });
+
+    let block_id = if let Ok(map_opt) = map_resp {
+        if let Some(block_id) = map_opt {
+            block_id
+        } else {
+            return PointerResult::from_value(FfiBlockOpt::from_none());
+        }
+    } else {
+        return PointerResult::from_error(OperationStatus::ClientError);
+    };
+
+    unsafe { sequencer_ffi_query_block(sequencer, block_id) }
+}
 
 // #[unsafe(no_mangle)]
 // pub unsafe extern "C" fn sequencer_ffi_query_events(
@@ -579,15 +632,15 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
 
 //     let sequencer = unsafe { &*sequencer };
 //     let program_id =
-//         unsafe { program_id.as_ref() }.map(|id| sequencer_service_protocol::ProgramId(id.data));
+//         unsafe { program_id.as_ref() }.into();
 //     let selector =
-//         unsafe { selector.as_ref() }.map(|s| sequencer_service_protocol::Selector(s.data));
+//         unsafe { selector.as_ref() }.into();
 
 //     let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
 //         // Coverage is judged at the transaction's height, resolved BEFORE the events
 //         // read: a filtered-out tx has no events row, and gating on the row's presence
 //         // would serve an empty result for exactly the dropped domains.
-//         match sequencer.core().store.block_id_by_tx_hash(tx_hash.data) {
+//         match unsafe{sequencer_ffi_query_block_by_tx_hash(sequencer, *tx_hash)} {
 //             Err(e) => Err(e),
 //             Ok(None) => {
 //                 log::error!("query_events: no indexed transaction has the requested hash");
@@ -602,9 +655,9 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
 //                     selector.map(|s| s.0),
 //                 ) {
 //                     log::error!(
-//                         "query_events: the requested events at block {block_id} are outside this
-// \                          sequencer's event-filter history"
-//                     );
+//                 "query_events: the requested events over blocks {block_id} are outside this \
+//                  sequencer's event-filter history"
+//             );
 //                     return PointerResult::from_error(OperationStatus::InvalidArgument);
 //                 }
 //                 sequencer
