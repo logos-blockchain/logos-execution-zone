@@ -268,7 +268,12 @@ mod tests {
         assert_eq!(loaded_store, storage);
         let restored = &loaded_store.referral().intents[&participant];
         assert_eq!(restored.pending_credits.len(), 1);
-        assert!(restored.registration().is_some());
+        assert!(
+            restored
+                .registration
+                .as_ref()
+                .is_some_and(|pending| pending.signed().is_some())
+        );
         assert!(restored.invitation.is_some());
         assert_eq!(
             loaded_store

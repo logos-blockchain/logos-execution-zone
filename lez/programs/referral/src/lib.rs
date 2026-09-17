@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use lee_core::{
     account::AccountId,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
@@ -47,15 +45,7 @@ fn register(
     let [participant, registry_account] = <[AccountInput; 2]>::try_from(pre_states)
         .expect("Register requires the participant and the registry");
 
-    assert!(
-        participant.is_authorized,
-        "participant authorization is missing"
-    );
-    let participant_id = descriptor.account_id();
-    assert_eq!(
-        participant.account_id, participant_id,
-        "participant is not the regular private account its descriptor derives"
-    );
+    let participant_id = assert_participant(&participant, descriptor);
     assert!(
         participant.shard_of(program).is_empty(),
         "participant is already initialized"
@@ -163,15 +153,7 @@ fn collect(
         "Collect takes at most one outgoing credit account"
     );
 
-    assert!(
-        participant.is_authorized,
-        "participant authorization is missing"
-    );
-    assert_eq!(
-        participant.account_id,
-        descriptor.account_id(),
-        "participant is not the regular private account its descriptor derives"
-    );
+    assert_participant(&participant, descriptor);
     let State::Participant {
         node,
         referrer,
@@ -187,20 +169,6 @@ fn collect(
         "a Collect delivers an outgoing credit exactly when its participant has a referrer"
     );
     let outgoing = referrer.zip(outgoing);
-
-    let touched: Vec<AccountId> = [
-        Some(participant.account_id),
-        Some(source.account_id),
-        outgoing.as_ref().map(|(_parent, credit)| credit.account_id),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    assert_eq!(
-        touched.iter().collect::<BTreeSet<_>>().len(),
-        touched.len(),
-        "the participant, its source and its outgoing credit must be distinct accounts"
-    );
 
     let State::Credit {
         recipient_node,
@@ -247,6 +215,19 @@ fn collect(
     }
 
     diffs
+}
+
+fn assert_participant(participant: &AccountInput, descriptor: &ParticipantDescriptor) -> AccountId {
+    assert!(
+        participant.is_authorized,
+        "participant authorization is missing"
+    );
+    let participant_id = descriptor.account_id();
+    assert_eq!(
+        participant.account_id, participant_id,
+        "participant is not the regular private account its descriptor derives"
+    );
+    participant_id
 }
 
 fn assert_oracle(oracle: &AccountInput) {

@@ -96,16 +96,6 @@ impl ReferralIntent {
         }
     }
 
-    #[must_use]
-    pub fn registration(&self) -> Option<(NodeId, Option<NodeId>, [u8; 64])> {
-        let pending = self.registration.as_ref()?;
-        Some((
-            pending.node,
-            pending.referrer,
-            pending.signature?.to_bytes(),
-        ))
-    }
-
     pub fn record_credit(&mut self, seed: PdaSeed) {
         if !self.pending_credits.contains(&seed) {
             self.pending_credits.push(seed);
@@ -114,6 +104,13 @@ impl ReferralIntent {
 
     pub fn settle_credit(&mut self, seed: PdaSeed) {
         self.pending_credits.retain(|reserved| *reserved != seed);
+    }
+}
+
+impl PendingRegistration {
+    #[must_use]
+    pub fn signed(&self) -> Option<[u8; 64]> {
+        Some(self.signature?.to_bytes())
     }
 }
 
@@ -165,7 +162,7 @@ mod tests {
     #[test]
     fn a_registration_replays_only_once_it_is_signed() {
         let mut intent = ReferralIntent::new(AccountId::new([9; 32]));
-        assert!(intent.registration().is_none());
+        assert!(intent.registration.is_none());
 
         intent.registration = Some(PendingRegistration {
             node: NodeId::new([7; 32]),
@@ -173,14 +170,15 @@ mod tests {
             signature: None,
         });
         assert!(
-            intent.registration().is_none(),
+            intent.registration.as_ref().unwrap().signed().is_none(),
             "an unsigned registration is not replayable"
         );
 
         intent.registration.as_mut().unwrap().signature = Some(Signature::from_bytes(&[1; 64]));
-        let (node, referrer, _signature) = intent.registration().expect("now replayable");
-        assert_eq!(node, NodeId::new([7; 32]));
-        assert_eq!(referrer, Some(NodeId::new([4; 32])));
+        let pending = intent.registration.as_ref().expect("now replayable");
+        assert!(pending.signed().is_some());
+        assert_eq!(pending.node, NodeId::new([7; 32]));
+        assert_eq!(pending.referrer, Some(NodeId::new([4; 32])));
     }
 
     #[test]

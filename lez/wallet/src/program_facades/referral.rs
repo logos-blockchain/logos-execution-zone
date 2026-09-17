@@ -83,7 +83,12 @@ impl<'wallet> Referral<'wallet> {
     }
 
     pub fn state(&self, account: AccountId) -> Result<State, ExecutionFailureKind> {
-        self.cached_state(account)
+        let found = self.found(account)?;
+        Ok(
+            StoredState::decode(found.account.data.shard(self.program_account()))
+                .ok_or(ExecutionFailureKind::AccountDataError(account))?
+                .state,
+        )
     }
 
     #[must_use]
@@ -92,11 +97,8 @@ impl<'wallet> Referral<'wallet> {
     }
 
     #[must_use]
-    pub fn pending_registration(
-        &self,
-        participant: AccountId,
-    ) -> Option<(NodeId, Option<NodeId>, [u8; 64])> {
-        self.intent(participant)?.registration()
+    pub fn pending_registration(&self, participant: AccountId) -> Option<&PendingRegistration> {
+        self.intent(participant)?.registration.as_ref()
     }
 
     #[must_use]
@@ -148,7 +150,7 @@ impl<'wallet> Referral<'wallet> {
         self.store_intent(participant, intent)
     }
 
-    pub async fn prepare_registration(
+    pub fn prepare_registration(
         &mut self,
         participant: AccountId,
         node: NodeId,
@@ -171,14 +173,8 @@ impl<'wallet> Referral<'wallet> {
                 "the referrer's invitation is needed before its registration",
             ));
         }
-        if matches!(
-            self.cached_state(participant),
-            Ok(State::Participant { .. })
-        ) {
+        if matches!(self.state(participant), Ok(State::Participant { .. })) {
             return Err(conflict("this participant is already registered"));
-        }
-        if self.is_registered(node).await? {
-            return Err(conflict("this node is already registered"));
         }
 
         match &intent.registration {
@@ -214,7 +210,7 @@ impl<'wallet> Referral<'wallet> {
         &mut self,
         participant: AccountId,
         signature: [u8; 64],
-    ) -> Result<(NodeId, Option<NodeId>, [u8; 64]), ExecutionFailureKind> {
+    ) -> Result<(), ExecutionFailureKind> {
         let mut intent = self
             .intent(participant)
             .cloned()
@@ -235,11 +231,7 @@ impl<'wallet> Referral<'wallet> {
             return Err(ExecutionFailureKind::AccountDataError(participant));
         }
 
-        let registration = intent
-            .registration()
-            .ok_or(ExecutionFailureKind::AccountDataError(participant))?;
-        self.store_intent(participant, intent)?;
-        Ok(registration)
+        self.store_intent(participant, intent)
     }
 
     pub fn reserve_credit(
@@ -390,7 +382,7 @@ impl<'wallet> Referral<'wallet> {
     ) -> Result<PendingOperation, ExecutionFailureKind> {
         let program_account = self.program_account();
         let (accounts, instruction, destination) = match &operation {
-            OperationKind::Register { participant } => self.register_request(*participant)?,
+            OperationKind::Register { participant } => self.register_request(*participant).await?,
             OperationKind::Grant { node, amount } => (
                 vec![
                     AccountIdentity::Public(ORACLE_ACCOUNT_ID).balance(),
@@ -476,7 +468,7 @@ impl<'wallet> Referral<'wallet> {
         })
     }
 
-    fn register_request(
+    async fn register_request(
         &self,
         participant: AccountId,
     ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
@@ -485,7 +477,11 @@ impl<'wallet> Referral<'wallet> {
         let descriptor = self.descriptor(participant)?;
         let (node, referrer, node_signature) = self
             .pending_registration(participant)
+            .and_then(|pending| Some((pending.node, pending.referrer, pending.signed()?)))
             .ok_or_else(|| conflict("this participant has no signed registration"))?;
+        if self.is_registered(node).await? {
+            return Err(conflict("this node is already registered"));
+        }
 
         Ok((
             vec![
@@ -655,7 +651,7 @@ impl<'wallet> Referral<'wallet> {
     }
 
     fn referrer(&self, participant: AccountId) -> Result<Option<NodeId>, ExecutionFailureKind> {
-        let Ok(State::Participant { referrer, .. }) = self.cached_state(participant) else {
+        let Ok(State::Participant { referrer, .. }) = self.state(participant) else {
             return Err(conflict("this participant is not registered yet"));
         };
         Ok(referrer)
@@ -688,7 +684,7 @@ impl<'wallet> Referral<'wallet> {
         if let Some(intent) = self.intent(participant) {
             return Ok(intent.clone());
         }
-        let State::Participant { .. } = self.cached_state(participant)? else {
+        let State::Participant { .. } = self.state(participant)? else {
             return Err(ExecutionFailureKind::AccountDataError(participant));
         };
         Ok(ReferralIntent::new(self.program_account()))
@@ -712,15 +708,6 @@ impl<'wallet> Referral<'wallet> {
             .key_chain()
             .private_account(account)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)
-    }
-
-    fn cached_state(&self, account: AccountId) -> Result<State, ExecutionFailureKind> {
-        let found = self.found(account)?;
-        Ok(
-            StoredState::decode(found.account.data.shard(self.program_account()))
-                .ok_or(ExecutionFailureKind::AccountDataError(account))?
-                .state,
-        )
     }
 }
 

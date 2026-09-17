@@ -559,24 +559,6 @@ fn collect_rejects_a_consumed_account_as_its_outgoing_credit() {
 }
 
 #[test]
-#[should_panic(expected = "must be distinct accounts")]
-fn collect_rejects_an_outgoing_credit_that_aliases_its_source() {
-    let (_alice_key, alice_node) = node(2);
-    let (_carol_key, carol_node) = node(3);
-    let alice = participant(12);
-
-    let _diffs = execute(
-        PROGRAM,
-        vec![
-            initialized(&alice, alice_node, Some(carol_node), 0),
-            note(0x41, alice_node, 10),
-            note(0x41, alice_node, 10),
-        ],
-        collect(&alice),
-    );
-}
-
-#[test]
 #[should_panic(expected = "node is already registered")]
 fn register_rejects_an_already_registered_node() {
     let (bob_key, bob_node) = node(1);

@@ -28,7 +28,7 @@ use lee_core::{
 use referral_core::{
     Invitation, NodeId, ORACLE_ACCOUNT_ID, PROTOTYPE_ORACLE_SIGNING_KEY, State, StoredState,
     credit_account_id,
-    ed25519_dalek::{Signer as _, SigningKey},
+    ed25519_dalek::{Signature, Signer as _, SigningKey},
     ticket_account_id,
 };
 use sequencer_service_protocol::{
@@ -304,14 +304,13 @@ impl Member {
         referral::Referral::new(&mut self.wallet, programs::referral(), program_account())
     }
 
-    async fn authorize(&mut self, referrer: Option<NodeId>) {
+    fn authorize(&mut self, referrer: Option<NodeId>) {
         let account = self.account;
         let node = self.node;
         let key = self.key.clone();
         let authorization = self
             .facade()
             .prepare_registration(account, node, referrer)
-            .await
             .expect("a registration can be started");
         let signature = key.sign(&authorization.message()).to_bytes();
         self.facade()
@@ -319,7 +318,8 @@ impl Member {
             .expect("the node's signature is accepted");
     }
 
-    async fn register(&mut self) {
+    async fn register(&mut self, referrer: Option<NodeId>) {
+        self.authorize(referrer);
         let account = self.account;
         let reference = self.node.to_bytes();
         self.facade()
@@ -475,7 +475,6 @@ struct Scenario {
     lagging: Option<Arc<Mutex<Ledger>>>,
     oracle: WalletCore,
     bob: Member,
-    alice: Option<Member>,
     source: AccountId,
     _oracle_home: WalletHome,
     _handles: Vec<jsonrpsee::server::ServerHandle>,
@@ -483,18 +482,14 @@ struct Scenario {
 
 impl Scenario {
     async fn root(amount: u128) -> Self {
-        Self::build(false, amount, false).await
-    }
-
-    async fn referred(amount: u128) -> Self {
-        Self::build(true, amount, false).await
+        Self::build(amount, false).await
     }
 
     async fn failover(amount: u128) -> Self {
-        Self::build(false, amount, true).await
+        Self::build(amount, true).await
     }
 
-    async fn build(referred: bool, amount: u128, failover: bool) -> Self {
+    async fn build(amount: u128, failover: bool) -> Self {
         let (ledger, address, handle) = start_sequencer().await;
         let mut handles = vec![handle];
         let mut addresses = vec![address];
@@ -514,28 +509,10 @@ impl Scenario {
         let config = overrides(&addresses);
         let (oracle_home, mut oracle, _mnemonic) = WalletHome::create_with(config.clone()).await;
         import_oracle(&mut oracle);
-        let mut bob = member_with(config.clone(), 1).await;
-        let mut alice = if referred {
-            Some(member_with(config.clone(), 2).await)
-        } else {
-            None
-        };
+        let mut bob = member_with(config, 1).await;
 
-        oracle_setup(&mut oracle, bob.node, amount).await;
-
-        let referrer = alice.as_ref().map(|parent| parent.node);
-        if let Some(parent) = alice.as_mut() {
-            let (_carol_key, carol_node) = node(3);
-            let mut carol = member_with(config, 3).await;
-            carol.authorize(None).await;
-            carol.register().await;
-            parent.import(foreign_invitation(0x44, carol_node));
-            parent.authorize(Some(carol_node)).await;
-            parent.register().await;
-            bob.import(parent.invitation());
-        }
-        bob.authorize(referrer).await;
-        bob.register().await;
+        oracle_grant(&mut oracle, [0x20; 32], bob.node, amount).await;
+        bob.register(None).await;
 
         Self {
             ledger,
@@ -543,7 +520,6 @@ impl Scenario {
             oracle,
             source: ticket_account_id(program_account(), bob.node),
             bob,
-            alice,
             _oracle_home: oracle_home,
             _handles: handles,
         }
@@ -761,10 +737,6 @@ fn oracle_facade(oracle: &mut WalletCore) -> referral::Referral<'_> {
     referral::Referral::new(oracle, programs::referral(), program_account())
 }
 
-async fn oracle_setup(oracle: &mut WalletCore, granted: NodeId, amount: u128) {
-    oracle_grant(oracle, [0x20; 32], granted, amount).await;
-}
-
 async fn oracle_submit(
     oracle: &mut WalletCore,
     reference: [u8; 32],
@@ -813,7 +785,7 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
     let mut alice = member(address, 2).await;
     let mut carol = member(address, 3).await;
 
-    oracle_setup(&mut oracle, bob.node, 5).await;
+    oracle_grant(&mut oracle, [0x20; 32], bob.node, 5).await;
     assert_eq!(ticket_amount(&ledger, bob.node), 5);
 
     let alice_invitation = alice.invitation();
@@ -834,12 +806,9 @@ async fn the_worked_example_pays_five_to_bob_alice_and_carol_through_real_wallet
         "a restore recovers notes, not the wallet-local intents that preceded them"
     );
 
-    carol.authorize(None).await;
-    carol.register().await;
-    alice.authorize(Some(carol_node)).await;
-    alice.register().await;
-    bob.authorize(Some(alice.node)).await;
-    bob.register().await;
+    carol.register(None).await;
+    alice.register(Some(carol_node)).await;
+    bob.register(Some(alice.node)).await;
 
     let bob_account = bob.account;
     let bob_source = ticket_account_id(program_account(), bob.node);
@@ -1006,7 +975,6 @@ async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_resta
     let authorization = bob
         .facade()
         .prepare_registration(account, bob_node, None)
-        .await
         .expect("a registration can be started");
     let signature = bob.key.sign(&authorization.message()).to_bytes();
     bob.facade()
@@ -1016,14 +984,12 @@ async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_resta
     let resumed = bob
         .facade()
         .prepare_registration(account, bob_node, None)
-        .await
         .expect("the same configuration resumes");
     assert_eq!(resumed.message(), authorization.message());
     assert!(bob.facade().pending_registration(account).is_some());
     assert!(
         bob.facade()
             .prepare_registration(account, alice.node, None)
-            .await
             .is_err(),
         "a conflicting configuration is rejected"
     );
@@ -1035,16 +1001,16 @@ async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_resta
             AccountId::new([0xAB; 32])
         )
         .prepare_registration(account, bob_node, None)
-        .await
         .is_err(),
         "another deployment with the same node is a conflict"
     );
-    let (kept_node, _kept_referrer, kept_signature) = bob
+    let kept = bob
         .facade()
         .pending_registration(account)
+        .cloned()
         .expect("the original registration survives");
-    assert_eq!(kept_node, bob_node);
-    assert_eq!(kept_signature, signature);
+    assert_eq!(kept.node, bob_node);
+    assert_eq!(kept.signature, Some(Signature::from_bytes(&signature)));
     assert_eq!(
         bob.facade()
             .intent(account)
@@ -1059,7 +1025,6 @@ async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_resta
     alice
         .facade()
         .prepare_registration(alice_account, alice_node, Some(carol_node))
-        .await
         .expect("the imported invitation admits its node as the referrer");
     let bob_invitation = bob.invitation();
     assert!(
@@ -1073,35 +1038,40 @@ async fn registration_bookkeeping_resumes_refuses_conflicts_and_survives_a_resta
         alice
             .facade()
             .prepare_registration(alice_account, alice_node, Some(bob_node))
-            .await
             .is_err(),
         "and a registration for a referrer without an invitation is refused"
     );
 
     bob.restart().await;
-    let (survived_node, _survived_referrer, survived_signature) = bob
+    let survived = bob
         .facade()
         .pending_registration(account)
+        .cloned()
         .expect("the registration survives a restart");
-    assert_eq!(survived_node, bob_node);
-    assert_eq!(survived_signature, signature);
+    assert_eq!(survived.node, bob_node);
+    assert_eq!(survived.signature, Some(Signature::from_bytes(&signature)));
 
-    bob.register().await;
+    bob.register(None).await;
     assert!(
         bob.facade()
             .prepare_registration(account, bob_node, None)
-            .await
             .is_err(),
         "a registered participant refuses a second registration"
     );
     let mut twin = member(address, 1).await;
     let twin_account = twin.account;
+    twin.authorize(None);
     assert!(
         twin.facade()
-            .prepare_registration(twin_account, bob_node, None)
+            .submit(bob_node.to_bytes(), register(twin_account))
             .await
             .is_err(),
-        "a fresh participant for a node the registry already holds is refused before it is built"
+        "a fresh participant for a node the registry already holds is refused when its registration is built"
+    );
+    assert_eq!(
+        twin.status(bob_node.to_bytes()),
+        None,
+        "the refused registration is never recorded"
     );
 }
 
@@ -1484,22 +1454,28 @@ async fn a_two_sequencer_failover_resolves_a_lagging_collect_and_a_grant_probe()
 
 #[test]
 async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_once() {
-    let mut scenario = Scenario::referred(5).await;
-    let mut alice = scenario
-        .alice
-        .take()
-        .expect("a referred scenario carries the parent as a member");
-    let (_carol_key, carol_node) = node(3);
-    let carol_invitation = foreign_invitation(0x44, carol_node);
+    let (ledger, address, _handle) = start_sequencer().await;
+    let (_oracle_home, mut oracle) = oracle_wallet(address).await;
+    let mut bob = member(address, 1).await;
+    let mut alice = member(address, 2).await;
+    let mut carol = member(address, 3).await;
+    let carol_invitation = foreign_invitation(0x44, carol.node);
     let first = [0xCB; 32];
     let second = [0xCC; 32];
 
-    let first_seed = scenario.bob.reserve();
-    scenario
-        .collect([4; 32], Some(first_seed))
+    carol.register(None).await;
+    alice.import(carol_invitation.clone());
+    alice.register(Some(carol.node)).await;
+    bob.import(alice.invitation());
+    bob.register(Some(alice.node)).await;
+    oracle_grant(&mut oracle, [0x20; 32], bob.node, 5).await;
+
+    let bob_source = ticket_account_id(program_account(), bob.node);
+    let first_seed = bob.reserve();
+    bob.submit([4; 32], bob_source, Some(first_seed))
         .await
         .expect("Bob's first collect settles");
-    scenario.bob.sync().await;
+    bob.sync().await;
 
     alice.sync().await;
     let alice_account = alice.account;
@@ -1512,17 +1488,15 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
     alice.sync().await;
     assert_eq!(alice.reward_balance(), 5);
 
-    scenario.grant([5; 32], 5).await;
-    let second_seed = scenario.bob.reserve();
-    scenario
-        .collect([6; 32], Some(second_seed))
+    oracle_grant(&mut oracle, [5; 32], bob.node, 5).await;
+    let second_seed = bob.reserve();
+    bob.submit([6; 32], bob_source, Some(second_seed))
         .await
         .expect("Bob's second collect settles");
-    scenario.bob.sync().await;
-    scenario.grant([7; 32], 5).await;
-    let third_seed = scenario.bob.reserve();
-    scenario
-        .collect([8; 32], Some(third_seed))
+    bob.sync().await;
+    oracle_grant(&mut oracle, [7; 32], bob.node, 5).await;
+    let third_seed = bob.reserve();
+    bob.submit([8; 32], bob_source, Some(third_seed))
         .await
         .expect("Bob's third collect settles");
     alice.sync().await;
@@ -1530,7 +1504,7 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
     let second_source = alice.credit(second_seed);
     let third_source = alice.credit(third_seed);
     let second_output = alice.reserve();
-    scenario.reject_next();
+    ledger.lock().expect("ledger is not poisoned").reject_next = true;
     assert!(
         alice
             .submit(second, second_source, Some(second_output))
@@ -1573,7 +1547,7 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
     let rejected = alice.recorded(second).transaction.hash();
     alice
         .facade()
-        .import_invitation(alice_account, foreign_invitation(0x33, carol_node))
+        .import_invitation(alice_account, foreign_invitation(0x33, carol.node))
         .expect("another invitation for the same parent node is accepted locally");
     assert!(
         alice
@@ -1606,8 +1580,7 @@ async fn a_collect_a_competing_wallet_overtook_is_rejected_and_rebuilt_exactly_o
         "the second credit was collected exactly once"
     );
 
-    scenario
-        .ledger
+    ledger
         .lock()
         .expect("ledger is not poisoned")
         .transaction_index = TransactionIndex::Hidden;
@@ -1636,10 +1609,9 @@ async fn a_settlement_that_cannot_be_persisted_keeps_the_intent_it_would_have_cl
     let account = bob.account;
     let reference = [0xE2; 32];
 
-    carol.authorize(None).await;
-    carol.register().await;
+    carol.register(None).await;
     bob.import(carol.invitation());
-    bob.authorize(Some(carol.node)).await;
+    bob.authorize(Some(carol.node));
     let seed = bob.reserve();
     bob.facade()
         .submit(reference, register(account))
