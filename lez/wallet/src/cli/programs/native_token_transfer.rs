@@ -74,6 +74,7 @@ impl AuthTransferSubcommand {
             .as_ref()
             .map(|m| m.resolve(wallet_core.storage()))
             .transpose()?;
+        ensure_not_self_transfer(from, to)?;
         let underlying_subcommand = match (to, to_npk, to_vpk) {
             (None, None, None) => {
                 anyhow::bail!("Provide either account account_id of receiver or their public keys");
@@ -498,5 +499,76 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 Self::handle_public(from, to, amount, wallet_core).await
             }
         }
+    }
+}
+
+/// Shielding and deshielding to your own account are legitimate, so a transfer
+/// is only self-directed when the privacy-qualified identities are equal.
+fn ensure_not_self_transfer(
+    from: AccountIdWithPrivacy,
+    to: Option<AccountIdWithPrivacy>,
+) -> Result<()> {
+    if to == Some(from) {
+        anyhow::bail!("Invalid transfer: --from and --to are the same account ({from})");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID_A: [u8; 32] = [1; 32];
+    const ID_B: [u8; 32] = [2; 32];
+
+    #[test]
+    fn rejects_transfer_to_the_same_public_account() {
+        let account = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+
+        let result = ensure_not_self_transfer(account, Some(account));
+
+        assert!(result.is_err(), "public self-transfer must be rejected");
+    }
+
+    #[test]
+    fn rejects_transfer_to_the_same_private_account() {
+        let account = AccountIdWithPrivacy::Private(AccountId::new(ID_A));
+
+        let result = ensure_not_self_transfer(account, Some(account));
+
+        assert!(result.is_err(), "private self-transfer must be rejected");
+    }
+
+    #[test]
+    fn allows_shielding_and_deshielding_your_own_account() {
+        let public = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+        let private = AccountIdWithPrivacy::Private(AccountId::new(ID_A));
+
+        assert!(
+            ensure_not_self_transfer(public, Some(private)).is_ok(),
+            "shielding your own account must stay allowed"
+        );
+        assert!(
+            ensure_not_self_transfer(private, Some(public)).is_ok(),
+            "deshielding your own account must stay allowed"
+        );
+    }
+
+    #[test]
+    fn allows_transfer_between_different_accounts() {
+        let from = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+        let to = AccountIdWithPrivacy::Public(AccountId::new(ID_B));
+
+        assert!(ensure_not_self_transfer(from, Some(to)).is_ok());
+    }
+
+    #[test]
+    fn allows_recipient_given_by_public_keys() {
+        let from = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+
+        assert!(
+            ensure_not_self_transfer(from, None).is_ok(),
+            "recipient given by keys has no resolved id to compare"
+        );
     }
 }
