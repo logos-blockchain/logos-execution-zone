@@ -34,7 +34,8 @@ async fn deploy_and_execute_program() -> Result<()> {
     let header_id = new_account(&mut ctx, false, None).await?;
     let mut segment_ids = Vec::new();
     for _ in deployed
-        .elf()
+        .user_elf()
+        .expect("valid ProgramBinary")
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
     {
         segment_ids.push(new_account(&mut ctx, false, None).await?);
