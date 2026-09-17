@@ -232,7 +232,7 @@ impl MultiSequencerClient {
         let (resp, statistics_update) =
             tokio::join!(call(leader), actualize_client(leader.clone()));
 
-        log::debug!("Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",);
+        log::debug!("Metered call for {leader_url:?}, statistic updates is {statistics_update:?}");
 
         statistic_map
             .entry(leader_url.clone())

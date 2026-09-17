@@ -23,7 +23,7 @@ use logos_blockchain_core::{
     mantle::{
         TxHash,
         ledger::Inputs,
-        ops::channel::{ChannelId, MsgId, deposit::Metadata},
+        ops::channel::{ChannelId, Ed25519PublicKey, MsgId, deposit::Metadata},
     },
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -43,13 +43,13 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use crate::{
     LiveCommittee, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
-    block_publisher::FollowUpdate,
+    block_publisher::{FollowUpdate, LiveChannelConfig},
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
     classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
-    deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
+    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, checkpoint_at, mock_checkpoint, mock_msg_of},
     resubmittable_txs,
@@ -114,6 +114,7 @@ fn empty_follow_update() -> FollowUpdate {
         deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
+        channel: None,
     }
 }
 
@@ -176,20 +177,23 @@ fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
 }
 
 #[test]
-fn committee_cooldown_needs_the_channel_to_advance() {
+fn a_config_is_given_up_on_only_once_the_channel_has_moved_past_it() {
     type Core = SequencerCoreWithMockClients<StorageActor>;
-    let cooldown = Core::COMMITTEE_SUBMISSION_COOLDOWN;
+    let deadline = Core::CONFIG_LANDING_DEADLINE;
     let submitted_at = Slot::new(100);
 
-    assert!(Core::committee_cooldown_elapsed(None, None));
-    assert!(!Core::committee_cooldown_elapsed(Some(submitted_at), None));
-    assert!(!Core::committee_cooldown_elapsed(
+    // Neither an unknown submission slot nor an unreadable tip is evidence
+    // that the config will not land.
+    assert!(!Core::landing_deadline_passed(None, Some(Slot::new(1_000))));
+    assert!(!Core::landing_deadline_passed(Some(submitted_at), None));
+
+    assert!(!Core::landing_deadline_passed(
         Some(submitted_at),
-        Some(Slot::new(100 + cooldown - 1))
+        Some(Slot::new(100 + deadline - 1))
     ));
-    assert!(Core::committee_cooldown_elapsed(
+    assert!(Core::landing_deadline_passed(
         Some(submitted_at),
-        Some(Slot::new(100 + cooldown))
+        Some(Slot::new(100 + deadline))
     ));
 }
 
@@ -1626,18 +1630,30 @@ fn empty_committee() -> LiveCommittee {
     LiveCommittee::at(Vec::new(), MsgId::root())
 }
 
+/// A live channel sitting at the config entry [`mock::checkpoint_at`] calls
+/// finalized.
+fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
+    LiveChannelConfig {
+        keys,
+        config_tip: MsgId::root(),
+        required_signatures: 1,
+    }
+}
+
 #[tokio::test]
 async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
     // Genesis stakes the bootstrap key, so the head wants it accredited already.
-    let (mut sequencer, mempool_handle) = common_setup().await;
+    let (sequencer, mempool_handle) = common_setup().await;
+    let chain = sequencer.chain();
+    let finalized = MsgId::root();
 
     assert!(
-        sequencer
-            .build_block_from_mempool(Some(&empty_committee()))
-            .await
-            .unwrap()
-            .committee_update
-            .is_none(),
+        config_target(
+            chain.lock().await.final_state(),
+            &live_channel(Vec::new()),
+            finalized
+        )
+        .is_none(),
         "an unfinalized stake must not move the committee"
     );
 
@@ -1649,7 +1665,7 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
         .unwrap();
     apply_follow_update(
         sequencer.block_store().storage_ref(),
-        &sequencer.chain(),
+        &chain,
         &mempool_handle,
         FollowUpdate {
             finalized: vec![(genesis, Slot::from(0))],
@@ -1658,19 +1674,20 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
     )
     .await;
 
-    let wanted = sequencer
-        .build_block_from_mempool(Some(&empty_committee()))
-        .await
-        .unwrap()
-        .committee_update
+    let final_state = chain.lock().await.final_state().clone();
+    let wanted = config_target(&final_state, &live_channel(Vec::new()), finalized)
         .expect("the stake is irreversible now, so the committee should follow it");
     assert!(
-        sequencer
-            .build_block_from_mempool(Some(&LiveCommittee::at(wanted, MsgId::root())))
-            .await
-            .unwrap()
-            .committee_update
-            .is_none(),
+        config_target(
+            &final_state,
+            &live_channel(Vec::new()),
+            MsgId::from([1; 32])
+        )
+        .is_none(),
+        "no config is targeted while another is still in flight"
+    );
+    assert!(
+        config_target(&final_state, &live_channel(wanted.keys), finalized).is_none(),
         "a committee that already matches must not be resubmitted"
     );
 }
@@ -5078,11 +5095,13 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
 
 mod channel_update_extraction {
     use logos_blockchain_core::mantle::{
+        SignedOps,
+        ledger::verification_mode::StandardMode,
         ops::{
-            Op,
+            Op, OpProof,
             channel::inscribe::{Inscription, InscriptionOp},
         },
-        transactions::{MantleTxBuilder, OpsProofs, SignedMantleTx, states::Unverified},
+        transactions::{MantleTxBuilder, OpProofs, states::Unverified},
     };
     use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
@@ -5093,20 +5112,23 @@ mod channel_update_extraction {
     fn inscribing_tx(
         channel: ChannelId,
         block: &common::block::Block,
-    ) -> SignedMantleTx<Unverified> {
+    ) -> SignedOps<Unverified, StandardMode> {
         let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+        let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
         let op = Op::ChannelInscribe(InscriptionOp {
             channel_id: channel,
             inscription,
             parent: MsgId::root(),
-            signer: Ed25519Key::generate(&mut rand::rngs::OsRng).public_key(),
+            signer: signer.public_key(),
         });
         let raw = MantleTxBuilder::new()
             .extend_ops([op])
             .expect("ops fit")
             .build()
             .expect("tx builds");
-        SignedMantleTx::new(raw, OpsProofs::empty())
+        // Extraction never checks the proof, only that there is one per op.
+        let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
+        SignedOps::from_parts(raw, OpProofs::from([proof])).expect("one proof per op")
     }
 
     #[test]
@@ -5132,7 +5154,9 @@ mod channel_update_extraction {
     fn a_config_tx_yields_nothing() {
         let channel = ChannelId::from([1; 32]);
         let raw = MantleTxBuilder::new().build().expect("tx builds");
-        let config = ChannelUpdateTx::Config(SignedMantleTx::new(raw, OpsProofs::empty()));
+        let config = ChannelUpdateTx::Config(
+            SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
+        );
         assert!(channel_blocks(&config, channel).is_empty());
     }
 }

@@ -1934,12 +1934,13 @@ fn effective_post_data(diff: &AccountStateDiff) -> Data {
 
 #[test]
 fn pool_pda_produces_unique_id_for_token_pair() {
-    assert!(
+    assert_eq!(
         amm_core::compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_a_definition_id(),
             IdForTests::token_b_definition_id()
-        ) == compute_pool_pda(
+        ),
+        compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_b_definition_id(),
             IdForTests::token_a_definition_id()
@@ -2179,9 +2180,9 @@ fn call_add_liquidity_chained_call_successsful() {
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_add_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_add_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_add_pool_lp());
+    assert_eq!(chained_call_a, ChainedCallForTests::cc_add_token_a());
+    assert_eq!(chained_call_b, ChainedCallForTests::cc_add_token_b());
+    assert_eq!(chained_call_lp, ChainedCallForTests::cc_add_pool_lp());
 }
 
 #[should_panic(expected = "Vault A was not provided")]
@@ -2354,9 +2355,9 @@ fn call_remove_liquidity_chained_call_successful() {
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_remove_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_remove_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_remove_pool_lp());
+    assert_eq!(chained_call_a, ChainedCallForTests::cc_remove_token_a());
+    assert_eq!(chained_call_b, ChainedCallForTests::cc_remove_token_b());
+    assert_eq!(chained_call_lp, ChainedCallForTests::cc_remove_pool_lp());
 }
 
 #[should_panic(expected = "Balances must be nonzero")]
@@ -2524,9 +2525,18 @@ fn call_new_definition_chained_call_successful() {
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_new_definition_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_new_definition_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_new_definition_token_lp());
+    assert_eq!(
+        chained_call_a,
+        ChainedCallForTests::cc_new_definition_token_a()
+    );
+    assert_eq!(
+        chained_call_b,
+        ChainedCallForTests::cc_new_definition_token_b()
+    );
+    assert_eq!(
+        chained_call_lp,
+        ChainedCallForTests::cc_new_definition_token_lp()
+    );
 }
 
 #[should_panic(expected = "AccountId is not a token type for the pool")]
@@ -3007,7 +3017,10 @@ fn new_definition_lp_asymmetric_amounts() {
     );
 
     let chained_call_lp = chained_calls[0].clone();
-    assert!(chained_call_lp == ChainedCallForTests::cc_new_definition_token_lp());
+    assert_eq!(
+        chained_call_lp,
+        ChainedCallForTests::cc_new_definition_token_lp()
+    );
 }
 
 #[test]

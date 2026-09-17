@@ -18,6 +18,7 @@ actor = [
   "dep:libp2p",
   "dep:log",
   "dep:logos-blockchain-key-management-system-service",
+  "dep:sequencer_channel_config_actor",
   "dep:sequencer_core",
   "dep:sequencer_slasher_actor",
   "dep:tokio",
@@ -28,6 +29,7 @@ mdns = ["actor"]
 
 [dependencies]
 common.workspace = true
+sequencer_channel_config_actor = { workspace = true, optional = true }
 sequencer_core = { workspace = true, optional = true }
 sequencer_slasher_actor = { workspace = true, optional = true }
 
@@ -48,6 +50,7 @@ libp2p = { workspace = true, optional = true }
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
+logos-blockchain-core.workspace = true
 mempool.workspace = true
 sequencer_stake_core.workspace = true
 testnet_initial_state.workspace = true

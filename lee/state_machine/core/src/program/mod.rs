@@ -50,6 +50,10 @@ impl From<ProgramId> for AccountId {
 }
 
 impl From<AccountId> for ProgramId {
+    #[expect(
+        clippy::chunks_exact_to_as_chunks,
+        reason = "rewriting would change the guest binaries"
+    )]
     fn from(account_id: AccountId) -> Self {
         let mut program_id = [0_u32; 8];
         for (word, chunk) in program_id

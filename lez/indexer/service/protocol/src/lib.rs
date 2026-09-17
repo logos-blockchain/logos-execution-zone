@@ -96,8 +96,8 @@ impl FromStr for ProgramId {
             return Err(ProgramIdParseError::InvalidLength(bytes.len()));
         }
         let mut arr = [0_u32; 8];
-        for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-            arr[i] = u32::from_le_bytes(chunk.try_into().unwrap());
+        for (word, chunk) in arr.iter_mut().zip(bytes.as_chunks::<4>().0) {
+            *word = u32::from_le_bytes(*chunk);
         }
         Ok(Self(arr))
     }

@@ -11,9 +11,10 @@ pub use logos_blockchain_core::mantle::{
 };
 use logos_blockchain_core::{
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         ops::{
             Op, OpProof,
             channel::{
@@ -23,7 +24,7 @@ use logos_blockchain_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpsProofs, states::Unverified},
+        transactions::{MantleTxBuilder, OpProofs, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -37,10 +38,12 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     sequencer::{
         ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
-        PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
-        WithdrawInfo, WithdrawInputs, ZoneSequencer, channel_inscriptions,
+        PendingTx, PreparedChannelConfig, SequencerConfig as ZoneSdkSequencerConfig,
+        TurnNotification, WithdrawArg, WithdrawInfo, WithdrawInputs, ZoneSequencer,
+        channel_inscriptions,
     },
 };
+use sequencer_channel_config_actor::ConfigTarget;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -83,6 +86,9 @@ pub struct FollowUpdate {
     pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
+    /// The live channel config as zone-sdk last saw it; `None` before the
+    /// channel exists.
+    pub channel: Option<LiveChannelConfig>,
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -113,20 +119,45 @@ enum Command {
         withdrawals: Vec<WithdrawArg>,
         resp: oneshot::Sender<Result<PublishOutcome>>,
     },
-    /// Submit a committee `ChannelConfigOp` as its own, independent Mantle tx
-    /// — not bundled with any block publish.
-    SubmitChannelConfig {
-        new_keys: Keys,
-        channel_params: ChannelParams,
+    /// Have zone-sdk fund a config tx for the accredited keys to sign.
+    PrepareConfig {
+        target: Box<ConfigTarget>,
+        resp: oneshot::Sender<Result<PreparedChannelConfig>>,
+    },
+    /// Hand zone-sdk a prepared config and its signatures to track and post.
+    SubmitConfig {
+        prepared: Box<PreparedChannelConfig>,
+        signatures: Vec<IndexedSignature>,
         resp: oneshot::Sender<Result<()>>,
     },
     /// Hand zone-sdk a pre-built tx to track and post, keyed by the channel tip
     /// it leaves behind.
     SubmitSignedTx {
-        tx: Box<SignedMantleTx<Unverified>>,
+        tx: Box<SignedOps<Unverified, StandardMode>>,
         msg_id: MsgId,
         resp: oneshot::Sender<Result<PublishOutcome>>,
     },
+}
+
+/// The live channel config, as much of it as a config update needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveChannelConfig {
+    /// Accredited keys in index order; a signature names its index here.
+    pub keys: Vec<Ed25519PublicKey>,
+    /// The config tip a new op must chain on.
+    pub config_tip: MsgId,
+    /// Signatures Bedrock demands of the next config op, exactly.
+    pub required_signatures: u16,
+}
+
+impl From<&ChannelState> for LiveChannelConfig {
+    fn from(state: &ChannelState) -> Self {
+        Self {
+            keys: state.accredited_keys.to_vec(),
+            config_tip: state.config_tip_hash,
+            required_signatures: state.configuration_threshold,
+        }
+    }
 }
 
 type CommandSender = mpsc::Sender<Command>;
@@ -185,14 +216,16 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// finalized one: compare it to the checkpoint's `finalized_config`.
     async fn accredited_keys(&self) -> Result<Option<(Vec<Ed25519PublicKey>, MsgId)>>;
 
-    /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
-    /// tx (not bundled with any block publish). `new_keys` is the full
-    /// replacement accredited-keys list; `channel_params` is what the config
-    /// account has carried since genesis, repeated unchanged.
+    /// Fund a `ChannelConfigOp` from this node's wallet without submitting it.
+    /// The accredited keys sign the funded transaction, so it must be built
+    /// before anyone can sign, and every signature is void if it is rebuilt.
+    async fn prepare_channel_config(&self, target: &ConfigTarget) -> Result<PreparedChannelConfig>;
+
+    /// Submit a prepared config with the signatures collected for it.
     async fn submit_channel_config(
         &self,
-        new_keys: Vec<Ed25519PublicKey>,
-        channel_params: ChannelParams,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
     ) -> Result<()>;
 
     fn channel_id(&self) -> ChannelId;
@@ -328,6 +361,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let mut ready_rx = sequencer.subscribe_ready();
         // Grab the turn watch before the move; the sdk actor keeps it current.
         let turn_rx = sequencer.subscribe_turn_to_write();
+        // Refreshed before each `BlocksProcessed`, so it is never behind one.
+        let channel_view_rx = sequencer.subscribe_channel_view();
 
         let (command_tx, mut command_rx): (CommandSender, _) =
             mpsc::channel(PUBLISH_INBOX_CAPACITY);
@@ -382,40 +417,22 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     }
                                     let _dontcare = resp_tx.send(msg_result);
                                 }
-                                Command::SubmitChannelConfig {
-                                    new_keys,
-                                    channel_params,
-                                    resp: resp_tx,
-                                } => {
-                                    // A committee update changes the key list and
-                                    // nothing else: `channel_params` is what the stake
-                                    // config account has carried since genesis.
-                                    //
-                                    // zone-sdk funds from the node wallet, signs,
-                                    // and enqueues this as its own independent
-                                    // Mantle tx onto the drive loop's in-flight
-                                    // pool — no manual bundling with any block
-                                    // inscription.
+                                Command::PrepareConfig { target, resp: resp_tx } => {
+                                    let result = prepare_config(&mut sequencer, &target).await;
+                                    if let Err(e) = &result {
+                                        warn!("zone-sdk failed to prepare the channel config: {e:#}");
+                                    }
+                                    let _dontcare = resp_tx.send(result);
+                                }
+                                Command::SubmitConfig { prepared, signatures, resp: resp_tx } => {
                                     let result = sequencer
                                         .handle()
-                                        .channel_config(
-                                            new_keys,
-                                            SlotTimeframe::from(channel_params.posting_timeframe),
-                                            SlotTimeout::from(channel_params.posting_timeout),
-                                            system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
-                                            system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-                                        )
-                                        .await
-                                        .map(|_| ())
-                                        .context("Failed to submit channel-config update");
-
-                                    match &result {
-                                        Ok(()) => info!("Submitted committee channel-config update"),
-                                        Err(err) => {
-                                            warn!("Channel-config update submission failed: {err:?}");
-                                        }
+                                        .submit_channel_config(*prepared, signatures)
+                                        .map(|_receipt| ())
+                                        .context("Failed to submit the signed channel config");
+                                    if let Err(e) = &result {
+                                        warn!("zone-sdk rejected the signed channel config: {e:?}");
                                     }
-
                                     let _dontcare = resp_tx.send(result);
                                 }
                                 Command::SubmitSignedTx { tx, msg_id, resp: resp_tx } => {
@@ -497,6 +514,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         }
                                     }
 
+                                    let channel = channel_view_rx
+                                        .borrow()
+                                        .channel
+                                        .as_ref()
+                                        .map(LiveChannelConfig::from);
                                     on_follow(FollowUpdate {
                                         checkpoint,
                                         adopted,
@@ -505,6 +527,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         deposits,
                                         withdrawals,
                                         undecodable,
+                                        channel,
                                     }).await;
                                 }
                                 Event::Ready => {}
@@ -593,14 +616,17 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let signature = self
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-        let mut ops_proofs: OpsProofs = OpProof::Ed25519Sig(signature).into();
+        let mut ops_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         if let Some(transfer_proof) = funded.transfer_proof {
             ops_proofs
                 .try_push(transfer_proof)
                 .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
         }
 
-        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        let tx = Box::new(
+            SignedOps::from_parts(mantle_tx, ops_proofs)
+                .map_err(|err| anyhow!("Failed to assemble channel transaction: {err}"))?,
+        );
         self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
             .await
     }
@@ -620,6 +646,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let keys =
             Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
 
+        // Derived from the founding committee, not a constant: a channel written
+        // with a threshold above its key count could never be reconfigured, and
+        // a one-key channel has to stay single-signer.
+        let threshold = crate::committee_discovery::channel_config_threshold(keys.len());
         let config_op = ChannelConfigOp {
             channel: self.channel_id,
             // The channel does not exist yet, so the config lineage starts here.
@@ -627,7 +657,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             keys,
             posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
             posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
-            configuration_threshold: system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
+            configuration_threshold: threshold,
             transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
         };
 
@@ -659,13 +689,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let signature = self
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-        // Creation skips the channel-config signature check, but the proof must
-        // still be well formed; index 0 is our own key.
+        // No key is accredited before creation, so the config proof must be empty.
         let config_proof =
-            ChannelMultiSigProof::try_new(IndexedSignature::new(0, signature).into())
+            ChannelMultiSigProof::try_new(Vec::new().try_into().expect("empty fits"))
                 .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
 
-        let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(config_proof).into();
+        let mut ops_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(config_proof)]);
         ops_proofs
             .try_push(OpProof::Ed25519Sig(signature))
             .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
@@ -677,7 +706,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
 
-        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        let tx = Box::new(
+            SignedOps::from_parts(mantle_tx, ops_proofs)
+                .map_err(|err| anyhow!("Failed to assemble channel transaction: {err}"))?,
+        );
         self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
             .await
     }
@@ -689,21 +721,21 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .map(|state| (state.accredited_keys.to_vec(), state.config_tip_hash)))
     }
 
+    async fn prepare_channel_config(&self, target: &ConfigTarget) -> Result<PreparedChannelConfig> {
+        let target = Box::new(target.clone());
+        self.dispatch(|resp| Command::PrepareConfig { target, resp })
+            .await
+    }
+
     async fn submit_channel_config(
         &self,
-        new_keys: Vec<Ed25519PublicKey>,
-        channel_params: ChannelParams,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
     ) -> Result<()> {
-        ensure!(
-            !new_keys.is_empty(),
-            "Refusing to submit a committee update with no accredited keys"
-        );
-        let new_keys =
-            Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
-
-        self.dispatch(|resp| Command::SubmitChannelConfig {
-            new_keys,
-            channel_params,
+        let prepared = Box::new(prepared);
+        self.dispatch(|resp| Command::SubmitConfig {
+            prepared,
+            signatures,
             resp,
         })
         .await
@@ -773,6 +805,7 @@ pub(crate) fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec
     match tx {
         ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
         ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
+        ChannelUpdateTx::PinDeposit(bundle) => entry(&bundle.inscription).into_iter().collect(),
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
             .iter()
@@ -785,13 +818,34 @@ pub(crate) fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec
 /// plain inscription. See [`PublishOutcome::released_notes`].
 fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
     match tx {
-        PendingTx::Inscription(_) => Vec::new(),
+        // A pinned deposit spends channel notes but releases none.
+        PendingTx::Inscription(_) | PendingTx::PinDeposit(_) => Vec::new(),
         PendingTx::AtomicWithdraw(bundle) => bundle
             .withdraws
             .iter()
             .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
             .collect(),
     }
+}
+
+/// Has zone-sdk build and fund the config `target` asks for.
+async fn prepare_config(
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
+    target: &ConfigTarget,
+) -> Result<PreparedChannelConfig> {
+    let keys = Keys::try_from(target.keys.clone())
+        .map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+    sequencer
+        .handle()
+        .prepare_channel_config(
+            keys,
+            SlotTimeframe::from(target.posting_timeframe),
+            SlotTimeout::from(target.posting_timeout),
+            target.configuration_threshold,
+            target.transfer_threshold,
+        )
+        .await
+        .context("Failed to prepare the channel config")
 }
 
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
@@ -866,9 +920,11 @@ pub async fn post_channel_config(
 
     let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
     // Configs chain on the channel's config tip, or the root if there is none.
-    let parent = read_channel_state(config)
+    let channel = read_channel_state(config)
         .await
-        .context("Failed to read the channel state for the config parent")?
+        .context("Failed to read the channel state for the config parent")?;
+    let parent = channel
+        .as_ref()
         .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
     let config_op = ChannelConfigOp {
         channel: config.channel_id,
@@ -896,22 +952,31 @@ pub async fn post_channel_config(
 
     // Sign the funded tx: the appended fee transfer changes the hash.
     let tx_hash = mantle_tx.hash();
-    // The admin key is `keys[0]`, hence signature index 0.
-    let signature = IndexedSignature::new(
-        0,
-        signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-    );
-    let proof = ChannelMultiSigProof::try_new(signature.into())
+    // Creating the channel takes no signature; otherwise the admin key is
+    // `keys[0]`, hence signature index 0.
+    let signatures = if channel.is_some() {
+        vec![IndexedSignature::new(
+            0,
+            signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+        )]
+    } else {
+        Vec::new()
+    };
+    let signatures = signatures
+        .try_into()
+        .map_err(|err| anyhow!("Too many channel-config signatures: {err:?}"))?;
+    let proof = ChannelMultiSigProof::try_new(signatures)
         .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
 
     // Proofs follow op order; funding appends the transfer as the last op.
-    let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(proof).into();
+    let mut ops_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
     if let Some(transfer_proof) = funded.transfer_proof {
         ops_proofs
             .try_push(transfer_proof)
             .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
     }
-    let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs);
+    let signed_tx = SignedOps::from_parts(mantle_tx, ops_proofs)
+        .map_err(|err| anyhow!("Failed to assemble channel config transaction: {err}"))?;
 
     node.post_transaction(signed_tx)
         .await
