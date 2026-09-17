@@ -150,10 +150,18 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
     let mut writers = vec![first_header];
     while writers.len() < BLOAT_WRITERS {
         let header = new_account(ctx, false, None).await?;
+        // `deploy` polls each of its own steps, but `create_header` hands back the hash
+        // and returns. Three in a row would each build on a payer nonce the previous one
+        // has not spent yet, and the sequencer rejects the later two on nonce mismatch.
+        let payer_nonce_before = get_account(ctx, payer.account_id).await?.nonce;
         ProgramLoader(ctx.wallet())
             .create_header(header, segments[0], &segments, true, Some(payer.account_id))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        wait_until(&format!("header {header} to be created"), || async {
+            Ok(get_account(ctx, payer.account_id).await?.nonce != payer_nonce_before)
+        })
+        .await?;
         writers.push(header);
     }
 
