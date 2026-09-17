@@ -438,9 +438,7 @@ impl AccountManager {
         self.states
             .iter()
             .map(|state| match state {
-                State::Public { .. } | State::PublicKeycard { .. } => {
-                    InputAccountIdentity::Public
-                }
+                State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) => InputAccountIdentity::Private(PrivateWitness {
                     vpk: pre.vpk.clone(),
                     random_seed: pre.random_seed,
