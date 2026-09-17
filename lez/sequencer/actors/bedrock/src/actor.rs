@@ -1,5 +1,8 @@
+use std::time::Duration;
+
+use anyhow::anyhow;
 use common::block::Block;
-use futures::{StreamExt as _, future::OptionFuture};
+use futures::{Stream, StreamExt as _, TryStreamExt, future::OptionFuture};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -8,14 +11,15 @@ use kameo::{
 };
 use kameo_actors::broker::Broker;
 use log::warn;
-use logos_blockchain_common_http_client::BasicAuthCredentials;
+use logos_blockchain_common_http_client::{BasicAuthCredentials, ProcessedBlockEvent};
 use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient,
-    adapter::{Node as _, NodeHttpClient},
+    CommonHttpClient, ZoneMessage,
+    adapter::{BoxStream, Node as _, NodeHttpClient},
     node_types::Inscription,
     sequencer::{ChannelUpdateTx, InscriptionInfo, PendingTx},
 };
+use sequencer_actors_common::SendErrorExt as _;
 use tokio::select;
 use url::Url;
 
@@ -25,10 +29,10 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys,
+        AccreditedKeys, BlockData, ChangeChannelConfig, ChannelEvent, ChannelEventKind, ChannelId,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, FinalizedBlock, GetAccreditedKeys,
         GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher, MsgId, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        PublishOutcome, ReadChannel, Slot,
     },
 };
 
@@ -46,11 +50,16 @@ mod tests;
 /// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
 ///
 /// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - `channel/<channel_id>/update`: for [`ChannelEvent::Update`]
-/// - `channel/<channel_id>/turn`: for [`ChannelEvent::Turn`]
+/// - `channel/<channel_id>/finalized_block`: for [`ChannelEvent::FinalizedBlock`].
+/// - If publisher was initialized with [`InitializeChannelPublisher`]:
+///   - `channel/<channel_id>/publisher/update`: for
+///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)
+///   - `channel/<channel_id>/publisher/turn`: for
+///     [`PublisherEvent::Turn`](crate::protocol::PublisherEvent::Turn)
 pub struct BedrockActor {
     channel_id: ChannelId,
     node: NodeHttpClient,
+    node_stream: BoxStream<Result<ZoneMessage>>,
     /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
@@ -58,19 +67,140 @@ pub struct BedrockActor {
 
 impl BedrockActor {
     #[must_use]
-    pub fn new(
+    pub async fn new(
         node_url: Url,
         basic_auth: Option<BasicAuthCredentials>,
         channel_id: ChannelId,
+        stream_from: Option<Slot>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), node_url);
 
-        Self {
+        Ok(Self {
             channel_id,
+            node_stream: Box::pin(Self::node_stream(node.clone(), stream_from, channel_id).await?),
             node,
             publisher: None,
             broker_ref,
+        })
+    }
+
+    async fn node_stream(
+        node: NodeHttpClient,
+        stream_from: Option<Slot>,
+        channel_id: ChannelId,
+    ) -> Result<impl Stream<Item = Result<ZoneMessage>>> {
+        const BATCH_SIZE: Slot = Slot::new(100);
+        const STREAM_ATTEMPT_LIMIT: usize = 5;
+        const STREAM_RETRY_TIMEOUT: Duration = Duration::from_millis(100);
+
+        let lib_slot = node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .lib_slot;
+
+        let stream = node
+            .block_stream()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+
+        struct StreamState {
+            last_processed_slot: Option<Slot>,
+            last_known_lib_slot: Slot,
+            real_time_stream: BoxStream<ProcessedBlockEvent>,
+        }
+
+        let initial_state = StreamState {
+            last_processed_slot: stream_from,
+            last_known_lib_slot: lib_slot,
+            real_time_stream: stream,
+        };
+
+        let stream = futures::stream::try_unfold(initial_state, move |mut stream_state| {
+            let node = node.clone();
+            async move {
+                // Fetch new lib_slot if needed
+                while stream_state
+                    .last_processed_slot
+                    .map_or(true, |slot| slot >= stream_state.last_known_lib_slot)
+                {
+                    let mut attempt_count = 0;
+                    let block_event = loop {
+                        if let Some(block_event) = stream_state.real_time_stream.next().await {
+                            break block_event;
+                        };
+                        attempt_count += 1;
+                        if attempt_count < STREAM_ATTEMPT_LIMIT {
+                            tokio::time::sleep(STREAM_RETRY_TIMEOUT).await;
+
+                            stream_state.real_time_stream = node
+                                .block_stream()
+                                .await
+                                .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+                        } else {
+                            return Err(Error::NodeRequestFailed(anyhow!(
+                                "Stream attempt limit reached"
+                            )));
+                        }
+                    };
+                    stream_state.last_known_lib_slot =
+                        stream_state.last_known_lib_slot.max(block_event.lib_slot);
+                }
+
+                // Backfilling from last processed slot
+                let start_slot = stream_state
+                    .last_processed_slot
+                    .map_or_else(Slot::genesis, |slot| slot.strict_add(1.into()));
+                let end_slot = (Slot::from(
+                    start_slot
+                        .into_inner()
+                        .saturating_add(BATCH_SIZE.into_inner()),
+                ))
+                .min(stream_state.last_known_lib_slot);
+
+                let backfill_stream = node
+                    .zone_messages_in_blocks(start_slot, end_slot, channel_id)
+                    .await
+                    .map_err(|err| Error::NodeRequestFailed(err.into()))?
+                    .map(|(block, _slot)| Ok(block));
+
+                stream_state.last_processed_slot = Some(end_slot);
+                Ok(Some((backfill_stream.boxed(), stream_state)))
+            }
+        })
+        .try_flatten();
+
+        Ok(stream)
+    }
+
+    async fn on_node_stream_message(&mut self, msg: ZoneMessage) -> Result<()> {
+        match msg {
+            ZoneMessage::Block(zone_block) => {
+                let block = match borsh::from_slice::<Block>(&zone_block.data) {
+                    Ok(block) => BlockData::Block(block),
+                    Err(_) => BlockData::Undecodable(zone_block.data.into()),
+                };
+
+                self.broker_ref
+                    .tell(kameo_actors::broker::Publish {
+                        topic: format!("channel/{}/finalized_block", self.channel_id),
+                        message: ChannelEvent {
+                            channel_id: self.channel_id,
+                            event: ChannelEventKind::FinalizedBlock(FinalizedBlock {
+                                block,
+                                msg_id: zone_block.id,
+                            }),
+                        },
+                    })
+                    .await
+                    .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
+            }
+            ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => {
+                // Not used anywhere for now
+                Ok(())
+            }
         }
     }
 
@@ -106,6 +236,9 @@ impl Actor for BedrockActor {
         )]
         loop {
             select! {
+                Some(res) = self.node_stream.next() => {
+                    self.on_node_stream_message(res?).await?;
+                }
                 Some(res) = OptionFuture::from(self.publisher.as_mut().map(|writer| writer.step(
                     self.channel_id,
                     &self.broker_ref,
@@ -321,6 +454,7 @@ impl Message<GetChannelTipMessageId> for BedrockActor {
     }
 }
 
+// TODO: Remove when cross zones become actor(-s)
 impl Message<ReadChannel> for BedrockActor {
     type Reply = Result<BoxStream<(ZoneMessage, Slot)>>;
 

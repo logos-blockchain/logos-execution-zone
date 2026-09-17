@@ -6,6 +6,7 @@ pub use logos_blockchain_core::{codec::DeserializeOp, mantle::NoteId};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 pub use logos_blockchain_zone_sdk::{
     Ed25519PublicKey, Slot, ZoneMessage,
+    adapter::BoxStream,
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
         DepositInfo, SequencerCheckpoint as Checkpoint, SequencerCheckpoint, WithdrawArg,
@@ -15,16 +16,51 @@ pub use logos_blockchain_zone_sdk::{
 pub use sequencer_stake_core::ChannelParams;
 use sharding_pool_actor::ShardingKey;
 
-/// A boxed, pinned, Send stream.
-pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
-
-/// Event happened on configured chain.
+/// Event happened on configured chain and published to the broker.
 #[derive(Debug, Clone)]
-pub enum ChannelEvent {
+pub struct ChannelEvent {
+    pub channel_id: ChannelId,
+    pub event: ChannelEventKind,
+}
+
+/// Concrete kinds of events that can happen on a channel.
+#[derive(Debug, Clone)]
+pub enum ChannelEventKind {
+    /// A block that has been finalized on chain since configured `stream_from` arriving to
+    /// `channel/<channel_id>/finalized_block` topic.
+    FinalizedBlock(FinalizedBlock),
+
+    /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
+    /// topics.
+    Publisher(PublisherEvent),
+}
+
+#[derive(Debug, Clone)]
+pub struct FinalizedBlock {
+    pub block: BlockData,
+    pub msg_id: MsgId,
+}
+
+#[derive(Debug, Clone)]
+pub enum BlockData {
+    /// Successfully decoded block.
+    Block(Block),
+    /// Raw bytes of a block that could not be decoded.
+    Undecodable(Vec<u8>),
+}
+
+/// Events related to the channel publisher, published to the broker.
+///
+/// Will arrive only if [`InitializeChannelPublisher`] has been successfully handled.
+#[derive(Debug, Clone)]
+pub enum PublisherEvent {
+    /// Message arriving to `channel/<channel_id>/publisher/update` topic.
     Update(Box<ChannelUpdate>),
 
+    /// Message arriving to `channel/<channel_id>/publisher/turn` topic.
     Turn { our_turn_to_write: bool },
 }
+
 /// Everything one channel update carries.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {

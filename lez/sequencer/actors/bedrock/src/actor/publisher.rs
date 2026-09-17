@@ -36,8 +36,8 @@ use crate::{
     actor::{block_from_inscription, channel_blocks, released_notes},
     error::Error,
     protocol::{
-        ChannelEvent, ChannelId, ChannelUpdate, Ed25519Key, MsgId, PublishOutcome, WithdrawArg,
-        ZkPublicKey,
+        ChannelEvent, ChannelEventKind, ChannelId, ChannelUpdate, Ed25519Key, MsgId,
+        PublishOutcome, PublisherEvent, WithdrawArg, ZkPublicKey,
     },
 };
 
@@ -171,16 +171,21 @@ impl Publisher {
 
                 broker_ref
                     .tell(kameo_actors::broker::Publish {
-                        topic: format!("channel/{channel_id}/update"),
-                        message: ChannelEvent::Update(Box::new(ChannelUpdate {
-                            checkpoint,
-                            adopted,
-                            orphaned,
-                            finalized: finalized_blocks,
-                            deposits,
-                            withdrawals,
-                            undecodable,
-                        })),
+                        topic: format!("channel/{channel_id}/publisher/update"),
+                        message: ChannelEvent {
+                            channel_id,
+                            event: ChannelEventKind::Publisher(PublisherEvent::Update(Box::new(
+                                ChannelUpdate {
+                                    checkpoint,
+                                    adopted,
+                                    orphaned,
+                                    finalized: finalized_blocks,
+                                    deposits,
+                                    withdrawals,
+                                    undecodable,
+                                },
+                            ))),
+                        },
                     })
                     .await
                     .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
@@ -197,9 +202,12 @@ impl Publisher {
 
                 broker_ref
                     .tell(kameo_actors::broker::Publish {
-                        topic: format!("channel/{channel_id}/turn",),
-                        message: ChannelEvent::Turn {
-                            our_turn_to_write: notification.our_turn_to_write,
+                        topic: format!("channel/{channel_id}/publisher/turn"),
+                        message: ChannelEvent {
+                            channel_id,
+                            event: ChannelEventKind::Publisher(PublisherEvent::Turn {
+                                our_turn_to_write: notification.our_turn_to_write,
+                            }),
                         },
                     })
                     .await
