@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kameo::{
     Actor,
-    actor::ActorRef,
+    actor::{ActorRef, WeakRecipient},
     message::{Context, Message},
 };
 use log::{debug, warn};
@@ -23,8 +23,8 @@ use tokio::sync::mpsc;
 use crate::{
     error::Error,
     protocol::{
-        Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, SetPublisher, Signature,
-        Submission, Wire,
+        Action, ChannelView, ConfigTarget, Draft, FundedTx, Propose, Reset, SetPublisher,
+        SetSubmitter, Signature, Submission, SubmitConfig, Wire,
     },
 };
 
@@ -53,6 +53,8 @@ pub struct ChannelConfigActor {
     /// transaction, and a restart funds a different one.
     draft: Option<OwnDraft>,
     publisher: Option<mpsc::Sender<Wire>>,
+    /// Sent the draft once it has its signatures.
+    submitter: Option<WeakRecipient<SubmitConfig>>,
 }
 
 impl ChannelConfigActor {
@@ -66,6 +68,7 @@ impl ChannelConfigActor {
             view: None,
             draft: None,
             publisher: None,
+            submitter: None,
         }
     }
 
@@ -75,6 +78,17 @@ impl ChannelConfigActor {
             && publisher.try_send(outbound).is_err()
         {
             debug!("Dropped an outbound channel-config message");
+        }
+    }
+
+    /// Hands the core a draft to submit; the next turn submits what a dropped
+    /// send would have.
+    fn send_submission(&self, submission: Box<Submission>) {
+        let Some(submitter) = self.submitter.as_ref().and_then(WeakRecipient::upgrade) else {
+            return;
+        };
+        if let Err(err) = submitter.tell(SubmitConfig(submission)).try_send() {
+            debug!("Dropped a signed channel config: {err}");
         }
     }
 
@@ -171,6 +185,7 @@ impl ChannelConfigActor {
         let Some(view) = &self.view else {
             return;
         };
+        let required = usize::from(view.required_signatures);
         let Some(draft) = &mut self.draft else {
             return;
         };
@@ -190,7 +205,16 @@ impl ChannelConfigActor {
             return;
         }
 
+        // On crossing the threshold, not on standing above it: a further
+        // signature changes nothing.
+        let was_short = draft.signatures.len() < required;
         draft.signatures.insert(index, msg.signature.signature);
+        if was_short
+            && draft.signatures.len() >= required
+            && let Action::Submit(submission) = self.next_action()
+        {
+            self.send_submission(submission);
+        }
     }
 }
 
@@ -310,6 +334,26 @@ impl Message<SetPublisher> for ChannelConfigActor {
     }
 }
 
+impl Message<SetSubmitter> for ChannelConfigActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SetSubmitter(submitter): SetSubmitter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.submitter = Some(submitter);
+    }
+}
+
+impl Message<Reset> for ChannelConfigActor {
+    type Reply = ();
+
+    async fn handle(&mut self, Reset: Reset, _ctx: &mut Context<Self, Self::Reply>) {
+        self.draft = None;
+    }
+}
+
 /// The channel config a transaction would install.
 ///
 /// A signature covers the whole transaction, and the same signatures satisfy
@@ -380,6 +424,30 @@ mod tests {
     /// A four-node committee: Bedrock asks three signatures of the next config.
     const COMMITTEE: [[u8; 32]; 4] = [[1; 32], [2; 32], [3; 32], [4; 32]];
 
+    /// Stands in for the core, the only thing that can actually submit.
+    struct SubmitSink(mpsc::UnboundedSender<Submission>);
+
+    impl Actor for SubmitSink {
+        type Args = Self;
+        type Error = Error;
+
+        async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Error> {
+            Ok(args)
+        }
+    }
+
+    impl Message<SubmitConfig> for SubmitSink {
+        type Reply = ();
+
+        async fn handle(
+            &mut self,
+            SubmitConfig(submission): SubmitConfig,
+            _ctx: &mut Context<Self, Self::Reply>,
+        ) {
+            let _dontcare = self.0.send(*submission);
+        }
+    }
+
     fn key(secret: [u8; 32]) -> Ed25519Key {
         Ed25519Key::from_bytes(&secret)
     }
@@ -442,6 +510,48 @@ mod tests {
             .expect("the actor should accept a publisher");
 
         rx
+    }
+
+    /// `PEER_SECRET`'s signature over `tx`, at its index in the live list.
+    async fn peer_signs(actor: &ActorRef<ChannelConfigActor>, tx: &Ops) {
+        let signature = key(PEER_SECRET).sign_payload(tx.hash().as_signing_bytes().as_ref());
+        actor
+            .tell(Signature {
+                tx_hash: tx.hash().0,
+                signature: IndexedSignature::new(1, signature),
+            })
+            .await
+            .expect("the actor should accept a signature");
+    }
+
+    /// The sink comes back too: the actor holds only a weak reference to it.
+    async fn submitter(
+        actor: &ActorRef<ChannelConfigActor>,
+    ) -> (ActorRef<SubmitSink>, mpsc::UnboundedReceiver<Submission>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let sink = SubmitSink::spawn(SubmitSink(tx));
+        actor
+            .tell(SetSubmitter(sink.clone().recipient().downgrade()))
+            .await
+            .expect("the actor should accept a submitter");
+
+        (sink, rx)
+    }
+
+    /// The submission the actor sent, if any; it crosses a second mailbox, so
+    /// this waits for it.
+    async fn submitted(wakes: &mut mpsc::UnboundedReceiver<Submission>) -> Option<Submission> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), wakes.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Whether the actor stays quiet, which only a wait can tell.
+    async fn stays_quiet(wakes: &mut mpsc::UnboundedReceiver<Submission>) -> bool {
+        tokio::time::timeout(std::time::Duration::from_millis(200), wakes.recv())
+            .await
+            .is_err()
     }
 
     async fn hold(actor: &ActorRef<ChannelConfigActor>, tx: Ops) {
@@ -739,6 +849,115 @@ mod tests {
             .map(|indexed| indexed.channel_key_index)
             .collect();
         assert_eq!(indices, vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn the_signature_that_meets_the_threshold_wakes_the_submitter() {
+        let actor = actor(OWN_SECRET);
+        tell_view(&actor, view(Some(target()))).await;
+        let (_sink, mut wakes) = submitter(&actor).await;
+        let tx = draft_tx(&target());
+        hold(&actor, tx.clone()).await;
+
+        // Our own signature is one of two, so there is nothing to submit yet.
+        assert!(stays_quiet(&mut wakes).await);
+
+        peer_signs(&actor, &tx).await;
+
+        let submission = submitted(&mut wakes)
+            .await
+            .expect("the draft has its threshold and must not wait for a turn");
+        assert_eq!(submission.tx_hash, tx.hash().0);
+        let indices: Vec<u16> = submission
+            .signatures
+            .iter()
+            .map(|indexed| indexed.channel_key_index)
+            .collect();
+        assert_eq!(indices, vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn a_signature_short_of_the_threshold_does_not_wake_the_submitter() {
+        // Three of four, so our own plus one peer is still short.
+        let actor = actor(COMMITTEE[0]);
+        tell_view(&actor, committee_view()).await;
+        let (_sink, mut wakes) = submitter(&actor).await;
+        let tx = draft_tx(&committee_target());
+        actor
+            .tell(FundedTx {
+                target: Box::new(committee_target()),
+                tx: Box::new(tx.clone()),
+                accredited_keys: committee_keys(),
+                signing_threshold: 3,
+            })
+            .await
+            .expect("the actor should accept a draft");
+
+        let signature = key(COMMITTEE[1]).sign_payload(tx.hash().as_signing_bytes().as_ref());
+        actor
+            .tell(Signature {
+                tx_hash: tx.hash().0,
+                signature: IndexedSignature::new(1, signature),
+            })
+            .await
+            .expect("the actor should accept a signature");
+
+        assert!(stays_quiet(&mut wakes).await);
+    }
+
+    #[tokio::test]
+    async fn a_signature_past_the_threshold_does_not_wake_the_submitter_again() {
+        let actor = actor(COMMITTEE[0]);
+        tell_view(&actor, committee_view()).await;
+        let (_sink, mut wakes) = submitter(&actor).await;
+        let tx = draft_tx(&committee_target());
+        actor
+            .tell(FundedTx {
+                target: Box::new(committee_target()),
+                tx: Box::new(tx.clone()),
+                accredited_keys: committee_keys(),
+                signing_threshold: 3,
+            })
+            .await
+            .expect("the actor should accept a draft");
+
+        // Ours plus two peers is the threshold; the fourth key is spare.
+        for (index, secret) in [(1_u16, COMMITTEE[1]), (2, COMMITTEE[2]), (3, COMMITTEE[3])] {
+            let signature = key(secret).sign_payload(tx.hash().as_signing_bytes().as_ref());
+            actor
+                .tell(Signature {
+                    tx_hash: tx.hash().0,
+                    signature: IndexedSignature::new(index, signature),
+                })
+                .await
+                .expect("the actor should accept a signature");
+        }
+
+        assert!(
+            submitted(&mut wakes).await.is_some(),
+            "the threshold was crossed"
+        );
+        assert!(
+            stays_quiet(&mut wakes).await,
+            "the spare signature changes nothing and must not wake it again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reset_draft_is_funded_again() {
+        let actor = actor(OWN_SECRET);
+        tell_view(&actor, view(Some(target()))).await;
+        let tx = draft_tx(&target());
+        hold(&actor, tx.clone()).await;
+        peer_signs(&actor, &tx).await;
+
+        actor.tell(Reset).await.expect("the actor should reset");
+
+        let action = actor.ask(Propose).await.expect("a reply");
+        assert!(
+            matches!(action, Action::Build(_)),
+            "the signatures covered a transaction the core has given up on"
+        );
     }
 
     #[tokio::test]

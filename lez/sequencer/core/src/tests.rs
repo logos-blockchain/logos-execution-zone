@@ -181,20 +181,23 @@ fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
 }
 
 #[test]
-fn committee_cooldown_needs_the_channel_to_advance() {
+fn a_config_is_given_up_on_only_once_the_channel_has_moved_past_it() {
     type Core = SequencerCoreWithMockClients<StorageActor>;
-    let cooldown = Core::COMMITTEE_SUBMISSION_COOLDOWN;
+    let deadline = Core::CONFIG_LANDING_DEADLINE;
     let submitted_at = Slot::new(100);
 
-    assert!(Core::committee_cooldown_elapsed(None, None));
-    assert!(!Core::committee_cooldown_elapsed(Some(submitted_at), None));
-    assert!(!Core::committee_cooldown_elapsed(
+    // Neither an unknown submission slot nor an unreadable tip is evidence
+    // that the config will not land.
+    assert!(!Core::landing_deadline_passed(None, Some(Slot::new(1_000))));
+    assert!(!Core::landing_deadline_passed(Some(submitted_at), None));
+
+    assert!(!Core::landing_deadline_passed(
         Some(submitted_at),
-        Some(Slot::new(100 + cooldown - 1))
+        Some(Slot::new(100 + deadline - 1))
     ));
-    assert!(Core::committee_cooldown_elapsed(
+    assert!(Core::landing_deadline_passed(
         Some(submitted_at),
-        Some(Slot::new(100 + cooldown))
+        Some(Slot::new(100 + deadline))
     ));
 }
 

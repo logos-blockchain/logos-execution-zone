@@ -98,6 +98,17 @@ pub struct Signature {
 /// gossip is up, or when it is off.
 pub struct SetPublisher(pub tokio::sync::mpsc::Sender<Wire>);
 
+/// The draft has the signatures it needs; submit it. A config carries no
+/// inscription, so this waits for no turn.
+pub struct SubmitConfig(pub Box<Submission>);
+
+/// Where this node sends a draft that is ready to go out. Weak, because the
+/// holder of the draft owns this actor.
+pub struct SetSubmitter(pub kameo::actor::WeakRecipient<SubmitConfig>);
+
+/// Drops the draft this node holds, for a core that has given up on it.
+pub struct Reset;
+
 /// The two message shapes the channel-config topic carries, either way.
 #[derive(Clone, Debug)]
 pub enum Wire {

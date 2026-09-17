@@ -32,7 +32,7 @@ use logos_blockchain_zone_sdk::{
 use mempool::{MemPool, MemPoolHandle};
 use num_bigint::BigUint;
 use sequencer_channel_config_actor as channel_config;
-pub use sequencer_channel_config_actor::ChannelConfigActor;
+pub use sequencer_channel_config_actor::{ChannelConfigActor, SubmitConfig};
 use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -182,8 +182,6 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
     watchers: TaskGroup,
-    /// Channel tip slot as of the last committee-config submission.
-    last_committee_submission_slot: Option<Slot>,
     /// Records offending inscriptions and proposes the slashes for them.
     slasher: ActorRef<SlasherActor<S>>,
     /// The committee the gossip mesh screens inbound slash approvals against.
@@ -197,15 +195,29 @@ pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdk
     config_manager: ActorRef<ChannelConfigActor>,
     /// The config draft zone-sdk last funded for us, submitted once its
     /// signatures are in.
-    config_draft: Option<logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig>,
+    config_draft: Option<ConfigDraft>,
+}
+
+/// A funded channel config, from the moment zone-sdk funds it to the moment it
+/// lands or is given up on.
+///
+/// The fee note funding it is reserved only for a while, so a draft is
+/// disposable.
+struct ConfigDraft {
+    prepared: logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig,
+    /// Submitted once; zone-sdk re-posts it from there on.
+    submitted: bool,
+    /// Channel slot the submission went out at, which starts the clock on
+    /// [`SequencerCore::CONFIG_LANDING_DEADLINE`].
+    submitted_at: Option<Slot>,
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     const CHANNEL_PROBE_RETRIES: usize = 29;
     const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
-    /// Channel slots between committee-config submissions; a margin over
-    /// observed Bedrock confirmation lag.
-    const COMMITTEE_SUBMISSION_COOLDOWN: SlotCount = 10;
+    /// Channel slots a submitted config gets to land before this node funds
+    /// another; a margin over observed Bedrock confirmation lag.
+    const CONFIG_LANDING_DEADLINE: SlotCount = 30;
 
     /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
     /// final snapshot (pre-genesis state when absent), the head tier by replaying
@@ -544,7 +556,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             sequencer_config: config,
             block_publisher,
             watchers,
-            last_committee_submission_slot: None,
             slasher,
             accredited_keys_tx,
             staked_keys_tx,
@@ -848,6 +859,17 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
+        // A draft still short of signatures a full rotation after funding has
+        // outlived its fee-note reservation, which the block below may spend.
+        if self
+            .config_draft
+            .as_ref()
+            .is_some_and(|draft| !draft.submitted)
+        {
+            warn!("A channel-config draft went a full turn unsigned; funding another");
+            self.discard_config_draft().await;
+        }
+
         let live_committee = self.live_accredited_sequencer_keys().await;
 
         let BlockWithMeta {
@@ -952,16 +974,16 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         }
     }
 
-    /// Whether the channel has advanced far enough past `last_submission` to
-    /// submit again. A missing tip counts as no advance.
-    fn committee_cooldown_elapsed(last_submission: Option<Slot>, tip: Option<Slot>) -> bool {
-        let Some(last_submission) = last_submission else {
-            return true;
+    /// Whether the channel has advanced far enough past `submitted_at` to call
+    /// a submitted config lost. A missing tip or submission slot counts as no
+    /// advance.
+    fn landing_deadline_passed(submitted_at: Option<Slot>, tip: Option<Slot>) -> bool {
+        let Some(submitted_at) = submitted_at else {
+            return false;
         };
         tip.is_some_and(|tip| {
-            tip.into_inner()
-                .saturating_sub(last_submission.into_inner())
-                >= Self::COMMITTEE_SUBMISSION_COOLDOWN
+            tip.into_inner().saturating_sub(submitted_at.into_inner())
+                >= Self::CONFIG_LANDING_DEADLINE
         })
     }
 
@@ -977,6 +999,10 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let target = match action {
             channel_config::Action::Idle => return,
             channel_config::Action::Submit(submission) => {
+                info!(
+                    "Channel-config draft {} was found complete on our turn",
+                    hex::encode(submission.tx_hash)
+                );
                 return self.submit_config(*submission).await;
             }
             channel_config::Action::Build(target) => target,
@@ -997,42 +1023,103 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             accredited_keys: prepared.accredited_keys.clone(),
             signing_threshold: prepared.signing_threshold,
         };
-        self.config_draft = Some(prepared);
+        self.config_draft = Some(ConfigDraft {
+            prepared,
+            submitted: false,
+            submitted_at: None,
+        });
         // Answers as `Propose` would, so a single-signer channel is already
         // over its threshold on our own signature and lands this turn.
         match self.config_manager.ask(message).await {
-            Ok(channel_config::Action::Submit(submission)) => self.submit_config(*submission).await,
+            Ok(channel_config::Action::Submit(submission)) => {
+                info!(
+                    "Channel-config draft {} needs only our own signature",
+                    hex::encode(submission.tx_hash)
+                );
+                self.submit_config(*submission).await;
+            }
             Ok(_) => {}
             Err(err) => warn!("The channel-config actor is gone; dropping the draft: {err}"),
         }
     }
 
+    /// Submits the draft the signatures were collected over, once; zone-sdk
+    /// re-posts it from there. A later call only asks whether it has landed,
+    /// and discards it past the deadline.
     async fn submit_config(&mut self, submission: channel_config::Submission) {
-        let Some(prepared) = self.config_draft.as_ref().filter(|prepared| {
-            logos_blockchain_core::mantle::traits::Hashable::hash(prepared.tx()).0
+        let Some(draft) = self.config_draft.as_ref().filter(|draft| {
+            logos_blockchain_core::mantle::traits::Hashable::hash(draft.prepared.tx()).0
                 == submission.tx_hash
         }) else {
-            warn!("No funded channel-config draft matches the signatures; dropping them");
+            // The turn this raced funded a draft of its own.
+            debug!("No funded channel-config draft matches the signatures; dropping them");
             return;
         };
+        let submitted = draft.submitted;
+        let prepared = draft.prepared.clone();
+
+        // Only the deadline needs the slot, so an unreadable tip delays that
+        // rather than the submission.
         let tip_slot = match self.block_publisher.channel_tip_slot().await {
             Ok(tip_slot) => tip_slot,
             Err(err) => {
-                warn!("Failed to read channel tip slot; skipping committee update: {err:#}");
-                return;
+                warn!("Failed to read the channel tip slot: {err:#}");
+                None
             }
         };
-        if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
+
+        if submitted {
+            let Some(in_flight) = self.config_draft.as_mut() else {
+                return;
+            };
+            // A submission whose slot went unread starts the clock late rather
+            // than never.
+            in_flight.submitted_at = in_flight.submitted_at.or(tip_slot);
+            if Self::landing_deadline_passed(in_flight.submitted_at, tip_slot) {
+                warn!(
+                    "Channel-config draft {} has not landed in {} channel slots; funding another",
+                    hex::encode(submission.tx_hash),
+                    Self::CONFIG_LANDING_DEADLINE,
+                );
+                self.discard_config_draft().await;
+            }
             return;
         }
-        self.last_committee_submission_slot = tip_slot;
+
         if let Err(err) = self
             .block_publisher
-            .submit_channel_config(prepared.clone(), submission.signatures)
+            .submit_channel_config(prepared, submission.signatures)
             .await
         {
+            // Left unsubmitted: zone-sdk never took it, so the next signature
+            // or turn submits it again.
             warn!("Failed to submit the committee channel-config update: {err:#}");
+            return;
         }
+        if let Some(in_flight) = self.config_draft.as_mut() {
+            in_flight.submitted = true;
+            in_flight.submitted_at = tip_slot;
+        }
+    }
+
+    /// Drops the funded draft on both sides, so the next turn funds a fresh
+    /// one. The signatures go with it: funding again changes the hash they
+    /// cover.
+    async fn discard_config_draft(&mut self) {
+        self.config_draft = None;
+        if let Err(err) = self.config_manager.tell(channel_config::Reset).await {
+            warn!("Failed to reset the channel-config actor: {err}");
+        }
+    }
+
+    /// Submits a draft the actor reports signed, turn or not: a config carries
+    /// no inscription, so the channel does not gate it.
+    pub async fn submit_signed_config(&mut self, submission: channel_config::Submission) {
+        info!(
+            "Channel-config draft {} was completed by a peer; it needs no turn",
+            hex::encode(submission.tx_hash)
+        );
+        self.submit_config(submission).await;
     }
 
     /// Applies our own freshly-published block to the head with the [`MsgId`] the
