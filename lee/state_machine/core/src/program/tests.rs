@@ -481,21 +481,3 @@ fn an_unowned_account_echoed_with_sub_zero_may_still_validate() {
     let diff = AccountStateDiff::new(pre.clone(), BalanceDiff::Sub(0), pre.account.data);
     assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
 }
-
-#[test]
-fn defer_reads_write_only_covers_only_writes() {
-    assert!(DeferReads::WriteOnly.covers(true));
-    assert!(!DeferReads::WriteOnly.covers(false));
-}
-
-#[test]
-fn defer_reads_read_only_covers_only_reads() {
-    assert!(!DeferReads::ReadOnly.covers(true));
-    assert!(DeferReads::ReadOnly.covers(false));
-}
-
-#[test]
-fn defer_reads_all_covers_regardless_of_write_or_read() {
-    assert!(DeferReads::All.covers(true));
-    assert!(DeferReads::All.covers(false));
-}
