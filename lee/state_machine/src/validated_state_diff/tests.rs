@@ -760,3 +760,73 @@ fn incremental_update_cycles_are_charged_against_the_same_budget() {
 
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == margin));
 }
+
+/// The two tests above only ever exercise a single `Incremental::Update` call (`Initialize`
+/// produces one diff). `Transfer` produces two — a sender diff and a receiver diff, each
+/// resolved by its own `Update` call inside the same `.map()` over one `Execute` call's diffs
+/// (`validated_state_diff/mod.rs`'s `resolve_diff` loop). This confirms the second `Update` sees
+/// the cost already spent by the first, rather than a fresh budget per diff: sized to cover
+/// `Execute` plus the sender's `Update` plus a small margin, it must run out of gas exactly when
+/// attempting the receiver's `Update`, with only the margin left.
+#[test]
+fn incremental_update_cycles_accumulate_across_diffs_in_the_same_call() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let sender = AccountId::new([1; 32]);
+    let receiver = AccountId::new([2; 32]);
+    let amount = 30;
+
+    let mut state = V03State::new().with_test_programs();
+    initialize_stripped_token_account(&mut state, program_id, sender, 100, 1);
+
+    // `Execute` alone, measured directly. Uses the same real (post-`Initialize`) pre-states the
+    // actual transaction below will see — `Transfer` never decodes either account's data, but
+    // the data still gets serialized into the guest's input, so its size affects cycle count.
+    let real_pre_states = vec![
+        AccountWithMetadata::new(state.get_account_by_id(sender), false, sender),
+        AccountWithMetadata::new(state.get_account_by_id(receiver), false, receiver),
+    ];
+    let instruction = StrippedTokenInstruction::Transfer { amount };
+    let instruction_data = borsh::to_vec(&instruction).unwrap();
+    let (_, execute_cycles) = program
+        .execute(
+            program_id,
+            None,
+            &real_pre_states,
+            &instruction_data,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("Execute alone fits comfortably under the default budget");
+
+    // The sender's `Update` alone, measured directly, against its real (post-`Initialize`)
+    // balance so the guest's balance check actually succeeds.
+    let sender_pre_state =
+        AccountWithMetadata::new(state.get_account_by_id(sender), false, sender);
+    let sender_post_data: lee_core::account::Data = borsh::to_vec(&TokenDiff::Sub(amount))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let (_, sender_update_cycles) = program
+        .execute_incremental(
+            program_id,
+            None,
+            &sender_pre_state,
+            &sender_post_data,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .expect("sender's Incremental resolution alone fits comfortably under the default budget");
+
+    // Enough for Execute plus the sender's Update plus a small margin — nowhere near enough for
+    // the receiver's Update, a second full guest invocation, to also fit.
+    let margin = 10;
+    let budget = execute_cycles + sender_update_cycles + margin;
+
+    let message =
+        Message::try_new(program_id, vec![sender, receiver], vec![], instruction).unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+    let result =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 2, 0, budget);
+
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == margin));
+}

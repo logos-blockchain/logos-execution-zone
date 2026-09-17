@@ -336,10 +336,13 @@ pub fn execute_and_prove_with_padded_inputs(
             // outcome). A program without `Incremental` responds `UnsupportedCallKind`; the diff
             // then applies verbatim.
             let resolved_diff = if let Some(post_data) = &diff.post_data {
+                // Unlike `Probe`, `Update` is never caller-gated by any program (whitelisting
+                // belongs at `Execute` time, before a proof is even generated) — so the real
+                // caller is withheld here rather than leaking who invoked this resolution.
                 let update_receipt = execute_and_prove_incremental(
                     program,
                     chained_call.program_account_id,
-                    caller_account_id,
+                    None,
                     pre,
                     &IncrementalCall::Update(post_data.as_ref().to_vec()),
                 )?;

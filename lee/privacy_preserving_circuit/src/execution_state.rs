@@ -427,9 +427,11 @@ impl ExecutionState {
             // continuity, and if this write ends up `Bound`, it's the literal final data. A
             // read has nothing to resolve: `post` is just the diff's own (unchanged) value.
             let resolved_diff = if is_write {
+                // `Update` is proven with no caller (see `execute_and_prove_incremental`'s call
+                // site) — withheld rather than leaking who invoked this resolution.
                 verify_update_receipt(
                     program_account_id,
-                    caller.account_id,
+                    None,
                     state_diff,
                     image_id_by_account_id,
                     program_outputs_iter,
