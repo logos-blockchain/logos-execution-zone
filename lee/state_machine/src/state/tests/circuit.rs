@@ -1772,9 +1772,11 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
 
 /// Mirrors the public path's `program_should_fail_if_it_drops_a_declared_account`:
 /// `dropped_account` is fed two public `pre_states` but reports only one `AccountStateDiff`,
-/// silently dropping the second. `initial_pre_states` catches this — the circuit checks the
+/// silently dropping the second. `initial_pre_states` catches this: the circuit checks the
 /// dropped account against what the top-level call was actually invoked with, so a valid proof
-/// can no longer be produced.
+/// can no longer be produced. Note that `initial_pre_states` is prover-supplied and uncommitted,
+/// so this pins an honest prover's own declaration rather than defeating a dishonest one; see
+/// the field's own documentation.
 #[test]
 fn dropped_public_account_through_the_privacy_circuit_is_caught() {
     let program = crate::test_methods::dropped_account();

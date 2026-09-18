@@ -40,8 +40,15 @@ pub struct PrivacyPreservingCircuitInput {
     /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
     pub ciphertext_padding: Option<u32>,
     /// `account_id`s the top-level call was invoked with. Every one must still appear somewhere
-    /// in the final accumulated pre-states, or the guest rejects — catches a chained call
-    /// silently dropping an account from its own output.
+    /// in the final accumulated pre-states, or the guest rejects.
+    ///
+    /// Supplied by the prover and untrusted, like [`ProgramImageClaim`]: it is not committed to
+    /// the journal and not covered by the message signature, and the guest is its only reader.
+    /// So this check binds the prover only to its own declaration, catching an inconsistent
+    /// honest prover rather than a dishonest one. What actually pins the transaction's account
+    /// footprint is the journal: every touched account emits exactly one `PublicAction` or
+    /// `PrivateAction`, and the verifier rebuilds both lists from the signed message and
+    /// compares them byte for byte.
     pub initial_pre_states: Vec<AccountId>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id. See [`ProgramImageClaim`].
