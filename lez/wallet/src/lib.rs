@@ -125,9 +125,6 @@ pub struct BuiltPrivateTransaction {
 }
 
 pub struct ChainView {
-    pub height: BlockId,
-    pub included: bool,
-    pub signer_nonces: Vec<Nonce>,
     pub views: Vec<Account>,
     pub effect_settled: bool,
 }
@@ -668,8 +665,6 @@ impl WalletCore {
 
     pub async fn observe_transaction(
         &self,
-        hash: HashType,
-        signers: &[AccountId],
         views: &[ProgramShardSelector],
         effects: &[Commitment],
     ) -> Result<ChainView> {
@@ -677,23 +672,6 @@ impl WalletCore {
             .multi_sequencer_client
             .metered_get(
                 async |client: &SequencerClient| -> Result<ChainView, ClientError> {
-                    let height = client.get_last_block_id().await?;
-                    if client.get_transaction(hash).await?.is_some() {
-                        return Ok(ChainView {
-                            height,
-                            included: true,
-                            signer_nonces: Vec::new(),
-                            views: Vec::new(),
-                            effect_settled: effect_settled(client, effects).await?,
-                        });
-                    }
-
-                    let signer_nonces = if signers.is_empty() {
-                        Vec::new()
-                    } else {
-                        client.get_accounts_nonces(signers.to_vec()).await?
-                    };
-
                     let mut fetched = Vec::with_capacity(views.len());
                     for selector in views {
                         let mut account = client.get_account_view(*selector).await?;
@@ -701,12 +679,7 @@ impl WalletCore {
                         fetched.push(account);
                     }
 
-                    let included = client.get_transaction(hash).await?.is_some();
-
                     Ok(ChainView {
-                        height,
-                        included,
-                        signer_nonces,
                         views: fetched,
                         effect_settled: effect_settled(client, effects).await?,
                     })

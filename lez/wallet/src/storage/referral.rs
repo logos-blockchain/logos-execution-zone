@@ -17,9 +17,6 @@ pub struct ReferralStore {
 pub struct ReferralIntent {
     pub program_account: AccountId,
     pub registration: Option<PendingRegistration>,
-    #[serde(default)]
-    pub pending_credits: Vec<PdaSeed>,
-    #[serde(default)]
     pub invitation: Option<Invitation>,
 }
 
@@ -35,21 +32,15 @@ pub enum OperationKind {
     Register {
         participant: AccountId,
     },
-    Grant {
-        node: NodeId,
-        amount: u128,
-    },
-    Collect {
+    Claim {
         participant: AccountId,
-        source: AccountId,
-        output_seed: Option<PdaSeed>,
+        notes: Vec<AccountId>,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubmissionStatus {
     Pending,
-    Included,
     Settled,
     Rejected,
 }
@@ -60,12 +51,8 @@ pub struct PendingOperation {
     pub program_account: AccountId,
     pub operation: OperationKind,
     pub transaction: LeeTransaction,
-    #[serde(default)]
     pub pinned_public_views: Vec<(ProgramShardSelector, Account)>,
-    #[serde(default)]
     pub pinned_private_inputs: Vec<(AccountId, Commitment)>,
-    #[serde(default)]
-    pub destination: Option<AccountId>,
     pub status: SubmissionStatus,
 }
 
@@ -91,19 +78,8 @@ impl ReferralIntent {
         Self {
             program_account,
             registration: None,
-            pending_credits: Vec::new(),
             invitation: None,
         }
-    }
-
-    pub fn record_credit(&mut self, seed: PdaSeed) {
-        if !self.pending_credits.contains(&seed) {
-            self.pending_credits.push(seed);
-        }
-    }
-
-    pub fn settle_credit(&mut self, seed: PdaSeed) {
-        self.pending_credits.retain(|reserved| *reserved != seed);
     }
 }
 
@@ -116,12 +92,9 @@ impl PendingRegistration {
 
 impl OperationKind {
     #[must_use]
-    pub const fn participant(&self) -> Option<AccountId> {
+    pub const fn participant(&self) -> AccountId {
         match self {
-            Self::Grant { .. } => None,
-            Self::Register { participant } | Self::Collect { participant, .. } => {
-                Some(*participant)
-            }
+            Self::Register { participant } | Self::Claim { participant, .. } => *participant,
         }
     }
 }
@@ -179,26 +152,5 @@ mod tests {
         assert!(pending.signed().is_some());
         assert_eq!(pending.node, NodeId::new([7; 32]));
         assert_eq!(pending.referrer, Some(NodeId::new([4; 32])));
-    }
-
-    #[test]
-    fn credit_reservations_are_recorded_once_and_cleared_on_settlement() {
-        let mut intent = ReferralIntent::new(AccountId::new([9; 32]));
-        let seed = random_seed();
-
-        intent.record_credit(seed);
-        intent.record_credit(seed);
-        assert_eq!(
-            intent.pending_credits.len(),
-            1,
-            "a retry is not a new credit"
-        );
-
-        let other = random_seed();
-        intent.record_credit(other);
-        assert_eq!(intent.pending_credits.len(), 2);
-
-        intent.settle_credit(seed);
-        assert_eq!(intent.pending_credits, vec![other]);
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use common::{HashType, transaction::LeeTransaction};
 use lee::{
@@ -6,14 +6,13 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    Commitment, PrivateAccountKind,
-    account::{Nonce, ProgramShardSelector},
+    Commitment, Identifier, PrivateAccountKind,
+    account::ProgramShardSelector,
     program::{InstructionData, PdaSeed},
 };
 use referral_core::{
-    CREDIT_IDENTIFIER, Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID,
-    ParticipantAuthorizationV1, State, credit_account_id, ed25519_dalek::Signature,
-    registry_account_id, ticket_account_id,
+    Instruction, Invitation, NodeId, ORACLE_ACCOUNT_ID, Participant, ParticipantAuthorizationV1,
+    Registry, State, ed25519_dalek::Signature,
 };
 
 use crate::{
@@ -102,7 +101,6 @@ impl<'wallet> Referral<'wallet> {
     ) -> Result<Invitation, ExecutionFailureKind> {
         let found = self.found(participant)?;
         Ok(Invitation::new(
-            self.program_account(),
             node,
             found.key_chain.nullifier_public_key,
             found.key_chain.viewing_public_key.clone(),
@@ -114,15 +112,13 @@ impl<'wallet> Referral<'wallet> {
         participant: AccountId,
         invitation: Invitation,
     ) -> Result<(), ExecutionFailureKind> {
-        let parent = invitation
-            .parent_node(self.program_account())
-            .ok_or_else(|| conflict("this invitation was issued for another deployment"))?;
+        let parent = invitation.parent_node;
         let mut intent = self
             .intent(participant)
             .cloned()
             .unwrap_or_else(|| ReferralIntent::new(self.program_account()));
         let recorded = intent.registration.as_ref().map_or_else(
-            || self.referrer(participant).ok(),
+            || self.participant(participant).ok().map(|me| me.referrer),
             |pending| Some(pending.referrer),
         );
         if recorded.is_some_and(|referrer| referrer != Some(parent)) {
@@ -151,14 +147,14 @@ impl<'wallet> Referral<'wallet> {
             && intent
                 .invitation
                 .as_ref()
-                .and_then(|invitation| invitation.parent_node(program_account))
+                .map(|invitation| invitation.parent_node)
                 != Some(parent)
         {
             return Err(conflict(
                 "the referrer's invitation is needed before its registration",
             ));
         }
-        if matches!(self.state(participant), Ok(State::Participant { .. })) {
+        if self.participant(participant).is_ok() {
             return Err(conflict("this participant is already registered"));
         }
 
@@ -219,15 +215,89 @@ impl<'wallet> Referral<'wallet> {
         self.store_intent(participant, intent)
     }
 
-    pub fn reserve_credit(
-        &mut self,
+    pub async fn registry(&self) -> Result<Registry, ExecutionFailureKind> {
+        let program_account = self.program_account();
+        let account = self
+            .wallet
+            .get_account_view(ProgramShardSelector::new(
+                ORACLE_ACCOUNT_ID,
+                program_account,
+            ))
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        match State::decode(account.data.shard(program_account)) {
+            None => Ok(Registry::default()),
+            Some(State::Registry(registry)) => Ok(registry),
+            Some(State::Participant(_) | State::Child { .. } | State::Credit { .. }) => {
+                Err(ExecutionFailureKind::AccountDataError(ORACLE_ACCOUNT_ID))
+            }
+        }
+    }
+
+    pub fn notes(
+        &self,
         participant: AccountId,
-    ) -> Result<PdaSeed, ExecutionFailureKind> {
-        let mut intent = self.intent_or_recovered(participant)?;
-        let seed = random_seed();
-        intent.record_credit(seed);
-        self.store_intent(participant, intent)?;
-        Ok(seed)
+    ) -> Result<Vec<(AccountId, State)>, ExecutionFailureKind> {
+        let me = self.participant(participant)?;
+        let npk = self.found(participant)?.key_chain.nullifier_public_key;
+        Ok(self
+            .wallet
+            .storage()
+            .key_chain()
+            .private_account_key_chains()
+            .filter(|(id, key_chain, _index)| {
+                *id != participant && key_chain.nullifier_public_key == npk
+            })
+            .filter_map(|(id, _key_chain, _index)| {
+                let found = self.found(id).ok()?;
+                let state = State::decode(found.account.data.shard(self.program_account()))?;
+                let addressed = match state {
+                    State::Child { referrer, .. } => referrer == me.node,
+                    State::Credit { recipient_node, .. } => recipient_node == me.node,
+                    State::Registry(_) | State::Participant(_) => false,
+                };
+                addressed.then_some((id, state))
+            })
+            .collect())
+    }
+
+    pub async fn claimable(&self, participant: AccountId) -> Result<u128, ExecutionFailureKind> {
+        let states: Vec<State> = self
+            .notes(participant)?
+            .into_iter()
+            .map(|(_id, state)| state)
+            .collect();
+        self.preview(participant, &states).await
+    }
+
+    async fn preview(
+        &self,
+        participant: AccountId,
+        states: &[State],
+    ) -> Result<u128, ExecutionFailureKind> {
+        Ok(self
+            .participant(participant)?
+            .claim(&self.registry().await?, states))
+    }
+
+    pub async fn publish(
+        &self,
+        epoch: u32,
+        active: BTreeSet<NodeId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let program_account = self.program_account();
+        let transaction = self
+            .wallet
+            .build_public_transaction(
+                vec![
+                    AccountIdentity::Public(ORACLE_ACCOUNT_ID)
+                        .select_program_shard(program_account),
+                ],
+                instruction_data(Instruction::Publish { epoch, active }),
+                program_account,
+            )
+            .await?;
+        self.wallet.submit_public_transaction(transaction).await
     }
 
     pub async fn submit(
@@ -250,7 +320,7 @@ impl<'wallet> Referral<'wallet> {
             }
             let status = self.reconcile(reference).await?;
             match status {
-                SubmissionStatus::Settled | SubmissionStatus::Included => {
+                SubmissionStatus::Settled => {
                     return Ok((recorded.transaction.hash(), status));
                 }
                 SubmissionStatus::Pending => {
@@ -261,38 +331,31 @@ impl<'wallet> Referral<'wallet> {
             }
         }
 
-        if let Some(participant) = operation.participant() {
-            let unresolved: Vec<[u8; 32]> = self
-                .wallet
-                .storage()
-                .referral()
-                .operations
-                .values()
-                .filter(|other| {
-                    other.reference != reference
-                        && !other.status.is_conclusive()
-                        && other.operation.participant() == Some(participant)
-                })
-                .map(|other| other.reference)
-                .collect();
-            for other in unresolved {
-                if !self.reconcile(other).await?.is_conclusive() {
-                    return Err(conflict(
-                        "another unresolved operation for this participant is in flight",
-                    ));
-                }
+        let participant = operation.participant();
+        let unresolved: Vec<[u8; 32]> = self
+            .wallet
+            .storage()
+            .referral()
+            .operations
+            .values()
+            .filter(|other| {
+                other.reference != reference
+                    && !other.status.is_conclusive()
+                    && other.operation.participant() == participant
+            })
+            .map(|other| other.reference)
+            .collect();
+        for other in unresolved {
+            if !self.reconcile(other).await?.is_conclusive() {
+                return Err(conflict(
+                    "another unresolved operation for this participant is in flight",
+                ));
             }
         }
 
         let built = self.build(reference, operation).await?;
-        if recorded.is_some_and(|previous| previous.destination != built.destination) {
-            return Err(conflict(
-                "a replacement for this reference must deliver its credit to the recorded account",
-            ));
-        }
-
         let transaction = built.transaction.clone();
-        self.store_operation(built)?;
+        self.persisted(|store| store.record_operation(built))?;
         let hash = self.rebroadcast(transaction).await?;
         Ok((hash, SubmissionStatus::Pending))
     }
@@ -314,8 +377,6 @@ impl<'wallet> Referral<'wallet> {
             return Ok(recorded.status);
         }
 
-        let nonces = replay_nonces(&recorded.transaction);
-        let signers: Vec<AccountId> = nonces.iter().map(|(signer, _nonce)| *signer).collect();
         let selectors: Vec<ProgramShardSelector> = recorded
             .pinned_public_views
             .iter()
@@ -323,41 +384,18 @@ impl<'wallet> Referral<'wallet> {
             .collect();
         let view = self
             .wallet
-            .observe_transaction(
-                recorded.transaction.hash(),
-                &signers,
-                &selectors,
-                &effect_commitments(&recorded.transaction),
-            )
+            .observe_transaction(&selectors, &effect_commitments(&recorded.transaction))
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
         if view.effect_settled {
             return self.set_status(reference, SubmissionStatus::Settled);
         }
-        if view.included {
-            return self.set_status(reference, SubmissionStatus::Included);
-        }
-        if !is_superseded(&recorded, &nonces, &view) && !self.is_outspent(&recorded, &view) {
-            return Ok(SubmissionStatus::Pending);
+        if is_superseded(&recorded, &view) || self.is_outspent(&recorded) {
+            return self.set_status(reference, SubmissionStatus::Rejected);
         }
 
-        self.set_status(reference, SubmissionStatus::Rejected)
-    }
-
-    pub fn record_failed_outcome(
-        &mut self,
-        reference: [u8; 32],
-    ) -> Result<SubmissionStatus, ExecutionFailureKind> {
-        let Some(recorded) = self.wallet.storage().referral().operation(reference) else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-        if recorded.status != SubmissionStatus::Included {
-            return Err(conflict(
-                "only an included operation with an unknown outcome can be marked failed",
-            ));
-        }
-        self.set_status(reference, SubmissionStatus::Rejected)
+        Ok(SubmissionStatus::Pending)
     }
 
     async fn build(
@@ -365,70 +403,21 @@ impl<'wallet> Referral<'wallet> {
         reference: [u8; 32],
         operation: OperationKind,
     ) -> Result<PendingOperation, ExecutionFailureKind> {
-        let program_account = self.program_account();
-        let (accounts, instruction, destination) = match &operation {
+        let (accounts, instruction) = match &operation {
             OperationKind::Register { participant } => self.register_request(*participant).await?,
-            OperationKind::Grant { node, amount } => (
-                vec![
-                    AccountIdentity::Public(ORACLE_ACCOUNT_ID).balance(),
-                    AccountIdentity::PublicNoSign(ticket_account_id(program_account, *node))
-                        .select_program_shard(program_account),
-                ],
-                instruction_data(Instruction::Grant {
-                    node: *node,
-                    amount: *amount,
-                }),
-                None,
-            ),
-            OperationKind::Collect {
-                participant,
-                source,
-                output_seed,
-            } => self.collect_request(*participant, *source, *output_seed)?,
+            OperationKind::Claim { participant, notes } => {
+                self.claim_request(*participant, notes).await?
+            }
         };
 
-        match operation.participant() {
-            None => {
-                self.public_operation(reference, operation, accounts, instruction)
-                    .await
-            }
-            Some(_participant) => {
-                self.private_operation(reference, operation, destination, accounts, instruction)
-                    .await
-            }
-        }
-    }
-
-    async fn public_operation(
-        &self,
-        reference: [u8; 32],
-        operation: OperationKind,
-        accounts: Vec<AccountMention>,
-        instruction: InstructionData,
-    ) -> Result<PendingOperation, ExecutionFailureKind> {
-        let program_account = self.program_account();
-        let transaction = self
-            .wallet
-            .build_public_transaction(accounts, instruction, program_account)
-            .await?;
-
-        Ok(PendingOperation {
-            reference,
-            program_account,
-            operation,
-            transaction: LeeTransaction::Public(transaction),
-            pinned_public_views: Vec::new(),
-            pinned_private_inputs: Vec::new(),
-            destination: None,
-            status: SubmissionStatus::Pending,
-        })
+        self.private_operation(reference, operation, accounts, instruction)
+            .await
     }
 
     async fn private_operation(
         &self,
         reference: [u8; 32],
         operation: OperationKind,
-        destination: Option<AccountId>,
         accounts: Vec<AccountMention>,
         instruction: InstructionData,
     ) -> Result<PendingOperation, ExecutionFailureKind> {
@@ -448,7 +437,6 @@ impl<'wallet> Referral<'wallet> {
             transaction: LeeTransaction::PrivacyPreserving(built.transaction),
             pinned_public_views: built.pinned_public_views,
             pinned_private_inputs: built.pinned_private_inputs,
-            destination,
             status: SubmissionStatus::Pending,
         })
     }
@@ -456,8 +444,7 @@ impl<'wallet> Referral<'wallet> {
     async fn register_request(
         &self,
         participant: AccountId,
-    ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
-    {
+    ) -> Result<(Vec<AccountMention>, InstructionData), ExecutionFailureKind> {
         let program_account = self.program_account();
         let (node, referrer, node_signature) = self
             .pending_registration(participant)
@@ -467,84 +454,98 @@ impl<'wallet> Referral<'wallet> {
             return Err(conflict("this node is already registered"));
         }
 
+        let mut accounts = vec![
+            self.own_private(participant)?
+                .select_program_shard(program_account),
+            AccountIdentity::PublicNoSign(ORACLE_ACCOUNT_ID).select_program_shard(program_account),
+        ];
+        self.deliver(participant, referrer, &mut accounts)?;
+
         Ok((
-            vec![
-                self.own_private(participant)?
-                    .select_program_shard(program_account),
-                AccountIdentity::PublicNoSign(registry_account_id(program_account))
-                    .select_program_shard(program_account),
-            ],
+            accounts,
             instruction_data(Instruction::Register {
                 node,
                 referrer,
                 node_signature,
             }),
-            None,
         ))
     }
 
-    fn collect_request(
+    async fn claim_request(
         &self,
         participant: AccountId,
-        source: AccountId,
-        output_seed: Option<PdaSeed>,
-    ) -> Result<(Vec<AccountMention>, InstructionData, Option<AccountId>), ExecutionFailureKind>
-    {
+        notes: &[AccountId],
+    ) -> Result<(Vec<AccountMention>, InstructionData), ExecutionFailureKind> {
         let program_account = self.program_account();
-        let referrer = self.referrer(participant)?;
+        let referrer = self.participant(participant)?.referrer;
+        let listed = self.notes(participant)?;
+        let states: Vec<State> = notes
+            .iter()
+            .map(|note| {
+                listed
+                    .iter()
+                    .find_map(|(id, state)| (id == note).then(|| state.clone()))
+                    .ok_or_else(|| conflict("this note is not addressed to the participant"))
+            })
+            .collect::<Result<_, _>>()?;
+        if self.preview(participant, &states).await? == 0 {
+            return Err(conflict("nothing to claim"));
+        }
 
         let mut accounts = vec![
             self.own_private(participant)?
                 .select_program_shard(program_account),
-            self.source_mention(source)
-                .select_program_shard(program_account),
+            AccountIdentity::PublicNoSign(ORACLE_ACCOUNT_ID).select_program_shard(program_account),
         ];
-
-        if referrer.is_none() && output_seed.is_some() {
-            return Err(conflict("a root participant's collection takes no output"));
+        for note in notes {
+            accounts.push(
+                self.own_private(*note)?
+                    .select_program_shard(program_account),
+            );
         }
-        let destination = referrer
-            .map(|parent| -> Result<AccountId, ExecutionFailureKind> {
-                let invitation = self
-                    .intent(participant)
-                    .and_then(|intent| intent.invitation.clone())
-                    .filter(|invitation| invitation.parent_node(program_account) == Some(parent))
-                    .ok_or_else(|| {
-                        conflict("the referrer's invitation is needed before this collection")
-                    })?;
-                let seed = output_seed.ok_or_else(|| {
-                    conflict("a referred participant's collection requires a reserved output seed")
-                })?;
-                accounts.push(
-                    foreign_credit(program_account, seed, &invitation)
-                        .select_program_shard(program_account),
-                );
-                Ok(credit_account_id(
-                    program_account,
-                    &seed,
-                    &invitation.npk,
-                    &invitation.vpk,
-                ))
-            })
-            .transpose()?;
+        self.deliver(participant, referrer, &mut accounts)?;
 
-        Ok((
-            accounts,
-            instruction_data(Instruction::Collect),
-            destination,
-        ))
+        Ok((accounts, instruction_data(Instruction::Claim)))
     }
 
-    fn is_outspent(&self, recorded: &PendingOperation, view: &ChainView) -> bool {
-        view.height >= self.wallet.storage().last_synced_block()
-            && recorded
-                .pinned_private_inputs
-                .iter()
-                .any(|(account_id, spent)| {
-                    self.wallet
-                        .get_private_account_commitment(*account_id)
-                        .is_some_and(|current| current != *spent)
-                })
+    fn deliver(
+        &self,
+        participant: AccountId,
+        referrer: Option<NodeId>,
+        accounts: &mut Vec<AccountMention>,
+    ) -> Result<(), ExecutionFailureKind> {
+        let program_account = self.program_account();
+        let Some(parent) = referrer else {
+            return Ok(());
+        };
+
+        let invitation = self
+            .intent(participant)
+            .and_then(|intent| intent.invitation.clone())
+            .filter(|invitation| invitation.parent_node == parent)
+            .ok_or_else(|| conflict("the referrer's invitation is needed to address its note"))?;
+        accounts.push(
+            foreign_note(
+                program_account,
+                random_seed(),
+                random_identifier(),
+                &invitation,
+            )
+            .select_program_shard(program_account),
+        );
+
+        Ok(())
+    }
+
+    fn is_outspent(&self, recorded: &PendingOperation) -> bool {
+        recorded
+            .pinned_private_inputs
+            .iter()
+            .any(|(account_id, spent)| {
+                self.wallet
+                    .get_private_account_commitment(*account_id)
+                    .is_some_and(|current| current != *spent)
+            })
     }
 
     async fn rebroadcast(
@@ -574,24 +575,12 @@ impl<'wallet> Referral<'wallet> {
             if status != SubmissionStatus::Settled {
                 return;
             }
-            match recorded.operation {
-                OperationKind::Grant { .. } => {}
-                OperationKind::Register { participant } => {
-                    if let Some(intent) = store.intents.get_mut(&participant) {
-                        intent.registration = None;
-                    }
-                }
-                OperationKind::Collect {
-                    participant,
-                    output_seed,
-                    ..
-                } => {
-                    if let Some(seed) = output_seed
-                        && let Some(intent) = store.intents.get_mut(&participant)
-                    {
-                        intent.settle_credit(seed);
-                    }
-                }
+            let registered = matches!(recorded.operation, OperationKind::Register { .. });
+            let participant = recorded.operation.participant();
+            if let Some(intent) = store.intents.get_mut(&participant)
+                && registered
+            {
+                intent.registration = None;
             }
         })?;
         Ok(status)
@@ -605,10 +594,6 @@ impl<'wallet> Referral<'wallet> {
         self.persisted(|store| {
             store.intents.insert(participant, intent);
         })
-    }
-
-    fn store_operation(&mut self, operation: PendingOperation) -> Result<(), ExecutionFailureKind> {
-        self.persisted(|store| store.record_operation(operation))
     }
 
     fn persisted<T>(
@@ -630,53 +615,21 @@ impl<'wallet> Referral<'wallet> {
             .map_err(ExecutionFailureKind::SequencerError)
     }
 
-    fn referrer(&self, participant: AccountId) -> Result<Option<NodeId>, ExecutionFailureKind> {
-        let Ok(State::Participant { referrer, .. }) = self.state(participant) else {
+    fn participant(&self, account: AccountId) -> Result<Participant, ExecutionFailureKind> {
+        let Ok(State::Participant(participant)) = self.state(account) else {
             return Err(conflict("this participant is not registered yet"));
         };
-        Ok(referrer)
+        Ok(participant)
     }
 
     async fn is_registered(&self, node: NodeId) -> Result<bool, ExecutionFailureKind> {
-        let program_account = self.program_account();
-        let account = self
-            .wallet
-            .get_account_view(ProgramShardSelector::new(
-                registry_account_id(program_account),
-                program_account,
-            ))
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        let Some(State::Registry(registry)) = State::decode(account.data.shard(program_account))
-        else {
-            return Ok(false);
-        };
-        Ok(registry.contains(node))
-    }
-
-    fn intent_or_recovered(
-        &self,
-        participant: AccountId,
-    ) -> Result<ReferralIntent, ExecutionFailureKind> {
-        if let Some(intent) = self.intent(participant) {
-            return Ok(intent.clone());
-        }
-        let State::Participant { .. } = self.state(participant)? else {
-            return Err(ExecutionFailureKind::AccountDataError(participant));
-        };
-        Ok(ReferralIntent::new(self.program_account()))
+        Ok(self.registry().await?.nodes.contains(&node))
     }
 
     fn own_private(&self, account: AccountId) -> Result<AccountIdentity, ExecutionFailureKind> {
         self.wallet
             .resolve_private_account(account)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)
-    }
-
-    fn source_mention(&self, source: AccountId) -> AccountIdentity {
-        self.wallet
-            .resolve_private_account(source)
-            .unwrap_or(AccountIdentity::PublicNoSign(source))
     }
 
     fn found(&self, account: AccountId) -> Result<FoundPrivateAccount<'_>, ExecutionFailureKind> {
@@ -688,33 +641,12 @@ impl<'wallet> Referral<'wallet> {
     }
 }
 
-fn is_superseded(
-    recorded: &PendingOperation,
-    nonces: &[(AccountId, Nonce)],
-    view: &ChainView,
-) -> bool {
-    nonces
+fn is_superseded(recorded: &PendingOperation, view: &ChainView) -> bool {
+    recorded
+        .pinned_public_views
         .iter()
-        .zip(&view.signer_nonces)
-        .any(|((_signer, declared), chain)| chain != declared)
-        || recorded
-            .pinned_public_views
-            .iter()
-            .zip(&view.views)
-            .any(|((_selector, pinned), current)| current != pinned)
-}
-
-fn replay_nonces(transaction: &LeeTransaction) -> Vec<(AccountId, Nonce)> {
-    match transaction {
-        LeeTransaction::Public(public) => public
-            .witness_set()
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_signature, key)| AccountId::from(key))
-            .zip(public.message().nonces.iter().copied())
-            .collect(),
-        LeeTransaction::PrivacyPreserving(_private) => Vec::new(),
-    }
+        .zip(&view.views)
+        .any(|((_selector, pinned), current)| current != pinned)
 }
 
 fn effect_commitments(transaction: &LeeTransaction) -> Vec<Commitment> {
@@ -730,9 +662,10 @@ fn conflict(message: &str) -> ExecutionFailureKind {
     ))
 }
 
-fn foreign_credit(
+fn foreign_note(
     program_account: AccountId,
     seed: PdaSeed,
+    identifier: Identifier,
     invitation: &Invitation,
 ) -> AccountIdentity {
     AccountIdentity::PrivateForeign {
@@ -741,7 +674,7 @@ fn foreign_credit(
         kind: PrivateAccountKind::Pda {
             account_id: program_account,
             seed,
-            identifier: CREDIT_IDENTIFIER,
+            identifier,
         },
     }
 }

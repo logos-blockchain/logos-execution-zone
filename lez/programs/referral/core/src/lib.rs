@@ -1,19 +1,13 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use ed25519_dalek;
 use lee_core::{
-    Identifier, NullifierPublicKey,
+    NullifierPublicKey,
     account::{AccountId, ShardData},
     encryption::ViewingPublicKey,
-    program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
-
-pub const CREDIT_IDENTIFIER: Identifier = 0;
-
-pub const DEPLOYMENT_CONTEXT: [u8; 32] = [
-    0x9d, 0x2c, 0x4b, 0x7e, 0x11, 0xa6, 0x53, 0xf0, 0x8c, 0x45, 0xd9, 0x37, 0x62, 0xbe, 0x0a, 0x18,
-    0xf4, 0x71, 0x26, 0xcd, 0x5b, 0x93, 0xe8, 0x0f, 0x3a, 0xd6, 0x84, 0x1c, 0x77, 0xb2, 0x50, 0xe9,
-];
 
 pub const ORACLE_ACCOUNT_ID: AccountId = AccountId::new([
     0x52, 0x5c, 0xc5, 0x6b, 0x7f, 0x8e, 0x28, 0x49, 0xec, 0x9d, 0xa8, 0x66, 0x1c, 0x7a, 0xde, 0x0c,
@@ -22,7 +16,6 @@ pub const ORACLE_ACCOUNT_ID: AccountId = AccountId::new([
 
 pub const PROTOTYPE_ORACLE_SIGNING_KEY: [u8; 32] = [11; 32];
 
-const REGISTRY_SEED: [u8; 32] = *b"LEZ/Referral/Registry/v1\0\0\0\0\0\0\0\0";
 const AUTHORIZATION_DOMAIN: &[u8; 37] = b"LEZ/Referral/AuthorizeParticipant/v1\0";
 
 #[derive(
@@ -58,67 +51,97 @@ impl NodeId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Invitation {
-    pub deployment_context: [u8; 32],
-    pub program_account: AccountId,
     pub parent_node: NodeId,
     pub npk: NullifierPublicKey,
-    #[borsh(deserialize_with = "read_viewing_key")]
     pub vpk: ViewingPublicKey,
 }
 
 impl Invitation {
     #[must_use]
-    pub const fn new(
-        program_account: AccountId,
-        parent_node: NodeId,
-        npk: NullifierPublicKey,
-        vpk: ViewingPublicKey,
-    ) -> Self {
+    pub const fn new(parent_node: NodeId, npk: NullifierPublicKey, vpk: ViewingPublicKey) -> Self {
         Self {
-            deployment_context: DEPLOYMENT_CONTEXT,
-            program_account,
             parent_node,
             npk,
             vpk,
         }
     }
-
-    #[must_use]
-    pub fn parent_node(&self, program_account: AccountId) -> Option<NodeId> {
-        (self.deployment_context == DEPLOYMENT_CONTEXT && self.program_account == program_account)
-            .then_some(self.parent_node)
-    }
 }
 
-#[derive(
-    Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub struct Registry(Vec<NodeId>);
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Registry {
+    pub nodes: BTreeSet<NodeId>,
+    pub epoch: u32,
+    pub active: BTreeSet<NodeId>,
+}
 
-impl Registry {
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Participant {
+    pub node: NodeId,
+    pub referrer: Option<NodeId>,
+    pub children: BTreeMap<NodeId, u32>,
+    pub reward_balance: u128,
+}
+
+impl Participant {
     #[must_use]
-    pub fn contains(&self, node: NodeId) -> bool {
-        self.0.contains(&node)
-    }
-
-    pub fn register(&mut self, node: NodeId) -> bool {
-        if self.contains(node) {
-            return false;
+    pub const fn new(node: NodeId, referrer: Option<NodeId>) -> Self {
+        Self {
+            node,
+            referrer,
+            children: BTreeMap::new(),
+            reward_balance: 0,
         }
-        self.0.push(node);
-        true
+    }
+
+    #[must_use]
+    pub fn claim(&mut self, registry: &Registry, notes: &[State]) -> u128 {
+        let mut total: u128 = 0;
+        for note in notes {
+            match *note {
+                State::Child { node, referrer } => {
+                    assert_eq!(referrer, self.node, "child is announced to another node");
+                    self.children.entry(node).or_insert(0);
+                }
+                State::Credit {
+                    recipient_node,
+                    amount,
+                } => {
+                    assert_eq!(
+                        recipient_node, self.node,
+                        "credit is addressed to another node"
+                    );
+                    total = total
+                        .checked_add(amount)
+                        .expect("credit total fits in u128");
+                }
+                State::Registry(_) | State::Participant(_) => {
+                    panic!("note does not hold a child or a credit")
+                }
+            }
+        }
+        for (child, last) in &mut self.children {
+            if *last < registry.epoch && registry.active.contains(child) {
+                *last = registry.epoch;
+                total = total.checked_add(1).expect("claim total fits in u128");
+            }
+        }
+        self.reward_balance = self
+            .reward_balance
+            .checked_add(total)
+            .expect("reward balance fits in u128");
+        total
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum State {
     Registry(Registry),
-    Participant {
+    Participant(Participant),
+    Child {
         node: NodeId,
-        referrer: Option<NodeId>,
-        reward_balance: u128,
+        referrer: NodeId,
     },
     Credit {
         recipient_node: NodeId,
@@ -143,9 +166,8 @@ impl State {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ParticipantAuthorizationV1 {
-    pub deployment_context: [u8; 32],
     pub program_account: AccountId,
     pub node: NodeId,
     pub participant_account: AccountId,
@@ -161,7 +183,6 @@ impl ParticipantAuthorizationV1 {
         referrer: Option<NodeId>,
     ) -> Self {
         Self {
-            deployment_context: DEPLOYMENT_CONTEXT,
             program_account,
             node,
             participant_account,
@@ -195,60 +216,11 @@ pub enum Instruction {
         referrer: Option<NodeId>,
         node_signature: [u8; 64],
     },
-    Grant {
-        node: NodeId,
-        amount: u128,
+    Publish {
+        epoch: u32,
+        active: BTreeSet<NodeId>,
     },
-    Collect,
-}
-
-fn invalid_data(message: &'static str) -> borsh::io::Error {
-    borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, message)
-}
-
-fn read_viewing_key<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<ViewingPublicKey> {
-    let mut encoded = [0_u8; 4 + ViewingPublicKey::LEN];
-    reader.read_exact(&mut encoded[..4])?;
-    if usize::try_from(u32::from_le_bytes([
-        encoded[0], encoded[1], encoded[2], encoded[3],
-    ]))
-    .is_ok_and(|len| len == ViewingPublicKey::LEN)
-    {
-        reader.read_exact(&mut encoded[4..])?;
-        ViewingPublicKey::try_from_slice(&encoded)
-    } else {
-        Err(invalid_data("viewing key has the wrong length"))
-    }
-}
-
-#[must_use]
-pub const fn registry_seed() -> PdaSeed {
-    PdaSeed::new(REGISTRY_SEED)
-}
-
-#[must_use]
-pub const fn ticket_seed(node: NodeId) -> PdaSeed {
-    PdaSeed::new(node.to_bytes())
-}
-
-#[must_use]
-pub fn registry_account_id(program_account: AccountId) -> AccountId {
-    AccountId::for_public_pda(&program_account, &registry_seed())
-}
-
-#[must_use]
-pub fn ticket_account_id(program_account: AccountId, node: NodeId) -> AccountId {
-    AccountId::for_public_pda(&program_account, &ticket_seed(node))
-}
-
-#[must_use]
-pub fn credit_account_id(
-    program_account: AccountId,
-    seed: &PdaSeed,
-    npk: &NullifierPublicKey,
-    vpk: &ViewingPublicKey,
-) -> AccountId {
-    AccountId::for_private_pda(&program_account, seed, npk, vpk, CREDIT_IDENTIFIER)
+    Claim,
 }
 
 #[cfg(test)]
@@ -270,44 +242,20 @@ mod tests {
             .expect("Hash output must be exactly 32 bytes long")
     }
 
-    fn viewing_key(seed: u8) -> ViewingPublicKey {
-        ViewingPublicKey::from_seed(&[seed; 32], &[seed.wrapping_add(1); 32])
-    }
-
-    #[test]
-    fn account_ids_match_pinned_vectors() {
-        assert_eq!(
-            registry_account_id(PROGRAM).to_bytes(),
-            [
-                0x1b, 0xcb, 0x9c, 0xd7, 0x4d, 0x37, 0x63, 0x2f, 0x40, 0xa7, 0xa5, 0xd8, 0x20, 0x4a,
-                0x09, 0xde, 0x47, 0x15, 0x02, 0x2f, 0xb7, 0x16, 0x96, 0xe1, 0x0d, 0x44, 0xa7, 0x63,
-                0x1e, 0x49, 0x67, 0x59,
-            ]
-        );
-        assert_eq!(
-            ticket_account_id(PROGRAM, NODE).to_bytes(),
-            [
-                0x9c, 0x47, 0x4a, 0x64, 0xeb, 0x93, 0x32, 0xcc, 0xd3, 0x0e, 0xfd, 0x37, 0x45, 0xc2,
-                0xa8, 0x9b, 0xec, 0xac, 0xb0, 0x8c, 0xff, 0x2b, 0x4b, 0x9e, 0xf8, 0xde, 0x1d, 0x89,
-                0x86, 0xe3, 0x24, 0x5e,
-            ]
-        );
-    }
-
     #[test]
     fn the_authorization_message_is_the_prefixed_encoding_itself() {
         let authorization = ParticipantAuthorizationV1::new(PROGRAM, NODE, PARTICIPANT, None);
         let message = authorization.message();
 
-        assert_eq!(message.len(), 166);
+        assert_eq!(message.len(), 134);
         assert_eq!(&message[..37], AUTHORIZATION_DOMAIN);
-        assert_eq!(&message[37..69], &DEPLOYMENT_CONTEXT);
+        assert_eq!(&message[37..69], &PROGRAM.to_bytes());
         assert_eq!(
             sha256(&message),
             [
-                0x27, 0xdb, 0xe7, 0x7b, 0xb8, 0x4d, 0xb7, 0x91, 0x8b, 0x4e, 0x5b, 0xd7, 0x2a, 0x30,
-                0x6e, 0xfe, 0xc9, 0xf0, 0x6a, 0x9c, 0xb0, 0x63, 0x86, 0x19, 0x2c, 0x92, 0x5a, 0xfc,
-                0x6a, 0xc2, 0x8d, 0x02,
+                0x0f, 0x69, 0x7b, 0x3b, 0xaa, 0x83, 0x74, 0x9f, 0xa7, 0x8f, 0x96, 0x17, 0xa9, 0x35,
+                0xaa, 0x4c, 0x76, 0x24, 0x08, 0xe8, 0x28, 0xc2, 0x63, 0x21, 0xc5, 0xea, 0xbc, 0x5b,
+                0x21, 0x32, 0xed, 0xf1,
             ]
         );
     }
@@ -350,10 +298,6 @@ mod tests {
                 referrer: Some(node),
                 ..authorization
             },
-            ParticipantAuthorizationV1 {
-                deployment_context: [0; 32],
-                ..authorization
-            },
         ];
         for candidate in tampered {
             assert!(!candidate.verify(&signature));
@@ -364,24 +308,10 @@ mod tests {
     }
 
     #[test]
-    fn registration_owns_uniqueness_and_roundtrips() {
-        let mut registry = Registry::default();
-        assert!(registry.register(NodeId::new([1; 32])));
-        assert!(registry.register(NodeId::new([2; 32])));
-        assert!(!registry.register(NodeId::new([1; 32])));
-
-        assert!(registry.contains(NodeId::new([1; 32])));
-        assert!(!registry.contains(NodeId::new([9; 32])));
-
-        let encoded = borsh::to_vec(&registry).unwrap();
-        assert_eq!(borsh::from_slice::<Registry>(&encoded).unwrap(), registry);
-    }
-
-    #[test]
     fn state_decoding_rejects_empty_and_trailing_bytes() {
-        let state = State::Credit {
-            recipient_node: NODE,
-            amount: 5,
+        let state = State::Child {
+            node: NODE,
+            referrer: NodeId::new([8; 32]),
         };
         let data = state.to_data();
         assert_eq!(State::decode(&data), Some(state));
@@ -390,30 +320,5 @@ mod tests {
         let mut trailing = data.to_vec();
         trailing.push(0);
         assert_eq!(State::decode(&trailing.try_into().unwrap()), None);
-    }
-
-    #[test]
-    fn a_viewing_key_length_prefix_is_checked_before_its_body_is_read() {
-        let valid = borsh::to_vec(&Invitation::new(
-            PROGRAM,
-            NODE,
-            NullifierPublicKey([1; 32]),
-            viewing_key(1),
-        ))
-        .unwrap();
-        assert!(borsh::from_slice::<Invitation>(&valid).is_ok());
-
-        let mut overlong = [0; 128].to_vec();
-        overlong.extend_from_slice(
-            &u32::try_from(ViewingPublicKey::LEN + 1)
-                .unwrap()
-                .to_le_bytes(),
-        );
-        assert!(borsh::from_slice::<Invitation>(&overlong).is_err());
-
-        let mut short = [0; 128].to_vec();
-        short.extend_from_slice(&3_u32.to_le_bytes());
-        short.extend_from_slice(&[0; 3]);
-        assert!(borsh::from_slice::<Invitation>(&short).is_err());
     }
 }

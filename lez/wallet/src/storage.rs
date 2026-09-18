@@ -247,17 +247,17 @@ mod tests {
                 &[3; 64],
             )),
         });
-        intent.record_credit(referral::random_seed());
         intent.invitation = Some(referral_core::Invitation::new(
-            program_account,
             referral_core::NodeId::new([8; 32]),
             lee_core::NullifierPublicKey([1; 32]),
             lee_core::encryption::ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
         ));
         storage.referral_mut().intents.insert(participant, intent);
-        storage
-            .referral_mut()
-            .record_operation(grant_operation(reference, program_account));
+        storage.referral_mut().record_operation(register_operation(
+            reference,
+            program_account,
+            participant,
+        ));
 
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");
@@ -267,7 +267,6 @@ mod tests {
 
         assert_eq!(loaded_store, storage);
         let restored = &loaded_store.referral().intents[&participant];
-        assert_eq!(restored.pending_credits.len(), 1);
         assert!(
             restored
                 .registration
@@ -284,9 +283,10 @@ mod tests {
         );
     }
 
-    fn grant_operation(
+    fn register_operation(
         reference: [u8; 32],
         program_account: lee::AccountId,
+        participant: lee::AccountId,
     ) -> referral::PendingOperation {
         let key = lee::PrivateKey::new_os_random();
         let message = lee::public_transaction::Message::try_new(
@@ -295,10 +295,7 @@ mod tests {
                 [4; 32],
             ))],
             vec![lee_core::account::Nonce::default()],
-            referral_core::Instruction::Grant {
-                node: referral_core::NodeId::new([8; 32]),
-                amount: 5,
-            },
+            referral_core::Instruction::Claim,
         )
         .unwrap();
         let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&key]);
@@ -310,14 +307,10 @@ mod tests {
         referral::PendingOperation {
             reference,
             program_account,
-            operation: referral::OperationKind::Grant {
-                node: referral_core::NodeId::new([8; 32]),
-                amount: 5,
-            },
+            operation: referral::OperationKind::Register { participant },
             transaction,
             pinned_public_views: Vec::new(),
             pinned_private_inputs: Vec::new(),
-            destination: None,
             status: referral::SubmissionStatus::Pending,
         }
     }
