@@ -12,13 +12,16 @@ use crate::Runtime;
 
 /// FFI-owned sequencer.
 ///
-/// - A [`ActorRef<StorageActor>`] used to get acess to db.
-/// - A [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial shutdown.
-/// - An [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query the node.
-/// - A [`ActorRef<Scheduler>`] right now is unused and exists only for gracial shutdown.
-/// - A [`Option<Gossip>`] right now is unused and exists only to pin gossip.
-/// - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
-///   already FFI-safe.
+/// - `storage_ref`: an [`ActorRef<StorageActor>`] used to get acess to db.
+/// - `slasher_ref`: an [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial
+///   shutdown.
+/// - `executor_ref`: an [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query
+///   the node.
+/// - `scheduler_ref`: an [`ActorRef<Scheduler>`] right now is unused and exists only for gracial
+///   shutdown.
+/// - `gossip`: an [`Option<Gossip>`] right now is unused and exists only to pin gossip.
+/// - `runtime`: the [`Runtime`] used to run async queries against the store (either owned or
+///   borrowed), already FFI-safe.
 #[repr(C)]
 pub struct SequencerServiceFFI {
     storage_ref: *mut c_void,
@@ -80,21 +83,21 @@ impl SequencerServiceFFI {
 
 impl Drop for SequencerServiceFFI {
     fn drop(&mut self) {
-        if !self.gossip.is_null() {
-            let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<Gossip>>()) };
-            // stop the gossip first.
-            drop(gossip);
-        }
-
         if !self.scheduler_ref.is_null() {
             let scheduler_ref =
                 unsafe { Box::from_raw(self.scheduler_ref.cast::<ActorRef<Scheduler>>()) };
-            // stop the sheduler next.
+            // stop the sheduler first.
             let send_res = self.runtime.block_on(scheduler_ref.stop_gracefully());
             if let Err(err) = send_res {
                 log::error!("Failed to send shutdown signal: {err}");
             }
             drop(scheduler_ref);
+        }
+
+        if !self.gossip.is_null() {
+            let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<Gossip>>()) };
+            // stop the gossip next.
+            drop(gossip);
         }
 
         if !self.executor_ref.is_null() {

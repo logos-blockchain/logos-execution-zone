@@ -57,13 +57,16 @@ typedef struct Runtime {
 /**
  * FFI-owned sequencer.
  *
- * - A [`ActorRef<StorageActor>`] used to get acess to db.
- * - A [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial shutdown.
- * - An [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query the node.
- * - A [`ActorRef<Scheduler>`] right now is unused and exists only for gracial shutdown.
- * - A [`Option<Gossip>`] right now is unused and exists only to pin gossip.
- * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
- *   already FFI-safe.
+ * - `storage_ref`: an [`ActorRef<StorageActor>`] used to get acess to db.
+ * - `slasher_ref`: an [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial
+ *   shutdown.
+ * - `executor_ref`: an [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query
+ *   the node.
+ * - `scheduler_ref`: an [`ActorRef<Scheduler>`] right now is unused and exists only for gracial
+ *   shutdown.
+ * - `gossip`: an [`Option<Gossip>`] right now is unused and exists only to pin gossip.
+ * - `runtime`: the [`Runtime`] used to run async queries against the store (either owned or
+ *   borrowed), already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
   void *storage_ref;
@@ -520,7 +523,7 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
  *
  * Not supporded yet.
  *
- * `ToDo`: Add support. Needs database modifications.
+ * TODO: Add support. Needs database modifications.
  *
  * # Arguments
  *

@@ -117,7 +117,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
 ///
 /// Not supporded yet.
 ///
-/// `ToDo`: Add support. Needs database modifications.
+/// TODO: Add support. Needs database modifications.
 ///
 /// # Arguments
 ///
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
 
     let sequencer = unsafe { &*sequencer };
 
-    let before_opt = before.is_some.then_some(unsafe { before.value.read() });
+    let before_opt = before.is_some.then(|| unsafe { before.value.read() });
 
     let before_limit = if let Some(before_val) = before_opt {
         before_val

@@ -3,6 +3,7 @@ use std::{
     fs,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -203,8 +204,37 @@ pub fn prebuilt_sequencer_db_dump_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/prebuilt_sequencer_db.dump")
 }
 
+/// Circuit id the committed dump was generated with (`just regenerate-test-fixture`).
+#[must_use]
+pub fn prebuilt_sequencer_db_circuit_id_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/prebuilt_sequencer_db.circuit_id")
+}
+
+/// Hex form of the privacy-preserving circuit id this build embeds.
+#[must_use]
+pub fn privacy_preserving_circuit_id_stamp() -> String {
+    lee::PRIVACY_PRESERVING_CIRCUIT_ID
+        .map(|word| format!("{word:08x}"))
+        .join("")
+}
+
 /// Load and deserialize the committed prebuilt-database dump.
 fn load_prebuilt_dump() -> Result<DbDump> {
+    let stamp_path = prebuilt_sequencer_db_circuit_id_path();
+    let stamped = fs::read_to_string(&stamp_path).with_context(|| {
+        format!(
+            "Failed to read fixture circuit id at {}",
+            stamp_path.display()
+        )
+    })?;
+    let expected = privacy_preserving_circuit_id_stamp();
+    if stamped.trim() != expected {
+        bail!(
+            "Prebuilt fixture was generated for circuit {}, this build embeds {expected}. Run `just regenerate-test-fixture`.",
+            stamped.trim()
+        );
+    }
+
     let path = prebuilt_sequencer_db_dump_path();
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read prebuilt db dump at {}", path.display()))?;
@@ -256,6 +286,42 @@ fn locked_logos_bedrock_node_revision() -> Result<String> {
     }
 }
 
+fn bedrock_platform_for_docker_arch(arch: &str) -> Option<&'static str> {
+    match arch.trim() {
+        "amd64" | "x86_64" => Some("linux-x86_64"),
+        "arm64" | "aarch64" => Some("linux-aarch64"),
+        _ => None,
+    }
+}
+
+fn docker_daemon_platform() -> Option<&'static str> {
+    static PLATFORM: OnceLock<Option<&'static str>> = OnceLock::new();
+    *PLATFORM.get_or_init(|| {
+        let output = std::process::Command::new("docker")
+            .args(["info", "--format", "{{.Architecture}}"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        bedrock_platform_for_docker_arch(&String::from_utf8_lossy(&output.stdout))
+    })
+}
+
+fn ensure_node_runs_on_docker_daemon(
+    target_platform: &str,
+    daemon_platform: Option<&str>,
+) -> Result<()> {
+    if let Some(daemon_platform) = daemon_platform
+        && daemon_platform != target_platform
+    {
+        bail!(
+            "Resolved Bedrock node targets {target_platform}, but the Docker daemon runs {daemon_platform}, so the node cannot execute in the Bedrock container. Run `just resolve-bedrock-node`."
+        );
+    }
+    Ok(())
+}
+
 fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
     let metadata_path = resolved_directory.join("metadata.json");
     let metadata: serde_json::Value = serde_json::from_str(
@@ -276,6 +342,7 @@ fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
             "Resolved Bedrock node targets {target_platform}, but Docker-backed tests require a Linux node. Run `just resolve-bedrock-node`."
         );
     }
+    ensure_node_runs_on_docker_daemon(target_platform, docker_daemon_platform())?;
 
     let locked_revision = locked_logos_bedrock_node_revision()?;
     if resolved_revision != locked_revision {
@@ -538,4 +605,51 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
         .context("Failed to sync wallet from prebuilt chain")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
+
+    #[test]
+    fn maps_docker_architectures_to_resolved_platforms() {
+        assert_eq!(
+            bedrock_platform_for_docker_arch("x86_64"),
+            Some("linux-x86_64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("amd64"),
+            Some("linux-x86_64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("aarch64\n"),
+            Some("linux-aarch64")
+        );
+        assert_eq!(
+            bedrock_platform_for_docker_arch("arm64"),
+            Some("linux-aarch64")
+        );
+        assert_eq!(bedrock_platform_for_docker_arch("riscv64"), None);
+    }
+
+    #[test]
+    fn accepts_a_node_the_daemon_can_execute() {
+        assert!(ensure_node_runs_on_docker_daemon("linux-aarch64", Some("linux-aarch64")).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_node_the_daemon_cannot_execute() {
+        let error = ensure_node_runs_on_docker_daemon("linux-x86_64", Some("linux-aarch64"))
+            .expect_err("a node built for another architecture is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Docker daemon runs linux-aarch64")
+        );
+    }
+
+    #[test]
+    fn skips_the_check_for_an_unknown_daemon() {
+        assert!(ensure_node_runs_on_docker_daemon("linux-x86_64", None).is_ok());
+    }
 }

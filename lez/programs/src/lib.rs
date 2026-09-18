@@ -12,10 +12,9 @@ mod inner {
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
         BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
-        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF,
-        WRAPPED_TOKEN_ID,
+        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FEE_ELF, FEE_ID,
+        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -63,12 +62,6 @@ mod inner {
             ASSOCIATED_TOKEN_ACCOUNT_ID,
             Cow::Borrowed(ASSOCIATED_TOKEN_ACCOUNT_ELF),
         )
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn faucet() -> Program {
-        Program::new_unchecked(FAUCET_ID, Cow::Borrowed(FAUCET_ELF))
     }
 
     #[must_use]
@@ -191,7 +184,6 @@ mod inner {
         fn builtin_programs() {
             let auth_transfer_program = authenticated_transfer();
             let token_program = token();
-            let faucet_program = faucet();
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
@@ -199,8 +191,6 @@ mod inner {
             assert_eq!(auth_transfer_program.elf(), AUTHENTICATED_TRANSFER_ELF);
             assert_eq!(token_program.id(), TOKEN_ID);
             assert_eq!(token_program.elf(), TOKEN_ELF);
-            assert_eq!(faucet_program.id(), FAUCET_ID);
-            assert_eq!(faucet_program.elf(), FAUCET_ELF);
             assert_eq!(bridge_program.id(), BRIDGE_ID);
             assert_eq!(bridge_program.elf(), BRIDGE_ELF);
             assert_eq!(sequencer_stake_program.id(), SEQUENCER_STAKE_ID);
@@ -214,7 +204,6 @@ mod inner {
                 (AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID),
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
-                (FAUCET_ELF, FAUCET_ID),
                 (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),
                 (TOKEN_ELF, TOKEN_ID),

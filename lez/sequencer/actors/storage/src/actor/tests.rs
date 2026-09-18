@@ -427,6 +427,149 @@ async fn net_shortening_reorg_drops_stale_blocks() {
     assert_tip_is(&storage_ref, &block1b).await;
 }
 
+#[tokio::test]
+async fn net_shortening_reorg_drops_block_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block1a.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2")
+            .expect("Block 2 is stored"),
+        2
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block1b.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn net_shortening_reorg_drops_acc_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    let genesis_clock_tx = clock_invocation(0_u64.saturating_mul(100));
+    let block_1a_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+
+    let clock_1_acc = genesis_clock_tx.message.account_ids[0];
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1a_clock_tx.clone().into(),
+            block_2_clock_tx.clone().into(),
+        ])
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1b_clock_tx.clone().into(),
+        ])
+    );
+}
+
 /// An orphan-only update: block 2 falls off the branch with no replacement, so
 /// the update carries no block at all and only the pinned tip says where the
 /// head went.

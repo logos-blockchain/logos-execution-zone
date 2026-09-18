@@ -21,11 +21,6 @@
     },
     "genesis": [
         {
-            "supply_bridge_account": {
-                "balance": 1000000
-            }
-        },
-        {
             "supply_account": {
                 "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
                 "balance": 10000

@@ -147,7 +147,7 @@ pub fn joining_setup() -> Result<(
                 .with_sequencer_partial_config(fast_blocks())
                 .with_genesis(vec![GenesisAction::SupplyAccount {
                     account_id: funding_id,
-                    balance: FUNDING_BALANCE,
+                    balance: FUNDING_BALANCE.try_into().expect("Must fit"),
                 }]),
         )
         .build_blocking()
