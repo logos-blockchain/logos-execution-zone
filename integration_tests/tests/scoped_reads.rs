@@ -105,7 +105,10 @@ fn genesis_payer(ctx: &mut TestContext) -> PublicAccountPrivateInitialData {
     payer
 }
 
-async fn fresh_segments(ctx: &mut TestContext, byte_len: usize) -> Result<Vec<AccountId>> {
+/// Segments hold `user_elf` alone, the kernel is re-attached on read, so size the chain off
+/// that rather than the full ELF or the loader rejects the count.
+async fn fresh_segments(ctx: &mut TestContext, program: &Program) -> Result<Vec<AccountId>> {
+    let byte_len = program.user_elf().expect("a test program decodes").len();
     let mut segments = Vec::new();
     for _ in 0..byte_len.div_ceil(MAX_SEGMENT_DATA_LEN) {
         segments.push(new_account(ctx, false, None).await?);
@@ -118,7 +121,7 @@ async fn deploy_at_bijection(
     payer: AccountId,
     program: &Program,
 ) -> Result<AccountId> {
-    let segments = fresh_segments(ctx, program.elf().len()).await?;
+    let segments = fresh_segments(ctx, program).await?;
 
     ProgramLoader(ctx.wallet())
         .deploy(
@@ -135,7 +138,7 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
     let payer = &genesis_payer(ctx);
     let writer = test_programs::data_writer();
 
-    let segments = fresh_segments(ctx, writer.elf().len()).await?;
+    let segments = fresh_segments(ctx, &writer).await?;
     let first_header = new_account(ctx, false, None).await?;
     ProgramLoader(ctx.wallet())
         .deploy(
