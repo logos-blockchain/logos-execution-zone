@@ -348,8 +348,8 @@ pub unsafe extern "C" fn wallet_ffi_default_storage_path() -> *mut c_char {
 /// create flow without touching the filesystem or knowing the path.
 ///
 /// # Returns
-/// - `true` if the default storage file exists, `false` otherwise (including
-///   when the path can't be resolved)
+/// - `true` if the default storage file exists, `false` otherwise (including when the path can't be
+///   resolved)
 ///
 /// # Safety
 /// This function takes no pointer arguments and is always safe to call.
