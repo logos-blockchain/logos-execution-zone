@@ -16,7 +16,7 @@ use kameo::{
     error::ActorStopReason,
     message::{Context, Message},
 };
-use lee::V03State;
+use lee::{AccountId, V03State};
 use lee_core::BlockId;
 use log::debug;
 
@@ -27,7 +27,8 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
+        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
@@ -63,6 +64,13 @@ struct UpdatedBlocks {
     removed: Vec<BlockId>,
     /// Whether the stored chain moved.
     chain_moved: bool,
+}
+
+#[derive(Debug)]
+struct AffectedAccountsMetaUpdate {
+    old_meta_length: u64,
+    updated_block_ids: Vec<u64>,
+    removed_block_ids: Vec<u64>,
 }
 
 impl StorageActor {
@@ -134,7 +142,7 @@ impl StorageActor {
     ) -> Result<UpdatedBlocks> {
         let last_stored_block_id = self.last_block()?.map_or(0, |block| block.header.block_id);
 
-        let (written, written_differs) =
+        let (written, mut accounts_affected_transactions, written_differs) =
             self.stage_new_blocks(batch, new_blocks, finalized_up_to)?;
 
         let tip_moved = head_tip
@@ -143,7 +151,14 @@ impl StorageActor {
 
         let highest_staged = written.last_key_value().map_or(0, |(id, _)| *id);
         let highest_block_id = last_stored_block_id.max(highest_staged);
-        let removed = self.delete_stale_blocks(batch, highest_block_id, head_tip);
+        let removed = self.delete_stale_blocks(
+            batch,
+            highest_block_id,
+            head_tip,
+            &mut accounts_affected_transactions,
+        )?;
+
+        self.stage_affected_accounts_meta(batch, accounts_affected_transactions)?;
 
         Ok(UpdatedBlocks {
             chain_moved: written_differs || tip_moved || !removed.is_empty(),
@@ -154,12 +169,20 @@ impl StorageActor {
 
     /// Stages every block this update writes, reporting whether any of them
     /// differs from the payload the store already holds.
+    #[expect(
+        clippy::type_complexity,
+        reason = "Non-public helperfunction, responses are arguments for other functions"
+    )]
     fn stage_new_blocks(
         &self,
         batch: &mut db::WriteBatch,
         new_blocks: Vec<Block>,
         finalized_up_to: Option<BlockId>,
-    ) -> Result<(BTreeMap<BlockId, entities::Block>, bool)> {
+    ) -> Result<(
+        BTreeMap<BlockId, entities::Block>,
+        BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
+        bool,
+    )> {
         let mut to_write: BTreeMap<BlockId, entities::Block> = new_blocks
             .into_iter()
             .map(|block| (block.header.block_id, entities::Block { block }))
@@ -206,12 +229,53 @@ impl StorageActor {
             }
         }
 
+        let mut accounts_affected_transactions: BTreeMap<AccountId, AffectedAccountsMetaUpdate> =
+            BTreeMap::new();
+
         for (block_id, block) in &to_write {
             self.db()
                 .put_batch(batch, &encoding::BigEndian::new(block_id), block)?;
+
+            // Atomic operation for block, no need for cumulative write.
+            self.db().put_batch(
+                batch,
+                &block.block.header.hash,
+                &entities::BlockHashToBlockIdMappingDestination { id: *block_id },
+            )?;
+
+            let affected_accounts = block
+                .block
+                .body
+                .transactions
+                .iter()
+                .flat_map(LeeTransaction::affected_public_account_ids);
+
+            // Non-atomic operation, needs cumulation.
+            for acc in affected_accounts {
+                let starting_meta_acc_opt = if accounts_affected_transactions.contains_key(&acc) {
+                    None
+                } else {
+                    self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
+                };
+
+                accounts_affected_transactions
+                    .entry(acc)
+                    .and_modify(|meta_update| {
+                        meta_update.updated_block_ids.push(*block_id);
+                    })
+                    .or_insert_with(|| AffectedAccountsMetaUpdate {
+                        old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
+                        updated_block_ids: vec![*block_id],
+                        removed_block_ids: vec![],
+                    });
+            }
         }
 
-        Ok((to_write, differs_from_stored))
+        Ok((
+            to_write,
+            accounts_affected_transactions,
+            differs_from_stored,
+        ))
     }
 
     fn delete_stale_blocks(
@@ -219,17 +283,139 @@ impl StorageActor {
         batch: &mut db::WriteBatch,
         highest_block_id: BlockId,
         head_tip: Option<BlockMeta>,
-    ) -> Vec<BlockId> {
+        accounts_affected_transactions: &mut BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
+    ) -> Result<Vec<BlockId>> {
         let mut removed_block_ids = Vec::new();
         if let Some(head_tip) = head_tip {
             for stale_id in head_tip.id.saturating_add(1)..=highest_block_id {
+                // TODO: Handle absence of stale block
+                if let Some(block) = self
+                    .db()
+                    .get::<entities::Block>(&encoding::BigEndian::new(&stale_id))?
+                {
+                    self.db()
+                        .delete_batch::<entities::BlockHashToBlockIdMappingDestination>(
+                            batch,
+                            &block.block.header.hash,
+                        );
+
+                    let affected_accounts = block
+                        .block
+                        .body
+                        .transactions
+                        .iter()
+                        .flat_map(LeeTransaction::affected_public_account_ids);
+
+                    for acc in affected_accounts {
+                        let starting_meta_acc_opt =
+                            if accounts_affected_transactions.contains_key(&acc) {
+                                None
+                            } else {
+                                self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
+                            };
+
+                        accounts_affected_transactions
+                            .entry(acc)
+                            .and_modify(|meta_update| meta_update.removed_block_ids.push(stale_id))
+                            .or_insert_with(|| AffectedAccountsMetaUpdate {
+                                old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
+                                updated_block_ids: vec![],
+                                removed_block_ids: vec![stale_id],
+                            });
+                    }
+                }
+
                 self.db()
                     .delete_batch::<entities::Block>(batch, &encoding::BigEndian::new(&stale_id));
+
                 removed_block_ids.push(stale_id);
             }
         }
+        Ok(removed_block_ids)
+    }
 
-        removed_block_ids
+    fn drop_all_affected_account_entries_up_to_block_id(
+        &self,
+        batch: &mut db::WriteBatch,
+        account_id: AccountId,
+        meta_pre_state: u64,
+        last_affecting_block_id: BlockId,
+    ) -> Result<u64> {
+        let mut cycle_counter = 1;
+        let mut curr_meta_state = meta_pre_state;
+        let mut iteration_key = entities::AccountIdToBlockIdKey::from((
+            account_id,
+            meta_pre_state.saturating_sub(cycle_counter),
+        ));
+
+        while let Some(entities::AccountIdToBlockIdDestination { block_id }) =
+            self.db()
+                .get::<entities::AccountIdToBlockIdDestination>(&iteration_key)?
+        {
+            if block_id >= last_affecting_block_id {
+                self.db()
+                    .delete_batch::<entities::AccountIdToBlockIdDestination>(batch, &iteration_key);
+                curr_meta_state = curr_meta_state.saturating_sub(1);
+            } else {
+                break;
+            }
+
+            cycle_counter = cycle_counter.saturating_add(1);
+            iteration_key = entities::AccountIdToBlockIdKey::from((
+                account_id,
+                meta_pre_state.saturating_sub(cycle_counter),
+            ));
+        }
+
+        Ok(curr_meta_state)
+    }
+
+    fn stage_affected_accounts_meta(
+        &self,
+        batch: &mut db::WriteBatch,
+        accounts_affected_transactions: BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
+    ) -> Result<()> {
+        // Cumulative write of accounts metadata.
+        for (
+            account_id,
+            AffectedAccountsMetaUpdate {
+                old_meta_length: meta_pre_state,
+                updated_block_ids: affecting_blocks_to_update,
+                removed_block_ids: affecting_blocks_to_remove,
+            },
+        ) in accounts_affected_transactions
+        {
+            let mut result_meta = self.drop_all_affected_account_entries_up_to_block_id(
+                batch,
+                account_id,
+                meta_pre_state,
+                *affecting_blocks_to_update.first().unwrap_or_else(|| {
+                    affecting_blocks_to_remove.first().expect("Must be present")
+                }),
+            )?;
+
+            for affecting_block_id in affecting_blocks_to_update {
+                let map_key = entities::AccountIdToBlockIdKey::from((account_id, result_meta));
+                self.db().put_batch(
+                    batch,
+                    &map_key,
+                    &entities::AccountIdToBlockIdDestination {
+                        block_id: affecting_block_id,
+                    },
+                )?;
+                result_meta = result_meta.saturating_add(1);
+            }
+
+            self.db().put_batch(
+                batch,
+                &account_id,
+                &entities::AccountIdToBlockIdMetaLen {
+                    length: result_meta,
+                },
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Stages the published high water mark down to `block_id`, leaving a mark
@@ -383,6 +569,66 @@ impl StorageActor {
         }
 
         Ok(())
+    }
+
+    fn get_affecting_txs_for_account_id(
+        &self,
+        account_id: AccountId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Option<Vec<LeeTransaction>>> {
+        let meta_acc_opt: Option<entities::AccountIdToBlockIdMetaLen> =
+            self.db()
+                .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
+
+        if let Some(meta_acc_data) = meta_acc_opt {
+            let mut affecting_txs = vec![];
+            let mut local_offset = 0;
+            let mut local_limit = 0;
+
+            'outer: for i in 0..meta_acc_data.length {
+                let mapping_key = entities::AccountIdToBlockIdKey::from((account_id, i));
+
+                let block_id = self
+                    .db()
+                    .get::<entities::AccountIdToBlockIdDestination>(&mapping_key)?
+                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                        "Inconsistent map: account id to block id map points into nowhere"
+                    )))?
+                    .block_id;
+
+                let affecting_transactions = self
+                    .db()
+                    .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                        "Inconsistent map: account id to block id map points into absent block"
+                    )))?
+                    .block
+                    .body
+                    .transactions
+                    .into_iter()
+                    .filter(|tx| tx.affected_public_account_ids().contains(&account_id));
+
+                for aff_tx in affecting_transactions {
+                    if local_offset >= offset {
+                        if local_limit < limit {
+                            affecting_txs.push(aff_tx);
+                            local_limit = local_limit.saturating_add(1);
+
+                            if local_limit >= limit {
+                                break 'outer;
+                            }
+                        }
+                    } else {
+                        local_offset = local_offset.saturating_add(1);
+                    }
+                }
+            }
+
+            Ok(Some(affecting_txs))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -1202,5 +1448,36 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
         self.db()
             .put(&peer_zone, &entities::CrossZonePeerTip { tip })
             .map_err(Into::into)
+    }
+}
+
+impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        GetBlockHashToBlockIdMapItem { block_hash }: GetBlockHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::BlockHashToBlockIdMappingDestination>(&block_hash)?
+            .map(|dest| dest.id))
+    }
+}
+
+impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        GetAccountIdToAffectingTxMapItemUptoLimit {
+            account_id,
+            offset,
+            limit,
+        }: GetAccountIdToAffectingTxMapItemUptoLimit,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.get_affecting_txs_for_account_id(account_id, offset, limit)
     }
 }
