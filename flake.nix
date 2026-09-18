@@ -201,6 +201,136 @@
             }
           );
 
+          # ---- Windows (x86_64-pc-windows-gnu), cross-compiled ------------
+          #
+          # Nix does not run on Windows, so this is published under the
+          # builder's own package set, the way zerokit and logos-delivery do it.
+          # It appears only once both prebuilt inputs carry their Windows
+          # artifacts; until then the attribute is absent rather than broken.
+          mingw = pkgs.pkgsCross.mingwW64;
+
+          # nvtx includes <Windows.h>; MinGW's header is lowercase and a cross
+          # build runs on a case-sensitive filesystem.
+          windowsHeaderShim = pkgs.runCommand "windows-h-shim" { } ''
+            mkdir -p $out/include
+            echo '#include <windows.h>' > $out/include/Windows.h
+          '';
+
+          circuitsWindows = logos-blockchain-circuits.packages.${system}.circuits-windows-x86_64-gnu;
+
+          # rust-rapidsnark and the circuits each ship a static libgmp.a, and
+          # linking both gives "multiple definition of __gmpn_*". Linux never
+          # hits it because rust-rapidsnark links its shared library there.
+          # Keep one: the circuits' copy, which their objects were built with.
+          rapidsnarkWindows =
+            let
+              raw = rust-rapidsnark.packages.${system}.rapidsnark-windows-x86_64;
+            in
+            pkgs.runCommand "rapidsnark-windows-x86_64-nogmp" { } ''
+              mkdir -p $out
+              for f in ${raw}/*; do
+                case "$(basename "$f")" in
+                  libgmp.a) ;;
+                  *) cp "$f" $out/ ;;
+                esac
+              done
+              ln -s ${circuitsWindows}/lib/libgmp.a $out/libgmp.a
+            '';
+
+          # risc0-zkvm 3.0.5 compiles its r0vm "actor" prover unconditionally,
+          # and that prover is a UnixStream socketpair. It is reachable only via
+          # RISC0_PROVER=actor, and with the `prove` feature default_prover()
+          # already returns the in-process LocalProver, so gating the module on
+          # cfg(unix) costs Windows nothing. Patched in the vendor directory, so
+          # the native builds and Cargo.lock are untouched.
+          rustToolchainWindows = pkgs.rust-bin.stable.latest.default.override {
+            targets = [ "x86_64-pc-windows-gnu" ];
+          };
+          craneLibWindows = (crane.mkLib pkgs).overrideToolchain rustToolchainWindows;
+          vendorWindows =
+            let
+              plain = craneLibWindows.vendorCargoDeps { inherit src; };
+            in
+            pkgs.runCommand "lez-cargo-vendor-windows" { } ''
+              cp -rL ${plain} $out
+              chmod -R u+w $out
+              # config.toml points every source at the ORIGINAL store path, so
+              # without this cargo reads the unpatched crates and the patch below
+              # is invisible.
+              sed -i 's|${plain}|'"$out"'|g' $out/config.toml
+              crate=$(find $out -maxdepth 3 -type d -name risc0-zkvm-3.0.5 | head -1)
+              if [ -z "$crate" ]; then
+                echo "risc0-zkvm-3.0.5 is not in the vendor dir; the layout changed" >&2
+                exit 1
+              fi
+              patch -p1 -d "$crate" < ${./patches/risc0-zkvm-3.0.5-windows.patch}
+              grep -q '#\[cfg(unix)\]' "$crate/src/host/client/prove/mod.rs" \
+                || { echo "risc0 patch did not take" >&2; exit 1; }
+              # The recorded per-file hashes no longer match; cargo accepts an
+              # empty file map for a vendored source.
+              ${pkgs.jq}/bin/jq '.files = {}' "$crate/.cargo-checksum.json" > "$crate/.cargo-checksum.json.new"
+              mv "$crate/.cargo-checksum.json.new" "$crate/.cargo-checksum.json"
+            '';
+
+          walletFfiWindowsArgs = commonArgs // {
+              cargoExtraArgs = "-p wallet-ffi";
+              cargoVendorDir = vendorWindows;
+              doCheck = false;
+
+              CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
+              # rustc shells out to dlltool by bare name for this target, so the
+              # toolchain has to be on PATH, not just named in the env below.
+              nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ mingw.stdenv.cc ];
+
+              CC_x86_64_pc_windows_gnu = "${mingw.stdenv.cc.targetPrefix}cc";
+              CXX_x86_64_pc_windows_gnu = "${mingw.stdenv.cc.targetPrefix}c++";
+              AR_x86_64_pc_windows_gnu = "${mingw.stdenv.cc.targetPrefix}ar";
+              CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "${mingw.stdenv.cc.targetPrefix}cc";
+
+              # nixpkgs' mingw gcc pulls <mcfgthread/gthr.h> from the mcfgthreads
+              # *dev* output; risc0's C++ kernels fail without it.
+              CFLAGS_x86_64_pc_windows_gnu =
+                "-I${windowsHeaderShim}/include "
+                + "-I${mingw.windows.mcfgthreads.dev}/include "
+                + "-I${mingw.windows.pthreads}/include";
+              CXXFLAGS_x86_64_pc_windows_gnu =
+                "-I${windowsHeaderShim}/include "
+                + "-I${mingw.windows.mcfgthreads.dev}/include "
+                + "-I${mingw.windows.pthreads}/include";
+
+              # nixpkgs builds mingw-w64 against mcfgthread, so its libstdc++
+              # pulls _MCF_mutex_*; rust's windows-gnu target links neither it
+              # nor winpthread by default. libmman supplies the mmap/munmap the
+              # circuit objects call.
+              CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS =
+                "-L native=${mingw.windows.mcfgthreads}/lib "
+                + "-L native=${mingw.windows.pthreads}/lib "
+                + "-l static=mcfgthread "
+                + "-L native=${circuitsWindows}/lib "
+                + "-l static=mman";
+
+              RAPIDSNARK_LIB_DIR = rapidsnarkWindows;
+              LBC_ROOT_DIR = circuitsWindows;
+            };
+
+          # crane builds `cargoArtifacts` itself when none is given, and that
+          # build vendors again from the unpatched lock -- the risc0 gates would
+          # silently not apply to the dependency stage.
+          cargoArtifactsWindows = craneLibWindows.buildDepsOnly walletFfiWindowsArgs;
+
+          walletFfiWindowsPackage = craneLibWindows.buildPackage (
+            walletFfiWindowsArgs
+            // {
+              pname = "logos-execution-zone-wallet-ffi-windows";
+              version = "0.1.0";
+              cargoArtifacts = cargoArtifactsWindows;
+              postInstall = ''
+                mkdir -p $out/include
+                cp lez/wallet-ffi/wallet_ffi.h $out/include/
+              '';
+            }
+          );
+
           indexerFfiPackage = craneLib.buildPackage (
             commonArgs
             // {
@@ -222,6 +352,15 @@
           indexer = indexerFfiPackage;
           default = walletFfiPackage;
         }
+        // nixpkgs.lib.optionalAttrs
+          (
+            system == "x86_64-linux"
+            && rust-rapidsnark.packages.${system} ? rapidsnark-windows-x86_64
+            && logos-blockchain-circuits.packages.${system} ? circuits-windows-x86_64-gnu
+          )
+          {
+            wallet-windows-x86_64 = walletFfiWindowsPackage;
+          }
       );
       devShells = forAll (
         system:
