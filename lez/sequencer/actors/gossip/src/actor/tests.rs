@@ -137,7 +137,7 @@ fn test_config() -> GossipConfig {
 }
 
 fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-    MemPool::new(1000).1
+    MemPool::new_fifo(1000).1
 }
 
 fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
@@ -174,7 +174,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
-    let (mempool, mempool_handle) = MemPool::new(1000);
+    let (mempool, mempool_handle) = MemPool::new_fifo(1000);
     let (approval_tx, approvals) = mpsc::unbounded_channel();
     let sink_ref = ApprovalSink::spawn(ApprovalSink(approval_tx));
     let actor = GossipActor::new(

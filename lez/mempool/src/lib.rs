@@ -10,9 +10,43 @@ use std::{
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
-pub struct MemPool<T> {
+/// A held item and the lanes it sits in.
+struct Entry<T, G> {
+    item: T,
+    lanes: Vec<G>,
+    /// Whether `ready` currently holds it, so it is never enqueued twice.
+    queued: bool,
+}
+
+/// A bounded pool that pops the highest `priority` first, without ever
+/// reordering a lane.
+///
+/// - `priority`: the bid of an item; higher pops first, ties go to the earlier arrival.
+/// - `lanes_of`: the lanes an item belongs to (one per signer `nonce` sequence). Items sharing a
+///   lane keep their arrival order: an item is ready only once it heads every lane it is in. An
+///   item in no lane is always ready.
+///
+/// This is Kahn's algorithm with a priority heap, kept across pops:
+/// - items are the nodes of a DAG
+/// - lanes are its edges.
+///
+/// `lanes_of` runs once per item, and so does `priority` unless a `push_front` overtakes the
+/// item while it is ready.
+///
+/// A pop costs O(k·(k + log n)), `k` being the lanes of the popped item and `n` the ready items.
+pub struct MemPool<T, K = (), G = ()> {
     receiver: Receiver<T>,
-    front_buffer: Vec<T>,
+    priority: fn(&T) -> K,
+    lanes_of: fn(&T) -> Vec<G>,
+    /// Arrival numbers: received items count up from 0, `push_front` counts
+    /// down from -1, so every lane stays sorted by arrival.
+    next_back: i64,
+    next_front: i64,
+    items: HashMap<i64, Entry<T, G>>,
+    /// Per lane, arrivals in order; only the front is eligible.
+    lanes: HashMap<G, VecDeque<i64>>,
+    /// Ready items: highest bid first, earlier arrival breaks ties.
+    ready: BinaryHeap<(K, Reverse<i64>)>,
     /// Every item the pool holds, in the channel or not.
     ///
     /// [`MemPoolHandle`] reserves a slot here before sending, so admission is one atomic op.
@@ -20,40 +54,148 @@ pub struct MemPool<T> {
 }
 
 impl<T> MemPool<T> {
+    /// A pool with no priorities nor lanes, simple arrival order (FIFO).
     #[must_use]
-    pub fn new(max_size: usize) -> (Self, MemPoolHandle<T>) {
+    pub fn new_fifo(max_size: usize) -> (Self, MemPoolHandle<T>) {
+        Self::new(max_size, |_| (), |_| Vec::new())
+    }
+}
+
+impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
+    #[must_use]
+    pub fn new(
+        max_size: usize,
+        priority: fn(&T) -> K,
+        lanes_of: fn(&T) -> Vec<G>,
+    ) -> (Self, MemPoolHandle<T>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
 
         let len = Arc::new(AtomicUsize::new(0));
         let mem_pool = Self {
             receiver,
-            front_buffer: Vec::new(),
+            priority,
+            lanes_of,
+            next_back: 0,
+            next_front: 0,
+            items: HashMap::new(),
+            lanes: HashMap::new(),
+            ready: BinaryHeap::new(),
             len: Arc::clone(&len),
         };
         let sender = MemPoolHandle { sender, len };
         (mem_pool, sender)
     }
 
-    /// Returns the total number of items in the mempool, including both the front buffer and the
-    /// channel.
+    /// Returns the total number of items in the mempool, received or still in the channel.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.front_buffer.len().saturating_add(self.receiver.len())
+        self.items.len().saturating_add(self.receiver.len())
     }
 
     /// Returns true if the mempool is empty, false otherwise.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.front_buffer.is_empty() && self.receiver.is_empty()
+        self.items.is_empty() && self.receiver.is_empty()
     }
 
-    /// Pop an item from the mempool first checking the front buffer (LIFO) then the channel (FIFO).
+    /// Pop the ready item with the highest priority.
     pub fn pop(&mut self) -> Option<T> {
-        // First check if there are any items in the front buffer (LIFO),
-        // otherwise try to receive from the channel (FIFO)
-        let item = self.front_buffer.pop().or_else(|| self.try_recv())?;
+        self.ingest();
+
+        let entry = loop {
+            let (_, Reverse(arrival)) = self.ready.pop()?;
+            if self.is_ready(arrival)
+                && let Some(entry) = self.items.remove(&arrival)
+            {
+                break entry;
+            }
+            // a `push_front` overtook it; it is enqueued again once that item pops
+            if let Some(entry) = self.items.get_mut(&arrival) {
+                entry.queued = false;
+            }
+        };
+
+        for lane in &entry.lanes {
+            if let Some(queue) = self.lanes.get_mut(lane) {
+                queue.pop_front();
+                if queue.is_empty() {
+                    self.lanes.remove(lane);
+                }
+            }
+        }
+
+        // whatever now heads those lanes may have become ready
+        for lane in &entry.lanes {
+            if let Some(head) = self
+                .lanes
+                .get(lane)
+                .and_then(|queue| queue.front().copied())
+            {
+                self.enqueue_if_ready(head);
+            }
+        }
+
         self.len.fetch_sub(1, Ordering::Relaxed);
-        Some(item)
+        Some(entry.item)
+    }
+
+    /// Put a popped item back at the front of its lanes; it also wins ties.
+    pub fn push_front(&mut self, item: T) {
+        self.next_front = self.next_front.saturating_sub(1);
+        self.insert(self.next_front, item, true);
+        self.len.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Moves everything out of the channel.
+    ///
+    /// Note that `len` already counts these.
+    fn ingest(&mut self) {
+        while let Some(item) = self.try_recv() {
+            let arrival = self.next_back;
+            self.next_back = arrival.saturating_add(1);
+            self.insert(arrival, item, false);
+        }
+    }
+
+    fn insert(&mut self, arrival: i64, item: T, front: bool) {
+        let lanes = (self.lanes_of)(&item);
+        for lane in &lanes {
+            let queue = self.lanes.entry(lane.clone()).or_default();
+            if front {
+                queue.push_front(arrival);
+            } else {
+                queue.push_back(arrival);
+            }
+        }
+        let entry = Entry {
+            item,
+            lanes,
+            queued: false,
+        };
+        self.items.insert(arrival, entry);
+        self.enqueue_if_ready(arrival);
+    }
+
+    /// Whether the item heads every lane it is in.
+    fn is_ready(&self, arrival: i64) -> bool {
+        self.items.get(&arrival).is_some_and(|entry| {
+            entry
+                .lanes
+                .iter()
+                .all(|lane| self.lanes.get(lane).and_then(VecDeque::front) == Some(&arrival))
+        })
+    }
+
+    fn enqueue_if_ready(&mut self, arrival: i64) {
+        if !self.is_ready(arrival) {
+            return;
+        }
+        if let Some(entry) = self.items.get_mut(&arrival)
+            && !std::mem::replace(&mut entry.queued, true)
+        {
+            self.ready
+                .push(((self.priority)(&entry.item), Reverse(arrival)));
+        }
     }
 
     fn try_recv(&mut self) -> Option<T> {
@@ -66,86 +208,6 @@ impl<T> MemPool<T> {
                 panic!("Mempool senders disconnected, cannot receive items, this is a bug")
             }
         }
-    }
-
-    /// Push an item to the front of the mempool (will be popped first).
-    pub fn push_front(&mut self, item: T) {
-        self.front_buffer.push(item);
-        self.len.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Reorders everything held so that `pop` yields the best item first.
-    ///
-    /// The logic is based on Kahn's algorithm with a priority heap.
-    /// We think of lanes as the edges, and items as the nodes in a DAG.
-    ///
-    /// Time O(n log n + e·k), space O(n + e):
-    /// - `n`: number of items, roughly bounded by the mempool's `max_size`
-    /// - `e`: total lane memberships (the edges)
-    /// - `k`: most lanes any one item has; bounded, as witness count is capped only by tx size
-    ///
-    /// The ordering is based on:
-    /// - `priority`: the bid of an item; higher pops first, ties go to the earlier arrival.
-    /// - `lanes_of`: the lanes an item belongs to (one per signer `nonce` sequence). Items sharing
-    ///   a lane keep their arrival order: an item is ready only once it heads every lane it is in.
-    ///   If it doesn't belong to any lane, it's already ready.
-    pub fn prioritize<K: Ord, G: Hash + Eq + Clone>(
-        &mut self,
-        priority: impl Fn(&T) -> K,
-        lanes_of: impl Fn(&T) -> Vec<G>,
-    ) {
-        let mut items: Vec<Option<(Vec<G>, T)>> = Vec::new();
-        // per lane, item indices in arrival order; only the front is eligible
-        let mut lanes: HashMap<G, VecDeque<usize>> = HashMap::new();
-
-        // we read & order and fill the pool again, `len` is not touched,
-        // so we do not use `pop` here
-        let in_buffer = std::mem::take(&mut self.front_buffer).into_iter().rev();
-        let in_channel = std::iter::from_fn(|| self.try_recv());
-        for (arrival, item) in in_buffer.chain(in_channel).enumerate() {
-            let groups = lanes_of(&item);
-            for group in &groups {
-                lanes.entry(group.clone()).or_default().push_back(arrival);
-            }
-            items.push(Some((groups, item)));
-        }
-
-        // ready items: highest bid first (`K`), earlier arrival breaks ties (`Reverse<usize>`)
-        let mut ready: BinaryHeap<(K, Reverse<usize>)> = BinaryHeap::new();
-        // an item is enqueued exactly once, however many lanes report it
-        let mut queued = vec![false; items.len()];
-        // items to check: every item on the first pass, then the new lane heads
-        let mut candidates: Vec<usize> = (0..items.len()).collect();
-        let mut ordered = Vec::with_capacity(items.len());
-        loop {
-            for i in candidates {
-                let (groups, item) = items[i].as_ref().expect("candidates are unpicked");
-                // if its not queued already & its the front of all lanes its part of, its ready
-                if !queued[i] && groups.iter().all(|group| lanes[group].front() == Some(&i)) {
-                    queued[i] = true;
-                    ready.push((priority(item), Reverse(i)));
-                }
-            }
-            let Some((_, Reverse(best))) = ready.pop() else {
-                break; // no more candidates
-            };
-
-            let (groups, item) = items[best].take().expect("an item is picked once");
-            for group in &groups {
-                lanes.get_mut(group).expect("registered lane").pop_front();
-            }
-            // whatever now heads those lanes may have become ready
-            candidates = groups
-                .iter()
-                .filter_map(|group| lanes[group].front().copied())
-                .collect();
-
-            ordered.push(item);
-        }
-
-        // `pop` takes from the end.
-        ordered.reverse();
-        self.front_buffer = ordered;
     }
 }
 
@@ -200,16 +262,33 @@ mod tests {
 
     use super::*;
 
+    /// An item as `(priority, lanes, tag)`.
+    type Laned = (u32, Vec<char>, &'static str);
+
+    fn laned_pool() -> (MemPool<Laned, u32, char>, MemPoolHandle<Laned>) {
+        MemPool::new(
+            10,
+            |&(priority, _, _)| priority,
+            |(_, lanes, _)| lanes.clone(),
+        )
+    }
+
+    fn drain(pool: &mut MemPool<Laned, u32, char>) -> Vec<&'static str> {
+        std::iter::from_fn(|| pool.pop())
+            .map(|(_, _, tag)| tag)
+            .collect()
+    }
+
     #[test]
     async fn mempool_new() {
-        let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
+        let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new_fifo(10);
         assert_eq!(pool.pop(), None);
         assert_eq!(pool.len(), 0);
     }
 
     #[test]
     async fn push_and_pop() {
-        let (mut pool, handle) = MemPool::new(10);
+        let (mut pool, handle) = MemPool::new_fifo(10);
 
         handle.push(1).await.unwrap();
         assert_eq!(pool.len(), 1);
@@ -222,7 +301,7 @@ mod tests {
 
     #[test]
     async fn multiple_push_pop() {
-        let (mut pool, handle) = MemPool::new(10);
+        let (mut pool, handle) = MemPool::new_fifo(10);
 
         handle.push(1).await.unwrap();
         handle.push(2).await.unwrap();
@@ -237,45 +316,37 @@ mod tests {
     }
 
     #[test]
-    async fn prioritize_pops_highest_first_then_arrival_order() {
-        let (mut pool, handle) = MemPool::new(10);
+    async fn pops_highest_first_then_arrival_order() {
+        let (mut pool, handle) = laned_pool();
 
-        // (priority, tag), every item in its own lane
-        handle.push((1, 'b')).await.unwrap();
-        handle.push((5, 'c')).await.unwrap();
-        handle.push((1, 'd')).await.unwrap();
-        pool.push_front((1, 'a'));
+        // every item in its own lane
+        handle.push((1, vec!['b'], "b")).await.unwrap();
+        handle.push((5, vec!['c'], "c")).await.unwrap();
+        handle.push((1, vec!['d'], "d")).await.unwrap();
+        pool.push_front((1, vec!['a'], "a"));
 
-        pool.prioritize(|&(priority, _)| priority, |&(_, tag)| vec![tag]);
-        let order: Vec<char> = std::iter::from_fn(|| pool.pop())
-            .map(|(_, tag)| tag)
-            .collect();
-        assert_eq!(order, vec!['c', 'a', 'b', 'd']);
+        assert_eq!(drain(&mut pool), vec!["c", "a", "b", "d"]);
     }
 
     #[test]
-    async fn prioritize_never_reorders_a_lane_and_waits_on_every_lane() {
-        let (mut pool, handle) = MemPool::new(10);
+    async fn never_reorders_a_lane_and_waits_on_every_lane() {
+        let (mut pool, handle) = laned_pool();
 
-        // (priority, lanes, tag): `p` is in no lane; alice's tipped `a1` waits
-        // behind `a0`; the sponsored `s` is in both lanes and waits behind
-        // `a0` even though bob's lane is free; `b0` waits behind `s`.
+        // `p` is in no lane; alice's tipped `a1` waits behind `a0`; the
+        // sponsored `s` is in both lanes and waits behind `a0` even though
+        // bob's lane is free; `b0` waits behind `s`.
         handle.push((0, vec![], "p")).await.unwrap();
         handle.push((0, vec!['A'], "a0")).await.unwrap();
         handle.push((5, vec!['A'], "a1")).await.unwrap();
         handle.push((9, vec!['A', 'B'], "s")).await.unwrap();
         handle.push((3, vec!['B'], "b0")).await.unwrap();
 
-        pool.prioritize(|&(priority, _, _)| priority, |(_, lanes, _)| lanes.clone());
-        let order: Vec<&str> = std::iter::from_fn(|| pool.pop())
-            .map(|(_, _, tag)| tag)
-            .collect();
-        assert_eq!(order, vec!["p", "a0", "a1", "s", "b0"]);
+        assert_eq!(drain(&mut pool), vec!["p", "a0", "a1", "s", "b0"]);
     }
 
     #[test]
-    async fn prioritize_enqueues_an_item_once_however_many_lanes_report_it() {
-        let (mut pool, handle) = MemPool::new(10);
+    async fn enqueues_an_item_once_however_many_lanes_report_it() {
+        let (mut pool, handle) = laned_pool();
 
         // `y` becomes the head of both lanes at once when `x` is picked;
         // `z` names the same lane twice.
@@ -283,31 +354,55 @@ mod tests {
         handle.push((2, vec!['A', 'B'], "y")).await.unwrap();
         handle.push((3, vec!['A', 'A'], "z")).await.unwrap();
 
-        pool.prioritize(|&(priority, _, _)| priority, |(_, lanes, _)| lanes.clone());
-        let order: Vec<&str> = std::iter::from_fn(|| pool.pop())
-            .map(|(_, _, tag)| tag)
-            .collect();
-        assert_eq!(order, vec!["x", "y", "z"]);
+        assert_eq!(drain(&mut pool), vec!["x", "y", "z"]);
     }
 
     #[test]
-    async fn try_push_counts_what_prioritize_moved_out_of_the_channel() {
-        let (mut pool, handle) = MemPool::new(2);
+    async fn push_front_goes_back_ahead_of_its_lane() {
+        let (mut pool, handle) = laned_pool();
+
+        handle.push((0, vec!['A'], "a0")).await.unwrap();
+        handle.push((5, vec!['A'], "a1")).await.unwrap();
+
+        // popping `a0` made the better-paying `a1` ready; putting `a0` back
+        // must make it wait again
+        let a0 = pool.pop().unwrap();
+        assert_eq!(a0.2, "a0");
+        pool.push_front(a0);
+
+        assert_eq!(drain(&mut pool), vec!["a0", "a1"]);
+        assert!(pool.lanes.is_empty(), "drained lanes are dropped");
+    }
+
+    #[test]
+    async fn orders_what_arrives_between_pops() {
+        let (mut pool, handle) = laned_pool();
+
+        handle.push((1, vec![], "low")).await.unwrap();
+        handle.push((2, vec![], "mid")).await.unwrap();
+        assert_eq!(pool.pop().unwrap().2, "mid");
+
+        handle.push((9, vec![], "late")).await.unwrap();
+        assert_eq!(drain(&mut pool), vec!["late", "low"]);
+    }
+
+    #[test]
+    async fn try_push_counts_what_pop_moved_out_of_the_channel() {
+        let (mut pool, handle) = MemPool::new(2, |&item: &u32| item, |_| Vec::<()>::new());
 
         handle.try_push(1).unwrap();
         handle.try_push(2).unwrap();
-        pool.prioritize(|&item| item, |&item| vec![item]);
-
-        // The channel is empty again, but the pool is still full.
-        assert!(handle.try_push(3).is_err());
         assert_eq!(pool.pop(), Some(2));
+
+        // The channel is empty again, but the pool still holds one.
         handle.try_push(3).unwrap();
+        assert!(handle.try_push(4).is_err());
         assert_eq!(pool.len(), 2);
     }
 
     #[test]
     async fn a_cancelled_push_does_not_leak_a_slot() {
-        let (mut pool, handle) = MemPool::new(1);
+        let (mut pool, handle) = MemPool::new_fifo(1);
         handle.push(1).await.unwrap();
 
         // the channel is full, so this push parks; drop it mid-wait
@@ -319,7 +414,7 @@ mod tests {
 
     #[test]
     async fn max_size() {
-        let (_pool, handle) = MemPool::new(2);
+        let (_pool, handle) = MemPool::new_fifo(2);
 
         handle.push(1).await.unwrap();
         handle.push(2).await.unwrap();
@@ -330,7 +425,7 @@ mod tests {
 
     #[test]
     async fn try_push_fails_when_full_without_blocking() {
-        let (mut pool, handle) = MemPool::new(1);
+        let (mut pool, handle) = MemPool::new_fifo(1);
 
         handle.try_push(1).unwrap();
         assert!(handle.try_push(2).is_err(), "full mempool must not accept");
@@ -343,7 +438,7 @@ mod tests {
 
     #[test]
     async fn push_front() {
-        let (mut pool, handle) = MemPool::new(10);
+        let (mut pool, handle) = MemPool::new_fifo(10);
 
         handle.push(1).await.unwrap();
         handle.push(2).await.unwrap();
