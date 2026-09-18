@@ -8,7 +8,7 @@ use lee_core::{
     encryption::{ViewTag, ViewingPublicKey},
 };
 
-use crate::private_backend::DerivedOutputs;
+use crate::private_backend::{DerivedOutputs, WriteFate};
 
 pub fn compute_circuit_output(
     accounts: Vec<(AccountWithMetadata, Account)>,
@@ -22,6 +22,7 @@ pub fn compute_circuit_output(
         block_validity_window,
         timestamp_validity_window,
         pda_seed_by_position,
+        classification,
     } = derived_outputs;
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions: Vec::new(),
@@ -42,10 +43,20 @@ pub fn compute_circuit_output(
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                output.public_actions.push(PublicAction {
-                    pre: pre_state,
-                    post: post_state,
-                });
+                let account_id = pre_state.account_id;
+                // Absence from `classification` means the same as `Bound`: nothing was ever
+                // written, so `post` trivially equals `pre` and there's nothing to defer.
+                let action = match classification.get(&account_id) {
+                    Some(WriteFate::Deferred(resolutions)) => PublicAction::Deferred {
+                        account_id,
+                        resolutions: resolutions.clone(),
+                    },
+                    Some(WriteFate::Bound) | None => PublicAction::Bound {
+                        pre: pre_state,
+                        post: post_state,
+                    },
+                };
+                output.public_actions.push(action);
             }
             InputAccountIdentity::Private(PrivateWitness {
                 vpk,

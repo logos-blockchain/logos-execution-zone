@@ -3,7 +3,7 @@
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
-    PrivateWitness, SharedSecretKey, WitnessKind,
+    PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
@@ -42,6 +42,183 @@ fn proof_inner_roundtrip() {
     assert_eq!(Proof::from_inner(bytes.clone()).into_inner(), bytes);
     assert!(Proof::from_inner(vec![]).into_inner().is_empty());
     assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
+}
+
+#[derive(borsh::BorshSerialize)]
+enum StrippedTokenInstruction {
+    Initialize { balance: u128 },
+    Transfer { amount: u128 },
+}
+
+/// Mirrors just the variant `stripped_token`'s `Initialize` produces - discriminant 0, matching
+/// the guest's own `enum TokenDiff { Add(u128), Sub(u128) }`.
+#[derive(borsh::BorshSerialize)]
+enum TokenDiff {
+    Add(u128),
+}
+
+/// Mirrors `stripped_token`'s own `TokenAccountData` - what its `Update` resolves a diff to.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct TokenAccountData {
+    balance: u128,
+}
+
+/// `PrivateBackend::resolve_write`'s counterpart to the public-side `incremental_update_cycles_*`
+/// tests: confirms the in-circuit `Update` resolution (via `execute_and_prove_incremental` and
+/// `env::verify`) actually runs, end to end through a real proof, rather than just compiling.
+/// `stripped_token`'s `Initialize` writes `post_data` (not just balance), so this is the only
+/// program among this file's other tests that exercises the path at all.
+///
+/// `Initialize` claims `DeferReads::WriteOnly` (see `stripped_token`'s `Probe` handler), which
+/// covers this write, so the account comes out `Deferred`, not `Bound` - `resolve_write` still
+/// resolved it in-circuit (that's what this test is really checking), but classification decided
+/// the *resolved* value isn't what gets exported; the raw delta is, for settlement to redo.
+#[test]
+fn prove_privacy_preserving_execution_circuit_resolves_an_incremental_write() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([9; 32]);
+    let pre = AccountWithMetadata::new(
+        Account {
+            program_owner: program_id,
+            ..Account::default()
+        },
+        true,
+        account_id,
+    );
+
+    let instruction_data =
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance: 42 })
+            .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction_data,
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Deferred {
+        account_id: returned_account_id,
+        resolutions,
+    } = action
+    else {
+        panic!("expected a Deferred action");
+    };
+    assert_eq!(returned_account_id, account_id);
+    let [resolution] = resolutions.try_into().unwrap();
+    assert_eq!(resolution.executing_account_id, program_id);
+    let expected_post_data: Data = borsh::to_vec(&TokenDiff::Add(42)).unwrap().try_into().unwrap();
+    assert_eq!(resolution.post_data, Some(expected_post_data));
+}
+
+/// The "once `Bound`, permanent" invariant: `acquire_and_forward` writes directly to
+/// `account_id` - a write with no `Probe` claim at all, since it never implements `Incremental` -
+/// forcing `Bound`. It then chains to `stripped_token`'s `Initialize` on that very same account,
+/// whose `WriteOnly` claim *would* cover this second write and defer it, if the account weren't
+/// already permanently `Bound`. Confirms it stays `Bound`, not reverted to `Deferred` by the
+/// later covered touch - and that the exported value is the real one `resolve_write` computed
+/// for that second touch (`stripped_token`'s), not a mechanical "first touch wins" artifact.
+///
+/// `acquire_and_forward`'s own write is `Some(vec![])` - `post_data.is_some()` so it still counts
+/// as a write for classification, but empty-to-empty changes nothing, so it neither claims
+/// ownership of the still-unowned account nor gives `stripped_token`'s later `Initialize`
+/// anything but an empty `data` to decode (avoiding its "must decode as `TokenAccountData`"
+/// panic on garbage bytes).
+#[test]
+fn once_bound_a_later_covered_touch_does_not_revert_to_deferred() {
+    let delegator = crate::test_methods::acquire_and_forward();
+    let callee = crate::test_methods::stripped_token();
+    let callee_program_id = callee.id();
+    let account_id = AccountId::new([7; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let callee_instruction =
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance: 42 })
+            .unwrap();
+    let instruction_data = Program::serialize_instruction((
+        Some(Vec::<u8>::new()),
+        callee_program_id,
+        callee_instruction,
+    ))
+    .unwrap();
+
+    let callee_account_id: AccountId = callee_program_id.into();
+    let program_with_deps = ProgramWithDependencies::new(
+        delegator.clone(),
+        delegator.id().into(),
+        [(callee_account_id, callee)].into(),
+    );
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        instruction_data,
+        vec![InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+
+    let [action] = output.public_actions.try_into().unwrap();
+    let PublicAction::Bound { post, .. } = action else {
+        panic!("expected the account to stay Bound despite the later covered touch");
+    };
+    let data: TokenAccountData = borsh::from_slice(post.data.as_ref())
+        .expect("resolved post_data must decode as TokenAccountData");
+    assert_eq!(data.balance, 42);
+}
+
+/// `Transfer` produces two diffs (sender debit, receiver credit) from one call, both covered by
+/// its single `All` `Probe` claim - unlike `Initialize`'s one-diff case above, this confirms the
+/// classification (and the one `Probe` receipt backing it) is shared correctly across multiple
+/// diffs from the same call, not just a single one.
+#[test]
+fn prove_privacy_preserving_execution_circuit_transfer_defers_both_diffs() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let sender_id = AccountId::new([10; 32]);
+    let receiver_id = AccountId::new([11; 32]);
+
+    let sender_data: Data = borsh::to_vec(&TokenAccountData { balance: 100 })
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let sender = AccountWithMetadata::new(
+        Account {
+            program_owner: program_id,
+            data: sender_data,
+            ..Account::default()
+        },
+        true,
+        sender_id,
+    );
+    let receiver = AccountWithMetadata::new(Account::default(), true, receiver_id);
+
+    let instruction_data =
+        Program::serialize_instruction(StrippedTokenInstruction::Transfer { amount: 30 })
+            .unwrap();
+
+    let (output, proof) = execute_and_prove(
+        vec![sender, receiver],
+        instruction_data,
+        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.public_actions.len(), 2);
+    for action in &output.public_actions {
+        assert!(
+            matches!(action, PublicAction::Deferred { .. }),
+            "expected both diffs to be Deferred, got {action:?}"
+        );
+    }
 }
 
 #[test]
@@ -108,7 +285,13 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     assert!(proof.is_valid_for(&output));
 
     let [action] = output.public_actions.try_into().unwrap();
-    let (sender_pre, sender_post) = (action.pre, action.post);
+    let PublicAction::Bound {
+        pre: sender_pre,
+        post: sender_post,
+    } = action
+    else {
+        panic!("expected a Bound action");
+    };
     assert_eq!(sender_pre, expected_sender_pre);
     assert_eq!(sender_post, expected_sender_post);
     assert_eq!(output.private_actions.len(), 1);

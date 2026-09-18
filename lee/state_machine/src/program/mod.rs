@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, Cycles},
+    account::{AccountId, AccountWithMetadata, Cycles, Data},
     from_frame,
-    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{CallKind, IncrementalCall, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
@@ -182,6 +182,48 @@ impl Program {
             borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
+    }
+
+    /// Resolves `post_data` against current `pre_state`. A program that hasn't implemented
+    /// `Incremental` responds with a no-op plus an `UnsupportedCallKind` event instead of an
+    /// error; the caller checks for that event to fall back to copy/replace.
+    ///
+    /// No caller is passed: `Update` is never caller-gated by any program (whitelisting belongs
+    /// at `Execute` time, before a proof is even generated), and threading the real caller
+    /// through here would only risk leaking call-chain identity for no benefit.
+    pub(crate) fn execute_incremental(
+        &self,
+        self_account_id: AccountId,
+        pre_state: &AccountWithMetadata,
+        post_data: &Data,
+        cycle_budget: Cycles,
+    ) -> Result<(ProgramOutput, Cycles), LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.session_limit(Some(cycle_budget));
+        env_builder.write_slice(&to_borsh_frame(&CallKind::Incremental));
+
+        let input = ProgramInput {
+            self_account_id,
+            caller_account_id: None,
+            pre_states: vec![pre_state.clone()],
+            instruction: borsh::to_vec(&IncrementalCall::Update(post_data.to_vec()))
+                .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
+        };
+        let input_payload =
+            borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder.write_slice(&to_frame(&input_payload));
+        let env = env_builder.build().unwrap();
+
+        let session = Self::execute_session(env, self.elf(), cycle_budget)?;
+        let cycles = session.cycles;
+
+        let output_payload = from_frame(&session.journal).ok_or_else(|| {
+            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
+        })?;
+        let program_output = borsh::from_slice(output_payload)
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        Ok((program_output, cycles))
     }
 }
 

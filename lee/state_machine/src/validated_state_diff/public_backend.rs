@@ -11,8 +11,9 @@ use lee_core::{
     BlockId, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles},
     program::{
-        BlockValidityWindow, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramEvent, ProgramOutput,
-        TimestampValidityWindow, TransactionEvent, compute_public_authorized_pdas, get_program_via,
+        AccountStateDiff, BlockValidityWindow, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID,
+        ProgramEvent, ProgramOutput, TimestampValidityWindow, TransactionEvent,
+        UnsupportedCallKind, compute_public_authorized_pdas, get_program_via,
     },
     validation::{Backend, CallContext},
 };
@@ -208,6 +209,90 @@ impl Backend for PublicBackend<'_> {
         // The public environment exports exactly what the program journalled: here the verifier
         // is the executor, so there is no second view of authorization to reconcile.
         Ok(pre.is_authorized)
+    }
+
+    /// Runs `diff`'s producing program via `CallKind::Incremental` against the account's real
+    /// current state, falling back to `diff` verbatim if the program hasn't implemented
+    /// `Incremental` (an `UnsupportedCallKind` event). `program_loader` is exempt - a native
+    /// pseudo-program with no guest ELF to run.
+    fn resolve_write(
+        &mut self,
+        diff: &AccountStateDiff,
+        ctx: &CallContext<'_>,
+    ) -> Result<AccountStateDiff, LeeError> {
+        if ctx.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            return Ok(diff.clone());
+        }
+        let Some(post_data) = diff.post_data.as_ref() else {
+            return Ok(diff.clone());
+        };
+
+        let account_id = diff.pre_state.account_id;
+        let real_pre_state = AccountWithMetadata::new(
+            ctx.touched
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_else(|| self.state.get_account_by_id(account_id)),
+            diff.pre_state.is_authorized,
+            account_id,
+        );
+
+        let Some((program_id, user_elf)) = get_program_via(ctx.program_account_id, |id| {
+            ctx.touched
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| self.state.get_account_by_id(id))
+        }) else {
+            return Err(LeeError::UnknownProgram {
+                chained: ctx.caller_account_id.is_some(),
+            });
+        };
+        let elf = crate::program::attach_kernel(&user_elf);
+        let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+
+        let (incremental_output, incremental_cycles) = program.execute_incremental(
+            ctx.program_account_id,
+            &real_pre_state,
+            post_data,
+            self.cycle_budget.saturating_sub(self.cycles_used),
+        )?;
+        self.cycles_used = self
+            .cycles_used
+            .checked_add(incremental_cycles)
+            .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+
+        if incremental_output
+            .events
+            .iter()
+            .any(|event| event.selector == UnsupportedCallKind::SELECTOR)
+        {
+            return Ok(diff.clone());
+        }
+
+        let [resolved]: [AccountStateDiff; 1] =
+            incremental_output
+                .state_diffs
+                .try_into()
+                .map_err(|diffs: Vec<AccountStateDiff>| {
+                    InvalidProgramBehaviorError::MalformedIncrementalResponse {
+                        program_account_id: ctx.program_account_id,
+                        account_id,
+                        reason: format!("expected exactly 1 diff, got {}", diffs.len()),
+                    }
+                })?;
+        ensure!(
+            resolved.pre_state.account_id == account_id,
+            InvalidProgramBehaviorError::MalformedIncrementalResponse {
+                program_account_id: ctx.program_account_id,
+                account_id,
+                reason: format!(
+                    "returned a diff for {} instead",
+                    resolved.pre_state.account_id
+                ),
+            }
+        );
+
+        Ok(resolved)
     }
 
     fn observe_windows(

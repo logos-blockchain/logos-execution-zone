@@ -55,6 +55,38 @@ mod test_methods {
         )
     }
 
+    #[must_use]
+    pub const fn stripped_token() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn stripped_token_robinhood() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_ROBINHOOD_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_ROBINHOOD_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn stripped_token_and_forward() -> Program {
+        Program::new_unchecked(
+            test_methods::STRIPPED_TOKEN_AND_FORWARD_ID,
+            Cow::Borrowed(test_methods::STRIPPED_TOKEN_AND_FORWARD_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn defer_asserting_noop() -> Program {
+        Program::new_unchecked(
+            test_methods::DEFER_ASSERTING_NOOP_ID,
+            Cow::Borrowed(test_methods::DEFER_ASSERTING_NOOP_ELF),
+        )
+    }
+
     #[cfg(feature = "prove")]
     #[must_use]
     pub const fn multi_segment_burner() -> Program {

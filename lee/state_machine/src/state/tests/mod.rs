@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateWitness, Timestamp, WitnessKind,
+    PrivateWitness, PublicAction, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -74,6 +74,10 @@ impl V03State {
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self.insert_program(&crate::test_methods::reordering_transfer());
+        self.insert_program(&crate::test_methods::stripped_token());
+        self.insert_program(&crate::test_methods::stripped_token_robinhood());
+        self.insert_program(&crate::test_methods::stripped_token_and_forward());
+        self.insert_program(&crate::test_methods::defer_asserting_noop());
         self
     }
 
