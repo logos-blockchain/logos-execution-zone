@@ -307,6 +307,14 @@ impl StorageActor {
                             &block.block.header.hash,
                         );
 
+                    for tx in &block.block.body.transactions {
+                        self.db()
+                            .delete_batch::<entities::TxHashToBlockIdMappingDestination>(
+                                batch,
+                                &tx.hash(),
+                            );
+                    }
+
                     let affected_accounts = block
                         .block
                         .body
@@ -335,6 +343,11 @@ impl StorageActor {
 
                 self.db()
                     .delete_batch::<entities::Block>(batch, &encoding::BigEndian::new(&stale_id));
+
+                self.db().delete_batch::<entities::BlockEvents>(
+                    batch,
+                    &encoding::BigEndian::new(&stale_id),
+                );
 
                 removed_block_ids.push(stale_id);
             }
