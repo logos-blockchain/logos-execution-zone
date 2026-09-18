@@ -4,7 +4,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use super::{message::Message, witness_set::WitnessSet};
+use super::{
+    message::{Message, PublicActionWithID},
+    witness_set::WitnessSet,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingTransaction {
@@ -57,7 +60,7 @@ impl PrivacyPreservingTransaction {
             self.message
                 .public_actions
                 .iter()
-                .map(|action| action.account_id),
+                .map(PublicActionWithID::account_id),
         );
 
         acc_set.into_iter().collect()

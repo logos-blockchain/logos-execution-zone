@@ -1,5 +1,14 @@
 use super::*;
 
+/// TODO: every `PublicAction` is `Bound` for now - `PrivateBackend` doesn't produce `Deferred`
+/// yet (Probe/DeferReads isn't wired into the new traversal).
+fn expect_bound_pre(action: &PublicAction) -> &AccountWithMetadata {
+    let PublicAction::Bound { pre, .. } = action else {
+        panic!("expected a Bound action");
+    };
+    pre
+}
+
 #[test]
 fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     let program = crate::test_methods::simple_balance_transfer();
@@ -692,8 +701,8 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while the
     // journal exports the credential view: a seed grant is not a signer-backed claim.
     assert_eq!(output.public_actions.len(), 1);
-    assert_eq!(output.public_actions[0].pre.account_id, account_id);
-    assert!(!output.public_actions[0].pre.is_authorized);
+    assert_eq!(expect_bound_pre(&output.public_actions[0]).account_id, account_id);
+    assert!(!expect_bound_pre(&output.public_actions[0]).is_authorized);
 }
 
 /// A delegated seed that doesn't match the account's real derivation can't be distinguished
@@ -732,7 +741,7 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
 
     // In-circuit this is indistinguishable from a signer's claim; the exported `true` is
     // what the verifier audits (and rejects, since the id is not actually a signer's).
-    assert!(output.public_actions[0].pre.is_authorized);
+    assert!(expect_bound_pre(&output.public_actions[0]).is_authorized);
 }
 
 #[test]

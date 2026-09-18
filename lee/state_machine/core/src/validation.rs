@@ -19,7 +19,7 @@ use crate::{
     account::{Account, AccountId, AccountWithMetadata},
     error::InvalidProgramBehaviorError,
     program::{
-        BlockValidityWindow, CallKind, ChainedCall, DEFAULT_PROGRAM_OWNER,
+        AccountStateDiff, BlockValidityWindow, CallKind, ChainedCall, DEFAULT_PROGRAM_OWNER,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramOutput, TimestampValidityWindow,
         is_ownership_settled, post_state, pre_states_match_accounts, validate_execution,
     },
@@ -117,6 +117,22 @@ pub trait Backend {
         first_sight: bool,
         ctx: &CallContext<'_>,
     ) -> Result<bool, Self::Error>;
+
+    /// Resolve one write's `post_data`, in whatever way this environment does that. Called once
+    /// per diff, write or read, before `validate_execution` and post-state materialization see
+    /// it - both run against the resolved diff, not the one `output_for_call` returned. Called
+    /// for reads too so an environment can observe them, not just resolve writes.
+    ///
+    /// The default is a verbatim pass-through: an environment with nothing further to resolve a
+    /// write against, and nothing to observe in a read, just keeps what the call already
+    /// produced.
+    fn resolve_write(
+        &mut self,
+        diff: &AccountStateDiff,
+        _ctx: &CallContext<'_>,
+    ) -> Result<AccountStateDiff, Self::Error> {
+        Ok(diff.clone())
+    }
 
     /// One call's declared validity windows, in traversal order.
     fn observe_windows(
@@ -300,13 +316,20 @@ pub fn validate_state_diff<B: Backend>(
             .into());
         }
 
-        validate_execution(&program_output.state_diffs, chained_call.program_account_id).map_err(
-            |err| {
-                ValidationError::ProgramBehavior(
-                    InvalidProgramBehaviorError::ExecutionValidationFailed(err),
-                )
-            },
-        )?;
+        // Resolved once here, so `validate_execution` and post-state materialization below both
+        // see what a write's `post_data` actually resolves to, not the delta `output_for_call`
+        // produced. Called for every diff, including reads, so a backend can observe those too.
+        let resolved_diffs: Vec<AccountStateDiff> = program_output
+            .state_diffs
+            .iter()
+            .map(|diff| backend.resolve_write(diff, &ctx))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        validate_execution(&resolved_diffs, chained_call.program_account_id).map_err(|err| {
+            ValidationError::ProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                err,
+            ))
+        })?;
 
         backend.observe_windows(
             program_output.block_validity_window,
@@ -317,7 +340,7 @@ pub fn validate_state_diff<B: Backend>(
         // data to. Deferred until the whole pre loop has run so `CallContext` can borrow
         // `touched`; unobservable, because `validate_execution` already rejects an output naming
         // the same account twice.
-        for diff in &program_output.state_diffs {
+        for diff in &resolved_diffs {
             let post = post_state(diff, chained_call.program_account_id).map_err(|err| {
                 ValidationError::ProgramBehavior(InvalidProgramBehaviorError::BalanceDiffFailed(
                     err,

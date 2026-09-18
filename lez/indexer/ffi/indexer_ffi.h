@@ -245,9 +245,39 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
+typedef struct FfiVec_u8 FfiVecU8;
+
+/**
+ * One pending, unresolved update to a `Deferred` account's `data`. `has_post_data` gates
+ * whether `post_data` is meaningful (empty otherwise); `post_balance_diff_is_sub` selects
+ * `Add`/`Sub` for `post_balance_diff_amount`.
+ */
+typedef struct FfiDeferredResolution {
+  FfiAccountId executing_account_id;
+  bool post_balance_diff_is_sub;
+  struct FfiU128 post_balance_diff_amount;
+  bool has_post_data;
+  FfiVecU8 post_data;
+} FfiDeferredResolution;
+
+typedef struct FfiVec_FfiDeferredResolution {
+  struct FfiDeferredResolution *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiDeferredResolution;
+
+typedef struct FfiVec_FfiDeferredResolution FfiDeferredResolutionList;
+
+/**
+ * `Bound`/`Deferred` flattened via `is_deferred` (the FFI boundary has no tagged unions):
+ * `post_state` is only meaningful when `!is_deferred` (zeroed otherwise), `resolutions` only
+ * when `is_deferred` (empty otherwise).
+ */
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
+  bool is_deferred;
   struct FfiAccount post_state;
+  FfiDeferredResolutionList resolutions;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -257,8 +287,6 @@ typedef struct FfiVec_FfiPublicAction {
 } FfiVec_FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;

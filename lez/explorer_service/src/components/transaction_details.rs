@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage, PublicTransaction,
-    WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicActionWithID, PublicMessage,
+    PublicTransaction, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -94,8 +94,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     } = message;
     let private_action_count = private_actions.len();
     let public_account_ids: Vec<_> = public_actions
-        .into_iter()
-        .map(|action| action.account_id)
+        .iter()
+        .map(PublicActionWithID::account_id)
         .collect();
     let public_account_count = public_account_ids.len();
     let WitnessSet {

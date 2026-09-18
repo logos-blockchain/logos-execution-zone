@@ -4,10 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput, ProgramImageClaim,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     from_frame,
     program::{
-        ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas, post_state,
+        ChainedCall, IncrementalCall, InstructionData, ProgramOutput,
+        compute_public_authorized_pdas, post_state,
     },
     to_frame,
 };
@@ -231,6 +232,50 @@ pub fn execute_and_prove_with_padded_inputs(
             })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
+        // Pushed before any `Probe`/`Update` receipts this call's own writes produce below, so
+        // `PrivateBackend` pops them in the same order: this call's `Execute`, then one `Probe`
+        // (if this call touches any public account), then one `Update` per write, before the
+        // next call's `Execute`.
+        program_outputs.push(program_output.clone());
+        env_builder.add_assumption(inner_receipt);
+
+        // Positions assigned here are re-derived, not reassigned, by the identical
+        // `position_by_account.entry(...).or_insert_with(...)` pattern in the per-diff loop
+        // below — done early, read-only in effect, just to answer "does this call touch a public
+        // account" before that loop runs.
+        let touches_public = program_output.state_diffs.iter().any(|diff| {
+            let account_id = diff.pre_state.account_id;
+            let position = *position_by_account.entry(account_id).or_insert_with(|| {
+                let pos = next_position;
+                next_position = next_position
+                    .checked_add(1)
+                    .expect("account position count cannot overflow usize");
+                pos
+            });
+            matches!(
+                account_identities.get(position),
+                Some(InputAccountIdentity::Public)
+            )
+        });
+        if touches_public {
+            let probe_receipt = execute_and_prove_probe(
+                program,
+                chained_call.program_account_id,
+                caller_account_id,
+                &real_pre_states,
+                &chained_call.instruction_data,
+            )?;
+            let probe_output: ProgramOutput =
+                borsh::from_slice(from_frame(&probe_receipt.journal.bytes).ok_or_else(|| {
+                    LeeError::ProgramOutputDeserializationError(
+                        "malformed inner-receipt journal frame".to_owned(),
+                    )
+                })?)
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            program_outputs.push(probe_output);
+            env_builder.add_assumption(probe_receipt);
+        }
+
         // Authorization scoped to this call's own subtree: starts from what this call itself
         // inherited from its caller, plus every account this call's own output reports
         // authorized — handed to this call's children only, never to its siblings. Mirrors
@@ -240,6 +285,53 @@ pub fn execute_and_prove_with_padded_inputs(
         for diff in &program_output.state_diffs {
             let pre = &diff.pre_state;
             let account_id = pre.account_id;
+
+            // Whenever `post_data` is present, resolve it now too, proving the resolution so
+            // the circuit can verify it. Every write is resolved unconditionally for now — no
+            // `Bound`/`Deferred` distinction exists yet, so `PrivateBackend` expects exactly one
+            // `Update` receipt per write, always. A program without `Incremental` responds
+            // `UnsupportedCallKind`; the diff then applies verbatim.
+            let resolved_diff = if let Some(post_data) = &diff.post_data {
+                let update_receipt = execute_and_prove_incremental(
+                    program,
+                    chained_call.program_account_id,
+                    pre,
+                    post_data,
+                )?;
+                let update_output: ProgramOutput = borsh::from_slice(
+                    from_frame(&update_receipt.journal.bytes).ok_or_else(|| {
+                        LeeError::ProgramOutputDeserializationError(
+                            "malformed inner-receipt journal frame".to_owned(),
+                        )
+                    })?,
+                )
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+
+                let unsupported = update_output
+                    .events
+                    .iter()
+                    .any(|event| event.selector == lee_core::program::UnsupportedCallKind::SELECTOR);
+                let resolved = if unsupported {
+                    diff.clone()
+                } else {
+                    let [resolved]: [lee_core::program::AccountStateDiff; 1] =
+                        update_output.state_diffs.clone().try_into().map_err(
+                            |diffs: Vec<lee_core::program::AccountStateDiff>| {
+                                LeeError::ProgramOutputDeserializationError(format!(
+                                    "Incremental resolution for account {account_id} returned \
+                                     {} diffs, expected 1",
+                                    diffs.len()
+                                ))
+                            },
+                        )?;
+                    resolved
+                };
+                program_outputs.push(update_output);
+                env_builder.add_assumption(update_receipt);
+                resolved
+            } else {
+                diff.clone()
+            };
 
             // Assigned here, after this call has actually run, uniformly for the top-level
             // call too — it's free to never echo a given account in its own output at all.
@@ -266,7 +358,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
             // A data write to an unowned account acquires it; the guest doesn't write this into
             // its own post_state, the circuit does it afterward, so predict it here too.
-            let post = post_state(diff, chained_call.program_account_id)
+            let post = post_state(&resolved_diff, chained_call.program_account_id)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
             materialized_state.insert(account_id, post);
             if pre.is_authorized {
@@ -280,12 +372,6 @@ pub fn execute_and_prove_with_padded_inputs(
                 }
             }
         }
-
-        // TODO: remove clone
-        program_outputs.push(program_output.clone());
-
-        // Prove circuit.
-        env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
             let next_program = dependencies.get(&new_call.program_account_id).ok_or(
@@ -382,6 +468,101 @@ fn execute_and_prove_program(
 
     // The local prover proves any exit code, and the circuit's `env::verify` only resolves a
     // `Halted(0)` claim, so gate here for a typed error before the expensive circuit proof.
+    let exit_code = prove_info
+        .receipt
+        .claim()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .as_value()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .exit_code;
+    check_exit_code(
+        exit_code,
+        prove_info.stats.user_cycles,
+        LeeError::ProgramProveFailed,
+    )?;
+    Ok(prove_info.receipt)
+}
+
+/// Proves a `CallKind::Incremental` `Update` invocation of `program` for one account, resolving
+/// `post_data` against `pre_state`. An `UnsupportedCallKind` response is itself a valid, provable
+/// outcome, not a failure.
+///
+/// No caller is passed: `Update` is never caller-gated by any program (whitelisting belongs at
+/// `Execute` time, before a proof is even generated), so the real caller is withheld here rather
+/// than leaking who invoked this resolution.
+fn execute_and_prove_incremental(
+    program: &Program,
+    self_account_id: AccountId,
+    pre_state: &AccountWithMetadata,
+    post_data: &Data,
+) -> Result<Receipt, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
+    let input = lee_core::program::ProgramInput {
+        self_account_id,
+        caller_account_id: None,
+        pre_states: vec![pre_state.clone()],
+        instruction: borsh::to_vec(&IncrementalCall::Update(post_data.as_ref().to_vec()))
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
+    };
+    let payload = borsh::to_vec(&input)
+        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+    env_builder.write_slice(&to_frame(&payload));
+    let env = env_builder.build().unwrap();
+
+    let prover = default_prover();
+    let prove_info = prover
+        .prove(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+
+    let exit_code = prove_info
+        .receipt
+        .claim()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .as_value()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .exit_code;
+    check_exit_code(
+        exit_code,
+        prove_info.stats.user_cycles,
+        LeeError::ProgramProveFailed,
+    )?;
+    Ok(prove_info.receipt)
+}
+
+/// Proves a `CallKind::Incremental` `Probe` invocation of `program`, asking whether it's safe to
+/// defer resolution of the public accounts this call touches. `UnsupportedCallKind` (no claim at
+/// all) is itself a valid, provable outcome, not a failure - it just forces every touch `Bound`.
+///
+/// Unlike `Update`, the real caller and pre-states are passed: a program's willingness to defer a
+/// touch may legitimately depend on who's calling it or on the account's current state, and
+/// `respond_probe` echoes `caller_account_id` straight from its input.
+fn execute_and_prove_probe(
+    program: &Program,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    pre_states: &[AccountWithMetadata],
+    instruction_data: &InstructionData,
+) -> Result<Receipt, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
+    let input = lee_core::program::ProgramInput {
+        self_account_id,
+        caller_account_id,
+        pre_states: pre_states.to_vec(),
+        instruction: borsh::to_vec(&IncrementalCall::Probe(instruction_data.clone()))
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
+    };
+    let payload = borsh::to_vec(&input)
+        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+    env_builder.write_slice(&to_frame(&payload));
+    let env = env_builder.build().unwrap();
+
+    let prover = default_prover();
+    let prove_info = prover
+        .prove(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+
     let exit_code = prove_info
         .receipt
         .claim()

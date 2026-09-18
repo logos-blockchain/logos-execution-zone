@@ -18,13 +18,56 @@ fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
         CallKind::Execute
     );
 
-    // Any nonzero discriminant must decode as `Unknown`, not fail.
-    for byte in 1..=u8::MAX {
+    let incremental = borsh::to_vec(&CallKind::Incremental).unwrap();
+    assert_eq!(
+        borsh::from_slice::<CallKind>(&incremental).unwrap(),
+        CallKind::Incremental
+    );
+
+    // Any discriminant with no assigned meaning must decode as `Unknown`, not fail.
+    for byte in 2..=u8::MAX {
         assert_eq!(
             borsh::from_slice::<CallKind>(&[byte]).unwrap(),
             CallKind::Unknown(byte)
         );
     }
+}
+
+#[derive(BorshDeserialize)]
+enum TestInstruction {
+    A,
+}
+
+fn envelope(instruction: InstructionData) -> ProgramInput<InstructionData> {
+    ProgramInput {
+        self_account_id: AccountId::new([0; 32]),
+        caller_account_id: None,
+        pre_states: Vec::new(),
+        instruction,
+    }
+}
+
+#[test]
+fn dispatch_call_reports_the_real_byte_for_a_genuinely_unknown_call_kind() {
+    let call: ProgramCall<TestInstruction> =
+        dispatch_call(CallKind::Unknown(5), envelope(Vec::new()));
+    assert!(matches!(call, ProgramCall::Unsupported(_, 5)));
+}
+
+#[test]
+fn dispatch_call_reports_incrementals_own_discriminant_for_a_malformed_incremental_call() {
+    // Not a valid `IncrementalCall` discriminant (only 0 and 1 are).
+    let call: ProgramCall<TestInstruction> =
+        dispatch_call(CallKind::Incremental, envelope(vec![0xFF, 0xFF, 0xFF]));
+    assert!(matches!(call, ProgramCall::Unsupported(_, 1)));
+}
+
+#[test]
+fn dispatch_call_reports_incrementals_own_discriminant_for_a_probe_with_undecodable_instruction() {
+    let probe_bytes = borsh::to_vec(&IncrementalCall::Probe(vec![0xFF, 0xFF, 0xFF])).unwrap();
+    let call: ProgramCall<TestInstruction> =
+        dispatch_call(CallKind::Incremental, envelope(probe_bytes));
+    assert!(matches!(call, ProgramCall::Unsupported(_, 1)));
 }
 
 #[test]

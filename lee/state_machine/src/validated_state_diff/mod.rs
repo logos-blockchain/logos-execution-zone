@@ -8,16 +8,20 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Cycles},
-    program::{ChainedCall, ProgramOutput, TransactionEvent},
-    validation::{Declarations, validate_state_diff},
+    program::{
+        AccountStateDiff, ChainedCall, DEFAULT_PROGRAM_OWNER, ExecutionValidationError,
+        ProgramOutput, TransactionEvent, post_state,
+    },
+    validation::{Backend, CallContext, Declarations, validate_state_diff},
 };
 use program_loader_core::Instruction as ProgramLoaderInstruction;
 
 use crate::{
     V03State, ensure,
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof, message::Message,
+        PrivacyPreservingTransaction, circuit::Proof,
+        message::{Message, PublicActionWithID},
     },
     public_transaction::PublicTransaction,
     validated_state_diff::public_backend::PublicBackend,
@@ -311,12 +315,35 @@ impl ValidatedStateDiff {
         }))
     }
 
+    /// [`Self::from_privacy_preserving_transaction_with_cycle_budget`] at the default budget,
+    /// discarding the metered outcome.
     pub fn from_privacy_preserving_transaction(
         tx: &PrivacyPreservingTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_with_cycle_budget(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _)| diff)
+    }
+
+    /// Validates `tx` and settles its `Deferred` public actions under `cycle_budget`: each is
+    /// replayed, host-side, against live state - the same `PublicBackend::resolve_write` an
+    /// ordinary public transaction's own `Incremental` diffs go through, so settlement's cost is
+    /// metered exactly the same way.
+    pub fn from_privacy_preserving_transaction_with_cycle_budget(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, ExecutionOutcome), LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
@@ -381,15 +408,24 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
+        // Build pre_states for proof verification. Only a `Bound` action's `pre` is actually
+        // consulted below (`check_privacy_preserving_circuit_proof_is_valid`'s `Deferred` arm
+        // never reads it) - skip the live state read for a `Deferred` account entirely.
+        let public_pre_states: Vec<_> = message
+            .public_actions
             .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+            .map(|action| {
+                let account_id = action.account_id();
+                match action {
+                    PublicActionWithID::Bound { .. } => AccountWithMetadata::new(
+                        state.get_account_by_id(account_id),
+                        signer_account_ids.contains(&account_id),
+                        account_id,
+                    ),
+                    PublicActionWithID::Deferred { .. } => {
+                        AccountWithMetadata::new(Account::default(), false, account_id)
+                    }
+                }
             })
             .collect();
 
@@ -407,20 +443,33 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
+        let mut backend = PublicBackend::new(
+            state,
+            block_id,
+            timestamp,
+            &[],
+            &HashSet::new(),
+            cycle_budget,
+        );
         let public_diff = message
             .public_actions
             .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
-            .collect();
+            .map(|action| resolve_public_action(action, state, &mut backend))
+            .collect::<Result<HashMap<_, _>, _>>()?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
-        Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff,
-            new_commitments: commitments,
-            new_nullifiers,
-            events: vec![],
-        }))
+        Ok((
+            Self(StateDiff {
+                signer_account_ids,
+                public_diff,
+                new_commitments: commitments,
+                new_nullifiers,
+                events: vec![],
+            }),
+            ExecutionOutcome {
+                cycles: backend.cycles_used(),
+            },
+        ))
     }
 
     /// Returns the public account changes produced by this transaction.
@@ -518,6 +567,96 @@ fn authenticate_public_transaction_signers(
     Ok(signer_account_ids)
 }
 
+/// Resolves one message-level public action to the `Account` it leaves behind. A `Bound`
+/// action's `post_state` is already final and proven - used as-is. A `Deferred` action carries a
+/// list of raw, unresolved deltas (one per touch by an `Incremental`-supporting program during
+/// the original execution, in order); this replays each in turn, host-side and unproven, through
+/// `PublicBackend::resolve_write` - the same machinery a public transaction's own `Incremental`
+/// diffs use - each resolution building on the previous one's result (threaded through a local
+/// `resolved_so_far` map, standing in for `CallContext::touched`), with the first resolved
+/// against real, live state directly. `backend` is shared across every action in the message, so
+/// its `cycles_used` accumulates the whole settlement's cost, not just this one action's.
+///
+/// Unlike the original in-circuit resolution, this also re-checks data ownership on each
+/// resolved diff before applying it (the same rule `validate_execution` enforces for a live
+/// call, but scoped to just this one diff - `validate_execution`'s own balance-sum check spans
+/// every diff *one program call* produced together, which a lone `DeferredResolution` replayed
+/// in isolation, possibly touching a different account than any sibling resolution, was never
+/// part of): an account's real ownership can differ by settlement time from what the prover saw
+/// at proof time - that's the entire premise of `Deferred` - so the ownership check the circuit
+/// already ran against its own, possibly-stale view isn't a substitute for checking it again
+/// here, against live state.
+fn resolve_public_action(
+    action: &PublicActionWithID,
+    state: &V03State,
+    backend: &mut PublicBackend<'_>,
+) -> Result<(AccountId, Account), LeeError> {
+    let (account_id, resolutions) = match action {
+        PublicActionWithID::Bound {
+            account_id,
+            post_state,
+        } => return Ok((*account_id, post_state.clone())),
+        PublicActionWithID::Deferred {
+            account_id,
+            resolutions,
+        } => (*account_id, resolutions),
+    };
+    ensure!(
+        !resolutions.is_empty(),
+        LeeError::InvalidInput(format!(
+            "Deferred action for account {account_id} carries no resolutions"
+        ))
+    );
+
+    let mut resolved_so_far: HashMap<AccountId, Account> = HashMap::new();
+    for deferred in resolutions {
+        let pre_account = resolved_so_far
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_else(|| state.get_account_by_id(account_id));
+        let diff = AccountStateDiff {
+            pre_state: AccountWithMetadata::new(Account::default(), false, account_id),
+            post_balance_diff: deferred.post_balance_diff,
+            post_data: deferred.post_data.clone(),
+        };
+        let empty_authorized = HashSet::new();
+        let ctx = CallContext {
+            caller_account_id: None,
+            program_account_id: deferred.executing_account_id,
+            pda_seeds: &[],
+            authorized_accounts: &empty_authorized,
+            touched: &resolved_so_far,
+        };
+        // `DeferredResolution` doesn't carry a caller - nothing reads it, and settlement has no
+        // record of what it was at proving time anyway.
+        let resolved = backend.resolve_write(&diff, &ctx)?;
+        ensure!(
+            !resolved
+                .post_data
+                .as_ref()
+                .is_some_and(|data| *data != pre_account.data)
+                || pre_account.program_owner == DEFAULT_PROGRAM_OWNER
+                || pre_account.program_owner == deferred.executing_account_id,
+            InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedDataModification {
+                    account_id,
+                    executing_account_id: deferred.executing_account_id,
+                }
+            )
+        );
+        let post = post_state(&resolved, deferred.executing_account_id)
+            .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+        resolved_so_far.insert(account_id, post);
+    }
+
+    Ok((
+        account_id,
+        resolved_so_far
+            .remove(&account_id)
+            .expect("just inserted above: resolutions is non-empty"),
+    ))
+}
+
 fn check_privacy_preserving_circuit_proof_is_valid(
     state: &V03State,
     proof: &Proof,
@@ -545,14 +684,26 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 
+    // `Deferred`'s shape here matches `PublicActionWithID::Deferred` exactly - the circuit never
+    // resolved it either, so reconstructing what it committed to is a plain re-tag, not a replay.
+    // Settlement's own replay (`resolve_public_action`) happens later, against live state.
     let output = PrivacyPreservingCircuitOutput {
         public_actions: public_pre_states
             .iter()
             .cloned()
             .zip(&message.public_actions)
-            .map(|(pre, action)| PublicAction {
-                pre,
-                post: action.post_state.clone(),
+            .map(|(pre, action)| match action {
+                PublicActionWithID::Bound { post_state, .. } => PublicAction::Bound {
+                    pre,
+                    post: post_state.clone(),
+                },
+                PublicActionWithID::Deferred {
+                    account_id,
+                    resolutions,
+                } => PublicAction::Deferred {
+                    account_id: *account_id,
+                    resolutions: resolutions.clone(),
+                },
             })
             .collect(),
         private_actions: message.private_actions.clone(),
