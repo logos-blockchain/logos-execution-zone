@@ -41,7 +41,7 @@ pub enum ColumnFamily {
     Meta,
     /// Small records deleted as the work they track settles.
     Pending,
-    /// Many small records, maps block hases to block ids.
+    /// Many small records, maps block hashes to block ids.
     BlockHashToBlockIdMap,
     /// Many small records, maps account ids to block ids, which affect them.
     ///
