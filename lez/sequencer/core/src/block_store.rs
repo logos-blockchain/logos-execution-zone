@@ -290,6 +290,7 @@ mod tests {
             .ask(AtomicUpdate::from_block(
                 genesis.clone(),
                 Arc::new(testnet_initial_state::initial_state(false)),
+                Vec::new(),
             ))
             .await
             .unwrap();
@@ -331,6 +332,7 @@ mod tests {
             .ask(AtomicUpdate::from_block(
                 block.clone(),
                 Arc::new(V03State::new()),
+                Vec::new(),
             ))
             .await
             .unwrap();

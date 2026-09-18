@@ -4,9 +4,11 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
     test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
+    transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{Account, AccountId, V03State};
+use lee_core::program::{ProgramEvent, TransactionEvent};
 
 use crate::{
     StorageActor,
@@ -17,13 +19,15 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetBlock, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
-        GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock, GetBlockEvents,
+        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetTransactionByHash, GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RaisePublishedHighWater, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
+        WithdrawalReconciliationKey,
     },
 };
 
@@ -44,6 +48,7 @@ fn bookkeeping_update() -> AtomicUpdate {
         zone_anchor: None,
         channel_cursor: None,
         lower_published_high_water: None,
+        events: Vec::new(),
     }
 }
 
@@ -69,7 +74,7 @@ fn deposit_record(byte: u8) -> PendingDepositEventRecord {
 fn reorg_update(blocks: Vec<Block>, head_tip: &Block) -> AtomicUpdate {
     AtomicUpdate {
         blocks,
-        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()))
+        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()), Vec::new())
     }
 }
 
@@ -92,7 +97,11 @@ async fn spawn_with_blocks(path: &Path, blocks: Vec<Block>) -> ActorRef<StorageA
     let storage_ref = StorageActor::spawn(StorageActor::new(path).expect("Failed to open db"));
     for block in blocks {
         storage_ref
-            .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+            .ask(AtomicUpdate::from_block(
+                block,
+                Arc::new(V03State::new()),
+                Vec::new(),
+            ))
             .await
             .expect("Failed to record a block");
     }
@@ -235,7 +244,11 @@ async fn recorded_transaction_is_looked_up_by_hash() {
     );
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            block,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the block");
 
@@ -248,6 +261,59 @@ async fn recorded_transaction_is_looked_up_by_hash() {
             .expect("Failed to look the transaction up"),
         Some((transaction, 1))
     );
+}
+
+#[tokio::test]
+async fn recorded_events_is_looked_up_by_block_id() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let transaction = produce_dummy_empty_transaction();
+    let block = produce_dummy_block(1, None, vec![transaction.clone()]);
+    let storage_ref =
+        spawn_with_blocks(dir.path(), vec![produce_dummy_block(0, None, vec![])]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetTransactionByHash {
+                hash: transaction.hash()
+            })
+            .await
+            .expect("Failed to look the transaction up"),
+        None,
+        "A transaction outside the chain has nowhere to be found"
+    );
+
+    let block_id = block.header.block_id;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block,
+            Arc::new(V03State::new()),
+            vec![(
+                block_id,
+                vec![TxEvents {
+                    tx_index: 0,
+                    tx_hash: HashType([42; 32]),
+                    events: vec![TransactionEvent {
+                        account_id: AccountId::new([43; 32]),
+                        event: ProgramEvent {
+                            selector: [1; 8],
+                            data: vec![1; 4],
+                        },
+                    }],
+                }],
+            )],
+        ))
+        .await
+        .expect("Failed to record the block");
+
+    let block_events = storage_ref
+        .ask(GetBlockEvents { block_id })
+        .await
+        .expect("Failed to look the events up")
+        .expect("There should be one event");
+
+    assert_eq!(block_events[0].events[0].event.data, vec![1; 4]);
+    assert_eq!(block_events[0].events[0].event.selector, [1; 8]);
 }
 
 /// The index lives only in memory, so a fresh actor has to build it off the
@@ -304,7 +370,11 @@ async fn replaced_block_leaves_no_stale_index_entries() {
         .expect("The orphaned block is the stored one so far");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(adopted, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            adopted,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to apply the update");
 
@@ -355,6 +425,149 @@ async fn net_shortening_reorg_drops_stale_blocks() {
         "A block above the new head must be deleted, or the tip read back is the orphan's"
     );
     assert_tip_is(&storage_ref, &block1b).await;
+}
+
+#[tokio::test]
+async fn net_shortening_reorg_drops_block_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block1a.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2")
+            .expect("Block 2 is stored"),
+        2
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block1b.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn net_shortening_reorg_drops_acc_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    let genesis_clock_tx = clock_invocation(0_u64.saturating_mul(100));
+    let block_1a_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+
+    let clock_1_acc = genesis_clock_tx.message.account_ids[0];
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1a_clock_tx.clone().into(),
+            block_2_clock_tx.clone().into(),
+        ])
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1b_clock_tx.clone().into(),
+        ])
+    );
 }
 
 /// An orphan-only update: block 2 falls off the branch with no replacement, so
@@ -667,6 +880,7 @@ async fn block_and_state_are_stored_together() {
         .ask(AtomicUpdate::from_block(
             block.clone(),
             state_with_balance(200),
+            Vec::new(),
         ))
         .await
         .expect("Failed to record the block");
@@ -696,7 +910,7 @@ async fn finalized_up_to_marks_only_the_blocks_it_covers() {
             blocks: vec![block2.clone(), block3.clone()],
             head_tip: Some(BlockMeta::from(&block3)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -730,13 +944,17 @@ async fn a_rewritten_block_keeps_the_finalized_status_it_had() {
     storage_ref
         .ask(AtomicUpdate {
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200), Vec::new())
         })
         .await
         .expect("Failed to finalize the block");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block2, state_with_balance(300)))
+        .ask(AtomicUpdate::from_block(
+            block2,
+            state_with_balance(300),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to rewrite the block");
 
@@ -763,6 +981,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .ask(AtomicUpdate::from_block(
             genesis.clone(),
             state_with_balance(200),
+            Vec::new(),
         ))
         .await
         .expect("Failed to record the genesis block");
@@ -804,7 +1023,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .ask(AtomicUpdate {
             final_snapshot: Some((state_with_balance(200), final_meta)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -895,6 +1114,22 @@ async fn an_unseeded_store_reports_no_chain() {
             .expect("Failed to read block 1")
             .is_none()
     );
+    assert!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: [0; 32].into()
+            })
+            .await
+            .expect("Failed to get block id by map")
+            .is_none()
+    );
+    assert!(
+        storage_ref
+            .ask(GetBlockEvents { block_id: 1 })
+            .await
+            .expect("Failed to get events for block id")
+            .is_none()
+    )
 }
 
 /// The property that lets a genesis go in as an ordinary block write.
@@ -903,6 +1138,11 @@ async fn the_first_block_written_starts_the_chain() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let genesis = produce_dummy_block(1, None, vec![]);
     let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
+
+    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+
+    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
 
     assert_eq!(
         storage_ref
@@ -918,11 +1158,36 @@ async fn the_first_block_written_starts_the_chain() {
             .expect("Failed to read the last block id"),
         Some(1)
     );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(1)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 100,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![block_1_clock_tx.clone().into()])
+    );
 
     // A later block extends the chain rather than restarting it.
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let second_hash = second.header.hash;
     storage_ref
-        .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            second,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the second block");
 
@@ -939,6 +1204,122 @@ async fn the_first_block_written_starts_the_chain() {
             .await
             .expect("Failed to read the last block id"),
         Some(2)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockHashToBlockIdMapItem {
+                block_hash: second_hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(2)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 100,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![block_1_clock_tx.into(), block_2_clock_tx.into()])
+    );
+}
+
+#[tokio::test]
+async fn acc_id_to_tx_map_corectness() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(1, None, vec![]);
+    let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
+
+    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_3_clock_tx = clock_invocation(3_u64.saturating_mul(100));
+    let block_4_clock_tx = clock_invocation(4_u64.saturating_mul(100));
+
+    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
+
+    // A later block extends the chain rather than restarting it.
+    let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let block_2_hash = block_2.header.hash;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block_2,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
+        .await
+        .expect("Failed to record the second block");
+
+    let block_3 = produce_dummy_block(3, Some(block_2_hash), vec![]);
+    let block_3_hash = block_3.header.hash;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block_3,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
+        .await
+        .expect("Failed to record the second block");
+
+    let block_4 = produce_dummy_block(4, Some(block_3_hash), vec![]);
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block_4,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
+        .await
+        .expect("Failed to record the second block");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 2,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_1_clock_tx.clone().into(),
+            block_2_clock_tx.clone().into()
+        ])
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 1,
+                limit: 2,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_2_clock_tx.clone().into(),
+            block_3_clock_tx.clone().into()
+        ])
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+                account_id: clock_1_acc,
+                offset: 1,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_2_clock_tx.into(),
+            block_3_clock_tx.into(),
+            block_4_clock_tx.into()
+        ])
     );
 }
 

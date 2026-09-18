@@ -60,6 +60,7 @@ pub mod block_store;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod event_filter;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
@@ -278,7 +279,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
         storage_ref
-            .ask(AtomicUpdate::from_block(block, Arc::new(state)))
+            // No need for events on first block
+            .ask(AtomicUpdate::from_block(block, Arc::new(state), Vec::new()))
             .await
             .expect("Failed to seed the database with the genesis block");
 
@@ -737,15 +739,16 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         // Above the final tier the head is reorg-able, so finalized history wins:
         // the head rebases onto what the channel settled. Validation happens inside.
-        match chain.apply_reconstructed(block, slot, this_msg) {
-            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
+        let events = match chain.apply_reconstructed(block, slot, this_msg) {
+            AcceptOutcome::Applied(events) => events,
+            AcceptOutcome::AlreadyApplied => Vec::new(),
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
                     "Channel block {block_id} does not extend local tip {:?}: {err}",
                     tip.map(|tip| tip.id)
                 ));
             }
-        }
+        };
 
         // A reconstructed block is finalized, so any deposit it mints is
         // permanently reflected in state (its receipt PDA); drop the pending
@@ -781,6 +784,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 consumed_withdrawals: HashSet::new(),
                 new_withdraw_intents: HashSet::new(),
                 lower_published_high_water: None,
+                events,
             })
             .await
             .context("Failed to persist reconstructed block")?;
@@ -998,7 +1002,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         let mut chain = self.chain.lock().await;
         match chain.apply_produced(&block, this_msg) {
-            AcceptOutcome::Applied => {
+            AcceptOutcome::Applied(events) => {
                 let block_id = block.header.block_id;
                 self.store
                     .storage_ref()
@@ -1006,7 +1010,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                         new_withdraw_intents: withdrawal_reconciliation_keys,
                         checkpoint: Some(checkpoint_bytes.clone()),
                         channel_cursor: Some(this_msg.into()),
-                        ..AtomicUpdate::from_block(block.clone(), chain.share_head_state())
+                        ..AtomicUpdate::from_block(block.clone(), chain.share_head_state(), events)
                     })
                     .await?;
 
@@ -2025,24 +2029,33 @@ async fn apply_follow_update<S: StorageActorTrait>(
         log_parked(&adopted, &outcomes, head_after, chain.channel_cursor());
         log_rewind(head_before, head_after, chain.channel_cursor());
 
-        let mut to_persist: Vec<&Block> = adopted
+        let mut to_persist: Vec<&Block> = Vec::new();
+        let mut final_events = Vec::new();
+
+        for (block, outcome) in adopted
             .iter()
             .zip(&outcomes)
-            .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
-            .map(|(block, _)| block)
-            .collect();
+            .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied(_)))
+        {
+            if let AcceptOutcome::Applied(events) = outcome {
+                to_persist.push(block);
+                final_events.extend(events.clone());
+            }
+        }
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
         // one never became irreversible, so marking blocks finalized through it
         // or dropping its deposit records would lose them for good.
         let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
+
         for ((block, _), outcome) in finalized.iter().zip(&finalized_outcomes) {
             match outcome {
-                AcceptOutcome::Applied => {
+                AcceptOutcome::Applied(events) => {
                     to_persist.push(block);
                     irreversible.push(block);
                     final_advanced = true;
+                    final_events.extend(events.clone());
                 }
                 // A re-delivery of a block the final tier already holds: no new
                 // payload and the tier does not move, but it is irreversible all
@@ -2108,7 +2121,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
         let all_adopted_applied = outcomes.iter().all(|outcome| {
             matches!(
                 outcome,
-                AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
+                AcceptOutcome::Applied(_) | AcceptOutcome::AlreadyApplied
             )
         });
         let lower_published_high_water =
@@ -2160,6 +2173,7 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 new_withdraw_intents: HashSet::new(),
                 zone_anchor: None,
                 lower_published_high_water,
+                events: final_events,
             })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
