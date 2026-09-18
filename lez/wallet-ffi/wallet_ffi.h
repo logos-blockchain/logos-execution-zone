@@ -1564,13 +1564,14 @@ char *wallet_ffi_default_config_path(void);
 char *wallet_ffi_default_storage_path(void);
 
 /**
- * Whether a wallet already exists at LEZ's canonical home (i.e. its
- * `storage.json` is present). Lets callers decide between an open and a
- * create flow without touching the filesystem or knowing the path.
+ * Whether a wallet already exists at LEZ's canonical home.
+ *
+ * Presence is decided by its `storage.json`, so callers can choose between an
+ * open and a create flow without touching the filesystem or knowing the path.
  *
  * # Returns
- * - `true` if the default storage file exists, `false` otherwise (including
- *   when the path can't be resolved)
+ * - `true` if the default storage file exists, `false` otherwise (including when the path can't be
+ *   resolved)
  *
  * # Safety
  * This function takes no pointer arguments and is always safe to call.
