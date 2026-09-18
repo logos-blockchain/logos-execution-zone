@@ -6,6 +6,10 @@ This document describes the guidelines for contributing to the project. We will 
 
 If you have any questions, come say hi to our [Discord](https://discord.gg/tGJwgGrSPN)!
 
+## Metrics
+
+We have guidelines about metrics, for more information refer to [metrics](docs/metrics/metrics.md).
+
 ## Commit title format
 
 We use [Conventional Commits](https://www.conventionalcommits.org/).
@@ -59,7 +63,7 @@ Could be squashed to an empty commit if they belong to the same PR.
 
 ## Default branch
 
-By default all PRs must be directed into the `dev` branch. This helps us to keep releases stable. 
+By default all PRs must be directed into the `dev` branch. This helps us to keep releases stable.
 
 ## Branch workflow
 

@@ -1,11 +1,8 @@
+use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::{AccountId, AccountWithMetadata};
 pub use lee_core::program::PdaSeed;
-use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::ProgramId,
-};
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Create the Associated Token Account for (owner, definition).
     /// Idempotent: no-op if the account already exists.
@@ -16,7 +13,7 @@ pub enum Instruction {
     /// - Associated token account (default/uninitialized, or already initialized)
     ///
     /// `token_program_id` is derived from `token_definition.account.program_owner`.
-    Create { ata_program_id: ProgramId },
+    Create { ata_program_id: AccountId },
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
     /// Uses PDA seeds to authorize the ATA in the chained Token::Transfer call.
@@ -28,7 +25,7 @@ pub enum Instruction {
     ///
     /// `token_program_id` is derived from `sender_ata.account.program_owner`.
     Transfer {
-        ata_program_id: ProgramId,
+        ata_program_id: AccountId,
         amount: u128,
     },
 
@@ -42,7 +39,7 @@ pub enum Instruction {
     ///
     /// `token_program_id` is derived from `holder_ata.account.program_owner`.
     Burn {
-        ata_program_id: ProgramId,
+        ata_program_id: AccountId,
         amount: u128,
     },
 }
@@ -60,7 +57,7 @@ pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSee
     )
 }
 
-pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
+pub fn get_associated_token_account_id(ata_program_id: &AccountId, seed: &PdaSeed) -> AccountId {
     AccountId::for_public_pda(ata_program_id, seed)
 }
 
@@ -70,7 +67,7 @@ pub fn verify_ata_and_get_seed(
     ata_account: &AccountWithMetadata,
     owner: &AccountWithMetadata,
     definition_id: AccountId,
-    ata_program_id: ProgramId,
+    ata_program_id: AccountId,
 ) -> PdaSeed {
     let seed = compute_ata_seed(owner.account_id, definition_id);
     let expected_id = get_associated_token_account_id(&ata_program_id, &seed);

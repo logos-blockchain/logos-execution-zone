@@ -2,7 +2,7 @@
 # keycard_tests_2.sh — comprehensive token + AMM keycard integration tests.
 #
 # Prerequisites:
-#   1. Run wallet_with_keycard.sh once to install dependencies.
+#   1. Run `cargo install --path lez/wallet --force` once to install the wallet CLI.
 #   2. Reset the local chain so all accounts are uninitialized.
 #   3. Keycard reader inserted with card loaded.
 #
@@ -23,8 +23,8 @@
 #   amm-lee-fund   → public LEE holding used to seed the AMM pool
 #   (LP holding for amm new is created fresh each run — no persistent label)
 
-source venv/bin/activate
 export KEYCARD_PIN=111111
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
 # =============================================================================
 # Keycard setup

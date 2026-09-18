@@ -66,7 +66,7 @@ async fn main() {
     let program = Program::new(bytecode.into()).unwrap();
 
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     match cli.command {
         Command::WritePublic {
@@ -77,7 +77,7 @@ async fn main() {
             let account_id = account_id.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id(),
+                program.id().into(),
                 vec![account_id],
                 nonces,
                 instruction,
@@ -88,7 +88,7 @@ async fn main() {
 
             // Submit the transaction
             let _response = wallet_core
-                .sequencer_client
+                .helm_owned()
                 .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();
@@ -116,7 +116,7 @@ async fn main() {
             let to = to.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id(),
+                program.id().into(),
                 vec![from, to],
                 nonces,
                 instruction,
@@ -127,7 +127,7 @@ async fn main() {
 
             // Submit the transaction
             let _response = wallet_core
-                .sequencer_client
+                .helm_owned()
                 .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();

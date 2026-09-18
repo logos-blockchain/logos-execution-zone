@@ -72,4 +72,4 @@ jobs:
           # access rules.
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           cache-from: type=gha,scope=ci-image
-          cache-to: type=gha,mode=max,scope=ci-image
+          cache-to: type=gha,mode=min,scope=ci-image

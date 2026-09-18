@@ -1,32 +1,36 @@
 use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, DEFAULT_PROGRAM_ID, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id: _, // ignore the correct ID
-            caller_program_id,
+            self_account_id: _, // ignore the correct ID
+            caller_account_id,
             pre_states,
             instruction: (),
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
+        .map(|a| AccountStateDiff::unchanged(a.clone()))
         .collect();
 
-    // Deliberately output wrong self_program_id
+    // Deliberately output wrong self_account_id
     ProgramOutput::new(
-        DEFAULT_PROGRAM_ID, // WRONG: should be self_program_id
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
+        DEFAULT_PROGRAM_ID.into(), // WRONG: should be self_account_id
+        caller_account_id,
+        instruction_data,
+        state_diffs,
     )
     .write();
 }

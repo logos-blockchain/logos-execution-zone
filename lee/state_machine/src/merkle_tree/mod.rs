@@ -8,8 +8,8 @@ mod default_values;
 type Value = [u8; 32];
 type Node = [u8; 32];
 
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MerkleTree {
     nodes: Vec<Node>,
     capacity: usize,

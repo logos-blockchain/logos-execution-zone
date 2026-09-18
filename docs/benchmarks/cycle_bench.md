@@ -20,7 +20,6 @@ Per-program Risc0 cycle counts, prover wall time, PPE composition cost, and veri
 
 | Program | Instruction | user_cycles | segments | exec_ms (best / mean ± stdev) | calib_ms | net_ms |
 |---|---|---:|---:|---|---:|---:|
-| authenticated_transfer | Initialize | 43,818 | 1 | 30.69 / 31.93 ± 1.03 | 1.31 | 0.29 |
 | authenticated_transfer | Transfer | 79,958 | 1 | 31.02 / 32.35 ± 0.59 | 2.38 | 0.61 |
 | token | Burn | 116,546 | 1 | 36.08 / 37.18 ± 0.60 | 3.47 | 5.67 |
 | token | Mint | 116,862 | 1 | 35.67 / 37.73 ± 2.54 | 3.48 | 5.26 |
@@ -52,7 +51,6 @@ The fixed overhead is paid per transaction in the current node, not amortized. T
 
 | Program | Instruction | total_cycles | prove_ms | prove_s |
 |---|---|---:|---:|---:|
-| authenticated_transfer | Initialize | 131,072 | 11,881 | 11.9 |
 | authenticated_transfer | Transfer | 131,072 | 13,705 | 13.7 |
 | token | Burn | 262,144 | 22,893 | 22.9 |
 | token | Mint | 262,144 | 23,927 | 23.9 |

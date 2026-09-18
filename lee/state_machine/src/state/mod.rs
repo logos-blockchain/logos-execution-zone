@@ -4,8 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId},
-    program::ProgramId,
+    account::{Account, AccountId, Data},
+    program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
+        get_program_via,
+    },
 };
 
 use crate::{
@@ -13,15 +16,14 @@ use crate::{
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(test, derive(Debug))]
 pub struct CommitmentSet {
     merkle_tree: MerkleTree,
     commitments: HashMap<Commitment, usize>,
@@ -44,7 +46,7 @@ impl CommitmentSet {
 
     /// Inserts a list of commitments to the `CommitmentSet`.
     pub(crate) fn extend(&mut self, commitments: &[Commitment]) {
-        for commitment in commitments.iter().cloned() {
+        for commitment in commitments.iter().copied() {
             let index = self.merkle_tree.insert(commitment.to_byte_array());
             self.commitments.insert(commitment, index);
         }
@@ -67,8 +69,8 @@ impl CommitmentSet {
     }
 }
 
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-#[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, PartialEq, Eq)]
 struct NullifierSet(BTreeSet<Nullifier>);
 
 impl NullifierSet {
@@ -109,12 +111,11 @@ impl BorshDeserialize for NullifierSet {
     }
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(test, derive(Debug))]
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
-    programs: HashMap<ProgramId, Program>,
 }
 
 impl Default for V03State {
@@ -127,7 +128,6 @@ impl Default for V03State {
         Self {
             public_state: HashMap::default(),
             private_state,
-            programs: HashMap::default(),
         }
     }
 }
@@ -190,30 +190,58 @@ impl V03State {
     #[must_use]
     pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
         for program in programs {
-            self.insert_program(program);
+            self.insert_program(&program);
         }
         self
     }
 
-    pub(crate) fn insert_program(&mut self, program: Program) {
-        self.programs.insert(program.id(), program);
+    /// Seeds a builtin as a loader-owned header pointing at one segment holding its `user_elf`.
+    /// The header lives at the bijection address (`AccountId::from(program.id())`).
+    pub(crate) fn insert_program(&mut self, program: &Program) {
+        let header_account_id = AccountId::from(program.id());
+        let segment_account_id = genesis_segment_account_id(header_account_id);
+
+        let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+            .expect("builtin program must be a valid ProgramBinary")
+            .user_elf
+            .to_vec();
+        let segment = Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramSegment {
+                    bytecode: user_elf,
+                    next_segment: None,
+                }
+                .to_bytes(),
+            )
+            .expect("elf must fit under DATA_MAX_LENGTH"),
+            ..Account::default()
+        };
+        let header = Account {
+            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
+            data: Data::try_from(
+                ProgramHeader {
+                    image_id: program.id(),
+                    program_first_segment: segment_account_id,
+                    immutable: true,
+                }
+                .to_bytes(),
+            )
+            .expect("program header fits under DATA_MAX_LENGTH"),
+            ..Account::default()
+        };
+        self.public_state.insert(segment_account_id, segment);
+        self.public_state.insert(header_account_id, header);
     }
 
-    /// Seeds a single genesis account that is not produced by any transaction
-    /// (e.g. the cross-zone inbox config or a bridge-lock holding). Lets the
-    /// sequencer and indexer seed identical zone-specific state after building
-    /// the shared initial state.
-    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
-        self.public_state.insert(account_id, account);
-    }
-
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+    #[must_use]
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
         let StateDiff {
             signer_account_ids,
             public_diff,
             new_commitments,
             new_nullifiers,
-            program,
+            events,
         } = diff.into_state_diff();
         #[expect(
             clippy::iter_over_hash_type,
@@ -229,9 +257,7 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        if let Some(program) = program {
-            self.insert_program(program);
-        }
+        events
     }
 
     pub fn transition_from_public_transaction(
@@ -239,10 +265,9 @@ impl V03State {
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<(), LeeError> {
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
+        Ok(self.apply_state_diff(diff))
     }
 
     pub fn transition_from_privacy_preserving_transaction(
@@ -253,16 +278,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
-    }
-
-    pub fn transition_from_program_deployment_transaction(
-        &mut self,
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
-        self.apply_state_diff(diff);
+        drop(self.apply_state_diff(diff));
         Ok(())
     }
 
@@ -278,18 +294,85 @@ impl V03State {
             .unwrap_or_else(Account::default)
     }
 
+    /// Borrowing counterpart of [`Self::get_account_by_id`].
+    #[must_use]
+    pub fn get_account_by_id_ref(&self, account_id: AccountId) -> Option<&Account> {
+        self.public_state.get(&account_id)
+    }
+
+    /// Looks up a program deployed at its bijection address (`AccountId::from(program_id)`),
+    /// reconstructing its bytecode from its header and segment chain.
+    ///
+    /// Only meaningful for programs deployed at their bijection address — genesis-seeded
+    /// builtins, or anything created through the (removed) `ProgramDeploymentTransaction`.
+    /// A program deployed through `program_loader` at an arbitrary address must be resolved
+    /// through [`get_program_via`] with the real address instead.
+    #[must_use]
+    pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
+        let (image_id, user_elf) = get_program_via(AccountId::from(program_id), |account_id| {
+            self.get_account_by_id(account_id)
+        })?;
+        Some((image_id, crate::program::attach_kernel(&user_elf)))
+    }
+
+    /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
+    /// isn't one — used to anchor a private transaction's [`ProgramImageClaim`]s to real chain
+    /// state rather than trusting the prover's own claim.
+    ///
+    /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
+    #[must_use]
+    pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
+        get_program_via(account_id, |id| self.get_account_by_id(id)).map(|(image_id, _)| image_id)
+    }
+
     #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
     }
 
-    pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
-        &self.programs
-    }
-
     #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
+    }
+
+    /// Order-independent fingerprint of the genesis-relevant state: the public account set
+    /// (which includes deployed programs' storage accounts) and the commitment-set digest.
+    ///
+    /// The sequencer and the indexer build the directly-seeded part of genesis
+    /// (base builtins plus any directly-seeded accounts) separately from their own
+    /// configs, so a divergence there would otherwise go unnoticed. Both nodes log
+    /// this at startup; equal values mean the two genesis states agree. Entries are
+    /// sorted by id before hashing, so the value does not depend on `HashMap`
+    /// iteration order.
+    #[must_use]
+    pub fn genesis_fingerprint(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+
+        // Destructure so adding a `V03State` field forces a decision here about
+        // whether it belongs in the genesis fingerprint.
+        let Self {
+            public_state,
+            private_state,
+        } = self;
+
+        let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
+        accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+        let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
+
+        let mut hasher = Sha256::new();
+        hasher.update(account_count.to_le_bytes());
+        for (id, account) in accounts {
+            hasher.update(id.as_ref());
+            let bytes = borsh::to_vec(account).expect("Account is BorshSerialize");
+            let len = u64::try_from(bytes.len()).expect("account encoding fits in u64");
+            hasher.update(len.to_le_bytes());
+            hasher.update(&bytes);
+        }
+        hasher.update(private_state.0.digest());
+
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(&hasher.finalize());
+        out
     }
 
     pub(crate) fn check_commitments_are_new(
@@ -327,6 +410,21 @@ impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+}
+
+/// The deterministic `AccountId` a genesis-seeded builtin's single segment lives at, derived
+/// from the header's own bijection address.
+///
+/// Only `insert_program` needs this — a live `program_loader` deploy has a real signer and picks
+/// its own segment addresses instead, since genesis has no signer to ask.
+fn genesis_segment_account_id(header_account_id: AccountId) -> AccountId {
+    use sha2::{Digest as _, Sha256};
+    const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
+
+    let mut hasher = Sha256::new();
+    hasher.update(GENESIS_SEGMENT_ID_PREFIX);
+    hasher.update(header_account_id.as_ref());
+    AccountId::new(hasher.finalize().into())
 }
 
 #[cfg(test)]

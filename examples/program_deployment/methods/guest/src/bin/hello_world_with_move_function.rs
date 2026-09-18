@@ -1,6 +1,9 @@
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 // Hello-world with write + move_data example program.
@@ -11,52 +14,41 @@ use lee_core::{
 // - `write`: appends `data` to the `data` field of a single input account.
 // - `move_data`: moves all bytes from one account to another. The source account is cleared and the
 //   destination account receives the appended bytes.
-//
-// Execution succeeds only if:
-// - the accounts involved are either uninitialized, or
-// - already owned by this program.
-//
-// In case an input account is uninitialized, the program will claim it when
-// producing the post-state.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
-    // Construct the post state account values
-    let post_account = {
-        let mut this = pre_state.account;
-        let mut bytes = this.data.into_inner();
+fn write(pre_state: &AccountWithMetadata, greeting: &[u8]) -> AccountStateDiff {
+    // Construct the new data value: the existing data with the greeting appended.
+    let new_data: Data = {
+        let mut bytes = pre_state.account.data.clone().into_inner();
         bytes.extend_from_slice(greeting);
-        this.data = bytes
+        bytes
             .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
+            .expect("Data should fit within the allowed limits")
     };
 
-    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
+    AccountStateDiff::new(pre_state.clone(), BalanceDiff::Add(0), new_data)
 }
 
-fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
-    // Construct the post state account values
+fn move_data(
+    from_pre: &AccountWithMetadata,
+    to_pre: &AccountWithMetadata,
+) -> Vec<AccountStateDiff> {
+    // Construct the new data values.
     let from_data: Vec<u8> = from_pre.account.data.clone().into();
 
-    let from_post = {
-        let mut this = from_pre.account;
-        this.data = Data::default();
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
-    };
+    let from_post = AccountStateDiff::new(from_pre.clone(), BalanceDiff::Add(0), Data::default());
 
     let to_post = {
-        let mut this = to_pre.account;
-        let mut bytes = this.data.into_inner();
+        let mut bytes = to_pre.account.data.clone().into_inner();
         bytes.extend_from_slice(&from_data);
-        this.data = bytes
+        let new_data: Data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        AccountStateDiff::new(to_pre.clone(), BalanceDiff::Add(0), new_data)
     };
 
     vec![from_post, to_post]
@@ -64,23 +56,27 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
 
 fn main() {
     // Read input accounts.
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (function_id, data),
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = match (pre_states.as_slice(), function_id, data.len()) {
+    let state_diffs = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre.clone(), &data);
+            let post = write(account_pre, &data);
             vec![post]
         }
         ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(account_from_pre.clone(), account_to_pre.clone())
+            move_data(account_from_pre, account_to_pre)
         }
         _ => panic!("invalid params"),
     };
@@ -88,11 +84,10 @@ fn main() {
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
+        self_account_id,
+        caller_account_id,
+        instruction_data,
+        state_diffs,
     )
     .write();
 }

@@ -1,7 +1,8 @@
-use indexer_service_protocol::{AccountId, HashType, ProgramId, PublicKey, Signature};
+use indexer_service_protocol::{AccountId, HashType, ProgramId, PublicKey, Selector, Signature};
 
 pub mod account;
 pub mod block;
+pub mod event;
 pub mod transaction;
 pub mod vectors;
 
@@ -10,6 +11,13 @@ pub mod vectors;
 #[derive(Clone, Copy, Default)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
+}
+
+/// 8-byte array type for event selectors.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiBytes8 {
+    pub data: [u8; 8],
 }
 
 /// 64-byte array type for signatures, etc.
@@ -74,6 +82,7 @@ pub type FfiSignature = FfiBytes64;
 pub type FfiAccountId = FfiBytes32;
 pub type FfiNonce = FfiU128;
 pub type FfiPublicKey = FfiBytes32;
+pub type FfiSelector = FfiBytes8;
 
 impl From<HashType> for FfiHashType {
     fn from(value: HashType) -> Self {
@@ -90,6 +99,12 @@ impl From<Signature> for FfiSignature {
 impl From<AccountId> for FfiAccountId {
     fn from(value: AccountId) -> Self {
         Self { data: value.value }
+    }
+}
+
+impl From<Selector> for FfiSelector {
+    fn from(value: Selector) -> Self {
+        Self { data: value.0 }
     }
 }
 

@@ -3,12 +3,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Data},
-    program::{PdaSeed, ProgramId},
+    program::PdaSeed,
 };
-use serde::{Deserialize, Serialize};
 
 /// AMM Program Instruction.
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Initializes a new Pool (or re-initializes an inactive Pool).
     ///
@@ -23,7 +22,7 @@ pub enum Instruction {
     NewDefinition {
         token_a_amount: u128,
         token_b_amount: u128,
-        amm_program_id: ProgramId,
+        amm_program_id: AccountId,
     },
 
     /// Adds liquidity to the Pool.
@@ -91,7 +90,7 @@ pub enum Instruction {
     },
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
     pub definition_token_a_id: AccountId,
     pub definition_token_b_id: AccountId,
@@ -131,7 +130,7 @@ impl From<&PoolDefinition> for Data {
 
 #[must_use]
 pub fn compute_pool_pda(
-    amm_program_id: ProgramId,
+    amm_program_id: AccountId,
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> AccountId {
@@ -142,7 +141,7 @@ pub fn compute_pool_pda(
 }
 
 #[must_use]
-pub fn compute_pool_pda_seed(
+fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> PdaSeed {
@@ -171,7 +170,7 @@ pub fn compute_pool_pda_seed(
 
 #[must_use]
 pub fn compute_vault_pda(
-    amm_program_id: ProgramId,
+    amm_program_id: AccountId,
     pool_id: AccountId,
     definition_token_id: AccountId,
 ) -> AccountId {
@@ -198,7 +197,7 @@ pub fn compute_vault_pda_seed(pool_id: AccountId, definition_token_id: AccountId
 }
 
 #[must_use]
-pub fn compute_liquidity_token_pda(amm_program_id: ProgramId, pool_id: AccountId) -> AccountId {
+pub fn compute_liquidity_token_pda(amm_program_id: AccountId, pool_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&amm_program_id, &compute_liquidity_token_pda_seed(pool_id))
 }
 

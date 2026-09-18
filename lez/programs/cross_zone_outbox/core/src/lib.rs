@@ -1,24 +1,28 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::AccountId,
-    program::{PdaSeed, ProgramId},
-};
-use serde::{Deserialize, Serialize};
+use lee_core::{account::AccountId, program::PdaSeed};
 
-const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00000/";
+/// Versions the seed layout: bump on any change to its field list or offsets,
+/// so slots under an old layout can never be re-derived. Redundant with the
+/// image id, which relocates every PDA in this crate whenever the crate changes,
+/// but the two version different things.
+const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00001/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Records an outbound cross-zone message as a write to a self-owned PDA.
+    ///
+    /// The slot is written once: a second `Emit` at the same
+    /// `(emitter, target_zone, ordinal)` fails the transaction rather than
+    /// replacing the record.
     ///
     /// Required accounts (1):
     /// - Outbox PDA account
     Emit {
         target_zone: ZoneId,
-        target_program_id: ProgramId,
+        target_account_id: AccountId,
         /// Accounts the destination inbox must hand to the target program's
         /// chained call. The emitter specifies them; the watcher forwards them
         /// verbatim so the inbox stays target-agnostic.
@@ -28,13 +32,22 @@ pub enum Instruction {
     },
 }
 
-/// The message as stored in an outbox PDA. The destination zone's watcher reads
-/// this from the inscribed block; the source coordinates are filled by the
-/// watcher, not stored here.
+/// One emitted message, as stored in its outbox PDA.
+///
+/// Carries the slot it occupies as well as the message, so a reader holding the
+/// bytes knows who wrote them and where without inverting the address, which is
+/// a hash. The source zone and block coordinates are filled by the destination's
+/// watcher and are not stored here.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OutboxRecord {
+    /// The program that called `Emit`, which is the immediate chained caller.
+    /// Cross-zone discovery names the top-level program instead, so joining a
+    /// record against a delivery is only sound while every emitter refuses to be
+    /// called by another program.
+    pub emitter: AccountId,
     pub target_zone: ZoneId,
-    pub target_program_id: ProgramId,
+    pub ordinal: u32,
+    pub target_account_id: AccountId,
     pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
 }
@@ -52,22 +65,32 @@ impl OutboxRecord {
     }
 }
 
-/// PDA holding one emitted message, keyed by destination zone and a per-zone
-/// ordinal.
+/// PDA holding one emitted message, keyed by the emitting program, the
+/// destination zone, and a per-emitter per-zone ordinal.
+///
+/// `emitter` is the program that called `Emit`, which the guest takes from
+/// `caller_program_id` rather than from the instruction. Without it in the
+/// address two programs share a slot and one overwrites the other.
 #[must_use]
-pub fn outbox_pda(outbox_id: ProgramId, target_zone: &ZoneId, ordinal: u32) -> AccountId {
-    AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(target_zone, ordinal))
+pub fn outbox_pda(
+    outbox_id: AccountId,
+    emitter: AccountId,
+    target_zone: &ZoneId,
+    ordinal: u32,
+) -> AccountId {
+    AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(emitter, target_zone, ordinal))
 }
 
-/// Seed of an outbox message PDA, exposed so the guest can claim the account.
+/// Seed of an outbox message PDA.
 #[must_use]
-pub fn outbox_pda_seed(target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+fn outbox_pda_seed(emitter: AccountId, target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
-    let mut bytes = [0_u8; 68];
+    let mut bytes = [0_u8; 100];
     bytes[..32].copy_from_slice(&OUTBOX_SEED_DOMAIN);
-    bytes[32..64].copy_from_slice(target_zone);
-    bytes[64..].copy_from_slice(&ordinal.to_le_bytes());
+    bytes[32..64].copy_from_slice(emitter.as_ref());
+    bytes[64..96].copy_from_slice(target_zone);
+    bytes[96..].copy_from_slice(&ordinal.to_le_bytes());
 
     let seed: [u8; 32] = Impl::hash_bytes(&bytes)
         .as_bytes()
@@ -80,14 +103,55 @@ pub fn outbox_pda_seed(target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
 mod tests {
     use super::*;
 
+    const OUTBOX: AccountId = AccountId::new([3; 32]);
+    const EMITTER: AccountId = AccountId::new([4; 32]);
+
     #[test]
     fn outbox_pda_is_unique_per_zone_and_ordinal() {
-        let id: ProgramId = [3; 8];
         let zone_a = [1; 32];
         let zone_b = [2; 32];
 
-        assert_eq!(outbox_pda(id, &zone_a, 0), outbox_pda(id, &zone_a, 0));
-        assert_ne!(outbox_pda(id, &zone_a, 0), outbox_pda(id, &zone_a, 1));
-        assert_ne!(outbox_pda(id, &zone_a, 0), outbox_pda(id, &zone_b, 0));
+        assert_eq!(
+            outbox_pda(OUTBOX, EMITTER, &zone_a, 0),
+            outbox_pda(OUTBOX, EMITTER, &zone_a, 0)
+        );
+        assert_ne!(
+            outbox_pda(OUTBOX, EMITTER, &zone_a, 0),
+            outbox_pda(OUTBOX, EMITTER, &zone_a, 1)
+        );
+        assert_ne!(
+            outbox_pda(OUTBOX, EMITTER, &zone_a, 0),
+            outbox_pda(OUTBOX, EMITTER, &zone_b, 0)
+        );
+    }
+
+    /// Two programs emitting to the same zone and ordinal must not share a slot,
+    /// or the second silently overwrites the first.
+    #[test]
+    fn outbox_pda_is_unique_per_emitter() {
+        let zone = [1; 32];
+        let other = AccountId::new([5; 32]);
+
+        assert_ne!(
+            outbox_pda(OUTBOX, EMITTER, &zone, 0),
+            outbox_pda(OUTBOX, other, &zone, 0)
+        );
+    }
+
+    #[test]
+    fn outbox_record_round_trips() {
+        let record = OutboxRecord {
+            emitter: EMITTER,
+            target_zone: [1; 32],
+            ordinal: 7,
+            target_account_id: AccountId::new([6; 32]),
+            target_accounts: vec![[9; 32]],
+            payload: b"payload".to_vec(),
+        };
+
+        assert_eq!(
+            OutboxRecord::from_bytes(&record.to_bytes()).expect("record decodes"),
+            record
+        );
     }
 }

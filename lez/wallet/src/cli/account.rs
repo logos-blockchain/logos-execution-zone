@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, PublicKey};
+use lee::{Account, AccountId, PublicKey};
 use lee_core::Identifier;
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -111,8 +111,9 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long, requires = "pda")]
-        /// Identifier that diversifies this PDA within the (`program_id`, seed, npk) family.
+        #[arg(long)]
+        /// Identifier selecting the shared account.
+        /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
         identifier: Option<u128>,
     },
@@ -197,7 +198,7 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    fn handle_private_gms(
+    async fn handle_private_gms(
         group: &Label,
         label: Option<Label>,
         pda: bool,
@@ -229,14 +230,22 @@ impl NewSubcommand {
                 pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
             }
 
-            wallet_core.create_shared_pda_account(
-                group.clone(),
-                pda_seed,
-                pid,
-                identifier.unwrap_or_else(rand::random),
-            )?
+            wallet_core
+                .create_shared_pda_account(
+                    group.clone(),
+                    pda_seed,
+                    pid,
+                    identifier.unwrap_or_else(rand::random),
+                )
+                .await?
+        } else if let Some(id) = identifier {
+            wallet_core
+                .create_shared_regular_account_with_identifier(group.clone(), id)
+                .await?
         } else {
-            wallet_core.create_shared_regular_account(group.clone())?
+            wallet_core
+                .create_shared_regular_account(group.clone())
+                .await?
         };
 
         if let Some(label) = label {
@@ -295,15 +304,18 @@ impl WalletSubcommand for NewSubcommand {
                 seed,
                 program_id,
                 identifier,
-            } => Self::handle_private_gms(
-                &group,
-                label,
-                pda,
-                seed,
-                program_id,
-                identifier,
-                wallet_core,
-            ),
+            } => {
+                Self::handle_private_gms(
+                    &group,
+                    label,
+                    pda,
+                    seed,
+                    program_id,
+                    identifier,
+                    wallet_core,
+                )
+                .await
+            }
             Self::PrivateAccountsKey { cci } => Self::handle_private_accounts_key(cci, wallet_core),
         }
     }
@@ -384,38 +396,61 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
-        let key_chain = &wallet_core.storage.key_chain();
-        let storage = wallet_core.storage();
+    fn format_with_label(
+        wallet_core: &WalletCore,
+        id: AccountIdWithPrivacy,
+        chain_index: Option<&ChainIndex>,
+    ) -> String {
+        let id_str = chain_index.map_or_else(|| id.to_string(), |cci| format!("{cci} {id}"));
 
-        let format_with_label = |id: AccountIdWithPrivacy, chain_index: Option<&ChainIndex>| {
-            let id_str = chain_index.map_or_else(|| id.to_string(), |cci| format!("{cci} {id}"));
-
-            let labels = storage.labels_for_account(id).format(", ").to_string();
-            if labels.is_empty() {
-                id_str
-            } else {
-                format!("{id_str} [{labels}]")
-            }
-        };
-
-        if !long {
-            let accounts = key_chain
-                .account_ids()
-                .map(|(id, idx)| format_with_label(id, idx))
-                .format("\n");
-            println!("{accounts}");
-
-            return Ok(SubcommandReturnValue::Empty);
+        let labels = wallet_core
+            .storage()
+            .labels_for_account(id)
+            .format(", ")
+            .to_string();
+        if labels.is_empty() {
+            id_str
+        } else {
+            format!("{id_str} [{labels}]")
         }
+    }
+
+    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
+        let (public_account_ids, private_account_ids) = {
+            let key_chain = &wallet_core.storage.key_chain();
+
+            if !long {
+                let accounts = key_chain
+                    .account_ids()
+                    .map(|(id, idx)| Self::format_with_label(wallet_core, id, idx))
+                    .format("\n");
+                println!("{accounts}");
+
+                return Ok(SubcommandReturnValue::Empty);
+            }
+
+            let public_account_ids: Vec<_> = key_chain
+                .public_account_ids()
+                .map(|(id, chain_index)| (id, chain_index.cloned()))
+                .collect();
+            let private_account_ids: Vec<_> = key_chain
+                .private_account_ids()
+                .map(|(id, chain_index)| (id, chain_index.cloned()))
+                .collect();
+
+            (public_account_ids, private_account_ids)
+        };
 
         // Detailed listing with --long flag
 
-        // Public key tree accounts
-        for (id, chain_index) in key_chain.public_account_ids() {
+        for (id, chain_index) in public_account_ids {
             println!(
                 "{}",
-                format_with_label(AccountIdWithPrivacy::Public(id), chain_index)
+                Self::format_with_label(
+                    wallet_core,
+                    AccountIdWithPrivacy::Public(id),
+                    chain_index.as_ref()
+                )
             );
             match wallet_core.get_account_public(id).await {
                 Ok(account) if account != Account::default() => {
@@ -429,10 +464,14 @@ impl AccountSubcommand {
         }
 
         // Private key tree accounts
-        for (id, chain_index) in key_chain.private_account_ids() {
+        for (id, chain_index) in private_account_ids {
             println!(
                 "{}",
-                format_with_label(AccountIdWithPrivacy::Private(id), chain_index)
+                Self::format_with_label(
+                    wallet_core,
+                    AccountIdWithPrivacy::Private(id),
+                    chain_index.as_ref()
+                )
             );
             match wallet_core.get_account_private(id) {
                 Some(account) if account != Account::default() => {
@@ -604,8 +643,8 @@ impl WalletSubcommand for ImportSubcommand {
 
 /// Formats account details for display, returning (description, `json_view`).
 fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id = programs::authenticated_transfer().id();
-    let token_prog_id = programs::token().id();
+    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
+    let token_prog_id: AccountId = programs::token().id().into();
 
     match &account.program_owner {
         o if *o == auth_tr_prog_id => {

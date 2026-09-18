@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_protocol::Account;
-use integration_tests::{L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention};
-use log::info;
+use integration_tests::{
+    L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    public_mention,
+};
 use wallet::{
     account::Label,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
@@ -52,7 +54,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let acc_1_balance = ctx.block_on(|ctx| {
@@ -68,10 +70,18 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         )
     })?;
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    // Charged transfer: the recipient gains exactly the amount; the sender
+    // pays the amount plus a positive fee within the protocol ceiling.
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[1] + 100);
+    let fee = (INITIAL_PUBLIC_BALANCES_FOR_WALLET[0] - 100)
+        .checked_sub(acc_1_balance)
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= wallet::DEFAULT_MAX_FEE,
+        "the sender must pay a positive fee within the protocol ceiling, got {fee}",
+    );
 
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     let acc1_ind_state_ffi = unsafe {
@@ -95,7 +105,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, acc1_seq_state.into());
 
-    info!("Indexer state is consistent after label-based transfer");
+    log::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

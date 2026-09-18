@@ -9,10 +9,11 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, utils::sync_private,
+    verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramId,
+    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -21,13 +22,14 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness,
+    PrivateWitness, WitnessKind,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
 };
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
+use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -43,7 +45,7 @@ async fn fund_private_pda(
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
-    authority_program_id: ProgramId,
+    authority_program_id: AccountId,
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
@@ -65,14 +67,18 @@ async fn fund_private_pda(
 
     let account_identities = vec![
         InputAccountIdentity::Public,
-        InputAccountIdentity::PrivatePdaInit {
+        InputAccountIdentity::Private(PrivateWitness {
             vpk,
             random_seed: [0; 32],
-            npk,
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: Some((seed, authority_program_id)),
-        },
+            kind: WitnessKind::Pda {
+                binding: Some((authority_program_id, seed)),
+            },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        }),
     ];
 
     let (output, proof) = execute_and_prove(
@@ -83,15 +89,13 @@ async fn fund_private_pda(
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
-    let message =
-        Message::try_from_circuit_output(vec![sender], vec![sender_account.nonce], output)
-            .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
+    let message = Message::from_circuit_output(vec![sender_account.nonce], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     wallet
-        .sequencer_client
+        .helm_owned()
         .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
@@ -159,14 +163,76 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = proxy.id();
-    let auth_transfer_id = auth_transfer.id();
+    let proxy_id: AccountId = proxy.id().into();
+    // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
+    // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
+    let auth_transfer_id: ProgramId = auth_transfer.id();
+    let auth_transfer_account_id: AccountId = auth_transfer_id.into();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
-    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
-    let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+    // The circuit anchors the PDAs' authority binding to `proxy_id`'s real on-chain image, so
+    // `pda_spend_proxy` must actually be deployed there through `program_loader`, not just known
+    // locally — a `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
+    // `proxy_id` itself as the header.
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let segment_key = PrivateKey::try_new([230; 32]).unwrap();
+    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
+
+    // Segments only ever hold `user_elf`.
+    let user_elf = proxy.user_elf().expect("valid ProgramBinary");
+    let segment_message = lee::public_transaction::Message::try_new_with_fees(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![segment_id],
+        vec![lee_core::account::Nonce(0), payer_nonce],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: user_elf,
+            next_segment: None,
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )?;
+    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+        &segment_message,
+        &[&segment_key, &payer.pub_sign_key],
+    );
+    ctx.sequencer_client()
+        .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
+            segment_message,
+            segment_witness_set,
+        )))
+        .await?;
+
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let header_message = lee::public_transaction::Message::try_new_with_fees(
+        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+        vec![proxy_id, segment_id],
+        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
+        program_loader_core::Instruction::CreateHeader {
+            first_segment: segment_id,
+            immutable: true,
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )?;
+    let header_witness_set =
+        lee::public_transaction::WitnessSet::for_message(&header_message, &[&payer.pub_sign_key]);
+    ctx.sequencer_client()
+        .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
+            header_message,
+            header_witness_set,
+        )))
+        .await?;
+
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let auth_transfer_program =
+        ProgramWithDependencies::new(auth_transfer.clone(), auth_transfer_account_id, [].into());
+    let spend_program = ProgramWithDependencies::new(
+        proxy,
+        proxy_id,
+        [(auth_transfer_account_id, auth_transfer)].into(),
+    );
 
     let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
     let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
@@ -178,9 +244,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // ── Receive ──────────────────────────────────────────────────────────────────────────────────
 
-    info!("Sending to alice_pda_0 (identifier=0)");
+    log::info!("Sending to alice_pda_0 (identifier=0)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_0,
         alice_npk,
         alice_vpk.clone(),
@@ -192,9 +258,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Sending to alice_pda_1 (identifier=1)");
+    log::info!("Sending to alice_pda_1 (identifier=1)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_1,
         alice_npk,
         alice_vpk.clone(),
@@ -206,7 +272,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for block");
+    log::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
@@ -231,7 +297,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_0_id)
         .context("commitment for alice_pda_0 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_0.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_0, ctx.sequencer_client()).await,
         "alice_pda_0 commitment not in state after receive"
     );
 
@@ -240,7 +306,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_1_id)
         .context("commitment for alice_pda_1 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_1.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_1, ctx.sequencer_client()).await,
         "alice_pda_1 commitment not in state after receive"
     );
     assert_ne!(
@@ -260,9 +326,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let amount_spend_0: u128 = 13;
     let amount_spend_1: u128 = 37;
 
-    info!("Alice spending from alice_pda_0");
+    log::info!("Alice spending from alice_pda_0");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_0_id,
         recipient_npk_0,
         recipient_vpk_0,
@@ -273,9 +339,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Alice spending from alice_pda_1");
+    log::info!("Alice spending from alice_pda_1");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_1_id,
         recipient_npk_1,
         recipient_vpk_1,
@@ -286,7 +352,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for block");
+    log::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     sync_private(&mut ctx).await?;
@@ -323,6 +389,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         "alice_pda_1 post-spend commitment not in state"
     );
 
-    info!("Private PDA family member receive-and-spend test passed");
+    log::info!("Private PDA family member receive-and-spend test passed");
     Ok(())
 }

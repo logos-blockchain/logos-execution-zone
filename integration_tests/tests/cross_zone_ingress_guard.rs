@@ -9,43 +9,49 @@
 //! inbox guest's caller-is-none assertion passes for a top-level user tx, so the
 //! sequencer ingress guard is the only thing that stops this.
 
-use std::net::SocketAddr;
-
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use common::transaction::LeeTransaction;
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction, inbox_config_account_id, inbox_seen_shard_account_id,
 };
-use integration_tests::{
-    config::{self, SequencerPartialConfig},
-    setup::{setup_bedrock_node, setup_sequencer},
-};
+use integration_tests::config::{self, SequencerPartialConfig};
 use lee::{
-    PublicTransaction,
+    AccountId, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 #[test]
 async fn user_origin_inbox_call_rejected() -> Result<()> {
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up Bedrock node")?;
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
-    let (seq, _seq_home) = setup_sequencer(partial, bedrock_addr, vec![], channel, None)
-        .await
-        .context("Failed to set up sequencer")?;
+
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel,
+            })
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
-    let inbox_id = programs::cross_zone_inbox().id();
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 1,
+        src_block_hash: [7; 32],
         src_tx_index: 0,
-        src_program_id: [9; 8],
-        target_program_id: programs::ping_receiver().id(),
+        src_account_id: AccountId::from([9_u32; 8]),
+        target_account_id: programs::ping_receiver().id().into(),
         payload: vec![],
         l1_inclusion_witness: None,
     };
@@ -62,19 +68,15 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         WitnessSet::from_raw_parts(vec![]),
     ));
 
-    let result = sequencer_client(seq.addr())?.send_transaction(tx).await;
+    let result = ctx
+        .default_sequencer_component()
+        .sequencer_client
+        .send_transaction(tx)
+        .await;
     let err = result.expect_err("the sequencer must reject a user-origin inbox call");
     assert!(
         err.to_string().contains("sequencer-only"),
         "rejection should cite the sequencer-only guard, got: {err}"
     );
     Ok(())
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }

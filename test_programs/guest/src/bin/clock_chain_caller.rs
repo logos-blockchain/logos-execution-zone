@@ -1,10 +1,11 @@
+use borsh::to_vec;
 use lee_core::{
     Timestamp,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+        AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
     },
 };
-use risc0_zkvm::serde::to_vec;
 
 type Instruction = (ProgramId, Timestamp); // (clock_program_id, timestamp)
 
@@ -12,34 +13,37 @@ type Instruction = (ProgramId, Timestamp); // (clock_program_id, timestamp)
 /// Used in tests to verify that user transactions cannot modify clock accounts, even indirectly
 /// via chain calls.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (clock_program_id, timestamp),
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states: Vec<_> = pre_states
+    let state_diffs: Vec<_> = pre_states
         .iter()
-        .map(|pre| AccountPostState::new(pre.account.clone()))
+        .map(|pre| AccountStateDiff::unchanged(pre.clone()))
         .collect();
 
     let chained_call = ChainedCall {
-        program_id: clock_program_id,
+        program_account_id: clock_program_id.into(),
         instruction_data: to_vec(&timestamp).unwrap(),
-        pre_states: pre_states.clone(),
+        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
+        self_account_id,
+        caller_account_id,
+        instruction_data,
+        state_diffs,
     )
     .with_chained_calls(vec![chained_call])
     .write();

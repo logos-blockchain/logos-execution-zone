@@ -9,7 +9,7 @@
 //! payload landing in the indexer's state proves verification passed; a forgery
 //! would have halted the indexer instead.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -17,13 +17,18 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{setup_bedrock_node, setup_indexer, setup_sequencer},
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
-use lee_core::program::ProgramId;
-use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
-use sequencer_core::config::{CrossZoneConfig, CrossZonePeer};
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use ping_core::{
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
+};
+use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, source_only_cross_zone},
+};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -31,50 +36,63 @@ const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 
 #[test]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
-    // Declared first so it outlives both zones (drops run in reverse order).
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up shared Bedrock node")?;
-
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let receiver_id = programs::ping_receiver().id();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
-            allowed_targets: vec![receiver_id],
-            expected_block_signing_pubkey: None,
+            allowed_routes: vec![CrossZoneRoute {
+                src_account_id: programs::ping_sender().id().into(),
+                target_account_id: receiver_id,
+                mint_cap: None,
+            }],
+            expected_block_signing_pubkeys: Vec::new(),
+            min_committee_size: 0,
         }],
+        source_authority: None,
+        source_governance: None,
     };
+
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(source_only_cross_zone())),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(cross_zone)),
+        )
+        .build()
+        .await?;
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
-        .await
-        .context("Failed to set up zone A sequencer")?;
-    let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
-        .await
-        .context("Failed to set up zone A indexer")?;
-    let (_seq_b, _seq_b_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        vec![],
-        channel_b,
-        Some(cross_zone.clone()),
-    )
-    .await
-    .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
-        .await
-        .context("Failed to set up zone B indexer")?;
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
+
+    let seq_client_a = &ctx
+        .zone_default_sequencer_component(channel_a)
+        .sequencer_client;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);
-    sequencer_client(seq_a.addr())?
+    seq_client_a
         .send_transaction(ping)
         .await
         .context("Failed to submit ping on zone A")?;
@@ -82,13 +100,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // Wait until zone B's indexer records the delivered payload. The indexer only
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
-    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, idx_b.addr())
-        .context("Failed to build indexer URL")?;
-    let indexer = IndexerClient::new(&indexer_url)
-        .await
-        .context("Failed to build indexer client")?;
 
-    let delivered = wait_for_indexer_delivery(&indexer, record_id).await?;
+    let delivered = wait_for_indexer_delivery(ind_client_b, record_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B's indexer must record the verified cross-zone payload"
@@ -96,29 +109,31 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     Ok(())
 }
 
-fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox().id();
+fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
     let ordinal = 0;
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
-        outbox_program_id: outbox_id,
         target_zone,
-        target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_account_id: receiver_id,
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
         ordinal,
     };
 
-    let outbox_account = outbox_pda(outbox_id, &target_zone, ordinal);
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
-        programs::ping_sender().id(),
-        vec![outbox_account],
+        sender_id,
+        vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,
     )
@@ -127,14 +142,6 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ))
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }
 
 /// Polls zone B's indexer until the ping record PDA holds a payload.

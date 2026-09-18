@@ -1,35 +1,46 @@
-use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda, outbox_pda_seed};
+use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountWithMetadata, BalanceDiff},
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
 };
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    assert!(
-        caller_program_id.is_some(),
-        "Outbox is only callable through a chain call from a user program"
-    );
+    // The emitter, and the only identity here the state machine verifies: it
+    // checks a guest's claimed caller against the real one. Note this is the
+    // immediate chained caller, not the top-level program that cross-zone
+    // discovery names; the two coincide only while every emitter refuses to be
+    // called by another program, which both do today.
+    let Some(emitter) = caller_account_id else {
+        panic!("Outbox is only callable through a chain call from a user program");
+    };
 
-    let (target_zone, target_program_id, target_accounts, payload, ordinal) = match instruction {
+    let (target_zone, target_account_id, target_accounts, payload, ordinal) = match instruction {
         Instruction::Emit {
             target_zone,
-            target_program_id,
+            target_account_id,
             target_accounts,
             payload,
             ordinal,
         } => (
             target_zone,
-            target_program_id,
+            target_account_id,
             target_accounts,
             payload,
             ordinal,
@@ -41,14 +52,33 @@ fn main() {
 
     assert_eq!(
         outbox.account_id,
-        outbox_pda(self_program_id, &target_zone, ordinal),
-        "Account must be the outbox PDA for (target_zone, ordinal)"
+        outbox_pda(self_account_id, emitter, &target_zone, ordinal),
+        "Account must be the outbox PDA for (emitter, target_zone, ordinal)"
     );
 
-    let mut post_account = outbox.account.clone();
-    post_account.data = OutboxRecord {
+    // A slot holds one message for ever. Identity first, so a wrong account that
+    // happens to be free is reported as the wrong account rather than as a used
+    // slot.
+    //
+    // This is the same predicate the state machine already requires of a first
+    // write, so guest and host agree by construction rather than by coincidence.
+    //
+    // A slot can still be denied to its intended writer by a real emission: the
+    // ordinal is caller-chosen in a namespace every user of an emitter shares,
+    // and an emission needs no signature, so anyone can occupy one. A client must
+    // pick an ordinal the chain does not already hold rather than counting from
+    // zero. TODO(squatting): a foreign data write at the address denies the
+    // ordinal the same way, since whoever writes data first owns the account.
+    assert!(
+        outbox.account.data.is_empty(),
+        "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
+    );
+
+    let new_data = OutboxRecord {
+        emitter,
         target_zone,
-        target_program_id,
+        ordinal,
+        target_account_id,
         target_accounts,
         payload,
     }
@@ -56,16 +86,12 @@ fn main() {
     .try_into()
     .expect("OutboxRecord fits in account data");
 
-    let post = AccountPostState::new_claimed_if_default(
-        post_account,
-        Claim::Pda(outbox_pda_seed(&target_zone, ordinal)),
-    );
+    let post = AccountStateDiff::new(outbox, BalanceDiff::Add(0), new_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![outbox],
+        self_account_id,
+        caller_account_id,
+        instruction_data,
         vec![post],
     )
     .write();

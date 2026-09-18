@@ -1,15 +1,15 @@
 use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::AccountPostState,
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
 #[must_use]
 pub fn burn(
-    definition_account: AccountWithMetadata,
-    user_holding_account: AccountWithMetadata,
+    definition_account: &AccountWithMetadata,
+    user_holding_account: &AccountWithMetadata,
     amount_to_burn: u128,
-) -> Vec<AccountPostState> {
+) -> Vec<AccountStateDiff> {
     assert!(
         user_holding_account.is_authorized,
         "Authorization is missing"
@@ -92,14 +92,17 @@ pub fn burn(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let mut definition_post = definition_account.account;
-    definition_post.data = Data::from(&definition);
+    let definition_diff = AccountStateDiff::new(
+        definition_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&definition),
+    );
 
-    let mut holding_post = user_holding_account.account;
-    holding_post.data = Data::from(&holding);
+    let holding_diff = AccountStateDiff::new(
+        user_holding_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&holding),
+    );
 
-    vec![
-        AccountPostState::new(definition_post),
-        AccountPostState::new(holding_post),
-    ]
+    vec![definition_diff, holding_diff]
 }

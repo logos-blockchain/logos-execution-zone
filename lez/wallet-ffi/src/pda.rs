@@ -18,7 +18,7 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
     program_id: FfiProgramId,
     pda_seed: FfiPdaSeed,
 ) -> FfiBytes32 {
-    AccountId::for_public_pda(&program_id.data, &pda_seed.into()).into()
+    AccountId::for_public_pda(&AccountId::from(program_id.data), &pda_seed.into()).into()
 }
 
 /// Produce account id for private PDA.
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
     unsafe {
         *account_id = AccountId::for_private_pda(
-            &program_id.data,
+            &AccountId::from(program_id.data),
             &pda_seed.into(),
             &ffi_private_keys.npk(),
             &vpk.unwrap(),
@@ -85,8 +85,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use lee_core::{encryption::ViewingPublicKey, NullifierPublicKey};
-    use vault_core::PdaSeed;
+    use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, NullifierPublicKey};
 
     use crate::{
         error::WalletFfiError,
@@ -99,7 +98,7 @@ mod tests {
         let program_id = [100_u32, 101, 102, 103, 104, 105, 106, 107];
         let pda_seed = PdaSeed::new([42; 32]);
 
-        let pda_id = AccountId::for_public_pda(&program_id, &pda_seed);
+        let pda_id = AccountId::for_public_pda(&AccountId::from(program_id), &pda_seed);
         let ffi_pda_id = wallet_ffi_account_id_for_public_pda(program_id.into(), pda_seed.into());
 
         assert_eq!(pda_id.into_value(), ffi_pda_id.data);
@@ -113,7 +112,13 @@ mod tests {
         let npk = NullifierPublicKey([44; 32]);
         let identifier = 100_000_u128;
 
-        let pda_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let pda_id = AccountId::for_private_pda(
+            &AccountId::from(program_id),
+            &pda_seed,
+            &npk,
+            &vpk,
+            identifier,
+        );
 
         let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
 

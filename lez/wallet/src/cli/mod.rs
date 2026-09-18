@@ -1,12 +1,11 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr};
+use std::{io::Write as _, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
-use common::{HashType, transaction::LeeTransaction};
+use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
-use lee::ProgramDeploymentTransaction;
 use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
@@ -20,12 +19,15 @@ use crate::{
         config::ConfigSubcommand,
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
+        network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-            token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
+            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
+        statistics::StatisticsSubcommand,
     },
+    config::SequencerConnectionData,
     storage::Storage,
 };
 
@@ -34,7 +36,9 @@ pub mod chain;
 pub mod config;
 pub mod group;
 pub mod keycard;
+pub mod network;
 pub mod programs;
+pub mod statistics;
 
 pub(crate) trait WalletSubcommand {
     async fn handle_subcommand(self, wallet_core: &mut WalletCore)
@@ -54,9 +58,6 @@ pub enum Command {
     /// Account view and sync subcommand.
     #[command(subcommand)]
     Account(AccountSubcommand),
-    /// Pinata program interaction subcommand.
-    #[command(subcommand)]
-    Pinata(PinataProgramAgnosticSubcommand),
     /// Token program interaction subcommand.
     #[command(subcommand)]
     Token(TokenProgramAgnosticSubcommand),
@@ -66,12 +67,12 @@ pub enum Command {
     /// Associated Token Account program interaction subcommand.
     #[command(subcommand)]
     Ata(AtaSubcommand),
-    /// Vault program interaction subcommand.
-    #[command(subcommand)]
-    Vault(VaultSubcommand),
     /// Bridge program interaction subcommand.
     #[command(subcommand)]
     Bridge(BridgeSubcommand),
+    /// `program_loader` program interaction subcommand (deploy/update a program).
+    #[command(subcommand)]
+    ProgramLoader(ProgramLoaderSubcommand),
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -81,6 +82,11 @@ pub enum Command {
     /// Command to setup config, get and set config fields.
     #[command(subcommand)]
     Config(ConfigSubcommand),
+    /// Change the network the wallet points to.
+    ChangeNetwork {
+        /// `testnet`, `local`, or a custom sequencer URL.
+        network: NetworkAlias,
+    },
     /// Restoring keys from given password at given `depth`.
     ///
     /// !!!WARNING!!! will rewrite current storage.
@@ -89,11 +95,12 @@ pub enum Command {
         /// Indicates, how deep in tree accounts may be. Affects command complexity.
         depth: u32,
     },
-    /// Deploy a program.
-    DeployProgram { binary_filepath: PathBuf },
     /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
+    /// Metrics management.
+    #[command(subcommand)]
+    Statistics(StatisticsSubcommand),
 }
 
 /// To execute commands, env var `LEE_WALLET_HOME_DIR` must be set into directory with config.
@@ -108,9 +115,6 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
-    /// Basic authentication in the format `user` or `user:password`.
-    #[arg(long)]
-    pub auth: Option<String>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -163,14 +167,22 @@ impl CliAccountMention {
         }
     }
 
+    /// Convert to an [`crate::AccountIdentity`] for use in a public transaction.
+    ///
+    /// The `sign` flag indicates whether to sign or not with the account keys.
     #[must_use]
-    pub fn into_public_identity(self, account_id: lee::AccountId) -> crate::AccountIdentity {
+    pub fn into_public_identity(
+        self,
+        account_id: lee::AccountId,
+        sign: bool,
+    ) -> crate::AccountIdentity {
         match self {
             Self::KeyPath(key_path) => crate::AccountIdentity::PublicKeycard {
                 account_id,
                 key_path,
             },
-            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) if sign => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::PublicNoSign(account_id),
         }
     }
 }
@@ -215,12 +227,8 @@ pub async fn execute_subcommand(
         Command::Account(account_subcommand) => {
             account_subcommand.handle_subcommand(wallet_core).await?
         }
-        Command::Pinata(pinata_subcommand) => {
-            pinata_subcommand.handle_subcommand(wallet_core).await?
-        }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
-                .sequencer_client
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
@@ -261,9 +269,13 @@ pub async fn execute_subcommand(
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Vault(vault_subcommand) => vault_subcommand.handle_subcommand(wallet_core).await?,
         Command::Bridge(bridge_subcommand) => {
             bridge_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::ProgramLoader(program_loader_subcommand) => {
+            program_loader_subcommand
+                .handle_subcommand(wallet_core)
+                .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Keycard(keycard_subcommand) => {
@@ -271,6 +283,20 @@ pub async fn execute_subcommand(
         }
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::ChangeNetwork { network } => {
+            let sequencer_addr: url::Url = network.try_into().context("Invalid sequencer URL")?;
+
+            let mut config = wallet_core.config().clone();
+            config.sequencers = vec![SequencerConnectionData {
+                sequencer_addr,
+                basic_auth: None,
+            }];
+
+            wallet_core.set_config(config);
+            wallet_core.store_config_changes().await?;
+
+            SubcommandReturnValue::Empty
         }
         Command::RestoreKeys { depth } => {
             let mnemonic = read_mnemonic_from_stdin()?;
@@ -280,25 +306,17 @@ pub async fn execute_subcommand(
 
             SubcommandReturnValue::Empty
         }
-        Command::DeployProgram { binary_filepath } => {
-            let bytecode: Vec<u8> = std::fs::read(&binary_filepath).context(format!(
-                "Failed to read program binary at {}",
-                binary_filepath.display()
-            ))?;
-            let message = lee::program_deployment_transaction::Message::new(bytecode);
-            let transaction = ProgramDeploymentTransaction::new(message);
-            let tx_hash = wallet_core
-                .sequencer_client
-                .send_transaction(LeeTransaction::ProgramDeployment(transaction))
-                .await
-                .context("Transaction submission error")?;
-
-            wallet_core
-                .poll_and_finalize_public_transaction(tx_hash)
-                .await
-                .context("Transaction finalization error")?
+        Command::Statistics(statistics_subcommand) => {
+            statistics_subcommand.handle_subcommand(wallet_core).await?
         }
     };
+
+    // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
+    // statistics
+    wallet_core
+        .client_rotation()
+        .await
+        .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
 }
@@ -388,14 +406,13 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
+    let leader_client = wallet_core.helm_owned();
+
     wallet_core
         .storage
         .key_chain_mut()
         .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            wallet_core
-                .sequencer_client
-                .get_account(account_id)
-                .map_err(Into::into)
+            leader_client.get_account(account_id).map_err(Into::into)
         })
         .await?;
 

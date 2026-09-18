@@ -4,7 +4,9 @@
 )]
 
 pub use circuit_io::{
-    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    DummyInput, InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness, ProgramImageClaim, PublicAction,
+    WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
@@ -14,7 +16,10 @@ pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
     ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
-pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use frame::{from_frame, to_borsh_frame, to_frame};
+pub use nullifier::{
+    AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
+};
 pub use program::PrivateAccountKind;
 
 pub mod account;
@@ -22,6 +27,7 @@ mod circuit_io;
 mod commitment;
 mod encoding;
 pub mod encryption;
+mod frame;
 mod nullifier;
 pub mod program;
 

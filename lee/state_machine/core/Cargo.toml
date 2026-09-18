@@ -13,7 +13,6 @@ borsh.workspace = true
 serde.workspace = true
 serde_with.workspace = true
 thiserror.workspace = true
-bytemuck.workspace = true
 bytesize.workspace = true
 base58.workspace = true
 ml-kem = { workspace = true }
@@ -21,6 +20,7 @@ chacha20 = { version = "0.10" }
 
 [dev-dependencies]
 serde_json.workspace = true
+sha2.workspace = true
 
 [features]
 default = []

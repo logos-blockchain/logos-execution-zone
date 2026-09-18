@@ -1,7 +1,4 @@
-use std::{
-    fmt::{Display, Write as _},
-    str::FromStr,
-};
+use std::{fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -9,8 +6,9 @@ pub use data::Data;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use thiserror::Error;
 
-use crate::{NullifierSecretKey, program::ProgramId};
+use crate::NullifierSecretKey;
 
 pub mod data;
 
@@ -90,38 +88,61 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+/// A base-fee price or tip, in atomic units; fits `u64` by the per-block gas caps
+/// (balances and totals are [`Balance`], `u128`).
+pub type Fee = u64;
+/// A gas amount (execution or storage work), bounded per block.
+pub type Gas = u64;
+/// A raw zkVM execution cycle count or budget, before it is priced into [`Gas`].
+pub type Cycles = u64;
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub enum BalanceDiff {
+    Add(Balance),
+    Sub(Balance),
+}
+
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BalanceDiffError {
+    #[error("balance overflow")]
+    Overflow,
+    #[error("insufficient balance")]
+    InsufficientBalance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct PostStateEffects {
+    pub id: AccountId,
+    pub diff_balance: Option<BalanceDiff>,
+    pub new_data: Option<Data>,
+}
+
+impl PostStateEffects {
+    /// A diff that leaves `id`'s balance and data untouched.
+    #[must_use]
+    pub const fn new_unchanged(id: AccountId) -> Self {
+        Self {
+            id,
+            diff_balance: None,
+            new_data: None,
+        }
+    }
+}
 
 /// Account to be used both in public and private contexts.
 #[derive(
-    Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: ProgramId,
+    pub program_owner: AccountId,
     pub balance: Balance,
     pub data: Data,
     pub nonce: Nonce,
 }
 
-impl std::fmt::Debug for Account {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let program_owner_hex = self
-            .program_owner
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .fold(String::new(), |mut acc, bytes| {
-                write!(acc, "{bytes:02x}").expect("writing to string should not fail");
-                acc
-            });
-        f.debug_struct("Account")
-            .field("program_owner", &program_owner_hex)
-            .field("balance", &self.balance)
-            .field("data", &self.data)
-            .field("nonce", &self.nonce)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AccountWithMetadata {
     pub account: Account,
     pub is_authorized: bool,
@@ -213,6 +234,21 @@ impl Display for AccountId {
     }
 }
 
+pub fn apply_balance_diff(
+    current: Balance,
+    diff: Option<BalanceDiff>,
+) -> Result<Balance, BalanceDiffError> {
+    match diff {
+        None => Ok(current),
+        Some(BalanceDiff::Add(amount)) => current
+            .checked_add(amount)
+            .ok_or(BalanceDiffError::Overflow),
+        Some(BalanceDiff::Sub(amount)) => current
+            .checked_sub(amount)
+            .ok_or(BalanceDiffError::InsufficientBalance),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,14 +279,14 @@ mod tests {
     fn default_program_owner_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID);
+        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID.into());
     }
 
     #[cfg(feature = "host")]
     #[test]
     fn account_with_metadata_constructor() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             balance: 1337,
             data: b"testing_account_with_metadata_constructor"
                 .to_vec()
@@ -350,5 +386,83 @@ mod tests {
         let nonce_restored = borsh::from_slice(&borsh_serialized_nonce).unwrap();
 
         assert_eq!(nonce, nonce_restored);
+    }
+
+    #[test]
+    fn apply_balance_diff_none_is_noop() {
+        let result = apply_balance_diff(10, None);
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
+    fn apply_balance_diff_add_succeeds() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Add(5)));
+        assert_eq!(result, Ok(15));
+    }
+
+    #[test]
+    fn apply_balance_diff_add_zero_is_noop() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Add(0)));
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
+    fn apply_balance_diff_add_overflow_is_rejected() {
+        let result = apply_balance_diff(Balance::MAX, Some(BalanceDiff::Add(1)));
+        assert_eq!(result, Err(BalanceDiffError::Overflow));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_succeeds() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(5)));
+        assert_eq!(result, Ok(5));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_zero_is_noop() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(0)));
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_down_to_exactly_zero_succeeds() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(10)));
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_insufficient_balance_is_rejected() {
+        let result = apply_balance_diff(10, Some(BalanceDiff::Sub(11)));
+        assert_eq!(result, Err(BalanceDiffError::InsufficientBalance));
+    }
+
+    #[test]
+    fn serde_roundtrip_for_balance_diff() {
+        let diff = BalanceDiff::Add(7);
+
+        let serde_serialized_diff = serde_json::to_vec(&diff).unwrap();
+        let diff_restored = serde_json::from_slice(&serde_serialized_diff).unwrap();
+
+        assert_eq!(diff, diff_restored);
+    }
+
+    #[test]
+    fn borsh_roundtrip_for_balance_diff() {
+        let diff = BalanceDiff::Sub(7);
+
+        let borsh_serialized_diff = borsh::to_vec(&diff).unwrap();
+        let diff_restored = borsh::from_slice(&borsh_serialized_diff).unwrap();
+
+        assert_eq!(diff, diff_restored);
+    }
+
+    #[test]
+    fn account_diff_unchanged_has_no_balance_or_data_change() {
+        let id = AccountId::new([7; 32]);
+        let diff = PostStateEffects::new_unchanged(id);
+
+        assert_eq!(diff.id, id);
+        assert!(diff.diff_balance.is_none());
+        assert!(diff.new_data.is_none());
     }
 }

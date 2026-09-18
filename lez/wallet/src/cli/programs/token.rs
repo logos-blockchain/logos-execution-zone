@@ -208,7 +208,7 @@ impl TokenProgramAgnosticSubcommand {
             (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
                 TokenProgramSubcommand::Shielded(
                     TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
-                        sender: Some(from_mention.into_public_identity(from)),
+                        sender: Some(from_mention.into_public_identity(from, true)),
                         recipient_account_id: to,
                         balance_to_move: amount,
                     },
@@ -237,7 +237,7 @@ impl TokenProgramAgnosticSubcommand {
             ),
             AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
                 TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
-                    sender: Some(from_mention.into_public_identity(from)),
+                    sender: Some(from_mention.into_public_identity(from, true)),
                     recipient_npk: to_npk,
                     recipient_vpk: to_vpk,
                     recipient_identifier: to_identifier,
@@ -830,8 +830,8 @@ impl TokenProgramSubcommandPublic {
         };
         let tx_hash = Token(wallet_core)
             .send_transfer_transaction(
-                sender_account_id.into_public_identity(sender_id),
-                recipient_account_id.into_public_identity(recipient_id),
+                sender_account_id.into_public_identity(sender_id, true),
+                recipient_account_id.into_public_identity(recipient_id, false),
                 balance_to_move,
             )
             .await?;
@@ -855,7 +855,7 @@ impl TokenProgramSubcommandPublic {
         let tx_hash = Token(wallet_core)
             .send_burn_transaction(
                 definition_account_id,
-                holder_account_id.into_public_identity(holder_id),
+                holder_account_id.into_public_identity(holder_id, true),
                 amount,
             )
             .await?;
@@ -881,8 +881,8 @@ impl TokenProgramSubcommandPublic {
         };
         let tx_hash = Token(wallet_core)
             .send_mint_transaction(
-                definition_account_id.into_public_identity(def_id),
-                holder_account_id.into_public_identity(holder_id),
+                definition_account_id.into_public_identity(def_id, true),
+                holder_account_id.into_public_identity(holder_id, false),
                 amount,
             )
             .await?;
@@ -1546,8 +1546,8 @@ impl CreateNewTokenProgramSubcommand {
         };
         let tx_hash = Token(wallet_core)
             .send_new_definition(
-                definition_account_id.into_public_identity(def_id),
-                supply_account_id.into_public_identity(sup_id),
+                definition_account_id.into_public_identity(def_id, true),
+                supply_account_id.into_public_identity(sup_id, true),
                 name,
                 total_supply,
             )

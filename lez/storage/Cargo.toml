@@ -9,6 +9,8 @@ workspace = true
 
 [dependencies]
 common.workspace = true
+chain_state.workspace = true
+fee_core.workspace = true
 lee.workspace = true
 
 thiserror.workspace = true
@@ -16,8 +18,12 @@ borsh.workspace = true
 log.workspace = true
 rocksdb.workspace = true
 tempfile.workspace = true
-zstd.workspace = true
 
 [dev-dependencies]
+lee_core = { workspace = true, features = ["host"] }
 programs.workspace = true
 system_accounts.workspace = true
+
+[features]
+# Runs guest execution in-process against the memoized image cache.
+prove = ["lee/prove"]

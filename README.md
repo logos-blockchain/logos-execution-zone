@@ -144,16 +144,8 @@ RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all
 ## Running Manually
 ### Normal mode
 The sequencer and logos blockchain node can be run locally:
- 1. On one terminal go to the `logos-blockchain/logos-blockchain` repo and run a local logos blockchain node:
-    - `git checkout master; git pull`
-    - `cargo clean`
-    - `cargo build --all-features`
-    - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
-
- - Alternatively (WARNING: This node is outdated) go to `logos-blockchain/logos-execution-zone/` repo and run the node from docker:
-    - `cd bedrock`
-    - Change line 14 of `docker-compose.yml` from `"0:18080/tcp"` into `"8080:18080/tcp"`
-    - `docker compose up`
+ 1. On one terminal, from the LEZ repository, resolve and run the Cargo-authoritative Bedrock node:
+    - `just run-bedrock`
 
  2. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run indexer service:
       - `RUST_LOG=info cargo run -p indexer_service lez/indexer/service/configs/debug/indexer_config.json`
@@ -169,9 +161,9 @@ The sequencer and logos blockchain node can be run locally:
 
 After stopping services above you need to remove 3 folders to start cleanly:
  1. In the `logos-blockchain/logos-blockchain` folder `state` (not needed in case of docker setup)
- 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb`
+ 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb-<channel id>`
  3. In the `logos-execution-zone` file `lez/sequencer/service/bedrock_signing_key`
- 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb`
+ 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb-<channel id>`
 
 ### Normal mode (`just` commands)
 We provide a `Justfile` for developer and user needs, you can run the whole setup with it. The only difference will be that logos-blockchain (bedrock) will be started from docker.
@@ -223,10 +215,12 @@ RUST_LOG=info cargo run --features standalone -p sequencer_service lez/sequencer
 
 ## Running with Docker
 
-You can run the whole setup with Docker:
+You can run the whole setup with Docker. `just run-bedrock` resolves the
+Cargo-authoritative Bedrock node first, and the compose runtime image uses that
+same binary:
 
 ```bash
-docker compose up
+just run-bedrock
 ```
 
 With that you can send transactions from local wallet to the Sequencer running inside Docker using `lez/wallet/configs/debug` as well as exploring blocks by opening `http://localhost:8080`.
@@ -234,4 +228,3 @@ With that you can send transactions from local wallet to the Sequencer running i
 ## Caution for local image builds
 
 If you're going to build sequencer image locally you should better adjust default docker settings and set `defaultKeepStorage` at least `25GB` so that it can keep layers properly cached.
-

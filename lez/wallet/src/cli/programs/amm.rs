@@ -138,9 +138,9 @@ impl AmmProgramAgnosticSubcommand {
             ) => {
                 let tx_hash = Amm(wallet_core)
                     .send_new_definition(
-                        user_holding_a.into_public_identity(a),
-                        user_holding_b.into_public_identity(b),
-                        user_holding_lp.into_public_identity(lp),
+                        user_holding_a.into_public_identity(a, true),
+                        user_holding_b.into_public_identity(b, true),
+                        user_holding_lp.into_public_identity(lp, true),
                         balance_a,
                         balance_b,
                     )
@@ -170,8 +170,8 @@ impl AmmProgramAgnosticSubcommand {
             (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                 let tx_hash = Amm(wallet_core)
                     .send_swap_exact_input(
-                        user_holding_a.into_public_identity(a),
-                        user_holding_b.into_public_identity(b),
+                        user_holding_a.into_public_identity(a, true),
+                        user_holding_b.into_public_identity(b, true),
                         amount_in,
                         min_amount_out,
                         token_definition,
@@ -202,8 +202,8 @@ impl AmmProgramAgnosticSubcommand {
             (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                 let tx_hash = Amm(wallet_core)
                     .send_swap_exact_output(
-                        user_holding_a.into_public_identity(a),
-                        user_holding_b.into_public_identity(b),
+                        user_holding_a.into_public_identity(a, true),
+                        user_holding_b.into_public_identity(b, true),
                         exact_amount_out,
                         max_amount_in,
                         token_definition,
@@ -240,9 +240,9 @@ impl AmmProgramAgnosticSubcommand {
             ) => {
                 let tx_hash = Amm(wallet_core)
                     .send_add_liquidity(
-                        user_holding_a.into_public_identity(a),
-                        user_holding_b.into_public_identity(b),
-                        user_holding_lp.into_public_identity(lp),
+                        user_holding_a.into_public_identity(a, true),
+                        user_holding_b.into_public_identity(b, true),
+                        user_holding_lp.into_public_identity(lp, true),
                         min_amount_lp,
                         max_amount_a,
                         max_amount_b,
@@ -281,7 +281,7 @@ impl AmmProgramAgnosticSubcommand {
                     .send_remove_liquidity(
                         a,
                         b,
-                        user_holding_lp.into_public_identity(lp),
+                        user_holding_lp.into_public_identity(lp, true),
                         balance_lp,
                         min_amount_a,
                         min_amount_b,

@@ -1,28 +1,34 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    respond_unsupported_call,
+};
 
 type Instruction = ();
 
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             ..
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
-    let post_states = pre_states
+    let state_diffs = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|account| AccountStateDiff::unchanged(account.clone()))
         .collect();
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
+        self_account_id,
+        caller_account_id,
+        instruction_data,
+        state_diffs,
     )
     .write();
 }

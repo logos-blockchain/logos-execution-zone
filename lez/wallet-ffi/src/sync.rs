@@ -1,7 +1,5 @@
 //! Block synchronization functions.
 
-use sequencer_service_rpc::RpcClient as _;
-
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
@@ -136,7 +134,7 @@ pub unsafe extern "C" fn wallet_ffi_get_current_block_height(
         }
     };
 
-    match block_on(wallet.sequencer_client.get_last_block_id()) {
+    match block_on(wallet.get_last_block_id()) {
         Ok(last_block_id) => {
             unsafe {
                 *out_block_height = last_block_id;

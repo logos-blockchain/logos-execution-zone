@@ -27,7 +27,7 @@ use wallet::WalletCore;
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary
@@ -53,13 +53,14 @@ async fn main() {
     // `run_hello_world_with_authorization` on how to use them.
     let nonces = vec![];
     let signing_keys = [];
-    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
+    let message =
+        Message::try_new(program.id().into(), vec![account_id], nonces, greeting).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction
     let _response = wallet_core
-        .sequencer_client
+        .helm_owned()
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();

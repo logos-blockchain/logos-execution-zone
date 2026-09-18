@@ -9,14 +9,13 @@ use std::ops::Deref;
 
 use anyhow::{Context as _, Result};
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use log::info;
 use url::Url;
 
 pub struct IndexerClient(WsClient);
 
 impl IndexerClient {
     pub async fn new(indexer_url: &Url) -> Result<Self> {
-        info!("Connecting to Indexer at {indexer_url}");
+        log::info!("Connecting to Indexer at {indexer_url}");
         let client = WsClientBuilder::default()
             .build(indexer_url)
             .await

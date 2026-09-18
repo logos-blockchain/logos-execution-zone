@@ -1,0 +1,19 @@
+[package]
+name = "sequencer_core_metrics"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Enable metrics record
+record = ["dep:common", "dep:metrics", "dep:strum"]
+
+[dependencies]
+common = { workspace = true, optional = true }
+
+metrics = { workspace = true, optional = true }
+strum = { workspace = true, optional = true }

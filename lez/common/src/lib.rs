@@ -5,10 +5,12 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 pub mod block;
 mod borsh_base64;
+pub mod bounded_vec_deque;
 pub mod config;
 pub mod transaction;
 
 // Module for tests utility functions
+//
 // TODO: Compile only for tests
 pub mod test_utils;
 

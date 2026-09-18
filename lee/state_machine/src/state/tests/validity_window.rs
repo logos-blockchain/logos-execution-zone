@@ -25,7 +25,7 @@ fn validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = validity_window_program.id();
+        let program_id: AccountId = validity_window_program.id().into();
         let instruction = (
             block_validity_window,
             TimestampValidityWindow::new_unbounded(),
@@ -76,7 +76,7 @@ fn timestamp_validity_window_works_in_public_transactions(
     let tx = {
         let account_ids = vec![pre.account_id];
         let nonces = vec![];
-        let program_id = validity_window_program.id();
+        let program_id: AccountId = validity_window_program.id().into();
         let instruction = (
             BlockValidityWindow::new_unbounded(),
             timestamp_validity_window,
@@ -126,7 +126,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();
@@ -138,18 +138,23 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::Private(PrivateWitness {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
-                npk: account_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            }],
+                kind: WitnessKind::Regular {
+                    ask: Some(account_keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: account_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            })],
             &validity_window_program.into(),
         )
         .unwrap();
 
-        let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+        let message = Message::from_circuit_output(vec![], output);
 
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
         PrivacyPreservingTransaction::new(message, witness_set)
@@ -191,7 +196,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();
@@ -203,18 +208,23 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::Private(PrivateWitness {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
-                npk: account_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            }],
+                kind: WitnessKind::Regular {
+                    ask: Some(account_keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: account_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            })],
             &validity_window_program.into(),
         )
         .unwrap();
 
-        let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+        let message = Message::from_circuit_output(vec![], output);
 
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
         PrivacyPreservingTransaction::new(message, witness_set)

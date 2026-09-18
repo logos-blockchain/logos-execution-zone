@@ -1,6 +1,8 @@
 use bip39::Mnemonic;
 use common::HashType;
-use lee_core::{NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey};
+use lee_core::{
+    AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey,
+};
 use ml_kem;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -36,7 +38,7 @@ impl ViewingSecretKey {
 /// for recepient.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateKeyHolder {
-    pub nullifier_secret_key: NullifierSecretKey,
+    pub authorization_secret_key: AuthorizationSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
 }
 
@@ -87,43 +89,37 @@ impl SeedHolder {
 impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-    pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[1];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+    pub fn generate_authorization_secret_key(&self, index: Option<u32>) -> AuthorizationSecretKey {
+        const DOMAIN: &[u8; 33] = b"/LEE-Keys/v1/Authorization/Secret";
 
         let index = index.unwrap_or(0);
 
         let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
+        hasher.update(DOMAIN);
         hasher.update(self.0);
-        hasher.update(SUFFIX_1);
         hasher.update(index.to_be_bytes());
-        hasher.update(SUFFIX_2);
 
-        <NullifierSecretKey>::from(hasher.finalize_fixed())
+        AuthorizationSecretKey(hasher.finalize_fixed().into())
+    }
+
+    #[must_use]
+    pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
+        <NullifierSecretKey>::from(&self.generate_authorization_secret_key(index))
     }
 
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[2];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+        const DOMAIN: &[u8; 27] = b"/LEE-Keys/v1/Viewing/Secret";
 
         let index = index.unwrap_or(0);
 
-        let mut bytes: Vec<u8> = Vec::with_capacity(64);
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&self.0);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(&index.to_be_bytes());
-        bytes.extend_from_slice(SUFFIX_2);
-        let bytes: [u8; 64] = bytes
-            .try_into()
-            .expect("`generate_viewing_secret_seed_key`: bytes must be exactly 64");
+        let mut bytes = [0_u8; 27 + 32 + 4];
+        bytes[..27].copy_from_slice(DOMAIN);
+        bytes[27..59].copy_from_slice(&self.0);
+        bytes[59..].copy_from_slice(&index.to_be_bytes());
 
-        let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
+        let full_seed = hmac_sha512::HMAC::mac(bytes, b"/LEE-Keys/v1/Viewing/Seed");
 
         Self::generate_viewing_secret_key(full_seed)
     }
@@ -139,7 +135,7 @@ impl SecretSpendingKey {
     #[must_use]
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
         PrivateKeyHolder {
-            nullifier_secret_key: self.generate_nullifier_secret_key(index),
+            authorization_secret_key: self.generate_authorization_secret_key(index),
             viewing_secret_key: self.generate_viewing_secret_seed_key(index),
         }
     }
@@ -159,8 +155,13 @@ impl From<&ViewingSecretKey> for ViewingPublicKey {
 
 impl PrivateKeyHolder {
     #[must_use]
+    pub fn nullifier_secret_key(&self) -> NullifierSecretKey {
+        (&self.authorization_secret_key).into()
+    }
+
+    #[must_use]
     pub fn generate_nullifier_public_key(&self) -> NullifierPublicKey {
-        (&self.nullifier_secret_key).into()
+        NullifierPublicKey::from(&self.nullifier_secret_key())
     }
 
     #[must_use]

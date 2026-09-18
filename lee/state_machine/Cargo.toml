@@ -9,18 +9,20 @@ workspace = true
 
 [dependencies]
 lee_core = { workspace = true, features = ["host"] }
+program_loader_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
 risc0-zkvm = { workspace = true, features = ["client"] }
-serde.workspace = true
 serde_with.workspace = true
 sha2.workspace = true
 rand.workspace = true
 borsh.workspace = true
 hex.workspace = true
 k256.workspace = true
-risc0-binfmt = "3.0.2"
+risc0-binfmt.workspace = true
+risc0-zkos-v1compat.workspace = true
+semver = { version = "1", optional = true }
 log.workspace = true
 
 [build-dependencies]
@@ -35,5 +37,5 @@ test-case = "3.3.1"
 
 [features]
 default = []
-prove = ["risc0-zkvm/prove"]
+prove = ["risc0-zkvm/prove", "dep:semver"]
 test-utils = []

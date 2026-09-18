@@ -1,9 +1,12 @@
+use common::transaction::TxEvents;
+
 use super::{Block, DbResult, RocksDBIO, V03State};
 use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastObservedL1LibHeaderCell,
+        AccNumTxCell, BlockEventsCellOwned, BlockHashToBlockIdMapCell, BreakpointCellOwned,
+        CrossZoneHaltCellOwned, EventFilterSegmentsCellOwned, LastObservedL1LibHeaderCell,
         StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
@@ -43,6 +46,11 @@ impl RocksDBIO {
             .map(|opt| opt.map(|val| val.0))
     }
 
+    pub fn get_block_events(&self, block_id: u64) -> DbResult<Option<Vec<TxEvents>>> {
+        self.get_opt::<BlockEventsCellOwned>(block_id)
+            .map(|opt| opt.map(|cell| cell.0))
+    }
+
     // State
 
     pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V03State> {
@@ -79,7 +87,19 @@ impl RocksDBIO {
             .map(|cell| cell.0))
     }
 
+    pub fn get_event_filter_segments_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<EventFilterSegmentsCellOwned>(())?
+            .map(|cell| cell.0))
+    }
+
     pub fn get_stall_reason_bytes(&self) -> DbResult<Option<Vec<u8>>> {
         Ok(self.get_opt::<StallReasonCellOwned>(())?.map(|cell| cell.0))
+    }
+
+    pub fn get_cross_zone_halt_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<CrossZoneHaltCellOwned>(())?
+            .map(|cell| cell.0))
     }
 }

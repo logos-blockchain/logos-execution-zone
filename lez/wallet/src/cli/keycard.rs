@@ -5,8 +5,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use keycard_wallet::{KeycardWallet, clear_pairing, python_path};
-use pyo3::prelude::*;
+use keycard_wallet::KeycardWallet;
 
 use crate::{
     WalletCore,
@@ -18,9 +17,16 @@ use crate::{
 pub enum KeycardSubcommand {
     Available,
     Connect,
-    Disconnect,
     Init,
     Load,
+    /// Wipes the card's PIN, PUK, and loaded keys back to an uninitialized state, so it can be
+    /// re-initialized with `wallet keycard init`. Irreversibly destroys any keys currently on
+    /// the card. Requires --confirm.
+    FactoryReset {
+        /// Confirm that the card's current keys should be irreversibly destroyed.
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Retrieve the private keys (NSK, VSK) for a given BIP-32 key path.
     ///
     /// Prints raw key material to stdout — intended for debugging only.
@@ -39,22 +45,11 @@ pub enum KeycardSubcommand {
 
 impl KeycardSubcommand {
     fn handle_available(_wallet_core: &mut WalletCore) -> SubcommandReturnValue {
-        Python::attach(|py| {
-            python_path::add_python_path(py)
-                .expect("`wallet::keycard::available`: unable to setup python path");
-
-            let wallet = KeycardWallet::new(py)
-                .expect("`wallet::keycard::available`: invalid data received for pin");
-            let available = wallet
-                .is_unpaired_keycard_available(py)
-                .expect("`wallet::keycard::available`: received invalid data from Keycard wrapper");
-
-            if available {
-                println!("\u{2705} Keycard is available.");
-            } else {
-                println!("\u{274c} Keycard is not available.");
-            }
-        });
+        if KeycardWallet::is_keycard_available() {
+            println!("\u{2705} Keycard is available.");
+        } else {
+            println!("\u{274c} Keycard is not available.");
+        }
 
         SubcommandReturnValue::Empty
     }
@@ -62,45 +57,9 @@ impl KeycardSubcommand {
     fn handle_connect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
-        Python::attach(|py| {
-            python_path::add_python_path(py)
-                .expect("`wallet::keycard::connect`: unable to setup python path");
-
-            let wallet = KeycardWallet::new(py)
-                .expect("`wallet::keycard::connect`: invalid keycard wallet provided");
-
-            wallet
-                .connect(py, &pin)
-                .expect("`wallet::keycard::connect`: failed to connect to keycard");
-
-            println!("\u{2705} Keycard paired and ready.");
-            drop(wallet.close_session(py));
-        });
-
-        Ok(SubcommandReturnValue::Empty)
-    }
-
-    fn handle_disconnect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
-        let pin = read_pin()?;
-
-        Python::attach(|py| {
-            python_path::add_python_path(py)
-                .expect("`wallet::keycard::disconnect`: unable to setup python path");
-
-            let wallet = KeycardWallet::new(py)
-                .expect("`wallet::keycard::disconnect`: invalid keycard wallet provided");
-
-            wallet
-                .connect(py, &pin)
-                .expect("`wallet::keycard::disconnect`: failed to open session");
-
-            wallet
-                .disconnect(py)
-                .expect("`wallet::keycard::disconnect`: failed to unpair keycard");
-
-            clear_pairing();
-            println!("\u{2705} Keycard unpaired and pairing cleared.");
-        });
+        let mut wallet = KeycardWallet::new()?;
+        wallet.connect(&pin)?;
+        println!("\u{2705} Keycard connected and PIN verified.");
 
         Ok(SubcommandReturnValue::Empty)
     }
@@ -108,22 +67,12 @@ impl KeycardSubcommand {
     fn handle_init(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
-        Python::attach(|py| {
-            python_path::add_python_path(py)
-                .expect("`wallet::keycard::init`: unable to setup python path");
+        let mut wallet = KeycardWallet::new()?;
+        let puk = wallet.initialize(&pin)?;
 
-            let wallet = KeycardWallet::new(py)
-                .expect("`wallet::keycard::init`: invalid keycard wallet provided");
-
-            let initialized = wallet
-                .initialize(py, &pin)
-                .expect("`wallet::keycard::init`: failed to initialize keycard");
-
-            if initialized {
-                clear_pairing();
-                println!("\u{2705} Keycard initialized successfully.");
-            }
-        });
+        println!("Keycard PUK: {puk}");
+        println!("Record this PUK and store it somewhere safe. It cannot be recovered.");
+        println!("\u{2705} Keycard initialized successfully.");
 
         Ok(SubcommandReturnValue::Empty)
     }
@@ -132,25 +81,31 @@ impl KeycardSubcommand {
         let pin = read_pin()?;
         let mnemonic = read_mnemonic()?;
 
-        Python::attach(|py| {
-            python_path::add_python_path(py)
-                .expect("`wallet::keycard::load`: unable to setup python path");
+        let mut wallet = KeycardWallet::new()?;
+        wallet.connect(&pin)?;
+        println!("\u{2705} Keycard is now connected to wallet.");
 
-            let wallet = KeycardWallet::new(py)
-                .expect("`wallet::keycard::load`: invalid keycard wallet provided");
+        wallet.load_mnemonic(&mnemonic)?;
+        println!("\u{2705} Mnemonic phrase loaded successfully.");
 
-            wallet
-                .connect(py, &pin)
-                .expect("`wallet::keycard::load`: failed to connect to keycard");
+        Ok(SubcommandReturnValue::Empty)
+    }
 
-            println!("\u{2705} Keycard is now connected to wallet.");
-            if wallet.load_mnemonic(py, &mnemonic).is_ok() {
-                println!("\u{2705} Mnemonic phrase loaded successfully.");
-            } else {
-                println!("\u{274c} Failed to load mnemonic phrase.");
-            }
-            drop(wallet.close_session(py));
-        });
+    fn handle_factory_reset(
+        confirm: bool,
+        _wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        if !confirm {
+            eprintln!(
+                "WARNING: pass --confirm to factory-reset the keycard. \
+                 This irreversibly destroys any keys currently loaded on it."
+            );
+            return Ok(SubcommandReturnValue::Empty);
+        }
+
+        let mut wallet = KeycardWallet::new()?;
+        wallet.factory_reset()?;
+        println!("\u{2705} Keycard factory-reset. Run `wallet keycard init` to reinitialize it.");
 
         Ok(SubcommandReturnValue::Empty)
     }
@@ -189,9 +144,9 @@ impl WalletSubcommand for KeycardSubcommand {
         match self {
             Self::Available => Ok(Self::handle_available(wallet_core)),
             Self::Connect => Self::handle_connect(wallet_core),
-            Self::Disconnect => Self::handle_disconnect(wallet_core),
             Self::Init => Self::handle_init(wallet_core),
             Self::Load => Self::handle_load(wallet_core),
+            Self::FactoryReset { confirm } => Self::handle_factory_reset(confirm, wallet_core),
             #[cfg(feature = "keycard-debug")]
             Self::GetPrivateKeys { key_path, reveal } => {
                 Self::handle_get_private_keys(&key_path, reveal, wallet_core)

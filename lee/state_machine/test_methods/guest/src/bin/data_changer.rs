@@ -1,38 +1,43 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::BalanceDiff,
+    program::{
+        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        respond_unsupported_call,
+    },
+};
 
 type Instruction = Vec<u8>;
 
 /// A program that modifies the account data by setting bytes sent in instruction.
 fn main() {
-    let (
+    let call = read_lee_call::<Instruction>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: data,
         },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+        instruction_data,
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let account_pre = &pre.account;
-    let mut account_post = account_pre.clone();
-    account_post.data = data
+    let post_data = data
         .try_into()
         .expect("provided data should fit into data limit");
+    let diff_output = AccountStateDiff::new(pre, BalanceDiff::Add(0), post_data);
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![pre],
-        vec![AccountPostState::new_claimed(
-            account_post,
-            Claim::Authorized,
-        )],
+        self_account_id,
+        caller_account_id,
+        instruction_data,
+        vec![diff_output],
     )
     .write();
 }

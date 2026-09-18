@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 indexer_service_rpc = { workspace = true, features = ["server"] }
-indexer_core = { workspace = true, features = ["testnet"] }
+indexer_core.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
@@ -26,3 +26,5 @@ arc-swap = "1.8.1"
 [features]
 # Return mock responses with generated data for testing purposes
 mock-responses = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["indexer_core/prove"]

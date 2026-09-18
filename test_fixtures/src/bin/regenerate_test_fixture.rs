@@ -3,17 +3,23 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::{path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use lee::PrivateKey;
-use sequencer_core::block_store::SequencerStore;
+use kameo::actor::Spawn as _;
+use sequencer_storage_actor::{
+    StorageActor,
+    protocol::{
+        AtomicUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
+        ResetAllBlocksToPending,
+    },
+};
 use test_fixtures::{
     config,
     setup::{
-        prebuilt_sequencer_db_dump_path, setup_bedrock_node,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_sequencer, setup_wallet,
+        SequencerSetup, fund_private_accounts, prebuilt_sequencer_db_circuit_id_path,
+        prebuilt_sequencer_db_dump_path, privacy_preserving_circuit_id_stamp, setup_bedrock_node,
+        setup_wallet,
     },
 };
 use wallet::config::WalletConfigOverrides;
@@ -36,8 +42,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run a real sequencer with the default accounts, apply genesis + claim the initial supply
-/// (genesis block + claim block), then strip the checkpoint and reset blocks to `Pending` so the
+/// Run a real sequencer with the default accounts, apply genesis + fund the private accounts
+/// (genesis block + funding block), then strip the checkpoint and reset blocks to `Pending` so the
 /// dump replays cleanly against a fresh Bedrock. Writes the dump to `dest`.
 async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (_bedrock_compose, bedrock_addr) = setup_bedrock_node()
@@ -46,81 +52,115 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
 
     let initial_public_accounts = config::default_public_accounts_for_wallet();
     let initial_private_accounts = config::default_private_accounts_for_wallet();
-    let genesis =
-        config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+    let genesis = config::genesis_from_accounts(
+        &initial_public_accounts,
+        config::private_total(&initial_private_accounts),
+    );
 
-    let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-        config::SequencerPartialConfig::default(),
-        bedrock_addr,
-        genesis,
-        config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup Sequencer for fixture generation")?;
+    let (sequencer_handle, temp_sequencer_dir) =
+        SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
+            .with_genesis(genesis)
+            .with_bedrock_signing_key(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+            .setup()
+            .await
+            .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
-        sequencer_handle.addr(),
+        &[sequencer_handle.addr()],
         &initial_public_accounts,
         &initial_private_accounts,
         WalletConfigOverrides::default(),
     )
+    .await
     .context("Failed to setup wallet for fixture generation")?;
 
-    setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-        .await
-        .context("Failed to initialize public accounts for fixture generation")?;
-    setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-        .await
-        .context("Failed to initialize private accounts for fixture generation")?;
+    fund_private_accounts(
+        &mut wallet,
+        &initial_public_accounts,
+        &initial_private_accounts,
+    )
+    .await
+    .context("Failed to fund private accounts for fixture generation")?;
 
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);
-    drop(sequencer_handle);
+    sequencer_handle.shutdown().await;
 
-    let db_path = temp_sequencer_dir.path().join("rocksdb");
-    let store = open_store_with_retry(&db_path)
+    let db_path = temp_sequencer_dir
+        .path()
+        .join(format!("rocksdb-{}", config::bedrock_channel_id()));
+    let storage =
+        StorageActor::new(&db_path).context("Failed to reopen sequencer storage after shutdown")?;
+    let storage_ref = StorageActor::spawn(storage);
+    storage_ref
+        .ask(DeleteZoneCheckpoint)
         .await
-        .context("Failed to reopen sequencer store after shutdown")?;
-    store
-        .delete_zone_checkpoint()
         .context("Failed to strip zone-sdk checkpoint from fixture database")?;
-    store
-        .reset_all_blocks_to_pending()
+    storage_ref
+        .ask(ResetAllBlocksToPending)
+        .await
         .context("Failed to reset fixture blocks to pending")?;
-    let dump = store.dump().context("Failed to dump fixture database")?;
-    drop(store);
+
+    // Stamp the final snapshot at the tip so restore replays no fixture blocks.
+    // The dump is generated under RISC0_DEV_MODE, so its privacy proofs are
+    // fake receipts that cannot verify in a real-proof run if they land after
+    // the finalized tip
+    //
+    // TODO: once Bedrock communication lives in its own mockable actor, mock it
+    // here to finalize immediately and drop this direct storage manipulation.
+    let state = storage_ref
+        .ask(GetLeeState)
+        .await
+        .context("Failed to read the fixture head state")?
+        .context("Fixture store has no persisted head state")?;
+    let tip = storage_ref
+        .ask(GetLatestBlockMeta)
+        .await
+        .context("Failed to read the fixture tip block meta")?
+        .context("Fixture store has no blocks")?;
+    let state = Arc::new(state);
+    storage_ref
+        .ask(AtomicUpdate {
+            checkpoint: None,
+            blocks: vec![],
+            channel_cursor: None,
+            head_tip: Some(tip.clone()),
+            head_state: Arc::clone(&state),
+            final_snapshot: Some((state, tip)),
+            // Blocks must stay Pending for the re-publish; only the snapshot moves.
+            finalized_up_to: None,
+            new_deposit_events: vec![],
+            finalized_deposit_records: HashSet::new(),
+            finalized_dispatch_records: HashSet::new(),
+            consumed_withdrawals: HashSet::new(),
+            new_withdraw_intents: HashSet::new(),
+            zone_anchor: None,
+            lower_published_high_water: None,
+        })
+        .await
+        .context("Failed to stamp the fixture final snapshot at the tip")?;
+
+    let dump = storage_ref
+        .ask(DumpDb)
+        .await
+        .context("Failed to dump fixture database")?;
+    storage_ref.stop_gracefully().await?;
+    storage_ref.wait_for_shutdown_with_result(|_| ()).await;
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create fixture directory {}", parent.display()))?;
     }
-    let bytes = dump
-        .to_bytes()
-        .context("Failed to serialize fixture dump")?;
-    std::fs::write(dest, bytes)
+    std::fs::write(dest, dump.bytes)
         .with_context(|| format!("Failed to write fixture dump to {}", dest.display()))?;
 
+    let stamp_path = prebuilt_sequencer_db_circuit_id_path();
+    std::fs::write(&stamp_path, privacy_preserving_circuit_id_stamp()).with_context(|| {
+        format!(
+            "Failed to write fixture circuit id to {}",
+            stamp_path.display()
+        )
+    })?;
+
     Ok(())
-}
-
-/// Reopen the store, retrying while the shut-down sequencer's aborted tasks are still releasing
-/// their db handles (the process holds the file lock until then). Must `await` between attempts.
-async fn open_store_with_retry(db_path: &Path) -> Result<SequencerStore> {
-    let signing_key = PrivateKey::try_new(config::SEQUENCER_SIGNING_KEY)
-        .expect("Fixed sequencer signing key must be valid");
-
-    let mut last_err = None;
-    for _ in 0..100 {
-        // Let the runtime drop the aborted sequencer tasks before each attempt.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        match SequencerStore::open_db(db_path, signing_key.clone()) {
-            Ok(store) => return Ok(store),
-            Err(err) => last_err = Some(err),
-        }
-    }
-    Err(anyhow::anyhow!(
-        "Failed to open sequencer store at {} after retries: {last_err:?}",
-        db_path.display()
-    ))
 }

@@ -13,6 +13,41 @@ mod guests {
 
 #[must_use]
 #[inline]
+pub const fn simple_balance_transfer() -> Program {
+    use guests::{
+        SIMPLE_BALANCE_TRANSFER_ELF, SIMPLE_BALANCE_TRANSFER_ID, SIMPLE_BALANCE_TRANSFER_PATH,
+    };
+
+    let _unused = SIMPLE_BALANCE_TRANSFER_PATH;
+
+    Program::new_unchecked(
+        SIMPLE_BALANCE_TRANSFER_ID,
+        Cow::Borrowed(SIMPLE_BALANCE_TRANSFER_ELF),
+    )
+}
+
+#[must_use]
+#[inline]
+pub const fn reverse_transfer() -> Program {
+    use guests::{REVERSE_TRANSFER_ELF, REVERSE_TRANSFER_ID, REVERSE_TRANSFER_PATH};
+
+    let _unused = REVERSE_TRANSFER_PATH;
+
+    Program::new_unchecked(REVERSE_TRANSFER_ID, Cow::Borrowed(REVERSE_TRANSFER_ELF))
+}
+
+#[must_use]
+#[inline]
+pub const fn data_writer() -> Program {
+    use guests::{DATA_WRITER_ELF, DATA_WRITER_ID, DATA_WRITER_PATH};
+
+    let _unused = DATA_WRITER_PATH;
+
+    Program::new_unchecked(DATA_WRITER_ID, Cow::Borrowed(DATA_WRITER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn chain_caller() -> Program {
     use guests::{CHAIN_CALLER_ELF, CHAIN_CALLER_ID, CHAIN_CALLER_PATH};
 
@@ -23,12 +58,12 @@ pub const fn chain_caller() -> Program {
 
 #[must_use]
 #[inline]
-pub const fn claimer() -> Program {
-    use guests::{CLAIMER_ELF, CLAIMER_ID, CLAIMER_PATH};
+pub const fn authority_proxy() -> Program {
+    use guests::{AUTHORITY_PROXY_ELF, AUTHORITY_PROXY_ID, AUTHORITY_PROXY_PATH};
 
-    let _unused = CLAIMER_PATH;
+    let _unused = AUTHORITY_PROXY_PATH;
 
-    Program::new_unchecked(CLAIMER_ID, Cow::Borrowed(CLAIMER_ELF))
+    Program::new_unchecked(AUTHORITY_PROXY_ID, Cow::Borrowed(AUTHORITY_PROXY_ELF))
 }
 
 #[must_use]
@@ -56,25 +91,12 @@ pub const fn time_locked_transfer() -> Program {
 
 #[must_use]
 #[inline]
-pub const fn pinata_cooldown() -> Program {
-    use guests::{PINATA_COOLDOWN_ELF, PINATA_COOLDOWN_ID, PINATA_COOLDOWN_PATH};
+pub const fn cooldown() -> Program {
+    use guests::{COOLDOWN_ELF, COOLDOWN_ID, COOLDOWN_PATH};
 
-    let _unused = PINATA_COOLDOWN_PATH;
+    let _unused = COOLDOWN_PATH;
 
-    Program::new_unchecked(PINATA_COOLDOWN_ID, Cow::Borrowed(PINATA_COOLDOWN_ELF))
-}
-
-#[must_use]
-#[inline]
-pub const fn faucet_chain_caller() -> Program {
-    use guests::{FAUCET_CHAIN_CALLER_ELF, FAUCET_CHAIN_CALLER_ID, FAUCET_CHAIN_CALLER_PATH};
-
-    let _unused = FAUCET_CHAIN_CALLER_PATH;
-
-    Program::new_unchecked(
-        FAUCET_CHAIN_CALLER_ID,
-        Cow::Borrowed(FAUCET_CHAIN_CALLER_ELF),
-    )
+    Program::new_unchecked(COOLDOWN_ID, Cow::Borrowed(COOLDOWN_ELF))
 }
 
 #[must_use]

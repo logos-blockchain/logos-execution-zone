@@ -19,7 +19,7 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::Public(to),
+                    AccountIdentity::PublicNoSign(to),
                 ],
                 instruction_data,
                 &program.into(),
