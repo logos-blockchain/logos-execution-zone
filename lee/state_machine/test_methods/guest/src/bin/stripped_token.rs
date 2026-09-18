@@ -83,10 +83,14 @@ fn main() {
             )
             .write();
         }
-        // Reads never inform this program's own decisions, so every read-only touch is safe to
-        // leave `Deferred`.
+        // Different claims per branch, though both cover this program's writes the same way -
+        // exercises that `Probe`'s answer is genuinely per-instruction, not just a constant.
         ProgramCall::Probe(input) => {
-            respond_probe(&input, Some(DeferReads::All));
+            let defer_reads = match input.instruction {
+                Instruction::Initialize { .. } => DeferReads::WriteOnly,
+                Instruction::Transfer { .. } => DeferReads::All,
+            };
+            respond_probe(&input, Some(defer_reads));
         }
         ProgramCall::Update(ProgramInput {
             self_account_id,
