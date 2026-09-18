@@ -1,7 +1,7 @@
 use super::*;
 
-/// TODO: every `PublicAction` is `Bound` for now - `PrivateBackend` doesn't produce `Deferred`
-/// yet (Probe/DeferReads isn't wired into the new traversal).
+/// For tests below whose program never writes `post_data`, so no `Probe` claim ever covers a
+/// touch and the account is always `Bound` - never a stand-in for "everything's `Bound` for now".
 fn expect_bound_pre(action: &PublicAction) -> &AccountWithMetadata {
     let PublicAction::Bound { pre, .. } = action else {
         panic!("expected a Bound action");

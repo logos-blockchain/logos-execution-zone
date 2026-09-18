@@ -54,18 +54,16 @@ pub struct DerivedOutputs {
     pub classification: HashMap<AccountId, WriteFate>,
 }
 
-/// A public account's classification, decided across every call that touches it in one
-/// transaction. Absence from the map (an account touched only by reads a `Probe` claim covers)
-/// means the same as `Bound` at output time - nothing was ever written, so there's nothing to
-/// anchor or defer.
+/// A public account's classification, decided across every call that touches it. Absence from
+/// the map means the same as `Bound` at output time - nothing was written, nothing to defer.
 ///
-/// `Bound` is permanent once reached: a later touch, even one a claim would cover, can't move an
-/// account back to `Deferred` - see `PrivateBackend::classify_touch`.
+/// `Bound` is permanent: a later touch, even a covered one, can't move an account back to
+/// `Deferred` - see `classify_touch`.
 #[derive(Clone)]
 pub enum WriteFate {
     Bound,
-    /// Unresolved deltas, in touch order, for a not-yet-`Bound` write. A read never appears here
-    /// - a covered read is a no-op, an uncovered one forces `Bound` directly.
+    /// Unresolved deltas, in touch order. A read never appears here - covered reads are no-ops,
+    /// uncovered ones force `Bound`.
     Deferred(Vec<DeferredResolution>),
 }
 
@@ -94,19 +92,18 @@ pub struct PrivateBackend<'input> {
     globally_authorized: HashSet<AccountId>,
     block_bounds: (Option<BlockId>, Option<BlockId>),
     timestamp_bounds: (Option<Timestamp>, Option<Timestamp>),
-    /// Mirrors the traversal's own first-sight position assignment, one call ahead of it:
-    /// `output_for_call` needs to know whether a call touches a public account before the
-    /// traversal has assigned real positions for that call's diffs. Grown here in exactly the
-    /// same order the traversal will grow its own, so a position looked up here always agrees
-    /// with the one `judge_authorization` is later called with for the same account.
+    /// Mirrors the traversal's own first-sight position assignment, one call ahead of it -
+    /// `output_for_call` needs positions before the traversal assigns them for this call's
+    /// diffs. Grown in the same order the traversal grows its own, so a lookup here always
+    /// agrees with what `judge_authorization` is later called with for the same account.
     position_by_account: HashMap<AccountId, usize>,
     next_position: usize,
-    /// This call's `Probe` claim, if any - `None` covers both "this call touches no public
-    /// account, so `Probe` was never asked" and "asked, but declined or made no claim". Reset by
-    /// every `output_for_call`; read by `resolve_write` for this same call's diffs, which the
-    /// traversal always processes before the next call's `output_for_call` runs.
+    /// This call's `Probe` claim, if any - `None` covers both "never asked" (no public account
+    /// touched) and "asked but declined". Reset every `output_for_call`; read by `resolve_write`
+    /// before the next call's `output_for_call` runs (the traversal always processes them in
+    /// that order).
     current_call_defer_reads: Option<DeferReads>,
-    /// Each public account's classification so far, across every call that's touched it. See
+    /// Each public account's classification, across every call that's touched it. See
     /// [`WriteFate`].
     classification: HashMap<AccountId, WriteFate>,
 }
@@ -322,11 +319,22 @@ impl<'input> PrivateBackend<'input> {
         }
     }
 
-    /// Whether `program_output`'s diffs touch a public account, mirroring the traversal's own
-    /// first-sight position assignment one call ahead of it - real assignment for these same
-    /// accounts, moments later, just reuses what's already here (`entry` is idempotent). See
-    /// `position_by_account`'s doc for why this has to be a persistent mirror, not scoped to one
-    /// call.
+    /// Verifies `output` as a genuine receipt from `self_account_id`'s real guest ELF, via
+    /// recursive proof composition rather than live re-execution.
+    fn verify_receipt(&self, self_account_id: AccountId, output: &ProgramOutput) {
+        let image_id = self
+            .image_id_by_account_id
+            .get(&self_account_id)
+            .copied()
+            .expect("no image_id claim supplied for invoked program account");
+        let frame = lee_core::to_borsh_frame(output);
+        env::verify(image_id, &frame)
+            .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+    }
+
+    /// Whether `program_output`'s diffs touch a public account - real position assignment,
+    /// moments later, just reuses what's mirrored here (`entry` is idempotent). See
+    /// `position_by_account`'s doc for why the mirror has to persist across calls.
     fn touches_public(&mut self, program_output: &ProgramOutput) -> bool {
         let account_identities = self.account_identities;
         let position_by_account = &mut self.position_by_account;
@@ -347,10 +355,10 @@ impl<'input> PrivateBackend<'input> {
         })
     }
 
-    /// Pops the next `CallKind::Incremental` receipt and verifies it as this call's single
-    /// `Probe` response - one per program invocation, covering every public account it touches,
-    /// reads and writes alike (see `DeferReads`'s doc). Checked via recursive proof composition
-    /// (`env::verify`) rather than a live re-execution.
+    /// Pops the next `CallKind::Incremental` receipt and verifies it (see
+    /// [`Self::verify_receipt`]) as this call's single `Probe` response - one per program
+    /// invocation, covering every public account it touches, reads and writes alike (see
+    /// `DeferReads`'s doc).
     ///
     /// Binds the claim to the real `Execute` call it answers for by checking its
     /// `instruction_data` matches `program_output.instruction_data` - without this a malicious
@@ -400,14 +408,7 @@ impl<'input> PrivateBackend<'input> {
             call.program_account_id
         );
 
-        let image_id = self
-            .image_id_by_account_id
-            .get(&call.program_account_id)
-            .copied()
-            .expect("no image_id claim supplied for invoked program account");
-        let frame = lee_core::to_borsh_frame(&probe_output);
-        env::verify(image_id, &frame)
-            .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+        self.verify_receipt(call.program_account_id, &probe_output);
 
         probe_output
             .events
@@ -417,12 +418,12 @@ impl<'input> PrivateBackend<'input> {
     }
 
     /// Classifies one touch of `account_id` as `Bound` or `Deferred`, using this call's `Probe`
-    /// claim (`current_call_defer_reads`). A no-op for a private account, and for a public
-    /// account already permanently `Bound` by an earlier touch. See [`WriteFate`]'s doc.
+    /// claim (`current_call_defer_reads`). A no-op for a private account, or once already
+    /// permanently `Bound`. See [`WriteFate`]'s doc.
     ///
     /// `diff` is the *unresolved* diff `output_for_call` produced - a `Deferred` write is
-    /// recorded as this raw, unresolved delta, never the value `resolve_write` computed, since
-    /// settlement replays it against live state later.
+    /// recorded as this raw delta, never the value `resolve_write` computed, since settlement
+    /// replays it against live state later.
     fn classify_touch(
         &mut self,
         account_id: AccountId,
@@ -449,6 +450,13 @@ impl<'input> PrivateBackend<'input> {
         let covered = self
             .current_call_defer_reads
             .is_some_and(|claim| claim.covers(is_write));
+        // Lazy: only reached (twice, once per branch below) when `covered && is_write`, so a
+        // read or an uncovered touch never pays for `post_data`'s clone.
+        let resolution = || DeferredResolution {
+            executing_account_id: ctx.program_account_id,
+            post_balance_diff: diff.post_balance_diff,
+            post_data: diff.post_data.clone(),
+        };
 
         match self.classification.entry(account_id) {
             Entry::Occupied(mut entry) => {
@@ -462,11 +470,7 @@ impl<'input> PrivateBackend<'input> {
                     let WriteFate::Deferred(resolutions) = entry.get_mut() else {
                         unreachable!("the Bound case already returned above")
                     };
-                    resolutions.push(DeferredResolution {
-                        executing_account_id: ctx.program_account_id,
-                        post_balance_diff: diff.post_balance_diff,
-                        post_data: diff.post_data.clone(),
-                    });
+                    resolutions.push(resolution());
                 }
                 // A covered read is a no-op, exactly as if this touch never happened.
             }
@@ -474,11 +478,7 @@ impl<'input> PrivateBackend<'input> {
                 if !covered {
                     entry.insert(WriteFate::Bound);
                 } else if is_write {
-                    entry.insert(WriteFate::Deferred(vec![DeferredResolution {
-                        executing_account_id: ctx.program_account_id,
-                        post_balance_diff: diff.post_balance_diff,
-                        post_data: diff.post_data.clone(),
-                    }]));
+                    entry.insert(WriteFate::Deferred(vec![resolution()]));
                 }
                 // A covered read on a not-yet-classified account stays unclassified - the same
                 // as `Bound` at output time, since nothing was ever written.
@@ -498,15 +498,7 @@ impl Backend for PrivateBackend<'_> {
         let Some(program_output) = self.remaining_outputs.pop_front() else {
             panic!("Insufficient program outputs for chained calls");
         };
-        // `env::verify` needs the invoked program's real image id, not its dispatch address.
-        let image_id = self
-            .image_id_by_account_id
-            .get(&call.program_account_id)
-            .copied()
-            .expect("no image_id claim supplied for invoked program account");
-        let frame = lee_core::to_borsh_frame(&program_output);
-        env::verify(image_id, &frame)
-            .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+        self.verify_receipt(call.program_account_id, &program_output);
 
         // One `Probe` per call, covering every public account it touches - popped here, right
         // after `Execute`, so it lands before any `Update` receipts this call's own writes
@@ -563,20 +555,16 @@ impl Backend for PrivateBackend<'_> {
         Ok(journalled)
     }
 
-    /// For a write, pops the next `CallKind::Incremental` receipt and verifies it as the
-    /// `Update` resolution - the in-circuit analog of the host's `resolve_diff`/
-    /// `Program::execute_incremental`, checked via recursive proof composition (`env::verify`)
-    /// rather than a live re-execution. Every write is resolved unconditionally, regardless of
-    /// its eventual `Bound`/`Deferred` classification below - the account's real, resolved value
-    /// is always needed for chain continuity (what a later call's pre-state is checked against),
-    /// and if it ends up `Bound`, it's the literal final value. If the program declines
-    /// (`UnsupportedCallKind`), falls back to `diff` verbatim, same as the host version. A read
-    /// has nothing to resolve, and the prover never emits a receipt for one, so this must not
-    /// pop one either.
+    /// For a write, pops the next `CallKind::Incremental` receipt and verifies it (see
+    /// [`Self::verify_receipt`]) as the `Update` resolution - the in-circuit analog of
+    /// `PublicBackend::resolve_write`. Every write is resolved unconditionally, regardless of its
+    /// eventual `Bound`/`Deferred` classification: the account's real, resolved value is always
+    /// needed for chain continuity, and if it ends up `Bound`, it's the literal final value.
+    /// Falls back to `diff` verbatim if the program declines (`UnsupportedCallKind`). A read has
+    /// nothing to resolve and gets no receipt, so none is popped for one.
     ///
-    /// Every touch of a public account, write or read, is then classified `Bound`/`Deferred` -
-    /// see `classify_touch`. `Update`'s own outcome never affects that classification, only what
-    /// `resolved` is.
+    /// Every touch, write or read, is then classified `Bound`/`Deferred` - see `classify_touch`.
+    /// `Update`'s outcome never affects that classification, only what `resolved` is.
     fn resolve_write(
         &mut self,
         diff: &AccountStateDiff,
@@ -608,15 +596,7 @@ impl Backend for PrivateBackend<'_> {
                 "Update resolution output for account {account_id} has the wrong caller"
             );
 
-            let image_id = self
-                .image_id_by_account_id
-                .get(&ctx.program_account_id)
-                .copied()
-                .expect("no image_id claim supplied for invoked program account");
-            let frame = lee_core::to_borsh_frame(&update_output);
-            env::verify(image_id, &frame).unwrap_or_else(|_: Infallible| {
-                unreachable!("Infallible error is never constructed")
-            });
+            self.verify_receipt(ctx.program_account_id, &update_output);
 
             let unsupported = update_output
                 .events

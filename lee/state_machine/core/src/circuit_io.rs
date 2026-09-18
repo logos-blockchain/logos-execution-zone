@@ -62,9 +62,8 @@ pub struct PrivacyPreservingCircuitInput {
 )]
 pub enum InputAccountIdentity {
     /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier. Whether a touch ends up `Bound` or `Deferred` is
-    /// never declared here — it's inferred per diff from whether the executing program
-    /// implements `CallKind::Incremental`.
+    /// commitment, ciphertext, or nullifier. See [`PublicAction`] for how its outcome (`Bound`
+    /// or `Deferred`) gets decided.
     Public,
     Private(PrivateWitness),
 }

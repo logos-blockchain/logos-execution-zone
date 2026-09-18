@@ -118,14 +118,12 @@ pub trait Backend {
         ctx: &CallContext<'_>,
     ) -> Result<bool, Self::Error>;
 
-    /// Resolve one write's `post_data`, in whatever way this environment does that. Called once
-    /// per diff, write or read, before `validate_execution` and post-state materialization see
-    /// it - both run against the resolved diff, not the one `output_for_call` returned. Called
-    /// for reads too so an environment can observe them, not just resolve writes.
+    /// Resolve one write's `post_data`, in whatever way this environment does that - called once
+    /// per diff, including reads, so an environment can observe those too. Runs before
+    /// `validate_execution` and post-state materialization see the diff, so both see the
+    /// resolved value, not what `output_for_call` returned.
     ///
-    /// The default is a verbatim pass-through: an environment with nothing further to resolve a
-    /// write against, and nothing to observe in a read, just keeps what the call already
-    /// produced.
+    /// The default is a verbatim pass-through: nothing further to resolve, nothing to observe.
     fn resolve_write(
         &mut self,
         diff: &AccountStateDiff,

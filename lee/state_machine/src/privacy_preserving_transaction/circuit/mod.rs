@@ -84,6 +84,24 @@ impl From<Program> for ProgramWithDependencies {
     }
 }
 
+/// `account_id`'s first-sight position: assigns the next one if unseen, otherwise returns the
+/// one already assigned. Calling this more than once for the same account before it's actually
+/// first-sighted is fine - idempotent, since a later real assignment just finds the entry already
+/// there.
+fn position_of(
+    position_by_account: &mut HashMap<AccountId, usize>,
+    next_position: &mut usize,
+    account_id: AccountId,
+) -> usize {
+    *position_by_account.entry(account_id).or_insert_with(|| {
+        let pos = *next_position;
+        *next_position = next_position
+            .checked_add(1)
+            .expect("account position count cannot overflow usize");
+        pos
+    })
+}
+
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
 pub fn execute_and_prove(
@@ -182,13 +200,7 @@ pub fn execute_and_prove_with_padded_inputs(
                     },
                 )?;
 
-                let position = *position_by_account.entry(*account_id).or_insert_with(|| {
-                    let pos = next_position;
-                    next_position = next_position
-                        .checked_add(1)
-                        .expect("account position count cannot overflow usize");
-                    pos
-                });
+                let position = position_of(&mut position_by_account, &mut next_position, *account_id);
                 let private_pda_witness = account_identities
                     .get(position)
                     .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
@@ -239,19 +251,12 @@ pub fn execute_and_prove_with_padded_inputs(
         program_outputs.push(program_output.clone());
         env_builder.add_assumption(inner_receipt);
 
-        // Positions assigned here are re-derived, not reassigned, by the identical
-        // `position_by_account.entry(...).or_insert_with(...)` pattern in the per-diff loop
-        // below — done early, read-only in effect, just to answer "does this call touch a public
-        // account" before that loop runs.
+        // Positions assigned here are re-derived, not reassigned, by `position_of` in the
+        // per-diff loop below — done early, read-only in effect, just to answer "does this call
+        // touch a public account" before that loop runs.
         let touches_public = program_output.state_diffs.iter().any(|diff| {
             let account_id = diff.pre_state.account_id;
-            let position = *position_by_account.entry(account_id).or_insert_with(|| {
-                let pos = next_position;
-                next_position = next_position
-                    .checked_add(1)
-                    .expect("account position count cannot overflow usize");
-                pos
-            });
+            let position = position_of(&mut position_by_account, &mut next_position, account_id);
             matches!(
                 account_identities.get(position),
                 Some(InputAccountIdentity::Public)
@@ -286,10 +291,10 @@ pub fn execute_and_prove_with_padded_inputs(
             let pre = &diff.pre_state;
             let account_id = pre.account_id;
 
-            // Whenever `post_data` is present, resolve it now too, proving the resolution so
-            // the circuit can verify it. Every write is resolved unconditionally for now — no
-            // `Bound`/`Deferred` distinction exists yet, so `PrivateBackend` expects exactly one
-            // `Update` receipt per write, always. A program without `Incremental` responds
+            // Whenever `post_data` is present, resolve it now too, proving the resolution so the
+            // circuit can verify it. Every write is resolved unconditionally, regardless of its
+            // eventual `Bound`/`Deferred` classification - `PrivateBackend` always expects
+            // exactly one `Update` receipt per write. A program without `Incremental` responds
             // `UnsupportedCallKind`; the diff then applies verbatim.
             let resolved_diff = if let Some(post_data) = &diff.post_data {
                 let update_receipt = execute_and_prove_incremental(
@@ -336,13 +341,7 @@ pub fn execute_and_prove_with_padded_inputs(
             // Assigned here, after this call has actually run, uniformly for the top-level
             // call too — it's free to never echo a given account in its own output at all.
             let first_sighting = !position_by_account.contains_key(&account_id);
-            let position = *position_by_account.entry(account_id).or_insert_with(|| {
-                let pos = next_position;
-                next_position = next_position
-                    .checked_add(1)
-                    .expect("account position count cannot overflow usize");
-                pos
-            });
+            let position = position_of(&mut position_by_account, &mut next_position, account_id);
             let private_pda_witness = account_identities
                 .get(position)
                 .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
@@ -442,32 +441,15 @@ pub fn execute_and_prove_with_padded_inputs(
     Ok((circuit_output, proof))
 }
 
-fn execute_and_prove_program(
-    program: &Program,
-    self_account_id: AccountId,
-    caller_account_id: Option<AccountId>,
-    pre_states: &[AccountWithMetadata],
-    instruction_data: &InstructionData,
-) -> Result<Receipt, LeeError> {
-    // Write inputs to the program
-    let mut env_builder = ExecutorEnv::builder();
-    program.write_inputs(
-        self_account_id,
-        caller_account_id,
-        pre_states,
-        instruction_data,
-        &mut env_builder,
-    )?;
-    let env = env_builder.build().unwrap();
-
-    // Prove the program
+/// Proves `env` against `elf` and checks its exit code. The local prover proves any exit code,
+/// and the circuit's `env::verify` only resolves a `Halted(0)` claim, so this gates on a typed
+/// error before the expensive circuit proof ever runs.
+fn prove_and_check(env: ExecutorEnv<'_>, elf: &[u8]) -> Result<Receipt, LeeError> {
     let prover = default_prover();
     let prove_info = prover
-        .prove(env, program.elf())
+        .prove(env, elf)
         .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
 
-    // The local prover proves any exit code, and the circuit's `env::verify` only resolves a
-    // `Halted(0)` claim, so gate here for a typed error before the expensive circuit proof.
     let exit_code = prove_info
         .receipt
         .claim()
@@ -483,6 +465,47 @@ fn execute_and_prove_program(
     Ok(prove_info.receipt)
 }
 
+/// The guest input for a `CallKind::Incremental` invocation (`Update` or `Probe`) - the two only
+/// ever differ in `caller_account_id`, `pre_states`, and the `IncrementalCall` payload itself.
+fn incremental_env(
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    pre_states: &[AccountWithMetadata],
+    call: &IncrementalCall,
+) -> Result<ExecutorEnv<'static>, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
+    let input = lee_core::program::ProgramInput {
+        self_account_id,
+        caller_account_id,
+        pre_states: pre_states.to_vec(),
+        instruction: borsh::to_vec(call).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
+    };
+    let payload = borsh::to_vec(&input)
+        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+    env_builder.write_slice(&to_frame(&payload));
+    Ok(env_builder.build().unwrap())
+}
+
+fn execute_and_prove_program(
+    program: &Program,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
+    pre_states: &[AccountWithMetadata],
+    instruction_data: &InstructionData,
+) -> Result<Receipt, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    program.write_inputs(
+        self_account_id,
+        caller_account_id,
+        pre_states,
+        instruction_data,
+        &mut env_builder,
+    )?;
+    let env = env_builder.build().unwrap();
+    prove_and_check(env, program.elf())
+}
+
 /// Proves a `CallKind::Incremental` `Update` invocation of `program` for one account, resolving
 /// `post_data` against `pre_state`. An `UnsupportedCallKind` response is itself a valid, provable
 /// outcome, not a failure.
@@ -496,38 +519,14 @@ fn execute_and_prove_incremental(
     pre_state: &AccountWithMetadata,
     post_data: &Data,
 ) -> Result<Receipt, LeeError> {
-    let mut env_builder = ExecutorEnv::builder();
-    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
-    let input = lee_core::program::ProgramInput {
+    let call = IncrementalCall::Update(post_data.as_ref().to_vec());
+    let env = incremental_env(
         self_account_id,
-        caller_account_id: None,
-        pre_states: vec![pre_state.clone()],
-        instruction: borsh::to_vec(&IncrementalCall::Update(post_data.as_ref().to_vec()))
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
-    };
-    let payload = borsh::to_vec(&input)
-        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-    env_builder.write_slice(&to_frame(&payload));
-    let env = env_builder.build().unwrap();
-
-    let prover = default_prover();
-    let prove_info = prover
-        .prove(env, program.elf())
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
-
-    let exit_code = prove_info
-        .receipt
-        .claim()
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .as_value()
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .exit_code;
-    check_exit_code(
-        exit_code,
-        prove_info.stats.user_cycles,
-        LeeError::ProgramProveFailed,
+        None,
+        std::slice::from_ref(pre_state),
+        &call,
     )?;
-    Ok(prove_info.receipt)
+    prove_and_check(env, program.elf())
 }
 
 /// Proves a `CallKind::Incremental` `Probe` invocation of `program`, asking whether it's safe to
@@ -544,38 +543,9 @@ fn execute_and_prove_probe(
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
-    let mut env_builder = ExecutorEnv::builder();
-    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
-    let input = lee_core::program::ProgramInput {
-        self_account_id,
-        caller_account_id,
-        pre_states: pre_states.to_vec(),
-        instruction: borsh::to_vec(&IncrementalCall::Probe(instruction_data.clone()))
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
-    };
-    let payload = borsh::to_vec(&input)
-        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-    env_builder.write_slice(&to_frame(&payload));
-    let env = env_builder.build().unwrap();
-
-    let prover = default_prover();
-    let prove_info = prover
-        .prove(env, program.elf())
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
-
-    let exit_code = prove_info
-        .receipt
-        .claim()
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .as_value()
-        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .exit_code;
-    check_exit_code(
-        exit_code,
-        prove_info.stats.user_cycles,
-        LeeError::ProgramProveFailed,
-    )?;
-    Ok(prove_info.receipt)
+    let call = IncrementalCall::Probe(instruction_data.clone());
+    let env = incremental_env(self_account_id, caller_account_id, pre_states, &call)?;
+    prove_and_check(env, program.elf())
 }
 
 #[cfg(test)]
