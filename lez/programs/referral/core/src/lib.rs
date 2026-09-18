@@ -321,4 +321,49 @@ mod tests {
         trailing.push(0);
         assert_eq!(State::decode(&trailing.try_into().unwrap()), None);
     }
+
+    fn registry(nodes: &[NodeId], epoch: u32, active: &[NodeId]) -> Registry {
+        Registry {
+            nodes: nodes.iter().copied().collect(),
+            epoch,
+            active: active.iter().copied().collect(),
+        }
+    }
+
+    fn participant_with(children: &[(NodeId, u32)]) -> Participant {
+        Participant {
+            node: NODE,
+            referrer: None,
+            children: children.iter().copied().collect(),
+            reward_balance: 0,
+        }
+    }
+
+    const fn child(node: NodeId) -> State {
+        State::Child {
+            node,
+            referrer: NODE,
+        }
+    }
+
+    #[test]
+    fn claim_pays_each_active_child_once_per_publication_plus_its_credits() {
+        let (a, b) = (NodeId::new([1; 32]), NodeId::new([2; 32]));
+        let mut participant = participant_with(&[]);
+        let first = registry(&[NODE, a, b], 1, &[a]);
+        let credit = State::Credit {
+            recipient_node: NODE,
+            amount: 4,
+        };
+
+        assert_eq!(participant.claim(&first, &[child(a), child(b), credit]), 5);
+        assert_eq!(participant.children, BTreeMap::from([(a, 1), (b, 0)]));
+        assert_eq!(participant.claim(&first, &[child(a)]), 0);
+        assert_eq!(
+            participant.claim(&registry(&[NODE, a, b], 2, &[a, b]), &[]),
+            2
+        );
+        assert_eq!(participant.claim(&first, &[]), 0);
+        assert_eq!(participant.reward_balance, 7);
+    }
 }
