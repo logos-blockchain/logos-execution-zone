@@ -766,8 +766,9 @@ pub struct UnsupportedCallKind {
 }
 
 impl UnsupportedCallKind {
-    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
     pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
+    /// `sha256(SELECTOR_NAME)[..8]`.
+    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
 
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -775,29 +776,23 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Event asserting that this program's touches during the current call are safe to leave
-/// `Deferred`, scoped by whether a given touch is a write or a read.
-///
-/// A self-attested claim emitted once per call, on its `Probe` response — how much of the
-/// program's own logic it covers is up to the developer, not something the circuit verifies.
-/// Absence of this event (or a decode failure) means no claim at all: every touch, read or
-/// write, forces `Bound`.
+/// Self-attested claim that this program's touches this call are safe to leave `Deferred`,
+/// scoped by write or read. Emitted once per call, on `Probe`'s response. Absence (or a decode
+/// failure) means no claim: every touch forces `Bound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum DeferReads {
-    /// Safe to defer only for accounts this call writes to. Never needs an ownership check of
-    /// its own: a write can only ever land on an account this program owns (or is about to),
-    /// since `validate_execution` forbids writing anything else.
+    /// Safe to defer for accounts this call writes to.
     WriteOnly,
-    /// Safe to defer only for accounts this call merely reads (touches but does not write),
-    /// regardless of who owns them.
+    /// Safe to defer for accounts this call only reads.
     ReadOnly,
-    /// Safe to defer regardless of whether the touch is a write or a read.
+    /// Safe to defer regardless of write or read.
     All,
 }
 
 impl DeferReads {
-    pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
     pub const SELECTOR_NAME: &str = "lee_core::DeferReads";
+    /// `sha256(SELECTOR_NAME)[..8]`.
+    pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
 
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -889,7 +884,6 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
                 }),
                 Err(_) => ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant()),
             },
-            // Undecoded: the delta shape is program-defined, not necessarily `T` (Execute's).
             Ok(IncrementalCall::Update(delta)) => ProgramCall::Update(ProgramInput {
                 self_account_id: envelope.self_account_id,
                 caller_account_id: envelope.caller_account_id,
@@ -904,9 +898,6 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
 
 /// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip, not
 /// a failure.
-///
-/// Generic over every `ProgramCall` variant, since which kind a program implements is its own
-/// choice, not something the caller can rule out in advance.
 pub fn respond_unsupported_call<T: BorshSerialize>(call: ProgramCall<T>) -> ! {
     let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
         match call {

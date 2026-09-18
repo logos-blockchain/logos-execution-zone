@@ -22,11 +22,9 @@ use crate::{
 };
 
 /// Cycle budget for an `IncrementalCall::Probe` invocation, deliberately far below
-/// `DEFAULT_PUBLIC_CYCLE_BUDGET` — `Probe` needs no real computation or account data (the caller
-/// sends a minimal placeholder `pre_state`, never the real, possibly `DATA_MAX_LENGTH`-sized
-/// `data`), so its cost should be flat. Measured: real guests answer in ~7.5–7.8K cycles
-/// regardless of account size; 2^15 leaves ~4x headroom without room to hide real computation.
-const PROBE_CYCLE_BUDGET: Cycles = 1 << 15;
+/// `DEFAULT_PUBLIC_CYCLE_BUDGET`. Measured real guests at 8.4K–9.6K cycles; 2^14 leaves ~1.7x
+/// headroom without room to hide real computation.
+const PROBE_CYCLE_BUDGET: Cycles = 1 << 14;
 
 /// Proof of the privacy preserving execution circuit.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -336,9 +334,6 @@ pub fn execute_and_prove_with_padded_inputs(
             // outcome). A program without `Incremental` responds `UnsupportedCallKind`; the diff
             // then applies verbatim.
             let resolved_diff = if let Some(post_data) = &diff.post_data {
-                // Unlike `Probe`, `Update` is never caller-gated by any program (whitelisting
-                // belongs at `Execute` time, before a proof is even generated) — so the real
-                // caller is withheld here rather than leaking who invoked this resolution.
                 let update_receipt = execute_and_prove_incremental(
                     program,
                     chained_call.program_account_id,
@@ -494,13 +489,10 @@ fn execute_and_prove_program(
     prove_and_check(program.elf(), env)
 }
 
-/// Proves a `CallKind::Incremental` invocation of `program` for one account — the wallet-side
-/// counterpart to `resolve_diff_in_circuit`'s expectations. An `UnsupportedCallKind` response is
-/// itself a valid, provable outcome, not a failure.
+/// Proves a `CallKind::Incremental` invocation of `program` for one account. An
+/// `UnsupportedCallKind` response is itself a valid, provable outcome, not a failure.
 ///
-/// `Update` shares `Execute`'s cycle budget; `Probe` uses the much tighter
-/// `PROBE_CYCLE_BUDGET`, since it now runs on every read-only touch of every public account, not
-/// just writes.
+/// `Update` shares `Execute`'s cycle budget; `Probe` uses the much tighter `PROBE_CYCLE_BUDGET`.
 fn execute_and_prove_incremental(
     program: &Program,
     self_account_id: AccountId,
@@ -509,10 +501,6 @@ fn execute_and_prove_incremental(
     call: &IncrementalCall,
 ) -> Result<Receipt, LeeError> {
     let (cycle_budget, pre_states) = match call {
-        // No implementation reads `pre_states` to answer `Probe`, and the circuit never inspects
-        // a `Probe` receipt beyond the `UnsupportedCallKind` event — sending the real `data` (up
-        // to `DATA_MAX_LENGTH`) would make cost scale with account size. Keep
-        // `account_id`/`is_authorized`; zero the rest.
         IncrementalCall::Probe(_) => (
             PROBE_CYCLE_BUDGET,
             vec![AccountWithMetadata::new(
