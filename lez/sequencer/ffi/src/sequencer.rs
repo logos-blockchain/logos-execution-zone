@@ -80,21 +80,21 @@ impl SequencerServiceFFI {
 
 impl Drop for SequencerServiceFFI {
     fn drop(&mut self) {
-        if !self.gossip.is_null() {
-            let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<Gossip>>()) };
-            // stop the gossip first.
-            drop(gossip);
-        }
-
         if !self.scheduler_ref.is_null() {
             let scheduler_ref =
                 unsafe { Box::from_raw(self.scheduler_ref.cast::<ActorRef<Scheduler>>()) };
-            // stop the sheduler next.
+            // stop the sheduler first.
             let send_res = self.runtime.block_on(scheduler_ref.stop_gracefully());
             if let Err(err) = send_res {
                 log::error!("Failed to send shutdown signal: {err}");
             }
             drop(scheduler_ref);
+        }
+
+        if !self.gossip.is_null() {
+            let gossip = unsafe { Box::from_raw(self.gossip.cast::<Option<Gossip>>()) };
+            // stop the gossip next.
+            drop(gossip);
         }
 
         if !self.executor_ref.is_null() {
