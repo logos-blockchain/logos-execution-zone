@@ -36,11 +36,15 @@
       ...
     }:
     let
+      # Nix does not run on Windows, so a native "x86_64-windows" package set
+      # cannot work: nixpkgs has no legacyPackages for it, and the attribute dies
+      # in cc-wrapper ("called without required argument 'runtimeShell'"). It has
+      # never built. Windows artifacts belong under a real build platform, named
+      # `<name>-windows-x86_64` and produced by a cross build.
       systems = [
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-windows"
       ];
 
       forAll = nixpkgs.lib.genAttrs systems;
