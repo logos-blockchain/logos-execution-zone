@@ -65,7 +65,14 @@ async fn submit(
         shard_selectors,
         nonces,
         instruction,
-        common::test_utils::test_fee_declaration(payer.account_id),
+        // A 700 KB shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
+        // and an over-cap call is a charged revert: it settles and writes nothing.
+        lee::FeeDeclaration::new(
+            payer.account_id,
+            fee_core::market::MAX_GAS_EXEC,
+            0,
+            u128::MAX >> 1,
+        ),
     )?;
     let mut keys = extra_signers.to_vec();
     keys.push(&payer.pub_sign_key);
