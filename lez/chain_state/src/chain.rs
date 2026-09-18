@@ -435,19 +435,37 @@ impl ChainState {
             self.parked.retain(|held| held.header.block_id > settled);
         }
         let mut drained = Vec::new();
-        while let Some(idx) = self.head_tip().and_then(|tip| {
-            self.parked.iter().position(|held| {
-                held.header.block_id == tip.block_id.saturating_add(1)
-                    && held.header.prev_block_hash == tip.hash
-            })
-        }) {
-            let block = self.parked.remove(idx);
-            if !matches!(self.apply_adopted(&block), AcceptOutcome::Applied) {
-                break;
-            }
+        while let Some(block) = self.drain_one_parked() {
             drained.push(block);
         }
         drained
+    }
+
+    /// Applies the first parked block that chains on the head and sticks. One
+    /// that fails stays parked, so `parked_rejected` keeps its record, and a
+    /// competitor at the same height still gets its turn.
+    fn drain_one_parked(&mut self) -> Option<Block> {
+        let tip = self.head_tip()?;
+        let candidates: Vec<usize> = self
+            .parked
+            .iter()
+            .enumerate()
+            .filter(|(_, held)| {
+                held.header.block_id == tip.block_id.saturating_add(1)
+                    && held.header.prev_block_hash == tip.hash
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        // A failure puts the block back at its own index, so the remaining
+        // candidate indices stay valid.
+        for idx in candidates {
+            let block = self.parked.remove(idx);
+            if matches!(self.apply_adopted(&block), AcceptOutcome::Applied) {
+                return Some(block);
+            }
+            self.parked.insert(idx, block);
+        }
+        None
     }
 
     /// A finalized block replayed off the channel at startup. The channel
@@ -1263,6 +1281,138 @@ mod tests {
             chain.final_tip().expect("final tip").hash,
             block3.header.hash
         );
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn a_parked_block_that_fails_on_its_merits_stays_parked() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        // Chains on block 2 but does not apply: the header and the contents
+        // disagree, so no later update can make it good.
+        let mut invalid = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        invalid.header.timestamp = invalid.header.timestamp.saturating_add(1);
+        chain.apply_adopted(&genesis);
+        chain.apply_channel_update(&[], std::slice::from_ref(&invalid));
+
+        // Block 2 fills the hole, so the drain reaches the invalid block.
+        let outcome = chain.apply_follow(&[], std::slice::from_ref(&block2), &[], msg(2));
+        assert!(outcome.drained.is_empty());
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+        assert!(
+            chain.parked_rejected(invalid.header.hash),
+            "the drain must leave the failed block on record"
+        );
+
+        // The pin sits on it, and the head cannot catch up: only the record of
+        // the failed apply keeps the turn from being skipped forever.
+        chain.set_channel_lineage(
+            lineage_of(&[
+                (msg(1), Some(&genesis)),
+                (msg(2), Some(&block2)),
+                (msg(3), Some(&invalid)),
+            ]),
+            None,
+        );
+        chain.set_channel_cursor(msg(3));
+
+        assert_eq!(
+            chain.publishing_verdict(),
+            PublishVerdict::Allowed,
+            "a drained block we rejected must not hold the turn"
+        );
+    }
+
+    #[test]
+    fn a_block_that_fails_at_the_tip_is_remembered_across_the_drain() {
+        let accounts = initial_pub_accounts_private_keys();
+        let charged = create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key.clone(),
+        );
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let mut chain = chain_with_head(&[genesis.clone(), block2.clone()]);
+        // A successor of our tip whose header and signature are sound but whose
+        // transactions do not settle: it parks, and the drain in the same update
+        // reaches it at once.
+        let invalid = produce_dummy_block(3, Some(block2.header.hash), vec![charged]);
+
+        let outcome = chain.apply_follow(&[], std::slice::from_ref(&invalid), &[], msg(3));
+        assert!(matches!(
+            outcome.adopted.as_slice(),
+            [AcceptOutcome::Parked(_)]
+        ));
+        assert!(outcome.drained.is_empty());
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+        assert!(
+            chain.parked_rejected(invalid.header.hash),
+            "the drain must leave the failed block on record"
+        );
+
+        // A later update retries and re-rejects it, and still keeps the record.
+        let retried = chain.apply_follow(&[], &[], &[], msg(3));
+        assert!(retried.drained.is_empty());
+        assert!(chain.parked_rejected(invalid.header.hash));
+
+        chain.set_channel_lineage(
+            lineage_of(&[
+                (msg(1), Some(&genesis)),
+                (msg(2), Some(&block2)),
+                (msg(3), Some(&invalid)),
+            ]),
+            None,
+        );
+
+        assert_eq!(
+            chain.publishing_verdict(),
+            PublishVerdict::Allowed,
+            "the drain must not erase the record of a block we just rejected"
+        );
+    }
+
+    #[test]
+    fn a_rejected_parked_block_does_not_starve_its_competitor() {
+        let accounts = initial_pub_accounts_private_keys();
+        let charged = create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key.clone(),
+        );
+
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        // Two blocks 3 on the same parent: the first carries a charged
+        // transaction the default fee summary does not settle, so it executes
+        // and fails; the second is good.
+        let invalid = produce_dummy_block(3, Some(block2.header.hash), vec![charged]);
+        let valid = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        assert_ne!(invalid.header.hash, valid.header.hash);
+        chain.apply_adopted(&genesis);
+
+        // Both park behind the hole at 2, the failing one first.
+        chain.apply_channel_update(&[], &[invalid, valid.clone()]);
+
+        // Filling the hole must reach past the failing block to the good one.
+        let outcome = chain.apply_follow(&[], std::slice::from_ref(&block2), &[], msg(2));
+        assert_eq!(
+            outcome
+                .drained
+                .iter()
+                .map(|block| block.header.block_id)
+                .collect::<Vec<_>>(),
+            vec![3],
+            "the good block at the same height must still be applied"
+        );
+        assert_eq!(chain.head_tip().expect("head tip").hash, valid.header.hash);
         assert_head_matches_replay(&chain);
     }
 
