@@ -20,9 +20,9 @@ pub enum LeeCoreError {
 
 /// Ways a program can violate the execution rules the environment enforces on it.
 ///
-/// Lives here rather than in `lee` so the shared traversal in [`crate::validation`] can reject
-/// on it from either environment: the public state machine surfaces it as
-/// `LeeError::InvalidProgramBehavior`, the privacy preserving circuit panics on it in-guest.
+/// Raised by the shared traversal in [`crate::validation`], so both environments reject on it:
+/// the public state machine surfaces it as `LeeError::InvalidProgramBehavior`, the privacy
+/// preserving circuit panics on it in-guest.
 #[derive(Error, Debug)]
 pub enum InvalidProgramBehaviorError {
     #[error(

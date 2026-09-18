@@ -3,38 +3,42 @@ use lee_core::{
     EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind,
     PrivateAction, PrivateWitness, ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, Nonce},
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
 };
 
-use crate::execution_state::ExecutionState;
+use crate::private_backend::DerivedOutputs;
 
 pub fn compute_circuit_output(
-    execution_state: ExecutionState,
+    accounts: Vec<(AccountWithMetadata, Account)>,
+    derived_outputs: &DerivedOutputs,
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
-        execution_state.into_parts();
+    let DerivedOutputs {
+        block_validity_window,
+        timestamp_validity_window,
+        pda_seed_by_position,
+    } = derived_outputs;
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions: Vec::new(),
         private_actions: Vec::new(),
-        block_validity_window,
-        timestamp_validity_window,
+        block_validity_window: *block_validity_window,
+        timestamp_validity_window: *timestamp_validity_window,
         program_image_claims,
     };
 
     assert_eq!(
         account_identities.len(),
-        states_iter.len(),
+        accounts.len(),
         "Invalid account_identities length"
     );
 
     for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(states_iter).enumerate()
+        account_identities.iter().zip(accounts).enumerate()
     {
         match account_identity {
             InputAccountIdentity::Public => {
