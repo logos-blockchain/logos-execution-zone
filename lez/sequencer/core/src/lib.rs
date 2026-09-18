@@ -179,7 +179,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Two-tier chain state: production builds on its head; the publisher's
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
-    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    /// Ordered by declared tip, one lane per signer's nonce sequence.
+    mempool: MemPool<(TransactionOrigin, LeeTransaction), u64, AccountId>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     storage_ref: ActorRef<S>,
@@ -397,7 +398,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .expect("Failed to load zone-sdk checkpoint");
         let is_fresh_start = initial_checkpoint.is_none();
 
-        let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
+        let (mempool, mempool_handle) = MemPool::new(
+            config.mempool_max_size,
+            // priority: the declared tip
+            |(_, tx)| declared_tip(tx),
+            // lanes: one per signer, to keep its nonce order
+            |(_, tx)| signers(tx),
+        );
         sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
         let slasher = SlasherActor::spawn(
@@ -1692,10 +1699,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
-        // prioritize the higher tip first & arrival order for tie-breaks,
-        // while respecting nonce sequencer per-sender
-        self.mempool
-            .prioritize(|(_, tx)| declared_tip(tx), |(_, tx)| signers(tx));
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
         // is not the same as a `Sequencer` origin: it says the transaction has a
