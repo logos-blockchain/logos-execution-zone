@@ -683,14 +683,19 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
+        // Only `Bound` actions need a pre-state; `Deferred` ones carry no anchor.
+        let public_pre_states: Vec<_> = message
+            .public_actions
             .iter()
+            .filter_map(|action| match action {
+                PublicActionWithID::Bound { account_id, .. } => Some(*account_id),
+                PublicActionWithID::Deferred { .. } => None,
+            })
             .map(|account_id| {
                 AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
+                    state.get_account_by_id(account_id),
+                    signer_account_ids.contains(&account_id),
+                    account_id,
                 )
             })
             .collect();
@@ -852,14 +857,11 @@ fn resolve_public_action(
     ))
 }
 
-/// Resolves one `Execute`-produced diff to what should actually be applied. A diff with no
-/// `post_data` has nothing to resolve — used as-is. Otherwise, probes the same program with
-/// `CallKind::Incremental` against the account's real current state; if the program hasn't
-/// implemented `Incremental` (signaled by an `UnsupportedCallKind` event), falls back to `diff`
-/// verbatim.
+/// Resolves one `Execute`-produced diff: runs the same program via `CallKind::Incremental`
+/// against the account's real current state, falling back to `diff` verbatim if there's no
+/// `post_data` or the program hasn't implemented `Incremental` (an `UnsupportedCallKind` event).
 ///
-/// `program_loader` is exempt — a native pseudo-program with no guest ELF to probe, so it always
-/// falls back to verbatim directly.
+/// `program_loader` is exempt — a native pseudo-program with no guest ELF to run.
 fn resolve_diff(
     diff: &AccountStateDiff,
     executing_account_id: AccountId,
@@ -908,11 +910,11 @@ fn resolve_diff(
         .checked_add(incremental_cycles)
         .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
 
-    let supported = !incremental_output
+    if incremental_output
         .events
         .iter()
-        .any(|event| event.selector == UnsupportedCallKind::SELECTOR);
-    if !supported {
+        .any(|event| event.selector == UnsupportedCallKind::SELECTOR)
+    {
         return Ok(diff.clone());
     }
 
@@ -1002,10 +1004,8 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 
-    // `Bound` actions need their real, live pre-state to reconstruct what the circuit actually
-    // committed to (that's the anchor check itself); `Deferred` actions need none at all — see
-    // `PublicAction`'s own doc for why. Looked up by id rather than zipped positionally, since
-    // the two lists no longer line up 1:1 once some actions carry no pre-state at all.
+    // Looked up by id, not zipped positionally: `Bound` actions need their pre-state, `Deferred`
+    // actions need none, so the two lists don't line up 1:1.
     let public_pre_state_by_id: HashMap<AccountId, AccountWithMetadata> = public_pre_states
         .iter()
         .cloned()
