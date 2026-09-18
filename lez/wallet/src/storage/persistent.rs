@@ -12,7 +12,7 @@ use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPriva
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    storage::key_chain::SharedAccountEntry,
+    storage::{key_chain::SharedAccountEntry, referral::ReferralStore},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -21,6 +21,8 @@ pub struct PersistentStorage {
     pub last_synced_block: u64,
     #[serde(default)]
     pub labels: BTreeMap<Label, AccountIdWithPrivacy>,
+    #[serde(default)]
+    pub referral: ReferralStore,
 }
 
 #[derive(Serialize, Deserialize)]

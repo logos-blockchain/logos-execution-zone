@@ -56,6 +56,8 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/referral",
+  "lez/programs/referral/core",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
 
@@ -124,6 +126,8 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
+referral_core = { path = "lez/programs/referral/core" }
+referral_program = { path = "lez/programs/referral" }
 program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
@@ -264,6 +268,8 @@ codegen-units = 1
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
 keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+curve25519-dalek = { git = "https://github.com/risc0/curve25519-dalek", rev = "385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32" }
+crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", rev = "3ab63a6f1048833f7047d5a50532e4a4cc789384" }
 
 # Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
 # linking large integration-test binaries on resource-constrained CI runners.
