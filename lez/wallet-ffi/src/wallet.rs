@@ -2,7 +2,7 @@
 
 use std::{
     ffi::{c_char, CStr, CString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     str::FromStr as _,
     sync::Mutex,
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn wallet_ffi_open(
 /// Resolve LEZ's canonical wallet paths (`LEE_WALLET_HOME_DIR` or `~/.lee/wallet`)
 /// and ensure the home directory exists. Centralizes the path layout so callers
 /// don't have to reconstruct it.
-fn default_wallet_paths() -> Result<(PathBuf, PathBuf), WalletFfiError> {
+fn default_wallet_paths() -> Result<(PathBuf, PathBuf, PathBuf), WalletFfiError> {
     let home = wallet::helperfunctions::get_home().map_err(|e| {
         print_error(format!("Failed to resolve wallet home: {e}"));
         WalletFfiError::InternalError
@@ -226,8 +226,12 @@ fn default_wallet_paths() -> Result<(PathBuf, PathBuf), WalletFfiError> {
         print_error(format!("Failed to resolve storage path: {e}"));
         WalletFfiError::InternalError
     })?;
+    let statistics_path = wallet::helperfunctions::fetch_statistics_path().map_err(|e| {
+        print_error(format!("Failed to resolve statistics path: {e}"));
+        WalletFfiError::InternalError
+    })?;
 
-    Ok((config_path, storage_path))
+    Ok((config_path, storage_path, statistics_path))
 }
 
 /// Create a new wallet at LEZ's canonical home, deriving the paths from the
@@ -254,11 +258,17 @@ pub unsafe extern "C" fn wallet_ffi_create_new_default(
         return FfiCreateWalletOutput::default();
     };
 
-    let Ok((config_path, storage_path)) = default_wallet_paths() else {
+    let Ok((config_path, storage_path, statistics_path)) = default_wallet_paths() else {
         return FfiCreateWalletOutput::default();
     };
 
-    match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
+    match block_on(WalletCore::new_init_storage(
+        config_path,
+        storage_path,
+        statistics_path,
+        None,
+        &password,
+    )) {
         Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -296,7 +306,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new_default(
 /// This function takes no pointer arguments and is always safe to call.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_open_default() -> *mut WalletHandle {
-    match WalletCore::from_env() {
+    match block_on(WalletCore::from_env()) {
         Ok(core) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
@@ -311,7 +321,7 @@ pub unsafe extern "C" fn wallet_ffi_open_default() -> *mut WalletHandle {
 }
 
 /// Convert a resolved path into an owned C string for return across the FFI.
-fn path_to_c_string(path: PathBuf) -> *mut c_char {
+fn path_to_c_string(path: &Path) -> *mut c_char {
     match CString::new(path.to_string_lossy().into_owned()) {
         Ok(s) => s.into_raw(),
         Err(e) => {
@@ -337,7 +347,7 @@ fn path_to_c_string(path: PathBuf) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_default_config_path() -> *mut c_char {
     match wallet::helperfunctions::fetch_config_path() {
-        Ok(path) => path_to_c_string(path),
+        Ok(path) => path_to_c_string(&path),
         Err(e) => {
             print_error(format!("Failed to resolve config path: {e}"));
             ptr::null_mut()
@@ -358,7 +368,7 @@ pub unsafe extern "C" fn wallet_ffi_default_config_path() -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_default_storage_path() -> *mut c_char {
     match wallet::helperfunctions::fetch_persistent_storage_path() {
-        Ok(path) => path_to_c_string(path),
+        Ok(path) => path_to_c_string(&path),
         Err(e) => {
             print_error(format!("Failed to resolve storage path: {e}"));
             ptr::null_mut()
@@ -366,9 +376,10 @@ pub unsafe extern "C" fn wallet_ffi_default_storage_path() -> *mut c_char {
     }
 }
 
-/// Whether a wallet already exists at LEZ's canonical home (i.e. its
-/// `storage.json` is present). Lets callers decide between an open and a
-/// create flow without touching the filesystem or knowing the path.
+/// Whether a wallet already exists at LEZ's canonical home.
+///
+/// Presence is decided by its `storage.json`, so callers can choose between an
+/// open and a create flow without touching the filesystem or knowing the path.
 ///
 /// # Returns
 /// - `true` if the default storage file exists, `false` otherwise (including when the path can't be
