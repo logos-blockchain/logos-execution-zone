@@ -167,11 +167,14 @@ impl<T> MemPoolHandle<T> {
     /// Send an item to the mempool blocking if the channel is full. Bounded by
     /// the channel alone, unlike [`Self::try_push`].
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
+        // `reserve` the slot so that counting and sending happen together,
+        // and the entire thing is cancel-safe
+        let Ok(permit) = self.sender.reserve().await else {
+            return Err(tokio::sync::mpsc::error::SendError(item));
+        };
         self.len.fetch_add(1, Ordering::Relaxed);
-        self.sender.send(item).await.inspect_err(|_| {
-            // revert len++ on error
-            self.len.fetch_sub(1, Ordering::Relaxed);
-        })
+        permit.send(item);
+        Ok(())
     }
 
     /// Send an item to the mempool, failing _immediately_ if it is full: the
@@ -300,6 +303,18 @@ mod tests {
         assert_eq!(pool.pop(), Some(2));
         handle.try_push(3).unwrap();
         assert_eq!(pool.len(), 2);
+    }
+
+    #[test]
+    async fn a_cancelled_push_does_not_leak_a_slot() {
+        let (mut pool, handle) = MemPool::new(1);
+        handle.push(1).await.unwrap();
+
+        // the channel is full, so this push parks; drop it mid-wait
+        assert!(handle.push(2).now_or_never().is_none());
+
+        assert_eq!(pool.pop(), Some(1));
+        handle.try_push(3).unwrap();
     }
 
     #[test]
