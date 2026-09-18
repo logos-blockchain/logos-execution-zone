@@ -695,17 +695,25 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
+    /// Call kind program opts into for custom `data` update.
+    Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
 }
 
+impl CallKind {
+    const fn discriminant(self) -> u8 {
+        match self {
+            Self::Execute => 0,
+            Self::Incremental => 1,
+            Self::Unknown(byte) => byte,
+        }
+    }
+}
+
 impl BorshSerialize for CallKind {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let discriminant: u8 = match *self {
-            Self::Execute => 0,
-            Self::Unknown(byte) => byte,
-        };
-        BorshSerialize::serialize(&discriminant, writer)
+        BorshSerialize::serialize(&self.discriminant(), writer)
     }
 }
 
@@ -714,6 +722,7 @@ impl BorshDeserialize for CallKind {
         let discriminant = u8::deserialize_reader(reader)?;
         Ok(match discriminant {
             0 => Self::Execute,
+            1 => Self::Incremental,
             other => Self::Unknown(other),
         })
     }
@@ -726,9 +735,26 @@ impl BorshDeserialize for CallKind {
 #[non_exhaustive]
 pub enum ProgramCall<T> {
     Execute(ProgramInput<T>, InstructionData),
-    /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
-    /// discriminant and the envelope common to every call kind.
+    Probe(ProgramInput<T>),
+    /// The delta to resolve. Program-defined shape, distinct from `T`, so it arrives undecoded.
+    Update(ProgramInput<InstructionData>),
+    /// A call kind this build doesn't implement (an unrecognized `CallKind`, or a `Probe`/
+    /// `Update` envelope that failed to decode), with the raw discriminant and the envelope
+    /// common to every call kind.
     Unsupported(ProgramInput<InstructionData>, u8),
+}
+
+/// The instruction shape every `CallKind::Incremental` invocation carries.
+///
+/// Shared by every caller and every implementer, so a capability check and a real resolution
+/// can never be confused for one another. A program that doesn't recognize this envelope at all
+/// (decode failure) falls back to `UnsupportedCallKind`, identical to "doesn't implement
+/// `Incremental`".
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum IncrementalCall {
+    Probe(InstructionData),
+    /// The actual delta to resolve, program-defined shape.
+    Update(InstructionData),
 }
 
 /// Diagnostic event recorded when a call kind isn't implemented; the call itself is a no-op,
@@ -740,12 +766,47 @@ pub struct UnsupportedCallKind {
 }
 
 impl UnsupportedCallKind {
-    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
     pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
+    /// `sha256(SELECTOR_NAME)[..8]`.
+    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
 
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).expect("UnsupportedCallKind serializes")
+    }
+}
+
+/// Self-attested claim that this program's touches this call are safe to leave `Deferred`,
+/// scoped by write or read. Emitted once per call, on `Probe`'s response. Absence (or a decode
+/// failure) means no claim: every touch forces `Bound`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum DeferReads {
+    /// Safe to defer for accounts this call writes to.
+    WriteOnly,
+    /// Safe to defer for accounts this call only reads.
+    ReadOnly,
+    /// Safe to defer regardless of write or read.
+    All,
+}
+
+impl DeferReads {
+    pub const SELECTOR_NAME: &str = "lee_core::DeferReads";
+    /// `sha256(SELECTOR_NAME)[..8]`.
+    pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
+
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("DeferReads serializes")
+    }
+
+    /// Whether this claim covers a specific touch, given whether that touch is a write.
+    #[must_use]
+    pub const fn covers(&self, is_write: bool) -> bool {
+        match self {
+            Self::WriteOnly => is_write,
+            Self::ReadOnly => !is_write,
+            Self::All => true,
+        }
     }
 }
 
@@ -812,16 +873,70 @@ pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
                 instruction_data,
             )
         }
+        CallKind::Incremental => match borsh::from_slice::<IncrementalCall>(&envelope.instruction)
+        {
+            Ok(IncrementalCall::Probe(probe_bytes)) => match borsh::from_slice::<T>(&probe_bytes) {
+                Ok(instruction) => ProgramCall::Probe(ProgramInput {
+                    self_account_id: envelope.self_account_id,
+                    caller_account_id: envelope.caller_account_id,
+                    pre_states: envelope.pre_states,
+                    instruction,
+                }),
+                Err(_) => ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant()),
+            },
+            Ok(IncrementalCall::Update(delta)) => ProgramCall::Update(ProgramInput {
+                self_account_id: envelope.self_account_id,
+                caller_account_id: envelope.caller_account_id,
+                pre_states: envelope.pre_states,
+                instruction: delta,
+            }),
+            Err(_) => ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant()),
+        },
         CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }
 
-/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip,
-/// not a failure.
-pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
-    let ProgramCall::Unsupported(envelope, raw_discriminant) = call else {
-        unreachable!("only reached after Execute was already ruled out by the caller");
-    };
+/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip, not
+/// a failure.
+pub fn respond_unsupported_call<T: BorshSerialize>(call: ProgramCall<T>) -> ! {
+    let (envelope, call_kind, raw_discriminant): (ProgramInput<InstructionData>, CallKind, u8) =
+        match call {
+            ProgramCall::Execute(input, instruction_data) => (
+                ProgramInput {
+                    self_account_id: input.self_account_id,
+                    caller_account_id: input.caller_account_id,
+                    pre_states: input.pre_states,
+                    instruction: instruction_data,
+                },
+                CallKind::Execute,
+                CallKind::Execute.discriminant(),
+            ),
+            ProgramCall::Probe(input) => (
+                ProgramInput {
+                    self_account_id: input.self_account_id,
+                    caller_account_id: input.caller_account_id,
+                    pre_states: input.pre_states,
+                    instruction: borsh::to_vec(&IncrementalCall::Probe(
+                        borsh::to_vec(&input.instruction).expect("instruction serializes"),
+                    ))
+                    .expect("IncrementalCall serializes"),
+                },
+                CallKind::Incremental,
+                CallKind::Incremental.discriminant(),
+            ),
+            ProgramCall::Update(input) => (
+                ProgramInput {
+                    self_account_id: input.self_account_id,
+                    caller_account_id: input.caller_account_id,
+                    pre_states: input.pre_states,
+                    instruction: borsh::to_vec(&IncrementalCall::Update(input.instruction))
+                        .expect("IncrementalCall serializes"),
+                },
+                CallKind::Incremental,
+                CallKind::Incremental.discriminant(),
+            ),
+            ProgramCall::Unsupported(envelope, raw) => (envelope, CallKind::Unknown(raw), raw),
+        };
     let state_diffs = envelope
         .pre_states
         .iter()
@@ -834,11 +949,42 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
         envelope.instruction,
         state_diffs,
     )
-    .with_call_kind(CallKind::Unknown(raw_discriminant))
+    .with_call_kind(call_kind)
     .with_events(vec![ProgramEvent {
         selector: UnsupportedCallKind::SELECTOR,
         data: UnsupportedCallKind { raw_discriminant }.to_bytes(),
     }])
+    .write();
+    env::exit(0)
+}
+
+/// Answers a `Probe` capability check with `defer_reads`, or `None` to decline any claim.
+///
+/// Reconstructs the receipt's instruction bytes from `call.instruction` itself rather than
+/// requiring them as a separate argument.
+pub fn respond_probe<T: BorshSerialize>(
+    call: &ProgramInput<T>,
+    defer_reads: Option<DeferReads>,
+) -> ! {
+    let instruction_data = borsh::to_vec(&IncrementalCall::Probe(
+        borsh::to_vec(&call.instruction).expect("instruction serializes"),
+    ))
+    .expect("IncrementalCall serializes");
+    let events = defer_reads
+        .map(|claim| ProgramEvent {
+            selector: DeferReads::SELECTOR,
+            data: claim.to_bytes(),
+        })
+        .into_iter()
+        .collect();
+    ProgramOutput::new(
+        call.self_account_id,
+        call.caller_account_id,
+        instruction_data,
+        Vec::new(),
+    )
+    .with_call_kind(CallKind::Incremental)
+    .with_events(events)
     .write();
     env::exit(0)
 }

@@ -18,8 +18,14 @@ fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
         CallKind::Execute
     );
 
-    // Any nonzero discriminant must decode as `Unknown`, not fail.
-    for byte in 1..=u8::MAX {
+    let incremental = borsh::to_vec(&CallKind::Incremental).unwrap();
+    assert_eq!(
+        borsh::from_slice::<CallKind>(&incremental).unwrap(),
+        CallKind::Incremental
+    );
+
+    // Any discriminant with no assigned meaning must decode as `Unknown`, not fail.
+    for byte in 2..=u8::MAX {
         assert_eq!(
             borsh::from_slice::<CallKind>(&[byte]).unwrap(),
             CallKind::Unknown(byte)
