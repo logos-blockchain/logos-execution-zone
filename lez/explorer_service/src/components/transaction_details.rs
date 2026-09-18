@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage, PublicTransaction,
-    WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramShardSelector, PublicMessage,
+    PublicTransaction, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -16,7 +16,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     } = tx;
     let PublicMessage {
         program_id,
-        account_ids,
+        shard_selectors,
         nonces,
         instruction_data,
         fee,
@@ -72,7 +72,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
             </div>
 
             <h3>"Accounts"</h3>
-            <AccountNonceList account_ids=account_ids nonces=nonces />
+            <AccountNonceList shard_selectors=shard_selectors nonces=nonces />
         </div>
     }
 }
@@ -93,11 +93,15 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         timestamp_validity_window,
     } = message;
     let private_action_count = private_actions.len();
-    let public_account_ids: Vec<_> = public_actions
+    // List public accounts without a program label; an action may include several shards.
+    let public_shard_selectors: Vec<_> = public_actions
         .into_iter()
-        .map(|action| action.account_id)
+        .map(|action| ProgramShardSelector {
+            account_id: action.account_id,
+            program_account_id: None,
+        })
         .collect();
-    let public_account_count = public_account_ids.len();
+    let public_account_count = public_shard_selectors.len();
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -133,7 +137,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             </div>
 
             <h3>"Public Accounts"</h3>
-            <AccountNonceList account_ids=public_account_ids nonces=nonces />
+            <AccountNonceList shard_selectors=public_shard_selectors nonces=nonces />
         </div>
     }
 }

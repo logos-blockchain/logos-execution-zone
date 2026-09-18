@@ -1,7 +1,10 @@
 use borsh::to_vec;
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput,
-    ProgramOutput, read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+    },
 };
 
 type Instruction = (
@@ -35,8 +38,8 @@ fn main() {
     let mut chained_calls = vec![ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
-        pre_state_ids: std::iter::once(pda.account_id)
-            .chain(rest.iter().map(|r| r.account_id))
+        shard_selectors: std::iter::once(ProgramShardSelector::from(pda))
+            .chain(rest.iter().map(ProgramShardSelector::from))
             .collect(),
         pda_seeds: vec![delegated_seed],
     }];
@@ -47,12 +50,12 @@ fn main() {
         chained_calls.push(ChainedCall {
             program_account_id: sibling_program_id.into(),
             instruction_data: to_vec(&()).unwrap(),
-            pre_state_ids: if include_pda {
-                std::iter::once(pda.account_id)
-                    .chain(rest.iter().map(|r| r.account_id))
+            shard_selectors: if include_pda {
+                std::iter::once(ProgramShardSelector::from(pda))
+                    .chain(rest.iter().map(ProgramShardSelector::from))
                     .collect()
             } else {
-                rest.iter().map(|r| r.account_id).collect()
+                rest.iter().map(ProgramShardSelector::from).collect()
             },
             pda_seeds: vec![],
         });

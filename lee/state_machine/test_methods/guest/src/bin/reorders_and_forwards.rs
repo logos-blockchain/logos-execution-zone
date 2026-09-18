@@ -1,6 +1,9 @@
-use lee_core::program::{
-    ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 /// Reports empty pre/post (pure passthrough) and forwards its two `pre_states` to one callee in
@@ -35,7 +38,10 @@ fn main() {
     .with_chained_calls(vec![ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
-        pre_state_ids: vec![second.account_id, first.account_id],
+        shard_selectors: vec![
+            ProgramShardSelector::from(&second),
+            ProgramShardSelector::from(&first),
+        ],
         pda_seeds,
     }])
     .write();
