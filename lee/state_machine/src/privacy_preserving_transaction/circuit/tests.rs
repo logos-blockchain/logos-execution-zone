@@ -64,10 +64,9 @@ struct TokenAccountData {
 }
 
 /// `PrivateBackend::resolve_write`'s counterpart to the public-side `incremental_update_cycles_*`
-/// tests: confirms the in-circuit `Update` resolution (via `execute_and_prove_incremental` and
-/// `env::verify`) actually runs, end to end through a real proof, rather than just compiling.
-/// `stripped_token`'s `Initialize` writes `post_data` (not just balance), so this is the only
-/// program among this file's other tests that exercises the path at all.
+/// tests: confirms the in-circuit `Update` resolution runs through a real proof, not just
+/// compiles. `stripped_token`'s `Initialize` is the only program here that writes `post_data`
+/// (not just balance), so it's the only one that exercises this path.
 ///
 /// `Initialize` claims `DeferReads::WriteOnly` (see `stripped_token`'s `Probe` handler), which
 /// covers this write, so the account comes out `Deferred`, not `Bound` - `resolve_write` still

@@ -258,9 +258,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
-/// One pending, unresolved update to a `Deferred` account's `data`. `has_post_data` gates
-/// whether `post_data` is meaningful (empty otherwise); `post_balance_diff_is_sub` selects
-/// `Add`/`Sub` for `post_balance_diff_amount`.
+/// `has_post_data` gates `post_data`; `post_balance_diff_is_sub` selects `Add`/`Sub`.
 #[repr(C)]
 pub struct FfiDeferredResolution {
     pub executing_account_id: FfiAccountId,
@@ -303,9 +301,7 @@ impl From<FfiDeferredResolution> for DeferredResolution {
     }
 }
 
-/// `Bound`/`Deferred` flattened via `is_deferred` (the FFI boundary has no tagged unions):
-/// `post_state` is only meaningful when `!is_deferred` (zeroed otherwise), `resolutions` only
-/// when `is_deferred` (empty otherwise).
+/// `is_deferred` selects `post_state` or `resolutions` (no tagged unions at the FFI boundary).
 #[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,

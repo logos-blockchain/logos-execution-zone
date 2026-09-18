@@ -115,6 +115,33 @@ impl<'state> PublicBackend<'state> {
             })
             .collect()
     }
+
+    /// An account's value, preferring what this same transaction already wrote over committed
+    /// chain state - so a program an earlier chained call just deployed, or an account an earlier
+    /// call just wrote, is visible immediately.
+    fn touched_or_live(&self, ctx: &CallContext<'_>, account_id: AccountId) -> Account {
+        ctx.touched
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_else(|| self.state.get_account_by_id(account_id))
+    }
+
+    /// Loads `program_account_id`'s program, resolved via [`Self::touched_or_live`].
+    fn load_program(
+        &self,
+        ctx: &CallContext<'_>,
+        program_account_id: AccountId,
+    ) -> Result<Program, LeeError> {
+        let Some((program_id, user_elf)) =
+            get_program_via(program_account_id, |id| self.touched_or_live(ctx, id))
+        else {
+            return Err(LeeError::UnknownProgram {
+                chained: ctx.caller_account_id.is_some(),
+            });
+        };
+        let elf = crate::program::attach_kernel(&user_elf);
+        Ok(Program::new_unchecked(program_id, Cow::Owned(elf)))
+    }
 }
 
 impl Backend for PublicBackend<'_> {
@@ -145,20 +172,7 @@ impl Backend for PublicBackend<'_> {
                 &call.instruction_data,
             )?
         } else {
-            // Looks through the in-flight diff first, so a program an earlier chained call in
-            // this same transaction deployed is callable immediately.
-            let Some((program_id, user_elf)) = get_program_via(call.program_account_id, |id| {
-                ctx.touched
-                    .get(&id)
-                    .cloned()
-                    .unwrap_or_else(|| self.state.get_account_by_id(id))
-            }) else {
-                return Err(LeeError::UnknownProgram {
-                    chained: ctx.caller_account_id.is_some(),
-                });
-            };
-            let elf = crate::program::attach_kernel(&user_elf);
-            let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+            let program = self.load_program(ctx, call.program_account_id)?;
             let (program_output, call_cycles) = program.execute(
                 call.program_account_id,
                 ctx.caller_account_id,
@@ -211,10 +225,8 @@ impl Backend for PublicBackend<'_> {
         Ok(pre.is_authorized)
     }
 
-    /// Runs `diff`'s producing program via `CallKind::Incremental` against the account's real
-    /// current state, falling back to `diff` verbatim if the program hasn't implemented
-    /// `Incremental` (an `UnsupportedCallKind` event). `program_loader` is exempt - a native
-    /// pseudo-program with no guest ELF to run.
+    /// Runs the producing program's `Incremental` support against live state, not `diff.pre_state`.
+    /// Falls back to `diff` verbatim if unsupported, or for `program_loader` (no guest ELF).
     fn resolve_write(
         &mut self,
         diff: &AccountStateDiff,
@@ -229,26 +241,11 @@ impl Backend for PublicBackend<'_> {
 
         let account_id = diff.pre_state.account_id;
         let real_pre_state = AccountWithMetadata::new(
-            ctx.touched
-                .get(&account_id)
-                .cloned()
-                .unwrap_or_else(|| self.state.get_account_by_id(account_id)),
+            self.touched_or_live(ctx, account_id),
             diff.pre_state.is_authorized,
             account_id,
         );
-
-        let Some((program_id, user_elf)) = get_program_via(ctx.program_account_id, |id| {
-            ctx.touched
-                .get(&id)
-                .cloned()
-                .unwrap_or_else(|| self.state.get_account_by_id(id))
-        }) else {
-            return Err(LeeError::UnknownProgram {
-                chained: ctx.caller_account_id.is_some(),
-            });
-        };
-        let elf = crate::program::attach_kernel(&user_elf);
-        let program = Program::new_unchecked(program_id, Cow::Owned(elf));
+        let program = self.load_program(ctx, ctx.program_account_id)?;
 
         let (incremental_output, incremental_cycles) = program.execute_incremental(
             ctx.program_account_id,

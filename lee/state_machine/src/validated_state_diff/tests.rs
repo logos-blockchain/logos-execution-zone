@@ -682,10 +682,9 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
 }
 
-/// `resolve_diff`'s `Incremental::Update` call (for a program like `stripped_token`, which
+/// `resolve_write`'s `Incremental::Update` call (for a program like `stripped_token`, which
 /// writes real `data`) is a second, separate zkVM session layered on top of `Execute` — this
-/// confirms its cost actually gets folded into the transaction's total cycle count, not run for
-/// free outside the budget.
+/// confirms its cost is folded into the transaction's total cycle count, not run for free.
 #[test]
 fn incremental_update_cycles_are_folded_into_the_total() {
     let program = crate::test_methods::stripped_token();
@@ -744,12 +743,11 @@ fn incremental_update_cycles_are_folded_into_the_total() {
     );
 }
 
-/// The complementary half: `resolve_diff` must pass `Incremental` only what's *left* of the
+/// The complementary half: `resolve_write` must pass `Incremental` only what's *left* of the
 /// budget after `Execute`, not the original total again — confirmed by mutation testing to catch
-/// a distinct bug from the one above (which only catches a dropped post-call cycle count;
-/// forgetting to shrink the pre-call budget here would still pass that one, since it never
-/// reaches the accumulation line at all). A budget sized to fit `Execute` alone plus a small
-/// margin must still run out of gas once `Incremental` is given only that margin to work with.
+/// a distinct bug from the one above (that one only catches a dropped post-call cycle count;
+/// forgetting to shrink the pre-call budget here would still pass it, since it never reaches the
+/// accumulation line at all).
 #[test]
 fn incremental_update_cycles_are_charged_against_the_same_budget() {
     let program = crate::test_methods::stripped_token();
@@ -790,11 +788,9 @@ fn incremental_update_cycles_are_charged_against_the_same_budget() {
 
 /// The two tests above only ever exercise a single `Incremental::Update` call (`Initialize`
 /// produces one diff). `Transfer` produces two — a sender diff and a receiver diff, each
-/// resolved by its own `Update` call inside the same `.map()` over one `Execute` call's diffs
-/// (`validated_state_diff/mod.rs`'s `resolve_diff` loop). This confirms the second `Update` sees
-/// the cost already spent by the first, rather than a fresh budget per diff: sized to cover
-/// `Execute` plus the sender's `Update` plus a small margin, it must run out of gas exactly when
-/// attempting the receiver's `Update`, with only the margin left.
+/// resolved by its own `Update` call within the same traversal's per-diff `resolve_write` loop.
+/// This confirms the second `Update` sees the cost already spent by the first, rather than a
+/// fresh budget per diff.
 #[test]
 fn incremental_update_cycles_accumulate_across_diffs_in_the_same_call() {
     let program = crate::test_methods::stripped_token();

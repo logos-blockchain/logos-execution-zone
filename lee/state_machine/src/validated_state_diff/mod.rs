@@ -567,25 +567,19 @@ fn authenticate_public_transaction_signers(
     Ok(signer_account_ids)
 }
 
-/// Resolves one message-level public action to the `Account` it leaves behind. A `Bound`
-/// action's `post_state` is already final and proven - used as-is. A `Deferred` action carries a
-/// list of raw, unresolved deltas (one per touch by an `Incremental`-supporting program during
-/// the original execution, in order); this replays each in turn, host-side and unproven, through
-/// `PublicBackend::resolve_write` - the same machinery a public transaction's own `Incremental`
-/// diffs use - each resolution building on the previous one's result (threaded through a local
-/// `resolved_so_far` map, standing in for `CallContext::touched`), with the first resolved
-/// against real, live state directly. `backend` is shared across every action in the message, so
-/// its `cycles_used` accumulates the whole settlement's cost, not just this one action's.
+/// Resolves one message-level public action to the `Account` it leaves behind. `Bound`'s
+/// `post_state` is already final and proven - used as-is. `Deferred` carries a list of raw,
+/// unresolved deltas, one per touch by an `Incremental`-supporting program, replayed in order
+/// via `PublicBackend::resolve_write` against live state - each resolution building on the
+/// previous one's result (`resolved_so_far`, standing in for `CallContext::touched`). `backend`
+/// is shared across every action in the message, so `cycles_used` accumulates the whole
+/// settlement's cost.
 ///
-/// Unlike the original in-circuit resolution, this also re-checks data ownership on each
-/// resolved diff before applying it (the same rule `validate_execution` enforces for a live
-/// call, but scoped to just this one diff - `validate_execution`'s own balance-sum check spans
-/// every diff *one program call* produced together, which a lone `DeferredResolution` replayed
-/// in isolation, possibly touching a different account than any sibling resolution, was never
-/// part of): an account's real ownership can differ by settlement time from what the prover saw
-/// at proof time - that's the entire premise of `Deferred` - so the ownership check the circuit
-/// already ran against its own, possibly-stale view isn't a substitute for checking it again
-/// here, against live state.
+/// Also re-checks data ownership on each resolved diff (`validate_execution`'s own rule, but not
+/// the full check - its balance-sum check spans one program call's diffs together, which a lone
+/// `DeferredResolution` was never part of): an account's real owner can differ by settlement time
+/// from what the prover saw at proof time, so the circuit's own check isn't a substitute for
+/// checking again here.
 fn resolve_public_action(
     action: &PublicActionWithID,
     state: &V03State,
