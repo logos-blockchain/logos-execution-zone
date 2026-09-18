@@ -1,5 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use ml_kem::{Decapsulate as _, Encapsulate as _, KeyExport as _, Seed};
+#[cfg(feature = "host")]
+use ml_kem::Encapsulate as _;
+use ml_kem::{Decapsulate as _, KeyExport as _, Seed};
 use serde::{Deserialize, Serialize};
 
 use crate::{EphemeralPublicKey, SharedSecretKey};
@@ -26,6 +28,7 @@ impl MlKem768EncapsulationKey {
     pub const LEN: usize = 1184;
 
     /// Construct from raw bytes, returning an error if the length is not [`Self::LEN`].
+    #[cfg(feature = "host")]
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, crate::error::LeeCoreError> {
         if bytes.len() != Self::LEN {
             return Err(crate::error::LeeCoreError::DeserializationError(format!(
@@ -59,12 +62,13 @@ impl SharedSecretKey {
     /// Returns `(shared_secret, ciphertext)`.  The ciphertext must be included in the transaction
     /// as the `EphemeralPublicKey`; the receiver recovers the same shared secret via
     /// [`Self::decapsulate`].
+    #[cfg(feature = "host")]
     #[must_use]
     pub fn encapsulate(ek: &MlKem768EncapsulationKey) -> (Self, EphemeralPublicKey) {
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()
                 .try_into()
-                .expect("MlKem768EncapsulationKey must be 1184 bytes");
+                .expect("MlKem768EncapsulationKey must be MlKem768EncapsulationKey::LEN bytes");
         let ek_obj = ml_kem::EncapsulationKey768::new(&ek_bytes).expect(
             "MlKem768EncapsulationKey bytes must encode a valid ML-KEM-768 encapsulation key",
         );
@@ -76,35 +80,23 @@ impl SharedSecretKey {
         (Self(ss_bytes), EphemeralPublicKey(ct.to_vec()))
     }
 
-    /// Deterministically encapsulate a shared secret toward `ek` for use in tests.
+    /// Deterministically encapsulate a shared secret toward `ek` using a
+    /// pre-derived `esk` as the ML-KEM encapsulation randomness.
     ///
-    /// The shared secret has no secret entropy — it is fully determined by `ek`,
-    /// `message_hash`, and `output_index`, all of which are public. This makes it
-    /// unsuitable for real encryption but useful for producing stable, reproducible
-    /// shared secrets in unit tests. Use a distinct `output_index` per output to
-    /// avoid EPK collisions across multiple outputs in the same test.
-    ///
-    /// For production use [`Self::encapsulate`], which draws randomness from the OS.
-    #[cfg(any(test, feature = "test_utils"))]
+    /// The `esk` must be derived via `derive_esk(account_id, random_seed, nonce)`
+    /// which binds it to the account and incorporates OS entropy.
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
-        message_hash: &[u8; 32],
-        output_index: u32,
+        esk: &crate::encryption::EphemeralSecretKey,
     ) -> (Self, EphemeralPublicKey) {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
-
-        let mut input = Vec::with_capacity(36);
-        input.extend_from_slice(message_hash);
-        input.extend_from_slice(&output_index.to_le_bytes());
-        let hash = Impl::hash_bytes(&input);
-        let m: ml_kem::B32 =
-            ml_kem::array::Array::try_from(hash.as_bytes()).expect("SHA-256 output is 32 bytes");
+        let m: ml_kem::B32 = ml_kem::array::Array::try_from(esk.0.as_slice())
+            .expect("EphemeralSecretKey is 32 bytes");
 
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()
                 .try_into()
-                .expect("MlKem768EncapsulationKey must be 1184 bytes");
+                .expect("MlKem768EncapsulationKey must be MlKem768EncapsulationKey::LEN bytes");
         let ek_obj = ml_kem::EncapsulationKey768::new(&ek_bytes).expect(
             "MlKem768EncapsulationKey bytes must encode a valid ML-KEM-768 encapsulation key",
         );
@@ -118,8 +110,9 @@ impl SharedSecretKey {
 
     /// Receiver: decapsulate the shared secret from a KEM ciphertext.
     ///
-    /// Returns `None` if the `EphemeralPublicKey` is not exactly 1088 bytes — callers on
-    /// the wallet scan path should skip the output rather than panic on malformed chain data.
+    /// Returns `None` if the `EphemeralPublicKey` is not exactly [`ML_KEM_768_CIPHERTEXT_LEN`]
+    /// bytes — callers on the wallet scan path should skip the output rather than panic on
+    /// malformed chain data.
     ///
     /// `d` and `z` are the two 32-byte halves of the FIPS 203 `ViewingSecretKey` seed.
     #[must_use]
@@ -146,6 +139,7 @@ mod tests {
     use ml_kem::KeyExport as _;
 
     use super::*;
+    use crate::ML_KEM_768_CIPHERTEXT_LEN;
 
     #[test]
     fn encapsulate_decapsulate_round_trip() {
@@ -164,11 +158,15 @@ mod tests {
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         assert_eq!(sender_ss.0, receiver_ss.0, "shared secrets must match");
-        assert_eq!(epk.0.len(), 1088, "ML-KEM-768 ciphertext is 1088 bytes");
+        assert_eq!(
+            epk.0.len(),
+            ML_KEM_768_CIPHERTEXT_LEN,
+            "ML-KEM-768 ciphertext length"
+        );
         assert_eq!(
             ek.0.len(),
-            1184,
-            "ML-KEM-768 encapsulation key is 1184 bytes"
+            MlKem768EncapsulationKey::LEN,
+            "ML-KEM-768 encapsulation key length"
         );
     }
 
@@ -177,15 +175,15 @@ mod tests {
         let d = [1_u8; 32];
         let z = [2_u8; 32];
 
-        // Too short — 100 bytes instead of 1088.
+        // Too short — 100 bytes instead of ML_KEM_768_CIPHERTEXT_LEN.
         let short_epk = EphemeralPublicKey(vec![42_u8; 100]);
         assert!(
             SharedSecretKey::decapsulate(&short_epk, &d, &z).is_none(),
             "short EphemeralPublicKey must return None"
         );
 
-        // Too long — 1089 bytes instead of 1088.
-        let long_epk = EphemeralPublicKey(vec![42_u8; 1089]);
+        // Too long — ML_KEM_768_CIPHERTEXT_LEN + 1.
+        let long_epk = EphemeralPublicKey(vec![42_u8; ML_KEM_768_CIPHERTEXT_LEN + 1]);
         assert!(
             SharedSecretKey::decapsulate(&long_epk, &d, &z).is_none(),
             "long EphemeralPublicKey must return None"

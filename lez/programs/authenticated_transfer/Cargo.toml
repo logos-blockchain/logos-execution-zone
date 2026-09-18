@@ -7,3 +7,7 @@ license = { workspace = true }
 [dependencies]
 authenticated_transfer_core.workspace = true
 lee_core.workspace = true
+
+[[bin]]
+name = "authenticated_transfer"
+path = "src/main.rs"

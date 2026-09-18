@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
+use common::transaction::TxEvents;
 use rocksdb::WriteBatch;
 
-use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
+use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO, V03State};
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
-        TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockEventsCellRef, BlockHashToBlockIdMapCell, BreakpointCellRef,
+        LastObservedL1LibHeaderCell, TipSlotCell, TxHashToBlockIdMapCell,
     },
 };
 
@@ -52,44 +53,8 @@ impl RocksDBIO {
         acc_id: [u8; 32],
         tx_hashes: &[[u8; 32]],
     ) -> DbResult<()> {
-        let acc_num_tx = self.get_acc_meta_num_tx(acc_id)?.unwrap_or(0);
-        let cf_att = self.account_id_to_tx_hash_column();
         let mut write_batch = WriteBatch::new();
-
-        for (tx_id, tx_hash) in tx_hashes.iter().enumerate() {
-            let put_id = acc_num_tx
-                .checked_add(tx_id.try_into().expect("Must fit into u64"))
-                .expect("Tx count should be lesser that u64::MAX");
-
-            let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
-            })?;
-            let suffix = borsh::to_vec(&put_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
-            })?;
-
-            prefix.extend_from_slice(&suffix);
-
-            write_batch.put_cf(
-                &cf_att,
-                prefix,
-                borsh::to_vec(tx_hash).map_err(|berr| {
-                    DbError::borsh_cast_message(
-                        berr,
-                        Some("Failed to serialize tx hash".to_owned()),
-                    )
-                })?,
-            );
-        }
-
-        self.update_acc_meta_batch(
-            acc_id,
-            acc_num_tx
-                .checked_add(tx_hashes.len().try_into().expect("Must fit into u64"))
-                .expect("Tx count should be lesser that u64::MAX"),
-            &mut write_batch,
-        )?;
-
+        self.put_account_transactions_dependant(acc_id, tx_hashes, &mut write_batch)?;
         self.db.write(write_batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })
@@ -167,21 +132,29 @@ impl RocksDBIO {
         self.put_batch(&LastObservedL1LibHeaderCell(l1_lib_header), (), write_batch)
     }
 
-    pub fn put_meta_last_breakpoint_id_batch(
+    pub fn put_meta_tip_slot_in_db_batch(
         &self,
-        br_id: u64,
+        l1_slot: u64,
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        self.put_batch(&LastBreakpointIdCell(br_id), (), write_batch)
+        self.put_batch(&TipSlotCell(l1_slot), (), write_batch)
     }
 
     pub fn put_meta_is_first_block_set_batch(&self, write_batch: &mut WriteBatch) -> DbResult<()> {
         self.put_batch(&FirstBlockSetCell(true), (), write_batch)
     }
 
-    // Block
-
-    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
+    /// Put a block atomically (via [`WriteBatch`]) along with its L1 header, `Slot`,
+    /// and (at interval-boundary blocks) a snapshot of `post_state`, the block's
+    /// post-application state.
+    pub fn put_block(
+        &self,
+        block: &Block,
+        l1_lib_header: [u8; 32],
+        l1_slot: u64,
+        post_state: &V03State,
+        events: &[TxEvents],
+    ) -> DbResult<()> {
         let cf_block = self.block_column();
         let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         let mut write_batch = WriteBatch::default();
@@ -199,6 +172,7 @@ impl RocksDBIO {
         if block.header.block_id > last_curr_block {
             self.put_meta_last_block_in_db_batch(block.header.block_id, &mut write_batch)?;
             self.put_meta_last_observed_l1_lib_header_in_db_batch(l1_lib_header, &mut write_batch)?;
+            self.put_meta_tip_slot_in_db_batch(l1_slot, &mut write_batch)?;
         }
         if last_curr_block == 0 {
             self.put_meta_first_block_in_db_batch(block, &mut write_batch)?;
@@ -244,17 +218,31 @@ impl RocksDBIO {
             self.put_account_transactions_dependant(acc_id, &tx_hashes, &mut write_batch)?;
         }
 
-        self.db.write(write_batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
-        })?;
-
         if block
             .header
             .block_id
             .is_multiple_of(BREAKPOINT_INTERVAL.into())
         {
-            self.put_next_breakpoint()?;
+            let br_id = block
+                .header
+                .block_id
+                .checked_div(BREAKPOINT_INTERVAL.into())
+                .expect("Breakpoint interval is not zero");
+            self.put_batch(&BreakpointCellRef(post_state), br_id, &mut write_batch)?;
         }
+
+        // No row at all for a block whose transactions emitted nothing.
+        if !events.is_empty() {
+            self.put_batch(
+                &BlockEventsCellRef(events),
+                block.header.block_id,
+                &mut write_batch,
+            )?;
+        }
+
+        self.db.write(write_batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
+        })?;
 
         Ok(())
     }

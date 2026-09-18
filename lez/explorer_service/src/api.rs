@@ -151,9 +151,8 @@ pub async fn get_transactions_by_account(
 #[cfg(feature = "ssr")]
 pub fn create_indexer_rpc_client(url: &url::Url) -> Result<IndexerRpcClient, String> {
     use jsonrpsee::http_client::HttpClientBuilder;
-    use log::info;
 
-    info!("Connecting to Indexer RPC on URL: {url}");
+    log::info!("Connecting to Indexer RPC on URL: {url}");
 
     HttpClientBuilder::default()
         .build(url.as_str())

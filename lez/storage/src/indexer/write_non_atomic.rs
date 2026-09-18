@@ -1,10 +1,12 @@
-use super::{BREAKPOINT_INTERVAL, DbError, DbResult, RocksDBIO, V03State};
+use super::{DbResult, RocksDBIO, V03State};
+#[cfg(test)]
+use crate::error::DbError;
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
-        ZoneSdkIndexerCursorCellRef,
+        BreakpointCellRef, CrossZoneHaltCellRef, EventFilterSegmentsCellRef,
+        LastObservedL1LibHeaderCell, StallReasonCellRef, ZoneSdkIndexerCursorCellRef,
     },
 };
 
@@ -23,10 +25,6 @@ impl RocksDBIO {
         self.put(&LastObservedL1LibHeaderCell(l1_lib_header), ())
     }
 
-    pub fn put_meta_last_breakpoint_id(&self, br_id: u64) -> DbResult<()> {
-        self.put(&LastBreakpointIdCell(br_id), ())
-    }
-
     pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {
         self.put(&FirstBlockSetCell(true), ())
     }
@@ -35,32 +33,33 @@ impl RocksDBIO {
         self.put(&ZoneSdkIndexerCursorCellRef(bytes), ())
     }
 
+    pub fn put_event_filter_segments_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&EventFilterSegmentsCellRef(bytes), ())
+    }
+
+    pub fn put_stall_reason_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&StallReasonCellRef(bytes), ())
+    }
+
+    pub fn put_cross_zone_halt_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&CrossZoneHaltCellRef(bytes), ())
+    }
+
     // State
 
     pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
         self.put(&BreakpointCellRef(breakpoint), br_id)
     }
 
-    pub fn put_next_breakpoint(&self) -> DbResult<()> {
-        let last_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
-        let next_breakpoint_id = self
-            .get_meta_last_breakpoint_id()?
-            .unwrap_or(0)
-            .checked_add(1)
-            .expect("Breakpoint Id will be lesser than u64::MAX");
-        let block_to_break_id = next_breakpoint_id
-            .checked_mul(u64::from(BREAKPOINT_INTERVAL))
-            .expect("Reached maximum breakpoint id");
-
-        if block_to_break_id <= last_block {
-            let next_breakpoint = self.calculate_state_for_id(block_to_break_id)?;
-
-            self.put_breakpoint(next_breakpoint_id, &next_breakpoint)?;
-            self.put_meta_last_breakpoint_id(next_breakpoint_id)
-        } else {
-            Err(DbError::db_interaction_error(
-                "Breakpoint not yet achieved".to_owned(),
-            ))
-        }
+    /// Deletes a breakpoint snapshot. Test-only fault injection for simulating
+    /// stores whose boundary snapshot was lost.
+    #[cfg(test)]
+    pub(crate) fn delete_breakpoint(&self, br_id: u64) -> DbResult<()> {
+        let key = borsh::to_vec(&br_id).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize breakpoint id".to_owned()))
+        })?;
+        self.db
+            .delete_cf(&self.breakpoint_column(), key)
+            .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
 }

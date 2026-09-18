@@ -47,9 +47,10 @@ impl WalletSubcommand for BridgeSubcommand {
                     .send_withdraw(sender_account_id, amount, bedrock_account_pk)
                     .await?;
 
-                println!("Transaction hash is {tx_hash}");
-
-                Ok(SubcommandReturnValue::Empty)
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+                    .context("Transaction finalization error")
             }
         }
     }

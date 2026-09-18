@@ -5,6 +5,7 @@
 
 use std::{collections::HashMap, time::Instant};
 
+use borsh::to_vec;
 use lee::{
     execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
@@ -13,7 +14,6 @@ use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
 };
-use risc0_zkvm::serde::to_vec;
 
 use super::PpeBenchResult;
 
@@ -46,12 +46,12 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let auth_transfer_id = auth_transfer.id();
     let pwd = ProgramWithDependencies::from(auth_transfer);
 
-    // For PPE to allow the sender's balance to be decremented by this
-    // program, the sender must already be claimed by auth_transfer.
-    // Recipient stays default-owned so the first call can claim it.
+    // The sender's balance may only be decremented because it is authorized;
+    // its owner is incidental. The recipient stays default: a credit writes no
+    // data, so it acquires no owner.
     let sender = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             balance: 1_000_000,
             ..Account::default()
         },
@@ -106,18 +106,17 @@ fn prove_chain_caller(
     num_chain_calls: u32,
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let chain_caller = test_programs::chain_caller();
+    let chain_caller_id = chain_caller.id();
     let auth_transfer = programs::authenticated_transfer();
     let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, deps);
+    deps.insert(auth_transfer.id().into(), auth_transfer);
+    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
 
-    // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
-    // track recipient's post-claim program_owner, so a default recipient
-    // would cause a state mismatch on subsequent chained calls.
+    // Both accounts are seeded owned by auth_transfer.
     let recipient_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             ..Account::default()
         },
         is_authorized: true,
@@ -125,7 +124,7 @@ fn prove_chain_caller(
     };
     let sender_pre = AccountWithMetadata {
         account: Account {
-            program_owner: auth_transfer_id,
+            program_owner: auth_transfer_id.into(),
             balance: 1_000_000,
             ..Account::default()
         },

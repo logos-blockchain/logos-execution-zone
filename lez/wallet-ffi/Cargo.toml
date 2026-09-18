@@ -14,22 +14,17 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 wallet.workspace = true
 lee.workspace = true
 lee_core.workspace = true
-sequencer_service_rpc = { workspace = true, features = ["client"] }
 common.workspace = true
 programs.workspace = true
+sequencer_service_rpc.workspace = true
 
 tokio.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-risc0-zkvm.workspace = true
 bip39.workspace = true
-vault_core.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"
-
-[dev-dependencies]
-tempfile = "3"
 
 [features]
 default = ["prove"]

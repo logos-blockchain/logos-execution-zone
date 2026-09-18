@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use log::{error, info};
+use log::error;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
@@ -34,18 +34,20 @@ async fn main() -> Result<()> {
     let cancellation_token = listen_for_shutdown_signal();
 
     let config = indexer_service::IndexerConfig::from_path(&config_path)?;
-    let indexer_handle = indexer_service::run_server(config, data_dir.as_path(), port).await?;
+    let indexer_handle =
+        indexer_service::run_server(config, data_dir.as_path(), port, cancellation_token.clone())
+            .await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
-            info!("Shutting down server...");
+            log::info!("Shutting down server...");
         }
         () = indexer_handle.stopped() => {
             error!("Server stopped unexpectedly");
         }
     }
 
-    info!("Server shutdown complete");
+    log::info!("Server shutdown complete");
 
     Ok(())
 }
@@ -59,7 +61,7 @@ fn listen_for_shutdown_signal() -> CancellationToken {
             error!("Failed to listen for Ctrl-C signal: {err}");
             return;
         }
-        info!("Received Ctrl-C signal");
+        log::info!("Received Ctrl-C signal");
         cancellation_token_clone.cancel();
     });
 

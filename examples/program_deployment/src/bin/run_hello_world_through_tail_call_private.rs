@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use lee::{
-    AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
-    program::Program,
+    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use wallet::{AccountIdentity, WalletCore};
 
@@ -26,7 +25,7 @@ use wallet::{AccountIdentity, WalletCore};
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the simple_tail_call program binary
@@ -47,9 +46,11 @@ async fn main() {
     let simple_tail_call = Program::new(simple_tail_call_bytecode.into()).unwrap();
     let hello_world_bytecode: Vec<u8> = std::fs::read(hello_world_path).unwrap();
     let hello_world = Program::new(hello_world_bytecode.into()).unwrap();
-    let dependencies: HashMap<ProgramId, Program> =
-        std::iter::once((hello_world.id(), hello_world)).collect();
-    let program_with_dependencies = ProgramWithDependencies::new(simple_tail_call, dependencies);
+    let dependencies: HashMap<AccountId, Program> =
+        std::iter::once((hello_world.id().into(), hello_world)).collect();
+    let simple_tail_call_id = simple_tail_call.id().into();
+    let program_with_dependencies =
+        ProgramWithDependencies::new(simple_tail_call, simple_tail_call_id, dependencies);
 
     let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
 

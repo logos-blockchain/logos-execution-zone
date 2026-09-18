@@ -1,7 +1,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
-    SharedSecretKey,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    Identifier, SharedSecretKey,
+    encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -146,11 +146,28 @@ impl GroupKeyHolder {
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
     }
 
+    /// Derive keys for a shared regular account from its `identifier`.
+    ///
+    /// Computes the derivation seed via the `SharedAccountTag` domain separator, then delegates
+    /// to [`Self::derive_keys_for_shared_account`].
+    #[must_use]
+    pub fn derive_regular_shared_account_keys_from_identifier(
+        &self,
+        identifier: Identifier,
+    ) -> PrivateKeyHolder {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(identifier.to_le_bytes());
+        let derivation_seed: [u8; 32] = hasher.finalize().into();
+        self.derive_keys_for_shared_account(&derivation_seed)
+    }
+
     /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].
     ///
     /// Uses ML-KEM-768 encapsulation to derive a shared secret, then AES-256-GCM to encrypt
     /// the payload. The returned bytes are
-    /// `kem_ciphertext (1088) || nonce (12) || ciphertext+tag (48)` = 1148 bytes.
+    /// `kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) || nonce (12) || ciphertext+tag (48)`.
     ///
     /// Each call generates a fresh KEM encapsulation, so two seals of the same holder produce
     /// different ciphertexts.
@@ -170,7 +187,7 @@ impl GroupKeyHolder {
             .encrypt(&nonce, self.gms.as_ref())
             .expect("AES-GCM encryption should not fail with valid key/nonce");
 
-        let capacity = 1088_usize
+        let capacity = ML_KEM_768_CIPHERTEXT_LEN
             .checked_add(12)
             .and_then(|n| n.checked_add(ciphertext.len()))
             .expect("seal capacity overflow");
@@ -186,21 +203,21 @@ impl GroupKeyHolder {
     /// Returns `Err` if the ciphertext is too short or the AES-GCM authentication tag
     /// doesn't verify (wrong key or tampered data).
     pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
-        // kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
-        const KEM_CT_LEN: usize = 1088;
-        const HEADER_LEN: usize = KEM_CT_LEN + 12;
+        // kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) + nonce (12) = header, then AES-GCM tag (16)
+        // minimum.
+        const HEADER_LEN: usize = ML_KEM_768_CIPHERTEXT_LEN + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
 
         if sealed.len() < MIN_LEN {
             return Err(SealError::TooShort);
         }
 
-        let kem_ct = EphemeralPublicKey(sealed[..KEM_CT_LEN].to_vec());
-        let nonce = aes_gcm::Nonce::from_slice(&sealed[KEM_CT_LEN..HEADER_LEN]);
+        let kem_ct = EphemeralPublicKey(sealed[..ML_KEM_768_CIPHERTEXT_LEN].to_vec());
+        let nonce = aes_gcm::Nonce::from_slice(&sealed[ML_KEM_768_CIPHERTEXT_LEN..HEADER_LEN]);
         let ciphertext = &sealed[HEADER_LEN..];
 
         let shared = SharedSecretKey::decapsulate(&kem_ct, &own_key.d, &own_key.z)
-            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: KEM_CT_LEN guarantees exactly 1088 bytes");
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: ML_KEM_768_CIPHERTEXT_LEN guarantees exactly 1088 bytes");
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 
@@ -322,31 +339,31 @@ mod tests {
     }
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
-    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
+    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` ask/nsk/npk chain, or the
     /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
-        use lee_core::{account::AccountId, program::ProgramId};
+        use lee_core::account::AccountId;
 
         let gms = [42_u8; 32];
         let seed = PdaSeed::new([1; 32]);
-        let program_id: ProgramId = [9; 8];
+        let program_id = AccountId::new([9; 32]);
 
         let holder = GroupKeyHolder::from_gms(gms);
-        let npk = holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
-            .generate_nullifier_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
+        let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
 
         let expected_npk = NullifierPublicKey([
-            136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
-            215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
+            59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
+            239, 255, 145, 142, 122, 166, 219, 75, 200, 9, 168, 7,
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
         let expected_account_id =
-            AccountId::for_private_pda(&program_id, &seed, &expected_npk, u128::MAX);
+            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk, u128::MAX);
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
@@ -528,7 +545,7 @@ mod tests {
 
         let alice_holder = GroupKeyHolder::new();
         let pda_seed = PdaSeed::new([42_u8; 32]);
-        let program_id: lee_core::program::ProgramId = [1; 8];
+        let program_id = AccountId::new([1; 32]);
 
         let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
         let alice_npk = alice_keys.generate_nullifier_public_key();
@@ -543,13 +560,16 @@ mod tests {
         let bob_holder =
             GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
 
-        let bob_npk = bob_holder
-            .derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed)
-            .generate_nullifier_public_key();
+        let bob_group_keys = bob_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
+        let bob_npk = bob_group_keys.generate_nullifier_public_key();
         assert_eq!(alice_npk, bob_npk);
 
-        let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, 0);
-        let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, 0);
+        let alice_vpk = alice_keys.generate_viewing_public_key();
+        let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
+        let alice_account_id =
+            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk, 0);
+        let bob_account_id =
+            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk, 0);
         assert_eq!(alice_account_id, bob_account_id);
     }
 

@@ -29,7 +29,7 @@ use wallet::WalletCore;
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary
@@ -52,7 +52,8 @@ async fn main() {
         .storage()
         .key_chain()
         .pub_account_signing_key(account_id)
-        .expect("Input account should be a self owned public account");
+        .expect("Input account should be a self owned public account")
+        .clone();
 
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
@@ -60,11 +61,12 @@ async fn main() {
     // Construct the public transaction
     // Query the current nonce from the node
     let nonces = wallet_core
-        .get_accounts_nonces(vec![account_id])
+        .get_accounts_nonces(&[account_id])
         .await
         .expect("Node should be reachable to query account data");
-    let signing_keys = [signing_key];
-    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
+    let signing_keys = [&signing_key];
+    let message =
+        Message::try_new(program.id().into(), vec![account_id], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
@@ -72,7 +74,7 @@ async fn main() {
 
     // Submit the transaction
     let _response = wallet_core
-        .sequencer_client
+        .helm_owned()
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();

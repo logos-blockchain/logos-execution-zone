@@ -1,14 +1,13 @@
 use rocksdb::{DBWithThreadMode, MultiThreaded, WriteBatch};
 
 use crate::{
-    cells::{SimpleReadableCell, SimpleWritableCell},
+    cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
 };
 
 pub mod cells;
 pub mod error;
 pub mod indexer;
-pub mod sequencer;
 
 /// Maximal size of stored blocks in base.
 ///
@@ -65,5 +64,30 @@ pub trait DBIO {
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
         cell.put_batch(self.db(), params, write_batch)
+    }
+
+    /// Stage a cell deletion into `write_batch`, the counterpart of
+    /// [`Self::put_batch`]. Deleting an absent key is a no-op (rocksdb
+    /// semantics).
+    fn del_batch<T: SimpleStorableCell>(
+        &self,
+        params: T::KeyParams,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        write_batch.delete_cf(&T::column_ref(self.db()), T::key_constructor(params)?);
+        Ok(())
+    }
+
+    /// Delete a cell. Deleting an absent key is a no-op (rocksdb semantics).
+    fn del<T: SimpleStorableCell>(&self, params: T::KeyParams) -> DbResult<()> {
+        let cf_ref = T::column_ref(self.db());
+        self.db()
+            .delete_cf(&cf_ref, T::key_constructor(params)?)
+            .map_err(|rerr| {
+                DbError::rocksdb_cast_message(
+                    rerr,
+                    Some(format!("Failed to delete {:?}", T::CELL_NAME)),
+                )
+            })
     }
 }

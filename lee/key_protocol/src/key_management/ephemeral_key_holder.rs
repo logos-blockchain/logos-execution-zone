@@ -48,14 +48,3 @@ impl EphemeralKeyHolder {
         self.shared_secret
     }
 }
-
-/// Encapsulates a fresh shared secret toward `vpk` and returns `(shared_secret, ciphertext)`.
-///
-/// Used when the local side is acting as an "ephemeral receiver" — i.e. generating a
-/// one-sided encryption that only the holder of the VSK can decrypt.
-#[must_use]
-pub fn produce_one_sided_shared_secret_receiver(
-    vpk: &ViewingPublicKey,
-) -> (SharedSecretKey, EphemeralPublicKey) {
-    SharedSecretKey::encapsulate(vpk)
-}

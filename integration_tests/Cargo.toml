@@ -8,40 +8,73 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+# LEZ and workspace crates.
+borsh.workspace = true
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
 authenticated_transfer_core.workspace = true
-sequencer_core = { workspace = true, features = ["default", "testnet"] }
+sequencer_core.workspace = true
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-token_core.workspace = true
-associated_token_account_core.workspace = true
-vault_core.workspace = true
-faucet_core.workspace = true
 bridge_core.workspace = true
+ping_core.workspace = true
+cross_zone_outbox_core.workspace = true
+cross_zone_inbox_core.workspace = true
+cross_zone_marker_core.workspace = true
+bridge_lock_core.workspace = true
+wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
+indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_service.workspace = true
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
+sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
+testnet_initial_state.workspace = true
+program_loader_core.workspace = true
 
-logos-blockchain-http-api-common.workspace = true
 logos-blockchain-core.workspace = true
-logos-blockchain-zone-sdk.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-testing-framework.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+testing-framework-app.workspace = true
+testing-framework-core.workspace = true
+
+# External dependencies.
 anyhow.workspace = true
-log.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-futures.workspace = true
-hex.workspace = true
-tempfile.workspace = true
+async-trait.workspace = true
 bytesize.workspace = true
-reqwest.workspace = true
-borsh.workspace = true
+cucumber = { features = [
+  "macros",
+  "output-junit",
+], workspace = true, optional = true }
+hex.workspace = true
+log.workspace = true
 num-bigint.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+fee_core.workspace = true
+sequencer_core = { workspace = true, features = ["test-utils"] }
+
+[features]
+cucumber = ["dep:cucumber"]
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["lee/prove"]
+
+[[test]]
+harness = false                     # Cucumber has its own main() function to run tests.
+name = "cucumber"
+path = "cucumber_tests/cucumber.rs"
+required-features = ["cucumber"]

@@ -1,8 +1,13 @@
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result, anyhow};
 use clap::Parser;
-use log::{error, info};
+use log::error;
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
@@ -12,6 +17,24 @@ struct Args {
     config_path: PathBuf,
     #[clap(short, long, default_value = "3040")]
     port: u16,
+    /// Interface the RPC server binds to. The RPC has no caller auth —
+    /// bind loopback unless the port is firewalled.
+    #[clap(long, default_value = "0.0.0.0")]
+    listen_address: IpAddr,
+    /// Override the config's home directory (`RocksDB` + bedrock signing key),
+    /// so multiple instances can share one config file.
+    #[clap(long)]
+    home: Option<PathBuf>,
+    /// Override the config's `metrics_address`, so multiple instances can share
+    /// one config file without fighting over the exporter port.
+    #[clap(long)]
+    metrics_address: Option<SocketAddr>,
+    /// File holding the 32-byte key to sign blocks with, overriding the
+    /// config's `signing_key`. It is the only thing that has to differ between
+    /// the sequencers of one committee, so passing it separately lets them all
+    /// run off one config file.
+    #[clap(long)]
+    signing_key: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -22,37 +45,131 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args { config_path, port } = Args::parse();
+    let args = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
 
-    let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    let sequencer_handle = sequencer_service::run(config, port).await?;
+    let mut config = sequencer_service::SequencerConfig::from_path(&args.config_path)?;
+    apply_config_overrides(&args, &mut config)?;
+    // Resolved here so a node without a usable one says so now, rather than
+    // after the store is open and Bedrock has been probed.
+    config.block_signing_key()?;
+
+    if let Some(metrics_address) = config.metrics_address {
+        install_prometheus_recorder(metrics_address)?;
+    }
+    let sequencer_handle =
+        sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
-            info!("Shutting down sequencer...");
+            log::info!("Shutting down sequencer...");
         }
         Err(err) = sequencer_handle.failed() => {
             error!("Sequencer failed unexpectedly: {err}");
         }
     }
 
-    info!("Sequencer shutdown complete");
+    // Stop the watchers, the publisher's drive task, the block loop and the RPC
+    // server, and wait for each. Dropping the handle only asks; the store stays
+    // open for an unbounded stretch after that, so a restart can find its own
+    // home directory locked, and a watcher can be killed between recording a
+    // delivery and handing it over.
+    sequencer_handle.shutdown().await;
+
+    log::info!("Sequencer shutdown complete");
 
     Ok(())
 }
 
+fn apply_config_overrides(
+    args: &Args,
+    config: &mut sequencer_service::SequencerConfig,
+) -> Result<()> {
+    let Args {
+        home,
+        metrics_address,
+        signing_key,
+        config_path: _,
+        port: _,
+        listen_address: _,
+    } = args;
+
+    if let Some(home) = home {
+        config.home.clone_from(home);
+    }
+    if let Some(metrics_address) = metrics_address {
+        config.metrics_address = Some(*metrics_address);
+    }
+    if let Some(path) = signing_key {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("Failed to read the signing key at {}", path.display()))?;
+        config.signing_key = Some(bytes.try_into().map_err(|bytes: Vec<u8>| {
+            anyhow!(
+                "Signing key at {} is {} bytes, not 32",
+                path.display(),
+                bytes.len()
+            )
+        })?);
+    }
+
+    Ok(())
+}
+
+/// Installs the recorder on `metrics_address`.
+fn install_prometheus_recorder(metrics_address: SocketAddr) -> Result<()> {
+    /// Ladder for `*_seconds` histograms, densest across the 1–100 ms band where
+    /// block production and transaction application actually land.
+    const LATENCY_BUCKETS: &[f64] = &[
+        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ];
+
+    /// Fallback ladder for histograms that count things rather than measure time.
+    const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+
+    PrometheusBuilder::new()
+        .with_http_listener(metrics_address)
+        .with_recommended_naming(true)
+        .set_buckets(COUNT_BUCKETS)
+        .context("Failed to set default histogram buckets")?
+        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
+        .context("Failed to set latency histogram buckets")?
+        .install()
+        .context("Failed to install Prometheus recorder")
+}
+
+/// Cancelled on Ctrl-C or `SIGTERM`.
+///
+/// `SIGTERM` is what a container runtime sends first, so without it every
+/// orchestrated stop is the ungraceful path.
+#[expect(
+    clippy::integer_division_remainder_used,
+    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+)]
 fn listen_for_shutdown_signal() -> CancellationToken {
     let cancellation_token = CancellationToken::new();
     let cancellation_token_clone = cancellation_token.clone();
 
     tokio::spawn(async move {
-        if let Err(err) = tokio::signal::ctrl_c().await {
-            error!("Failed to listen for Ctrl-C signal: {err}");
-            return;
+        let mut terminate = match signal(SignalKind::terminate()) {
+            Ok(terminate) => terminate,
+            Err(err) => {
+                error!("Failed to listen for SIGTERM: {err}");
+                return;
+            }
+        };
+
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => match result {
+                Ok(()) => log::info!("Received Ctrl-C signal"),
+                Err(err) => {
+                    error!("Failed to listen for Ctrl-C signal: {err}");
+                    return;
+                }
+            },
+            _ = terminate.recv() => log::info!("Received SIGTERM"),
         }
-        info!("Received Ctrl-C signal");
+
         cancellation_token_clone.cancel();
     });
 

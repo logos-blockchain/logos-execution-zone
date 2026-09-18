@@ -1,0 +1,22 @@
+name: Pin host toolchain
+description: >
+  Removes the runner's preinstalled Rust so only the `rust-toolchain.toml`
+  version is left. `rust-cache` hashes every toolchain it finds into its key,
+  and the runner image ships a rolling one (1.98.0 vs 1.98.1 today), which
+  splits the cache into pools that can never restore each other. Nothing here
+  builds on the host, so dropping it costs nothing.
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        pinned="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' rust-toolchain.toml | head -1)"
+        # `grep -v` exits 1 when everything already matches, which `set -e`
+        # would treat as failure, so swallow it.
+        rustup toolchain list \
+          | awk '{print $1}' \
+          | { grep -v "^${pinned}-" || true; } \
+          | xargs -r rustup toolchain uninstall
+        rustup toolchain list

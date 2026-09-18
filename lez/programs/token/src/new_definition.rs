@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::{AccountWithMetadata, BalanceDiff, Data},
+    program::AccountStateDiff,
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -8,21 +8,19 @@ use token_core::{
 
 #[must_use]
 pub fn new_fungible_definition(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
     name: String,
     total_supply: u128,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+) -> Vec<AccountStateDiff> {
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
     let token_definition = TokenDefinition::Fungible {
@@ -35,42 +33,42 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    let definition_diff = AccountStateDiff::new(
+        definition_target_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&token_definition),
+    );
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_diff = AccountStateDiff::new(
+        holding_target_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&token_holding),
+    );
 
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-    ]
+    vec![definition_diff, holding_diff]
 }
 
 #[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
-    metadata_target_account: AccountWithMetadata,
+    definition_target_account: &AccountWithMetadata,
+    holding_target_account: &AccountWithMetadata,
+    metadata_target_account: &AccountWithMetadata,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+) -> Vec<AccountStateDiff> {
+    assert!(
+        definition_target_account.account.data.is_empty(),
+        "Definition target account must not already hold data"
     );
 
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    assert!(
+        holding_target_account.account.data.is_empty(),
+        "Holding target account must not already hold data"
     );
 
-    assert_eq!(
-        metadata_target_account.account,
-        Account::default(),
-        "Metadata target account must have default values"
+    assert!(
+        metadata_target_account.account.data.is_empty(),
+        "Metadata target account must not already hold data"
     );
 
     let (token_definition, token_holding) = match new_definition {
@@ -109,18 +107,23 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
+    let definition_diff = AccountStateDiff::new(
+        definition_target_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&token_definition),
+    );
 
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
+    let holding_diff = AccountStateDiff::new(
+        holding_target_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&token_holding),
+    );
 
-    let mut metadata_target_account_post = metadata_target_account.account;
-    metadata_target_account_post.data = Data::from(&token_metadata);
+    let metadata_diff = AccountStateDiff::new(
+        metadata_target_account.clone(),
+        BalanceDiff::Add(0),
+        Data::from(&token_metadata),
+    );
 
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
-    ]
+    vec![definition_diff, holding_diff, metadata_diff]
 }

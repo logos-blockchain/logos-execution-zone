@@ -20,8 +20,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    utils::sync_private,
 };
-use log::info;
 use tokio::test;
 use wallet::{
     account::Label,
@@ -81,7 +81,7 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
     assert_eq!(entry.group_label, Label::new("test-group"));
     assert!(entry.pda_seed.is_none());
 
-    info!("Shared account registered: {shared_account_id}");
+    log::info!("Shared account registered: {shared_account_id}");
     Ok(())
 }
 
@@ -156,12 +156,11 @@ async fn group_invite_join_key_agreement() -> Result<()> {
         "Key agreement: same GMS produces same keys"
     );
 
-    info!("Key agreement verified via invite/join");
+    log::info!("Key agreement verified via invite/join");
     Ok(())
 }
 
 /// Fund a shared account from a public account via auth-transfer, then sync.
-/// TODO: Requires auth-transfer init to work with shared accounts (authorization flow).
 #[test]
 async fn fund_shared_account_from_public() -> Result<()> {
     let mut ctx = TestContext::new().await?;
@@ -188,17 +187,8 @@ async fn fund_shared_account_from_public() -> Result<()> {
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    // Initialize the shared account under auth-transfer
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: private_mention(shared_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
     // Sync private accounts
-    let command = Command::Account(AccountSubcommand::SyncPrivate);
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
     // Fund from a public account
     let from_public = ctx.existing_public_accounts()[0];
@@ -216,8 +206,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync private accounts
-    let command = Command::Account(AccountSubcommand::SyncPrivate);
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
     // Verify the shared account was updated
     let entry = ctx
@@ -227,7 +216,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         .shared_private_account(shared_id)
         .context("Shared account not found after sync")?;
 
-    info!(
+    log::info!(
         "Shared account balance after funding: {}",
         entry.account.balance
     );

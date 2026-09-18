@@ -1,0 +1,2830 @@
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "top-level test functions are conventional for integration tests"
+)]
+
+//! Single-zone state-machine tests for cross-zone delivery (ping demo) and the
+//! wrapped-token bridge (Demo 2). They drive the guests in isolation, no watcher
+//! or Bedrock: a hand-built `cross_zone_inbox::Dispatch` (as the watcher would
+//! inject) and the source `bridge_lock::Lock` (which escrows and chains
+//! `outbox::Emit`). Fast, so they pin guest logic before the e2e exercises the
+//! plumbing. Run with `RISC0_DEV_MODE=1`.
+
+use cross_zone_inbox_core::{
+    CrossZoneMessage, InboxConfig, Instruction as InboxInstruction, SeenShard,
+    inbox_config_account_id, inbox_seen_shard_account_id,
+};
+use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
+use lee::{
+    AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
+    public_transaction::{Message, WitnessSet},
+};
+use lee_core::account::Account;
+use ping_core::{
+    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
+    sender_config_account_id,
+};
+
+/// Serializes an instruction to the borsh bytes the guests read.
+macro_rules! bytes_of {
+    ($instruction:expr) => {
+        borsh::to_vec($instruction).expect("serialize instruction")
+    };
+}
+
+const INITIAL_BALANCE: u128 = 100;
+const LOCK_AMOUNT: u128 = 30;
+const RECIPIENT: [u8; 32] = [9; 32];
+/// The peer source the mint tests authorize.
+const MINT_SRC_ZONE: [u8; 32] = [2; 32];
+const MINT_SRC_PROGRAM_ID: lee_core::program::ProgramId = [9_u32; 8];
+/// These tests drive the guest directly, so any fixed source-block hash does.
+const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
+
+/// State registering the cross-zone builtins these tests exercise.
+fn base_state() -> V03State {
+    V03State::new().with_programs([
+        programs::cross_zone_inbox(),
+        programs::cross_zone_outbox(),
+        programs::ping_sender(),
+        programs::ping_receiver(),
+        programs::bridge_lock(),
+        programs::authenticated_transfer(),
+        programs::wrapped_token(),
+    ])
+}
+
+/// Seeds the inbox config (inbox-owned), which is now just this zone's id.
+fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let config = InboxConfig { self_zone };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        inbox_config_account_id(inbox_id),
+        Account {
+            program_owner: inbox_id,
+            balance: 0,
+            data: config
+                .to_bytes()
+                .try_into()
+                .expect("config fits in account data"),
+            nonce: 0_u128.into(),
+        },
+    )]);
+}
+
+/// Uncapped policies from peer pairs, the shape most tests still exercise.
+fn uncapped_policies(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core::SourcePolicy> {
+    pairs
+        .iter()
+        .map(
+            |&(src_zone, src_account_id)| wrapped_token_core::SourcePolicy {
+                src_zone,
+                src_account_id,
+                mint_cap: None,
+            },
+        )
+        .collect()
+}
+
+/// The entries the guest writes for `uncapped_policies` applied to a fresh list.
+fn uncapped_entries(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core::SourceEntry> {
+    uncapped_policies(pairs)
+        .into_iter()
+        .map(|policy| wrapped_token_core::SourceEntry { policy, minted: 0 })
+        .collect()
+}
+
+/// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
+/// peer pairs it will mint for, matching what genesis seeds for a real zone.
+fn seed_wrapped_config(
+    state: &mut V03State,
+    authority: Option<AccountId>,
+    sources: &[([u8; 32], AccountId)],
+) {
+    seed_wrapped_config_with_governance(state, None, authority, sources);
+}
+
+/// The same, naming a program allowed to act for the authority through a chain.
+fn seed_wrapped_config_with_governance(
+    state: &mut V03State,
+    governance: Option<AccountId>,
+    authority: Option<AccountId>,
+    sources: &[([u8; 32], AccountId)],
+) {
+    seed_wrapped_config_entries(state, governance, authority, uncapped_entries(sources));
+}
+
+/// The same, with full entries: caps and counters exactly as the config holds
+/// them.
+fn seed_wrapped_config_entries(
+    state: &mut V03State,
+    governance: Option<AccountId>,
+    authority: Option<AccountId>,
+    entries: Vec<wrapped_token_core::SourceEntry>,
+) {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let config = wrapped_token_core::WrappedTokenConfig {
+        minter: programs::cross_zone_inbox().id().into(),
+        governance,
+        authority,
+        sources: entries,
+    };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        wrapped_token_core::config_account_id(wrapped_token_id),
+        Account {
+            program_owner: wrapped_token_id,
+            data: config
+                .to_bytes()
+                .try_into()
+                .expect("wrapped-token config fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// Seeds the ping-receiver config pinning the inbox as deliverer and `sources` as
+/// the peer pairs it accepts a delivery from.
+fn seed_receiver_config(
+    state: &mut V03State,
+    authority: Option<AccountId>,
+    sources: Vec<([u8; 32], AccountId)>,
+) {
+    seed_receiver_config_with_governance(state, None, authority, sources);
+}
+
+/// The same, naming a program allowed to act for the authority through a chain.
+fn seed_receiver_config_with_governance(
+    state: &mut V03State,
+    governance: Option<AccountId>,
+    authority: Option<AccountId>,
+    sources: Vec<([u8; 32], AccountId)>,
+) {
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let config = ping_core::ReceiverConfig {
+        deliverer: programs::cross_zone_inbox().id().into(),
+        governance,
+        authority,
+        sources,
+    };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        receiver_config_account_id(receiver_id),
+        Account {
+            program_owner: receiver_id,
+            data: config
+                .to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// Seeds the ping-sender config account pinning the real outbox, matching what
+/// genesis seeds for a real zone.
+fn seed_ping_sender_config(state: &mut V03State) {
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        sender_config_account_id(sender_id),
+        Account {
+            program_owner: sender_id,
+            data: outbox_bytes(programs::cross_zone_outbox().id().into())
+                .to_vec()
+                .try_into()
+                .expect("outbox id fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// The holding PDA a holder's bridgeable balance lives in.
+fn holding_id_of(holder_id: AccountId) -> AccountId {
+    bridge_lock_core::holding_account_id(
+        programs::bridge_lock().id().into(),
+        &holder_id.into_value(),
+    )
+}
+
+/// Seeds a funded holding PDA for `holder_id`, matching genesis.
+fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        holding_id_of(holder_id),
+        Account {
+            program_owner: bridge_lock_id,
+            balance,
+            ..Default::default()
+        },
+    )]);
+}
+
+/// Seeds the bridge-lock config account pinning the real outbox and the wrapped
+/// token, matching what genesis seeds for a real zone.
+fn seed_bridge_lock_config(state: &mut V03State) {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        bridge_lock_core::config_account_id(bridge_lock_id),
+        Account {
+            program_owner: bridge_lock_id,
+            data: bridge_lock_core::config_bytes(
+                programs::cross_zone_outbox().id().into(),
+                programs::wrapped_token().id().into(),
+            )
+            .to_vec()
+            .try_into()
+            .expect("pinned ids fit in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// The account list a dispatch declares, mirroring `cross_zone::build_inbox_dispatch_tx`:
+/// config, seen shard, source marker, then the target's own accounts.
+fn dispatch_accounts(
+    inbox_id: AccountId,
+    msg: &CrossZoneMessage,
+    targets: Vec<AccountId>,
+) -> Vec<AccountId> {
+    let mut ids = vec![
+        inbox_config_account_id(inbox_id),
+        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_account_id),
+    ];
+    ids.extend(targets);
+    ids
+}
+
+/// Asserts the transaction fails at `block` with an error mentioning `expected`,
+/// so a refusal for an unrelated reason cannot keep a guard test green.
+fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &str) {
+    let Err(err) = ValidatedStateDiff::from_public_transaction(tx, state, block, 0) else {
+        panic!("expected a rejection mentioning {expected}");
+    };
+    assert!(
+        format!("{err:?}").contains(expected),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// A top-level authority transaction: the instruction bytes over `accounts`,
+/// signed by `key` at `nonce`.
+fn signed_tx(
+    program: AccountId,
+    accounts: Vec<AccountId>,
+    nonce: u128,
+    instruction_data: Vec<u8>,
+    key: &PrivateKey,
+) -> PublicTransaction {
+    let message = Message::new_preserialized(
+        program,
+        accounts,
+        vec![nonce.into()],
+        instruction_data,
+        None,
+    );
+    let witness = WitnessSet::for_message(&message, &[key]);
+    PublicTransaction::new(message, witness)
+}
+
+/// An unsigned call through the governance proxy, delegating `delegated` (or
+/// nothing) on the chained call into `target`.
+fn via_proxy(
+    proxy_id: AccountId,
+    target: AccountId,
+    config: AccountId,
+    authority: AccountId,
+    delegated: Option<lee_core::program::PdaSeed>,
+    instruction_data: Vec<u8>,
+) -> PublicTransaction {
+    let message = Message::try_new(
+        proxy_id,
+        vec![config, authority],
+        vec![],
+        (target, instruction_data, delegated),
+    )
+    .expect("build proxy message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// An authority instruction delivered through the inbox, as a peer would have to
+/// send it: the dispatch shape over the target's config and authority accounts.
+fn chained_via_inbox(
+    target: AccountId,
+    config_id: AccountId,
+    authority: AccountId,
+    instruction_data: Vec<u8>,
+) -> PublicTransaction {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let msg = CrossZoneMessage {
+        src_zone: [2; 32],
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: programs::bridge_lock().id().into(),
+        target_account_id: target,
+        payload: instruction_data,
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
+/// given rather than the correct ones, so tests can vary them.
+fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let send = ping_core::SenderInstruction::Send {
+        target_zone,
+        target_account_id: receiver_id,
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
+        payload,
+        ordinal,
+    };
+    let message = Message::try_new(programs::ping_sender().id().into(), accounts, vec![], send)
+        .expect("build ping_sender message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
+/// payload (borsh bytes).
+fn mint_payload() -> Vec<u8> {
+    mint_payload_of(LOCK_AMOUNT)
+}
+
+fn mint_payload_of(amount: u128) -> Vec<u8> {
+    let mint = wrapped_token_core::Instruction::Mint {
+        recipient: RECIPIENT,
+        amount,
+    };
+    borsh::to_vec(&mint).expect("serialize mint")
+}
+
+/// A state authorizing [`MINT_SRC_ZONE`]/[`MINT_SRC_PROGRAM_ID`] as the one
+/// wrapped-token source, with the given mint policy and counter.
+fn capped_mint_state(
+    mint_cap: Option<u128>,
+    minted: u128,
+    authority: Option<AccountId>,
+) -> V03State {
+    let mut state = base_state();
+    seed_inbox_config(&mut state, [1_u8; 32]);
+    seed_wrapped_config_entries(
+        &mut state,
+        None,
+        authority,
+        vec![wrapped_token_core::SourceEntry {
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: MINT_SRC_ZONE,
+                src_account_id: MINT_SRC_PROGRAM_ID.into(),
+                mint_cap,
+            },
+            minted,
+        }],
+    );
+    state
+}
+
+/// The inbox dispatch a watcher would build for a mint of `amount` emitted at
+/// `src_tx_index` on the canonical peer source.
+fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let msg = CrossZoneMessage {
+        src_zone: MINT_SRC_ZONE,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index,
+        src_account_id: MINT_SRC_PROGRAM_ID.into(),
+        target_account_id: wrapped_token_id,
+        payload: mint_payload_of(amount),
+        l1_inclusion_witness: None,
+    };
+
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// Runs one mint dispatch against `state` at `block`.
+fn dispatch_mint_on(
+    state: &V03State,
+    amount: u128,
+    src_tx_index: u32,
+    block: u64,
+) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    ValidatedStateDiff::from_public_transaction(
+        &mint_dispatch_tx(amount, src_tx_index),
+        state,
+        block,
+        0,
+    )
+}
+
+/// Runs a bridge mint of `amount` through the inbox, as the watcher would.
+fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    dispatch_mint_on(&capped_mint_state(None, 0, None), amount, 0, 1)
+}
+
+/// The lifetime counter the config holds for the canonical source.
+fn source_minted(state: &V03State) -> u128 {
+    let config_id = wrapped_token_core::config_account_id(programs::wrapped_token().id().into());
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    cfg.sources
+        .iter()
+        .find(|entry| {
+            entry.policy.src_zone == MINT_SRC_ZONE
+                && entry.policy.src_account_id == MINT_SRC_PROGRAM_ID.into()
+        })
+        .expect("the canonical source is configured")
+        .minted
+}
+
+/// One message must not be able to pin a holding near `u128::MAX`, which would
+/// make every later honest mint to that recipient overflow and fail for good.
+#[test]
+fn a_mint_above_the_cap_is_rejected() {
+    assert!(
+        dispatch_mint(wrapped_token_core::MAX_MINT_AMOUNT + 1).is_err(),
+        "an amount over the per-mint cap must not execute"
+    );
+}
+
+#[test]
+fn a_mint_at_the_cap_is_accepted() {
+    let diff = dispatch_mint(wrapped_token_core::MAX_MINT_AMOUNT)
+        .expect("the cap itself is a legitimate amount");
+    let holding_id =
+        wrapped_token_core::holding_account_id(programs::wrapped_token().id().into(), &RECIPIENT);
+    let minted = wrapped_token_core::read_balance(
+        &diff.public_diff()[&holding_id].data.clone().into_inner(),
+    );
+    assert_eq!(minted, wrapped_token_core::MAX_MINT_AMOUNT);
+}
+
+/// A policy the update tests hand the guest for the canonical source.
+fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
+    wrapped_token_core::SourcePolicy {
+        src_zone: MINT_SRC_ZONE,
+        src_account_id: MINT_SRC_PROGRAM_ID.into(),
+        mint_cap,
+    }
+}
+
+/// The signed `UpdateSources` the configured authority sends at `nonce`.
+fn update_sources_tx(
+    key: &PrivateKey,
+    authority: AccountId,
+    nonce: u128,
+    sources: Vec<wrapped_token_core::SourcePolicy>,
+) -> PublicTransaction {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    signed_tx(
+        wrapped_token_id,
+        vec![
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            authority,
+        ],
+        nonce,
+        bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
+        key,
+    )
+}
+
+/// Asserts a mint dispatch is refused by the lifetime cap itself, not by an
+/// unrelated guard.
+fn rejects_on_cap(state: &V03State, amount: u128, src_tx_index: u32, block: u64) {
+    let Err(err) = dispatch_mint_on(state, amount, src_tx_index, block) else {
+        panic!("expected the lifetime cap to refuse the mint");
+    };
+    assert!(
+        format!("{err:?}").contains("lifetime cap"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The cap itself is spendable: a mint landing exactly on it executes, and the
+/// counter records the whole allowance as spent.
+#[test]
+fn a_mint_that_reaches_the_lifetime_cap_is_accepted() {
+    let mut state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
+    let diff = dispatch_mint_on(&state, LOCK_AMOUNT, 0, 1).expect("the cap itself is spendable");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(source_minted(&state), LOCK_AMOUNT);
+}
+
+/// The refusal is the cap's own, pinned to its message so an unrelated guard
+/// cannot keep this green.
+#[test]
+fn a_mint_over_the_lifetime_cap_is_rejected() {
+    let state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
+    rejects_on_cap(&state, LOCK_AMOUNT + 1, 0, 1);
+}
+
+/// The cap bounds the counter, not any single amount: mints that are each fine
+/// alone refuse once their sum would cross it, and the remainder stays
+/// spendable.
+#[test]
+fn mints_accumulate_into_the_lifetime_cap() {
+    let mut state = capped_mint_state(Some(100), 0, None);
+    let first = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(first));
+    rejects_on_cap(&state, 60, 1, 2);
+    let exact = dispatch_mint_on(&state, 40, 1, 2).expect("the remainder is spendable");
+    drop(state.apply_state_diff(exact));
+    assert_eq!(source_minted(&state), 100);
+}
+
+/// `None` is uncapped: the counter still advances, so a cap added later starts
+/// from the true total, but nothing is ever refused.
+#[test]
+fn an_uncapped_source_counts_but_never_refuses() {
+    let mut state = capped_mint_state(None, 0, None);
+    for index in 0..2 {
+        let diff = dispatch_mint_on(
+            &state,
+            wrapped_token_core::MAX_MINT_AMOUNT,
+            index,
+            u64::from(index) + 1,
+        )
+        .expect("an uncapped source refuses nothing");
+        drop(state.apply_state_diff(diff));
+    }
+    assert_eq!(
+        source_minted(&state),
+        2 * wrapped_token_core::MAX_MINT_AMOUNT
+    );
+}
+
+/// The inbox no-ops a replayed delivery without reaching the token, so a replay
+/// must not spend allowance.
+#[test]
+fn a_replayed_delivery_does_not_advance_the_counter() {
+    let mut state = capped_mint_state(Some(100), 0, None);
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let replay = dispatch_mint_on(&state, 60, 0, 2).expect("the inbox no-ops a replay");
+    drop(state.apply_state_diff(replay));
+    assert_eq!(
+        source_minted(&state),
+        60,
+        "a replay must not spend allowance"
+    );
+}
+
+/// An update keeps a surviving source's spent allowance: the new cap applies to
+/// the old counter, so an update cannot re-arm a spent source.
+#[test]
+fn the_counter_survives_a_source_update() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(100), 0, Some(authority));
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let update = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(70))]);
+    let applied = ValidatedStateDiff::from_public_transaction(&update, &state, 2, 0)
+        .expect("the authority updates the cap");
+    drop(state.apply_state_diff(applied));
+    assert_eq!(
+        source_minted(&state),
+        60,
+        "an update cannot reset spent allowance"
+    );
+
+    rejects_on_cap(&state, 11, 1, 3);
+    let exact = dispatch_mint_on(&state, 10, 1, 3).expect("the remaining headroom is spendable");
+    drop(state.apply_state_diff(exact));
+    assert_eq!(source_minted(&state), 70);
+}
+
+/// Removing a source forgets its counter: whoever re-adds one grants a fresh
+/// allowance, which is the authority's call to make.
+#[test]
+fn a_source_removed_and_re_added_restarts_its_counter() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(100), 0, Some(authority));
+    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
+    drop(state.apply_state_diff(diff));
+
+    let removed = update_sources_tx(&key, authority, 0, vec![]);
+    let applied = ValidatedStateDiff::from_public_transaction(&removed, &state, 2, 0)
+        .expect("the authority removes the source");
+    drop(state.apply_state_diff(applied));
+
+    let re_added = update_sources_tx(&key, authority, 1, vec![mint_src_policy(Some(100))]);
+    let restored = ValidatedStateDiff::from_public_transaction(&re_added, &state, 3, 0)
+        .expect("the authority re-adds the source");
+    drop(state.apply_state_diff(restored));
+    assert_eq!(source_minted(&state), 0, "a re-added source starts at zero");
+
+    let full = dispatch_mint_on(&state, 100, 1, 4).expect("the fresh allowance is spendable");
+    drop(state.apply_state_diff(full));
+    assert_eq!(source_minted(&state), 100);
+}
+
+/// Mint advances the first matching entry, so a source listed twice would
+/// split one policy across entries an auditor reads as two; the guest refuses
+/// the update outright.
+#[test]
+fn an_update_listing_a_source_twice_is_refused() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = capped_mint_state(Some(100), 0, Some(authority));
+
+    let duplicated = update_sources_tx(
+        &key,
+        authority,
+        0,
+        vec![mint_src_policy(Some(100)), mint_src_policy(Some(1_000))],
+    );
+    rejects_at(&state, &duplicated, 1, "same source twice");
+}
+
+/// A cap breach fails the whole delivery, so nothing marks the message seen:
+/// after the authority raises the cap, the very same message delivers.
+#[test]
+fn a_refused_mint_leaves_the_message_deliverable() {
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = capped_mint_state(Some(50), 0, Some(authority));
+    rejects_on_cap(&state, 60, 0, 1);
+
+    let raised = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(60))]);
+    let applied = ValidatedStateDiff::from_public_transaction(&raised, &state, 2, 0)
+        .expect("the authority raises the cap");
+    drop(state.apply_state_diff(applied));
+
+    let delivered =
+        dispatch_mint_on(&state, 60, 0, 3).expect("the refused delivery was never marked seen");
+    drop(state.apply_state_diff(delivered));
+    assert_eq!(source_minted(&state), 60);
+}
+
+/// A source list of realistic breadth, all capped with live counters, still
+/// fits the config account and still mints for its last entry.
+#[test]
+fn a_many_source_config_still_fits_and_mints() {
+    // Entry 0 shares the canonical zone under another program, so a mint that
+    // matched on zone alone would draw down the wrong counter.
+    let mut entries: Vec<_> = (0..16_u8)
+        .map(|index| wrapped_token_core::SourceEntry {
+            policy: wrapped_token_core::SourcePolicy {
+                src_zone: if index == 0 {
+                    MINT_SRC_ZONE
+                } else {
+                    [index.wrapping_add(10); 32]
+                },
+                src_account_id: AccountId::from([u32::from(index) + 100; 8]),
+                mint_cap: Some(u128::MAX),
+            },
+            minted: u128::from(u64::MAX),
+        })
+        .collect();
+    entries.push(wrapped_token_core::SourceEntry {
+        policy: wrapped_token_core::SourcePolicy {
+            src_zone: MINT_SRC_ZONE,
+            src_account_id: MINT_SRC_PROGRAM_ID.into(),
+            mint_cap: Some(100),
+        },
+        minted: 0,
+    });
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, [1_u8; 32]);
+    seed_wrapped_config_entries(&mut state, None, None, entries);
+
+    let diff = dispatch_mint_on(&state, 100, 0, 1)
+        .expect("a mint against the last of many sources executes");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(source_minted(&state), 100);
+
+    // Only the (zone, program) pair that emitted spends; every other entry,
+    // the shared-zone one included, is untouched.
+    let config_id = wrapped_token_core::config_account_id(programs::wrapped_token().id().into());
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    for entry in cfg
+        .sources
+        .iter()
+        .filter(|entry| entry.policy.src_account_id != MINT_SRC_PROGRAM_ID.into())
+    {
+        assert_eq!(
+            entry.minted,
+            u128::from(u64::MAX),
+            "a mint must not spend another source's allowance"
+        );
+    }
+}
+
+/// Drives `cross_zone_inbox::Dispatch` directly through the state machine
+/// (no watcher) and asserts the message is delivered to `ping_receiver`, which
+/// records the payload into its own PDA.
+#[test]
+fn inbox_dispatch_delivers_payload_to_ping_receiver() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8].into())]);
+
+    // The payload is the ping_receiver instruction, borsh-serialized into instruction_data bytes.
+    let inner = b"hello-cross-zone".to_vec();
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: inner.clone(),
+    })
+    .expect("serialize ping instruction");
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: AccountId::from([9_u32; 8]),
+        target_account_id: receiver_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+
+    let record_id = ping_record_pda(receiver_id);
+
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("dispatch must validate and execute");
+    let record = diff
+        .public_diff()
+        .get(&record_id)
+        .expect("ping record account must change")
+        .clone();
+    assert_eq!(
+        record.data.into_inner(),
+        inner,
+        "ping_receiver must record the delivered payload"
+    );
+}
+
+/// Drives `bridge_lock::Lock` and asserts it debits the holder, credits the
+/// escrow, and records the forwarded mint in the outbox PDA.
+#[test]
+fn lock_escrows_balance_and_emits_to_outbox() {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let mut state = base_state();
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let payload = mint_payload();
+    let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
+    let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
+    let tx = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("lock must validate and execute");
+    let public_diff = diff.public_diff();
+
+    let holding_after = public_diff[&holding_id_of(holder_id)].balance;
+    assert_eq!(
+        holding_after,
+        INITIAL_BALANCE - LOCK_AMOUNT,
+        "holding debited"
+    );
+
+    let escrow_after = public_diff[&escrow_id].balance;
+    assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
+
+    let record =
+        OutboxRecord::from_bytes(&public_diff[&outbox_record_id].data.clone().into_inner())
+            .expect("outbox PDA holds an OutboxRecord");
+    assert_eq!(
+        record.emitter, bridge_lock_id,
+        "the record names the program that emitted it"
+    );
+    assert_eq!(record.target_zone, zone_b);
+    assert_eq!(record.ordinal, ordinal);
+    assert_eq!(record.target_account_id, wrapped_token_id);
+    assert_eq!(
+        record.payload, payload,
+        "emitted payload is the wrapped mint"
+    );
+}
+
+/// A `bridge_lock::Lock` emitting to `(zone_b, ordinal)`, ready to run twice.
+fn lock_tx(
+    holder_key: &PrivateKey,
+    holder_id: AccountId,
+    zone_b: [u8; 32],
+    ordinal: u32,
+    nonce: u128,
+) -> PublicTransaction {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    lock_tx_to(
+        holder_key,
+        holder_id,
+        zone_b,
+        ordinal,
+        nonce,
+        wrapped_token_id,
+        mint_target_accounts(wrapped_token_id),
+    )
+}
+
+/// The mint's own account list: the wrapped-token config, then the recipient's
+/// holding. What `wrapped_token::Mint` requires on the destination zone.
+fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<[u8; 32]> {
+    vec![
+        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+    ]
+}
+
+/// The same lock aimed at `target_program_id` over `target_accounts`, so a test
+/// can vary what the destination would be asked to do.
+fn lock_tx_to(
+    holder_key: &PrivateKey,
+    holder_id: AccountId,
+    zone_b: [u8; 32],
+    ordinal: u32,
+    nonce: u128,
+    target_account_id: AccountId,
+    target_accounts: Vec<[u8; 32]>,
+) -> PublicTransaction {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_account_id,
+        target_accounts,
+        payload: mint_payload(),
+        ordinal,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            holder_id,
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+        ],
+        vec![nonce.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let witness = WitnessSet::for_message(&message, &[holder_key]);
+    PublicTransaction::new(message, witness)
+}
+
+/// A slot holds one message for ever, so a second emission into it fails rather
+/// than replacing the record. Without this a later emitter silently destroys an
+/// earlier one, and for a bridge that means an escrow with no record of what it
+/// was for.
+#[test]
+fn a_second_emit_at_the_same_slot_is_rejected() {
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
+        .expect("the first lock executes");
+    drop(state.apply_state_diff(diff));
+
+    // Same slot, fresh nonce, so the only thing that can reject it is the slot
+    // already holding a record. Matched on the guest's own message rather than
+    // any error, or a future change that rejected it earlier for an unrelated
+    // reason would keep this passing.
+    let second = lock_tx(&holder_key, holder_id, zone_b, ordinal, 1);
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&second, &state, 2, 0) else {
+        panic!("a second emission into a written slot must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("Outbox slot already written"),
+        "rejected for the wrong reason: {err:?}"
+    );
+
+    // Control: the same second lock into a fresh ordinal executes, so the
+    // refusal above is the slot and not the transaction's shape.
+    let elsewhere = lock_tx(&holder_key, holder_id, zone_b, ordinal + 1, 1);
+    ValidatedStateDiff::from_public_transaction(&elsewhere, &state, 2, 0)
+        .expect("a lock into an unwritten slot executes");
+}
+
+/// Two programs emitting to one zone and ordinal address two different slots,
+/// so neither can overwrite or block the other.
+#[test]
+fn two_emitters_share_an_ordinal_without_colliding() {
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_ping_sender_config(&mut state);
+    seed_bridge_lock_config(&mut state);
+
+    let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
+    let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    assert_ne!(
+        lock_slot, send_slot,
+        "the same zone and ordinal under two emitters are two slots"
+    );
+
+    let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
+        .expect("the lock executes");
+    drop(state.apply_state_diff(diff));
+
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), send_slot],
+        zone_b,
+        ordinal,
+    );
+    let send_diff = ValidatedStateDiff::from_public_transaction(&send, &state, 2, 0)
+        .expect("the send executes into its own slot, not the lock's");
+
+    let record = OutboxRecord::from_bytes(
+        &send_diff.public_diff()[&send_slot]
+            .data
+            .clone()
+            .into_inner(),
+    )
+    .expect("outbox PDA holds an OutboxRecord");
+    assert_eq!(record.emitter, sender_id);
+    assert_eq!(record.target_account_id, receiver_id);
+
+    // And the lock's own slot is untouched by it.
+    let lock_record =
+        OutboxRecord::from_bytes(&state.get_account_by_id(lock_slot).data.into_inner())
+            .expect("the lock's record survives");
+    assert_eq!(lock_record.emitter, bridge_lock_id);
+}
+
+/// A caller can no longer aim an emission at a program of their own and still
+/// succeed, leaving no record of it. With the program no longer an instruction
+/// field, the account is the only way left to try.
+#[test]
+fn a_send_into_a_foreign_outbox_slot_is_rejected() {
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let mut state = base_state();
+    seed_ping_sender_config(&mut state);
+
+    // A slot under some other program, which is what the caller would have to
+    // pass to reach it.
+    let foreign_slot = outbox_pda([3; 8].into(), sender_id, &zone_b, ordinal);
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), foreign_slot],
+        zone_b,
+        ordinal,
+    );
+
+    // Refused inside the pinned outbox, not by the sender: the chained call goes
+    // there whatever account the caller passes, which is the point.
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send into a slot outside the pinned outbox must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("Account must be the outbox PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Nothing releases an escrow, so a message the destination will refuse is a
+/// burn: debited here, never minted there. The refusal has to come before the
+/// debit.
+#[test]
+fn a_lock_naming_another_target_program_is_rejected() {
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let elsewhere: AccountId = programs::ping_receiver().id().into();
+    let lock = lock_tx_to(
+        &holder_key,
+        holder_id,
+        zone_b,
+        0,
+        0,
+        elsewhere,
+        mint_target_accounts(elsewhere),
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock aimed at another program must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("only mints through the wrapped token it is pinned to"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE,
+        "a refused lock leaves the holding's balance alone"
+    );
+}
+
+/// The same burn by a different route: the right target program, the wrong
+/// accounts for it. `wrapped_token::Mint` fails its own address asserts on the
+/// destination, so the escrow has to be refused here instead.
+#[test]
+fn a_lock_naming_other_mint_accounts_is_rejected() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    // A holding under someone other than the payload's recipient: a mint the
+    // destination would credit to the wrong account if it credited it at all.
+    let other_holding =
+        wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]).into_value();
+    let lock = lock_tx_to(
+        &holder_key,
+        holder_id,
+        zone_b,
+        0,
+        0,
+        wrapped_token_id,
+        vec![
+            wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+            other_holding,
+        ],
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock over the wrong mint accounts must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("target accounts must be the mint's config"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE,
+        "a refused lock leaves the holding's balance alone"
+    );
+}
+
+/// The config is read by address, so substituting another account for it fails
+/// rather than reading the pins out of whatever that account holds. Without the
+/// address check, 64 bytes a caller controls would re-pin both for one lock.
+#[test]
+fn a_lock_with_a_substituted_config_account_is_rejected() {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    // A bridge-lock-owned account holding pins of the caller's choosing, so only
+    // the address check stands between it and being read as the config.
+    let decoy_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let decoy_id = AccountId::from(&PublicKey::new_from_private_key(&decoy_key));
+    let mut state = base_state().with_public_accounts([(
+        decoy_id,
+        Account {
+            program_owner: bridge_lock_id,
+            data: bridge_lock_core::config_bytes([3; 8].into(), [4; 8].into())
+                .to_vec()
+                .try_into()
+                .expect("pinned ids fit in account data"),
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_account_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload(),
+        ordinal,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            decoy_id,
+            holder_id,
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&holder_key]),
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a lock over a substituted config account must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the bridge-lock config PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+#[test]
+fn a_direct_transfer_from_the_holding_is_refused() {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+
+    let message = Message::try_new(
+        programs::authenticated_transfer().id().into(),
+        vec![
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+        ],
+        vec![],
+        authenticated_transfer_core::Instruction::Transfer {
+            amount: INITIAL_BALANCE,
+        },
+    )
+    .expect("build transfer message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("an unauthorized holding debit must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("Sender must be authorized"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE
+    );
+}
+
+/// The debit lands on the holding PDA; the holder only signs.
+#[test]
+fn lock_debits_the_holding_not_the_holder() {
+    let zone_b = [9_u8; 32];
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            balance: 55,
+            ..Default::default()
+        },
+    )]);
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
+    drop(state.apply_state_diff(diff));
+
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(holder_id)).balance,
+        INITIAL_BALANCE - LOCK_AMOUNT,
+        "the holding is what a lock debits"
+    );
+    assert_eq!(
+        state.get_account_by_id(holder_id).balance,
+        55,
+        "the holder's own balance is untouched"
+    );
+}
+
+/// A zero lock costs nothing yet would emit a real dispatch.
+#[test]
+fn a_zero_amount_lock_is_refused() {
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: 0,
+        target_zone: zone_b,
+        target_account_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload_of(0),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            holder_id,
+            holding_id_of(holder_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id().into(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&holder_key]),
+    );
+    rejects_at(&state, &tx, 1, "locked amount must be positive");
+}
+
+/// A lock naming any account but the signer's derived holding is refused.
+#[test]
+fn a_lock_naming_someone_elses_holding_is_refused() {
+    let attacker_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let attacker_id = AccountId::from(&PublicKey::new_from_private_key(&attacker_key));
+    let victim_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+    let mut state = base_state();
+    seed_holding(&mut state, victim_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let zone_b = [9_u8; 32];
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_account_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload(),
+        ordinal: 0,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
+            attacker_id,
+            holding_id_of(victim_id),
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(
+                programs::cross_zone_outbox().id().into(),
+                bridge_lock_id,
+                &zone_b,
+                0,
+            ),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&attacker_key]),
+    );
+    rejects_at(&state, &tx, 1, "holder's bridge-lock holding");
+    assert_eq!(
+        state.get_account_by_id(holding_id_of(victim_id)).balance,
+        INITIAL_BALANCE,
+        "the victim's holding is untouched"
+    );
+}
+
+/// A bridge with no pin cannot fall back to caller-named programs: it stops locking.
+#[test]
+fn a_lock_before_the_pins_are_set_is_rejected() {
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state();
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+
+    let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock with nothing pinned must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("config account holds an outbox and a mint target"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Written once, on the same terms as the sender's: an identical re-init is the
+/// genesis replay, a different one would redirect every lock on the zone.
+#[test]
+fn the_bridge_pins_are_written_once_and_replayable() {
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+    let config_id = bridge_lock_core::config_account_id(bridge_lock_id);
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+
+    let init = |outbox: AccountId, target: AccountId| {
+        let message = Message::try_new(
+            bridge_lock_id,
+            vec![config_id],
+            vec![],
+            bridge_lock_core::Instruction::InitConfig {
+                outbox_account_id: outbox,
+                target_account_id: target,
+            },
+        )
+        .expect("build InitConfig message");
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    };
+
+    let mut state = base_state();
+
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &init(outbox_id, wrapped_token_id),
+        &state,
+        1,
+        0,
+    )
+    .expect("the first init claims the config PDA");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(
+        bridge_lock_core::read_config(&state.get_account_by_id(config_id).data.into_inner()),
+        Some((outbox_id, wrapped_token_id)),
+        "the config pins both programs after genesis"
+    );
+
+    ValidatedStateDiff::from_public_transaction(&init(outbox_id, wrapped_token_id), &state, 2, 0)
+        .expect("replaying the identical init is a no-op, not a failure");
+
+    // Either half moving is a redirect: the outbox decides whether the emission is
+    // recorded, the target where the value lands.
+    for (outbox, target, what) in [
+        (AccountId::from([3; 8]), wrapped_token_id, "outbox"),
+        (outbox_id, AccountId::from([3; 8]), "mint target"),
+    ] {
+        let Err(err) =
+            ValidatedStateDiff::from_public_transaction(&init(outbox, target), &state, 3, 0)
+        else {
+            panic!("a re-init naming a different {what} must not execute");
+        };
+        assert!(
+            format!("{err:?}").contains("already pins a different outbox or mint target"),
+            "rejected for the wrong reason: {err:?}"
+        );
+    }
+}
+
+/// An emitter with no pin cannot fall back to a caller-named outbox: it stops
+/// emitting. The state a zone reaches by skipping the genesis init.
+#[test]
+fn a_send_before_the_pin_is_set_is_rejected() {
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let state = base_state();
+    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), slot],
+        zone_b,
+        ordinal,
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send with no outbox pinned must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("config account holds an outbox program id"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The config is read by address, so substituting another account for it fails
+/// rather than pinning the outbox to whatever that account happens to hold.
+#[test]
+fn a_send_with_a_substituted_config_account_is_rejected() {
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let mut state = base_state();
+    seed_ping_sender_config(&mut state);
+
+    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let send = send_tx(vec![ping_record_pda(sender_id), slot], zone_b, ordinal);
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send over a substituted config account must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the ping-sender config PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Written once: an identical re-init has to succeed, since genesis is replayed
+/// during multi-sequencer reconstruction, while one naming a different outbox has
+/// to fail, or anyone could redirect every emission on the zone after genesis.
+#[test]
+fn the_outbox_pin_is_written_once_and_replayable() {
+    let sender_id: AccountId = programs::ping_sender().id().into();
+    let config_id = sender_config_account_id(sender_id);
+
+    // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
+    let init = |outbox: AccountId| {
+        let message = Message::try_new(
+            sender_id,
+            vec![config_id],
+            vec![],
+            ping_core::SenderInstruction::InitConfig {
+                outbox_account_id: outbox,
+            },
+        )
+        .expect("build InitConfig message");
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    };
+
+    let mut state = base_state();
+    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+
+    let first = init(outbox_id);
+    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
+        .expect("the first init claims the config PDA");
+    drop(state.apply_state_diff(diff));
+    assert_eq!(
+        read_outbox(&state.get_account_by_id(config_id).data.into_inner()),
+        Some(outbox_id),
+        "the config pins the outbox after genesis"
+    );
+
+    ValidatedStateDiff::from_public_transaction(&init(outbox_id), &state, 2, 0)
+        .expect("replaying the identical init is a no-op, not a failure");
+
+    let Err(err) =
+        ValidatedStateDiff::from_public_transaction(&init(AccountId::from([3; 8])), &state, 3, 0)
+    else {
+        panic!("a re-init naming a different outbox must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("already pins a different outbox"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The token's authority path, end to end: each guard refuses for its own
+/// reason.
+#[test]
+fn the_token_authority_path_holds() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+
+    let update = |account: AccountId,
+                  signer: &PrivateKey,
+                  nonce: u128,
+                  sources: Vec<([u8; 32], AccountId)>| {
+        signed_tx(
+            wrapped_token_id,
+            vec![config_id, account],
+            nonce,
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
+            signer,
+        )
+    };
+    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            wrapped_token_id,
+            vec![config_id, account],
+            nonce,
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            signer,
+        )
+    };
+    let bridge_source = vec![(src_zone, programs::bridge_lock().id().into())];
+
+    // With no authority configured, nothing moves in either direction.
+    let mut unset = base_state();
+    seed_wrapped_config(&mut unset, None, &[]);
+    rejects_at(
+        &unset,
+        &update(authority, &key, 0, bridge_source.clone()),
+        1,
+        "fixed at genesis",
+    );
+    rejects_at(
+        &unset,
+        &renounce(authority, &key, 0),
+        1,
+        "already renounced",
+    );
+
+    // With one configured: the wrong account, and the right account without its
+    // own signature, are refused for their own reasons.
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, Some(authority), &[]);
+    rejects_at(
+        &state,
+        &update(other, &other_key, 0, bridge_source.clone()),
+        1,
+        "second account must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &renounce(other, &other_key, 0),
+        1,
+        "second account must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &update(authority, &other_key, 0, bridge_source.clone()),
+        1,
+        "must authorize a source change",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &other_key, 0),
+        1,
+        "must authorize renouncing it",
+    );
+
+    // Substituting another account for the config is refused rather than read,
+    // on both instructions.
+    let substituted = |instruction_data: Vec<u8>| {
+        signed_tx(
+            wrapped_token_id,
+            vec![ping_record_pda(wrapped_token_id), authority],
+            0,
+            instruction_data,
+            &key,
+        )
+    };
+    rejects_at(
+        &state,
+        &substituted(bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+            sources: uncapped_policies(&bridge_source),
+        })),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+    rejects_at(
+        &state,
+        &substituted(bytes_of!(
+            &wrapped_token_core::Instruction::RenounceAuthority
+        )),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &update(authority, &key, 0, bridge_source.clone()),
+        &state,
+        1,
+        0,
+    )
+    .expect("the configured authority changes sources");
+    drop(state.apply_state_diff(diff));
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&bridge_source),
+        "the new source is authorized"
+    );
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        lee::AccountId::default(),
+        "acting as the authority must not hand the account to wrapped_token"
+    );
+
+    // Acting again with a different list must replace it, not accumulate.
+    let sender_source = vec![(src_zone, programs::ping_sender().id().into())];
+    let second = ValidatedStateDiff::from_public_transaction(
+        &update(authority, &key, 1, sender_source.clone()),
+        &state,
+        2,
+        0,
+    )
+    .expect("the authority acts again");
+    drop(state.apply_state_diff(second));
+    let updated_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        updated_cfg.sources,
+        uncapped_entries(&sender_source),
+        "the second change took effect"
+    );
+    assert_eq!(
+        updated_cfg.authority,
+        Some(authority),
+        "the authority is unchanged"
+    );
+
+    // Renouncing is one-way: the sources freeze at their last value and nothing
+    // moves afterwards, in either direction.
+    let renounced =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
+            .expect("the authority renounces itself");
+    drop(state.apply_state_diff(renounced));
+    let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+    assert_eq!(
+        renounced_cfg.sources,
+        uncapped_entries(&sender_source),
+        "renouncing leaves the sources it froze"
+    );
+    assert_eq!(
+        renounced_cfg.minter,
+        programs::cross_zone_inbox().id().into(),
+        "the minter is unchanged"
+    );
+    rejects_at(
+        &state,
+        &update(authority, &key, 3, bridge_source),
+        4,
+        "fixed at genesis",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &key, 3),
+        4,
+        "already renounced",
+    );
+}
+
+/// `ping_receiver` authorizes its own sources too. It holds nothing worth
+/// stealing, but without this any program on any configured peer could overwrite
+/// the record, and a delivery would prove only that some peer sent it.
+#[test]
+fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    // Authorizes one source; the delivery comes from another.
+    seed_receiver_config(
+        &mut state,
+        None,
+        vec![(src_zone, programs::bridge_lock().id().into())],
+    );
+
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: programs::ping_sender().id().into(),
+        target_account_id: receiver_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                receiver_config_account_id(receiver_id),
+                ping_record_pda(receiver_id),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("an unauthorized source must not reach the receiver");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this receiver authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The inbox binds the marker to the message it is delivering. Without that the
+/// marker would be a field the dispatch could set freely, and a target checking it
+/// would be checking nothing.
+#[test]
+fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let sender_id: AccountId = programs::ping_sender().id().into();
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, None, vec![(src_zone, sender_id)]);
+
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: sender_id,
+        target_account_id: receiver_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+
+    // The message says ping_sender; the marker names bridge_lock, which the
+    // receiver also would not accept. The inbox must refuse it first.
+    let message = Message::try_new(
+        inbox_id,
+        vec![
+            inbox_config_account_id(inbox_id),
+            inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+            inbox_source_marker_account_id(
+                inbox_id,
+                &src_zone,
+                programs::bridge_lock().id().into(),
+            ),
+            receiver_config_account_id(receiver_id),
+            ping_record_pda(receiver_id),
+        ],
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a marker that does not match the message must not be delivered");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the source marker PDA for this message"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The receiver's authority path is a mirror of the token's, and a mirror is
+/// exactly where a copy-paste slip hides. Same battery, run against it.
+#[test]
+fn the_receiver_authority_path_holds() {
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+    let sender_id: AccountId = programs::ping_sender().id().into();
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+
+    let update = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            receiver_id,
+            vec![config_id, account],
+            nonce,
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, sender_id)],
+            }),
+            signer,
+        )
+    };
+    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        signed_tx(
+            receiver_id,
+            vec![config_id, account],
+            nonce,
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            signer,
+        )
+    };
+
+    // The wrong account, and the right account without its own signature, are
+    // both refused for their own reasons.
+    let mut state = base_state();
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+    rejects_at(
+        &state,
+        &update(other, &other_key, 0),
+        1,
+        "must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &renounce(other, &other_key, 0),
+        1,
+        "must be the configured authority",
+    );
+    rejects_at(
+        &state,
+        &update(authority, &other_key, 0),
+        1,
+        "must authorize a source change",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &other_key, 0),
+        1,
+        "must authorize renouncing it",
+    );
+
+    // The authority itself works, and renouncing is one-way.
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
+            .expect("the configured authority changes sources");
+    drop(state.apply_state_diff(diff));
+    let cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
+    assert_eq!(cfg.deliverer, programs::cross_zone_inbox().id().into());
+
+    let renounce_diff =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
+            .expect("the authority renounces itself");
+    drop(state.apply_state_diff(renounce_diff));
+    let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+    assert_eq!(
+        renounced_cfg.sources,
+        vec![(src_zone, sender_id)],
+        "renouncing freezes the list it had"
+    );
+    rejects_at(&state, &update(authority, &key, 2), 3, "fixed at genesis");
+    rejects_at(
+        &state,
+        &renounce(authority, &key, 2),
+        3,
+        "already renounced",
+    );
+}
+
+/// The inbox cannot reach the authority instructions, named as governance or not:
+/// it prepends the source marker to every chained call, so the config never lands
+/// where these instructions read it. Worth pinning, because the inbox is the only
+/// program that chain-calls a target today, so this is what actually keeps a peer
+/// away from the source list.
+#[test]
+fn the_inbox_cannot_reach_the_authority_instructions() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let update = || {
+        chained_via_inbox(
+            wrapped_token_id,
+            config_id,
+            authority,
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id().into())]),
+            }),
+        )
+    };
+
+    // No governance named: the chained call is refused.
+    let mut closed = base_state();
+    seed_inbox_config(&mut closed, self_zone);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
+    rejects_at(
+        &closed,
+        &update(),
+        1,
+        "must be the wrapped-token config PDA",
+    );
+
+    // Naming the inbox as governance changes nothing: the obstacle is structural,
+    // not the caller check. The prepended marker sits at index 0, so with or
+    // without the inbox named as governance the call dies on the config-address
+    // check, before the caller check is even reached.
+    let mut open = base_state();
+    seed_inbox_config(&mut open, self_zone);
+    seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), &[]);
+    rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
+}
+
+/// A program-held authority acts through the governance program delegating its PDA on the
+/// chained call, and renouncing through it is as total as renouncing top-level.
+#[test]
+fn the_governance_path_holds() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let proxy_id: AccountId = test_programs::authority_proxy().id().into();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
+
+    let update = |sources: Vec<([u8; 32], AccountId)>| {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            Some(seed),
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&sources),
+            }),
+        )
+    };
+    let renounce = || {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            Some(seed),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+        )
+    };
+
+    let first = ValidatedStateDiff::from_public_transaction(
+        &update(vec![(src_zone, programs::bridge_lock().id().into())]),
+        &state,
+        1,
+        0,
+    )
+    .expect("the governance path changes sources");
+    drop(state.apply_state_diff(first));
+
+    let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        cfg.sources,
+        uncapped_entries(&[(src_zone, programs::bridge_lock().id().into())])
+    );
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        lee::AccountId::default(),
+        "acting as the authority must not hand the account to wrapped_token"
+    );
+
+    let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
+        .expect("the governance path acts again");
+    drop(state.apply_state_diff(second));
+    let cleared_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert!(
+        cleared_cfg.sources.is_empty(),
+        "the second change took effect"
+    );
+    assert_eq!(cleared_cfg.authority, Some(authority));
+
+    let renounced = ValidatedStateDiff::from_public_transaction(&renounce(), &state, 3, 0)
+        .expect("the governance path renounces");
+    drop(state.apply_state_diff(renounced));
+    let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+
+    rejects_at(
+        &state,
+        &update(vec![(src_zone, programs::bridge_lock().id().into())]),
+        4,
+        "fixed at genesis",
+    );
+    rejects_at(&state, &renounce(), 4, "already renounced");
+}
+
+/// Each governance-path guard fails on its own: a caller other than the
+/// configured governance program is refused with the delegation in order, no
+/// configured governance refuses every chained caller (on the token's update
+/// and on its three sibling handlers), and the governance program without
+/// delegating finds the authority unauthorized.
+#[test]
+fn the_governance_path_guards_hold() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let proxy_id: AccountId = test_programs::authority_proxy().id().into();
+    let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let call = |delegated: Option<lee_core::program::PdaSeed>| {
+        via_proxy(
+            proxy_id,
+            wrapped_token_id,
+            config_id,
+            authority,
+            delegated,
+            bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id().into())]),
+            }),
+        )
+    };
+
+    // A perfect call shape from a program that is not the configured governance.
+    let mut other = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(
+        &mut other,
+        Some(programs::ping_sender().id().into()),
+        Some(authority),
+        &[],
+    );
+    rejects_at(
+        &other,
+        &call(Some(seed)),
+        1,
+        "through the configured governance program",
+    );
+
+    // No governance configured: every chained caller is refused.
+    let mut closed = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config(&mut closed, Some(authority), &[]);
+    seed_receiver_config(&mut closed, Some(authority), vec![]);
+    rejects_at(
+        &closed,
+        &call(Some(seed)),
+        1,
+        "through the configured governance program",
+    );
+
+    // The same pin guards the three sibling handlers, both renounces and the
+    // receiver's update, each of which would otherwise accept the delegated
+    // authority and succeed.
+    for (target, config, instruction_data) in [
+        (
+            wrapped_token_id,
+            config_id,
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id().into())],
+            }),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+        ),
+    ] {
+        rejects_at(
+            &closed,
+            &via_proxy(
+                proxy_id,
+                target,
+                config,
+                authority,
+                Some(seed),
+                instruction_data,
+            ),
+            1,
+            "through the configured governance program",
+        );
+    }
+
+    // The configured governance itself, but not delegating the authority.
+    let mut undelegated = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
+    rejects_at(
+        &undelegated,
+        &call(None),
+        1,
+        "must authorize a source change",
+    );
+}
+
+/// The receiver's governance path works the same way; without this its config
+/// never carries a governance in any test.
+#[test]
+fn the_receiver_governance_path_holds() {
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let proxy_id: AccountId = test_programs::authority_proxy().id().into();
+    let config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+
+    let tx = via_proxy(
+        proxy_id,
+        receiver_id,
+        config_id,
+        authority,
+        Some(seed),
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id().into())],
+        }),
+    );
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("the receiver governance path changes sources");
+    drop(state.apply_state_diff(diff));
+    let cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        cfg.sources,
+        vec![(src_zone, programs::ping_sender().id().into())]
+    );
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        lee::AccountId::default(),
+        "acting as the authority must not hand the account to ping_receiver"
+    );
+}
+
+/// One authority seeds both targets at genesis, and neither takes it over: the
+/// authority carries no data, so it stays unowned and both keep working. Act
+/// through the token, then act and renounce on the receiver.
+#[test]
+fn a_shared_authority_serves_both_targets() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let proxy_id: AccountId = test_programs::authority_proxy().id().into();
+    let token_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let receiver_config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+
+    let seed = lee_core::program::PdaSeed::new([3; 32]);
+    let authority = AccountId::for_public_pda(&proxy_id, &seed);
+
+    let mut state = base_state().with_programs([test_programs::authority_proxy()]);
+    seed_wrapped_config_with_governance(&mut state, Some(proxy_id), Some(authority), &[]);
+    seed_receiver_config_with_governance(&mut state, Some(proxy_id), Some(authority), vec![]);
+
+    let token_update = via_proxy(
+        proxy_id,
+        wrapped_token_id,
+        token_config_id,
+        authority,
+        Some(seed),
+        bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
+            sources: uncapped_policies(&[(src_zone, programs::bridge_lock().id().into())]),
+        }),
+    );
+    let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
+        .expect("the token acts for the shared authority");
+    drop(state.apply_state_diff(first));
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        lee::AccountId::default(),
+        "a data-free authority is owned by nobody, whichever target uses it first"
+    );
+
+    let receiver_update = via_proxy(
+        proxy_id,
+        receiver_id,
+        receiver_config_id,
+        authority,
+        Some(seed),
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id().into())],
+        }),
+    );
+    let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
+        .expect("the other target still acts on the token-owned authority");
+    drop(state.apply_state_diff(second));
+    let receiver_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state
+            .get_account_by_id(receiver_config_id)
+            .data
+            .into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        receiver_cfg.sources,
+        vec![(src_zone, programs::ping_sender().id().into())]
+    );
+    assert_eq!(
+        state.get_account_by_id(authority).program_owner,
+        lee::AccountId::default(),
+        "the authority stays unowned across both targets"
+    );
+
+    let receiver_renounce = via_proxy(
+        proxy_id,
+        receiver_id,
+        receiver_config_id,
+        authority,
+        Some(seed),
+        bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+    );
+    let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
+        .expect("the other target renounces on the token-owned authority");
+    drop(state.apply_state_diff(third));
+    let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state
+            .get_account_by_id(receiver_config_id)
+            .data
+            .into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the receiver side is gone");
+    let token_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
+        &state.get_account_by_id(token_config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(
+        token_cfg.authority,
+        Some(authority),
+        "renouncing one target leaves the other's grant alone"
+    );
+}
+
+/// The guards that survive a deletion otherwise: the receiver's config-address
+/// checks its substitution cases miss, and the three caller pins that are only
+/// reachable through the inbox.
+#[test]
+fn the_remaining_authority_guards_hold() {
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, Some(authority), &[]);
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+
+    // Config address, on both receiver instructions.
+    for instruction_data in [
+        bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+            sources: vec![(src_zone, programs::ping_sender().id().into())],
+        }),
+        bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+    ] {
+        rejects_at(
+            &state,
+            &signed_tx(
+                receiver_id,
+                vec![ping_record_pda(receiver_id), authority],
+                0,
+                instruction_data,
+                &key,
+            ),
+            1,
+            "must be the receiver config PDA",
+        );
+    }
+
+    // Reached through the inbox rather than top-level: the prepended marker sits
+    // at index 0, so each call dies on the target's config-address check. The
+    // caller pins themselves are exercised through the proxy in
+    // the_governance_path_guards_hold, where the account list is well formed.
+    for (target, config_id, instruction_data, expected) in [
+        (
+            wrapped_token_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
+            "must be the wrapped-token config PDA",
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
+            "must be the receiver config PDA",
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id().into())],
+            }),
+            "must be the receiver config PDA",
+        ),
+    ] {
+        rejects_at(
+            &state,
+            &chained_via_inbox(target, config_id, authority, instruction_data),
+            1,
+            expected,
+        );
+    }
+}
+
+/// A token that authorizes nothing mints for nobody. The state a zone reaches with
+/// no peers configured, where the config is still seeded so its PDA cannot be
+/// claimed by a first initializer.
+#[test]
+fn a_mint_is_refused_when_the_token_authorizes_no_source() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, None, &[]);
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: programs::bridge_lock().id().into(),
+        target_account_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a token authorizing nothing must not mint");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The marker only means something because the caller is pinned to the inbox.
+/// Invoked directly, with the caller handing in the marker themselves, the mint
+/// must refuse before it ever looks at it.
+#[test]
+fn a_top_level_mint_is_refused() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let src_zone = [2_u8; 32];
+    let src_program_id: AccountId = programs::bridge_lock().id().into();
+
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, None, &[(src_zone, src_program_id)]);
+
+    let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
+    let message = Message::try_new(
+        wrapped_token_id,
+        vec![
+            marker_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+        ],
+        vec![],
+        wrapped_token_core::Instruction::Mint {
+            recipient: RECIPIENT,
+            amount: LOCK_AMOUNT,
+        },
+    )
+    .expect("build mint message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a directly invoked mint must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("only callable by the authorized minter"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)
+/// and asserts it chains into `wrapped_token::Mint`, crediting the recipient.
+#[test]
+fn inbox_dispatch_mints_wrapped_token() {
+    let diff = dispatch_mint(LOCK_AMOUNT).expect("dispatch must validate and execute");
+    let holding_id =
+        wrapped_token_core::holding_account_id(programs::wrapped_token().id().into(), &RECIPIENT);
+    let minted = wrapped_token_core::read_balance(
+        &diff.public_diff()[&holding_id].data.clone().into_inner(),
+    );
+    assert_eq!(
+        minted, LOCK_AMOUNT,
+        "recipient holding minted the locked amount"
+    );
+}
+
+/// `ping_sender` lets its caller choose the target and payload freely, so any user
+/// on a peer can aim a `Mint` payload at `wrapped_token`. The inbox no longer
+/// refuses it; the token does, because the marker names `ping_sender` and the
+/// token authorized only the bridge. This is the check that replaced the central
+/// route table, so it must be the thing that rejects here.
+#[test]
+fn a_mint_from_an_unrouted_emitter_is_rejected() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+
+    let mut state = base_state();
+    // The config a bridging zone writes: the lock program may mint, nothing else.
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(
+        &mut state,
+        None,
+        &[(src_zone, programs::bridge_lock().id().into())],
+    );
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        // The emitter a user can drive directly, aimed at the bridge's target.
+        src_account_id: programs::ping_sender().id().into(),
+        target_account_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+
+    let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
+
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a delivery from a source the token did not authorize must not mint");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The same target reached by the emitter the route names still works. Without
+/// this, the test above would pass equally against an inbox that rejected every
+/// delivery.
+#[test]
+fn a_mint_from_the_routed_emitter_is_accepted() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(
+        &mut state,
+        None,
+        &[(src_zone, programs::bridge_lock().id().into())],
+    );
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_account_id: bridge_lock_id,
+        target_account_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+
+    let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
+
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("the routed emitter must still deliver");
+    let minted = wrapped_token_core::read_balance(
+        &diff.public_diff()[&holding_id].data.clone().into_inner(),
+    );
+    assert_eq!(minted, LOCK_AMOUNT);
+}
+
+/// A dispatch whose message key is already in the seen-shard is an idempotent
+/// no-op: the inbox makes no chained call, so the wrapped token is not minted a
+/// second time. This is the bridge's replay defense.
+#[test]
+fn mint_replay_rejected() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+    let src_tx_index = 0;
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, None, &[(src_zone, [9_u32; 8].into())]);
+
+    // Seed the seen-shard as already holding this delivery, so the inbox takes
+    // the replay no-op branch. The shard is inbox-owned (claimed on a prior
+    // delivery) and bound to the same source block, so the guest leaves it
+    // untouched.
+    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
+    let mut shard = SeenShard::default();
+    shard.insert(SRC_BLOCK_HASH, src_tx_index);
+    state = state.with_public_accounts([(
+        seen_id,
+        Account {
+            program_owner: inbox_id,
+            balance: 0,
+            data: shard
+                .to_bytes()
+                .try_into()
+                .expect("shard fits in account data"),
+            nonce: 0_u128.into(),
+        },
+    )]);
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index,
+        src_account_id: AccountId::from([9_u32; 8]),
+        target_account_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+
+    let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
+    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
+
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .expect("a replayed dispatch is a valid no-op, not an error");
+    let public_diff = diff.public_diff();
+
+    // No mint: the holding is never credited on replay.
+    let minted = public_diff.get(&holding_id).map_or(0, |account| {
+        wrapped_token_core::read_balance(&account.data.clone().into_inner())
+    });
+    assert_eq!(minted, 0, "a replayed message must not mint again");
+
+    // The seen-shard is untouched by the no-op.
+    if let Some(seen) = public_diff.get(&seen_id) {
+        let shard_after =
+            SeenShard::from_bytes(&seen.data.clone().into_inner()).expect("seen shard decodes");
+        assert_eq!(shard_after, shard, "replay must not modify the seen-shard");
+    }
+}
+
+/// A peer publishing two blocks at one block id gets at most one delivered from.
+///
+/// Both resolve to the same shard account; the first binds it. Failing rather
+/// than no-opping is the point: a replay no-op would let a peer choose which of
+/// two messages at one coordinate the target program ever sees.
+#[test]
+fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
+    let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
+    let receiver_id: AccountId = programs::ping_receiver().id().into();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+    let other_block_hash = [8_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, None, vec![(src_zone, [9_u32; 8].into())]);
+
+    // The shard as the first delivery left it: bound, holding transaction 0.
+    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
+    let mut shard = SeenShard::default();
+    shard.insert(SRC_BLOCK_HASH, 0);
+    state = state.with_public_accounts([(
+        seen_id,
+        Account {
+            program_owner: inbox_id,
+            balance: 0,
+            data: shard
+                .to_bytes()
+                .try_into()
+                .expect("shard fits in account data"),
+            nonce: 0_u128.into(),
+        },
+    )]);
+
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: b"from-the-other-block".to_vec(),
+    })
+    .expect("serialize ping instruction");
+
+    // A different transaction index, so this is not a replay: only the source
+    // block differs from what the shard is bound to.
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: other_block_hash,
+        src_tx_index: 1,
+        src_account_id: AccountId::from([9_u32; 8]),
+        target_account_id: receiver_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+
+    let record_id = ping_record_pda(receiver_id);
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    assert!(
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_err(),
+        "a delivery from a block the shard is not bound to must not execute"
+    );
+
+    // Control: the same delivery naming the bound block executes, so the refusal
+    // above is the binding and not the transaction's shape.
+    let control_payload = borsh::to_vec(&ReceiverInstruction::Record {
+        payload: b"from-the-bound-block".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let control_msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 1,
+        src_account_id: AccountId::from([9_u32; 8]),
+        target_account_id: receiver_id,
+        payload: control_payload,
+        l1_inclusion_witness: None,
+    };
+    let control_message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &control_msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(control_msg),
+    )
+    .expect("build dispatch message");
+    let control_tx = PublicTransaction::new(control_message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&control_tx, &state, 1, 0)
+        .expect("a second delivery from the bound block executes");
+    let public_diff = diff.public_diff();
+    let seen_after = public_diff
+        .get(&seen_id)
+        .expect("the shard records the new delivery");
+    let shard_after =
+        SeenShard::from_bytes(&seen_after.data.clone().into_inner()).expect("seen shard decodes");
+    assert!(shard_after.contains(0), "the first delivery is still there");
+    assert!(shard_after.contains(1), "and the second is recorded");
+    assert_eq!(
+        shard_after.src_block_hash, SRC_BLOCK_HASH,
+        "a shard stays bound to the block that claimed it"
+    );
+}

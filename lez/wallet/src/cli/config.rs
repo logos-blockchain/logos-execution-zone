@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::Subcommand;
+use common::config::BasicAuth;
 
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
+    config::SequencerConnectionData,
 };
 
 /// Represents generic config CLI subcommand.
@@ -21,6 +23,160 @@ pub enum ConfigSubcommand {
     Set { key: String, value: String },
     /// Prints description of corresponding field.
     Description { key: String },
+    /// Adds a new sequencer to the list.
+    AddSequencer {
+        addr: String,
+        user: Option<String>,
+        password: Option<String>,
+    },
+    /// Remove sequencer from a list.
+    RemoveSequencer { addr: String },
+}
+
+impl ConfigSubcommand {
+    fn handle_get(
+        all: bool,
+        key: Option<String>,
+        wallet_core: &WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let config = wallet_core.config();
+        if all {
+            let config_str = serde_json::to_string_pretty(&config)?;
+
+            println!("{config_str}");
+        } else if let Some(key) = key {
+            match key.as_str() {
+                "sequencers" => {
+                    println!("{:?}", config.sequencers);
+                }
+                "seq_poll_timeout" => {
+                    println!("{:?}", config.seq_poll_timeout);
+                }
+                "seq_tx_poll_max_blocks" => {
+                    println!("{}", config.seq_tx_poll_max_blocks);
+                }
+                "seq_poll_max_retries" => {
+                    println!("{}", config.seq_poll_max_retries);
+                }
+                "seq_block_poll_max_amount" => {
+                    println!("{}", config.seq_block_poll_max_amount);
+                }
+                "distribution_limit" => {
+                    println!(
+                        "{}",
+                        config.multi_sequencer_client_config.distribution_limit
+                    );
+                }
+                "calibration_limit" => {
+                    println!("{}", config.multi_sequencer_client_config.calibration_limit);
+                }
+                "gas_limit" => {
+                    println!("{}", config.gas_limit);
+                }
+                _ => {
+                    println!("Unknown field");
+                }
+            }
+        } else {
+            println!("Please provide a key or use --all flag");
+        }
+
+        Ok(SubcommandReturnValue::Empty)
+    }
+
+    async fn handle_set(
+        key: String,
+        value: String,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let mut config = wallet_core.config().clone();
+        match key.as_str() {
+            "sequencers" => {
+                anyhow::bail!("Not settable via this method, use add-sequencer subcommand");
+            }
+            "seq_poll_timeout" => {
+                config.seq_poll_timeout = humantime::parse_duration(&value)
+                    .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
+            }
+            "seq_tx_poll_max_blocks" => {
+                config.seq_tx_poll_max_blocks = value.parse()?;
+            }
+            "seq_poll_max_retries" => {
+                config.seq_poll_max_retries = value.parse()?;
+            }
+            "seq_block_poll_max_amount" => {
+                config.seq_block_poll_max_amount = value.parse()?;
+            }
+            "distribution_limit" => {
+                config.multi_sequencer_client_config.distribution_limit = value.parse()?;
+            }
+            "calibration_limit" => {
+                config.multi_sequencer_client_config.calibration_limit = value.parse()?;
+            }
+            "gas_limit" => {
+                config.gas_limit = value.parse()?;
+            }
+            _ => {
+                anyhow::bail!("Unknown field");
+            }
+        }
+
+        wallet_core.set_config(config);
+        wallet_core.store_config_changes().await?;
+
+        Ok(SubcommandReturnValue::Empty)
+    }
+
+    fn handle_description(key: &str, _wallet_core: &WalletCore) -> SubcommandReturnValue {
+        match key {
+            "override_rust_log" => {
+                println!("Value of variable RUST_LOG to override, affects logging");
+            }
+            "sequencer" => {
+                println!("A list of HTTP V4 addresses of sequencer, with authorization");
+            }
+            "seq_poll_timeout" => {
+                println!(
+                    "Sequencer client retry variable: how much time to wait between retries (human readable duration)"
+                );
+            }
+            "seq_tx_poll_max_blocks" => {
+                println!(
+                    "Sequencer client polling variable: max number of blocks to poll to find a transaction"
+                );
+            }
+            "seq_poll_max_retries" => {
+                println!(
+                    "Sequencer client retry variable: max number of retries before failing(can be zero)"
+                );
+            }
+            "seq_block_poll_max_amount" => {
+                println!(
+                    "Sequencer client polling variable: max number of blocks to request in one polling call"
+                );
+            }
+            "distribution_limit" => {
+                println!(
+                    "Sequencer multi node variable: max number of nodes to distribute transaction(can not be zero)"
+                );
+            }
+            "calibration_limit" => {
+                println!(
+                    "Sequencer multi node variable: max number of callibration runs before the end of handshake(can not be zero)"
+                );
+            }
+            "gas_limit" => {
+                println!(
+                    "Execution gas declared by public transactions this wallet builds: raise it for programs costing more cycles than the default"
+                );
+            }
+            _ => {
+                println!("Unknown field");
+            }
+        }
+
+        SubcommandReturnValue::Empty
+    }
 }
 
 impl WalletSubcommand for ConfigSubcommand {
@@ -28,117 +184,54 @@ impl WalletSubcommand for ConfigSubcommand {
         self,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let config = wallet_core.config();
         match self {
-            Self::Get { all, key } => {
-                if all {
-                    let config_str = serde_json::to_string_pretty(&config)?;
+            Self::Get { all, key } => Self::handle_get(all, key, wallet_core),
+            Self::Set { key, value } => Self::handle_set(key, value, wallet_core).await,
+            Self::Description { key } => Ok(Self::handle_description(&key, wallet_core)),
+            Self::AddSequencer {
+                addr,
+                user,
+                password,
+            } => {
+                let url_addr = addr.parse()?;
 
-                    println!("{config_str}");
-                } else if let Some(key) = key {
-                    match key.as_str() {
-                        "sequencer_addr" => {
-                            println!("{}", config.sequencer_addr);
-                        }
-                        "seq_poll_timeout" => {
-                            println!("{:?}", config.seq_poll_timeout);
-                        }
-                        "seq_tx_poll_max_blocks" => {
-                            println!("{}", config.seq_tx_poll_max_blocks);
-                        }
-                        "seq_poll_max_retries" => {
-                            println!("{}", config.seq_poll_max_retries);
-                        }
-                        "seq_block_poll_max_amount" => {
-                            println!("{}", config.seq_block_poll_max_amount);
-                        }
-                        "basic_auth" => {
-                            if let Some(basic_auth) = &config.basic_auth {
-                                println!("{basic_auth}");
-                            } else {
-                                println!("Not set");
-                            }
-                        }
-                        _ => {
-                            println!("Unknown field");
-                        }
-                    }
-                } else {
-                    println!("Please provide a key or use --all flag");
-                }
-            }
-            Self::Set { key, value } => {
-                let mut config = config.clone();
-                match key.as_str() {
-                    "sequencer_addr" => {
-                        config.sequencer_addr = value.parse()?;
-                    }
-                    "seq_poll_timeout" => {
-                        config.seq_poll_timeout = humantime::parse_duration(&value)
-                            .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
-                    }
-                    "seq_tx_poll_max_blocks" => {
-                        config.seq_tx_poll_max_blocks = value.parse()?;
-                    }
-                    "seq_poll_max_retries" => {
-                        config.seq_poll_max_retries = value.parse()?;
-                    }
-                    "seq_block_poll_max_amount" => {
-                        config.seq_block_poll_max_amount = value.parse()?;
-                    }
-                    "basic_auth" => {
-                        config.basic_auth = Some(value.parse()?);
-                    }
-                    "initial_accounts" => {
-                        anyhow::bail!("Setting this field from wallet is not supported");
-                    }
-                    _ => {
-                        anyhow::bail!("Unknown field");
-                    }
-                }
+                let basic_auth = user.map(|user| {
+                    let mut basic_auth = BasicAuth {
+                        username: user,
+                        password: None,
+                    };
 
-                wallet_core.set_config(config);
-                wallet_core.store_config_changes().await?;
+                    if password.is_some() {
+                        basic_auth.password = password;
+                    }
+
+                    basic_auth
+                });
+
+                let seq_connection_data = SequencerConnectionData {
+                    sequencer_addr: url_addr,
+                    basic_auth,
+                };
+
+                wallet_core.config.sequencers.push(seq_connection_data);
+
+                Ok(SubcommandReturnValue::Empty)
             }
-            Self::Description { key } => match key.as_str() {
-                "override_rust_log" => {
-                    println!("Value of variable RUST_LOG to override, affects logging");
-                }
-                "sequencer_addr" => {
-                    println!("HTTP V4 account_id of sequencer");
-                }
-                "seq_poll_timeout" => {
-                    println!(
-                        "Sequencer client retry variable: how much time to wait between retries (human readable duration)"
-                    );
-                }
-                "seq_tx_poll_max_blocks" => {
-                    println!(
-                        "Sequencer client polling variable: max number of blocks to poll to find a transaction"
-                    );
-                }
-                "seq_poll_max_retries" => {
-                    println!(
-                        "Sequencer client retry variable: max number of retries before failing(can be zero)"
-                    );
-                }
-                "seq_block_poll_max_amount" => {
-                    println!(
-                        "Sequencer client polling variable: max number of blocks to request in one polling call"
-                    );
-                }
-                "initial_accounts" => {
-                    println!("List of initial accounts' keys(both public and private)");
-                }
-                "basic_auth" => {
-                    println!("Basic authentication credentials for sequencer HTTP requests");
-                }
-                _ => {
-                    println!("Unknown field");
-                }
-            },
+            Self::RemoveSequencer { addr } => {
+                let url_addr = addr.parse()?;
+
+                let (idx, _) = wallet_core
+                    .config
+                    .sequencers
+                    .iter()
+                    .enumerate()
+                    .find(|(_, conn_data)| conn_data.sequencer_addr == url_addr)
+                    .ok_or_else(|| anyhow::anyhow!("Sequencer with this addr is not found"))?;
+
+                wallet_core.config.sequencers.remove(idx);
+
+                Ok(SubcommandReturnValue::Empty)
+            }
         }
-
-        Ok(SubcommandReturnValue::Empty)
     }
 }

@@ -12,6 +12,12 @@ pub enum DbError {
         error: borsh::io::Error,
         additional_info: Option<String>,
     },
+    #[error("Compression error: {}", additional_info.as_deref().unwrap_or("No additional info"))]
+    CompressionError {
+        #[source]
+        error: std::io::Error,
+        additional_info: Option<String>,
+    },
     #[error("Logic Error: {additional_info}")]
     DbInteractionError { additional_info: String },
 }
@@ -29,6 +35,14 @@ impl DbError {
     pub const fn borsh_cast_message(berr: borsh::io::Error, message: Option<String>) -> Self {
         Self::SerializationError {
             error: berr,
+            additional_info: message,
+        }
+    }
+
+    #[must_use]
+    pub const fn compression_error(err: std::io::Error, message: Option<String>) -> Self {
+        Self::CompressionError {
+            error: err,
             additional_info: message,
         }
     }

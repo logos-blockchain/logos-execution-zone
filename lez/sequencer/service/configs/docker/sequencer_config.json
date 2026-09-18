@@ -11,36 +11,37 @@
             "max_retries": 5
         },
         "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
-        "node_url": "http://host.docker.internal:18080"
+        "node_url": "http://host.docker.internal:18080",
+        "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26",
+        "channel_params": {
+            "minimum_sequencer_stake": 149,
+            "posting_timeframe": 300,
+            "posting_timeout": 25
+        }
     },
     "genesis": [
         {
-            "supply_bridge_account": {
-                "balance": 1000000
-            }
-        },
-        {
             "supply_account": {
                 "account_id": "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r",
-                "balance": 10000
+                "balance": 10000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2",
-                "balance": 20000
+                "balance": 20000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "5T7EJX45Vi8rYgVjeiiQbdgM2Eun4Hq5S8uMiupiwWY1",
-                "balance": 10000
+                "balance": 10000000000000
             }
         },
         {
             "supply_account": {
                 "account_id": "2ByFEVzfMKC13jvk1nZuFVGYoDVW1iAxvvFnqboV1aAg",
-                "balance": 20000
+                "balance": 20000000000000
             }
         }
     ],

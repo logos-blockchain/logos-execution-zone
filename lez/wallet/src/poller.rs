@@ -2,8 +2,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
-use log::{info, warn};
+use lee_core::BlockId;
+use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use tokio::task::JoinSet;
 
 use crate::config::WalletConfig;
 
@@ -30,18 +32,18 @@ impl TxPoller {
     }
 
     // TODO: this polling is not based on blocks, but on timeouts, need to fix this.
-    pub async fn poll_tx(&self, tx_hash: HashType) -> Result<LeeTransaction> {
+    pub async fn poll_tx(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
         let max_blocks_to_query = self.polling_max_blocks_to_query;
 
-        info!("Starting poll for transaction {tx_hash}");
+        log::info!("Starting poll for transaction {tx_hash}");
         for poll_id in 1..max_blocks_to_query {
-            info!("Poll {poll_id}");
+            log::info!("Poll {poll_id}");
 
             let mut try_error_counter = 0_u64;
 
             loop {
                 match self.client.get_transaction(tx_hash).await {
-                    Ok(Some(tx)) => return Ok(tx),
+                    Ok(Some((tx, block_id))) => return Ok((tx, block_id)),
                     Ok(None) => {}
                     Err(err) => {
                         warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
@@ -85,4 +87,24 @@ impl TxPoller {
             }
         }
     }
+}
+
+pub async fn multi_poll(
+    pollers: Vec<TxPoller>,
+    tx_hash: HashType,
+) -> Result<(LeeTransaction, BlockId)> {
+    let mut set = JoinSet::new();
+
+    for poller in pollers {
+        set.spawn(async move { poller.poll_tx(tx_hash).await });
+    }
+
+    while let Some(res) = set.join_next().await {
+        if let Ok(Ok(tx_res)) = res {
+            return Ok(tx_res);
+        }
+        // There is no point handling failed poll here
+    }
+
+    anyhow::bail!("All pollers failed")
 }

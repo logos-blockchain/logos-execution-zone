@@ -1,5 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountStateDiff, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_call, respond_unsupported_call,
 };
 
 // Tail Call example program.
@@ -25,32 +26,37 @@ fn hello_world_program_id() -> ProgramId {
 
 fn main() {
     // Read inputs
-    let (
+    let call = read_lee_call::<()>();
+    let ProgramCall::Execute(
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (),
         },
         instruction_data,
-    ) = read_lee_inputs::<()>();
+    ) = call
+    else {
+        respond_unsupported_call(call);
+    };
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
-        .clone()
         .try_into()
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 
+    let pre_state_account_id = pre_state.account_id;
+
     // Create the (unchanged) post state
-    let post_state = AccountPostState::new(pre_state.account.clone());
+    let post_state = AccountStateDiff::unchanged(pre_state);
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
-    let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
+    let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
     let chained_call = ChainedCall {
-        program_id: hello_world_program_id(),
+        program_account_id: hello_world_program_id().into(),
         instruction_data: chained_call_instruction_data,
-        pre_states,
+        pre_state_ids: vec![pre_state_account_id],
         pda_seeds: vec![],
     };
 
@@ -58,10 +64,9 @@ fn main() {
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
-        vec![pre_state],
         vec![post_state],
     )
     .with_chained_calls(vec![chained_call])

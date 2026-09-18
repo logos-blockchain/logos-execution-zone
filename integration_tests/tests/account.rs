@@ -4,12 +4,15 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, private_mention};
+use integration_tests::{
+    TestContext,
+    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    private_mention,
+    utils::{get_account, new_account},
+};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
-use lee_core::account::Nonce;
-use log::info;
-use sequencer_service_rpc::RpcClient as _;
+use lee_core::{account::Nonce, program::DEFAULT_PROGRAM_OWNER};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -24,20 +27,17 @@ use wallet::{
 async fn get_existing_account() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let account = ctx
-        .sequencer_client()
-        .get_account(ctx.existing_public_accounts()[0])
-        .await?;
+    let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
-    assert_eq!(account.balance, 10000);
+    // Genesis credits the account.
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
+    // No data is appended.
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    // It also gets used as a funder for private accounts on genesis twice.
+    assert_eq!(account.nonce.0, 2);
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
@@ -64,7 +64,7 @@ async fn new_public_account_with_label() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Public(account_id)));
 
-    info!("Successfully created public account with label");
+    log::info!("Successfully created public account with label");
 
     Ok(())
 }
@@ -86,7 +86,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Private(account_id)));
 
-    info!("Successfully set label on existing private account");
+    log::info!("Successfully set label on existing private account");
 
     Ok(())
 }
@@ -95,18 +95,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 async fn new_public_account_without_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: None,
-        label: None,
-    }));
-
-    let result = execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    // Extract the account_id from the result
-
-    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        panic!("Expected RegisterAccount return value")
-    };
+    let account_id = new_account(&mut ctx, false, None).await?;
 
     // Verify no label was stored for the account id
     assert!(
@@ -118,7 +107,7 @@ async fn new_public_account_without_label() -> Result<()> {
         "No label should be stored when not provided"
     );
 
-    info!("Successfully created public account without label");
+    log::info!("Successfully created public account without label");
 
     Ok(())
 }
@@ -156,9 +145,13 @@ async fn import_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account_id = lee::AccountId::from((
+        &key_chain.nullifier_public_key,
+        &key_chain.viewing_public_key,
+        0,
+    ));
     let account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 777,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -213,12 +206,16 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account_id = lee::AccountId::from((
+        &key_chain.nullifier_public_key,
+        &key_chain.viewing_public_key,
+        0,
+    ));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
     let initial_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 100,
         data: Data::default(),
         nonce: Nonce::default(),
@@ -237,7 +234,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     .await?;
 
     let updated_account = lee::Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: programs::authenticated_transfer().id().into(),
         balance: 999,
         data: Data::default(),
         nonce: Nonce::default(),

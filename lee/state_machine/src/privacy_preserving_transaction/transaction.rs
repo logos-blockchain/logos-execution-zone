@@ -53,7 +53,12 @@ impl PrivacyPreservingTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(&self.message.public_account_ids);
+        acc_set.extend(
+            self.message
+                .public_actions
+                .iter()
+                .map(|action| action.account_id),
+        );
 
         acc_set.into_iter().collect()
     }

@@ -17,8 +17,11 @@ use indexer_ffi::{
         types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
     },
 };
-use integration_tests::{BlockingTestContext, TestContext};
+use integration_tests::{BlockingTestContext, L2_TO_L1_TIMEOUT};
 use tempfile::TempDir;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 
 unsafe extern "C" {
     pub unsafe fn query_last_block(indexer: *const IndexerServiceFFI) -> LastBlockIdResult;
@@ -50,8 +53,12 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = integration_tests::config::indexer_config(bedrock_addr)
-        .context("Failed to create Indexer config")?;
+    let indexer_config = integration_tests::config::indexer_config(
+        bedrock_addr,
+        integration_tests::config::bedrock_channel_id(),
+        None,
+    )
+    .context("Failed to create Indexer config")?;
 
     let config_json = serde_json::to_vec(&indexer_config)?;
     let config_path = temp_indexer_dir.path().join("indexer_config.json");
@@ -79,7 +86,12 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
 }
 
 pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
-    let ctx = TestContext::builder().disable_indexer().build_blocking()?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()).disable_indexer(),
+        )
+        .build_blocking()?;
+
     // Don't borrow `ctx.runtime()`: `ctx` (and its by-value tokio runtime) is
     // moved into the returned tuple, which would leave any pointer into it
     // dangling. Pass a null runtime so the FFI owns its own — the same path the
@@ -102,10 +114,10 @@ pub fn wait_for_indexer_ffi_block(indexer: &IndexerServiceFFI, min_block_id: u64
         if res.error.is_ok() && res.is_some && res.block_id >= min_block_id {
             return Ok(res.block_id);
         }
-        if start.elapsed() >= integration_tests::L2_TO_L1_TIMEOUT {
+        if start.elapsed() >= L2_TO_L1_TIMEOUT {
             anyhow::bail!(
                 "Indexer FFI did not reach block {min_block_id} within {:?}. Last observed block id: {}",
-                integration_tests::L2_TO_L1_TIMEOUT,
+                L2_TO_L1_TIMEOUT,
                 res.block_id
             );
         }

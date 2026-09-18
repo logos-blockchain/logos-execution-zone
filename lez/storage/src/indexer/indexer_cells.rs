@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use common::transaction::TxEvents;
 use lee::V03State;
 
 use crate::{
@@ -6,10 +7,11 @@ use crate::{
     cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
     indexer::{
-        ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_LAST_BREAKPOINT_ID,
-        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY,
-        TX_HASH_CELL_NAME,
+        ACC_NUM_CELL_NAME, BLOCK_EVENTS_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME,
+        CF_ACC_META, CF_BREAKPOINT_NAME, CF_EVENTS, CF_HASH_TO_ID, CF_TX_TO_ID,
+        DB_META_CROSS_ZONE_HALT_KEY, DB_META_EVENT_FILTER_SEGMENTS_KEY,
+        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
+        DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
 };
 
@@ -31,29 +33,6 @@ impl SimpleWritableCell for LastObservedL1LibHeaderCell {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize last observed l1 header".to_owned()),
-            )
-        })
-    }
-}
-
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
-pub struct LastBreakpointIdCell(pub u64);
-
-impl SimpleStorableCell for LastBreakpointIdCell {
-    type KeyParams = ();
-
-    const CELL_NAME: &'static str = DB_META_LAST_BREAKPOINT_ID;
-    const CF_NAME: &'static str = CF_META_NAME;
-}
-
-impl SimpleReadableCell for LastBreakpointIdCell {}
-
-impl SimpleWritableCell for LastBreakpointIdCell {
-    fn value_constructor(&self) -> DbResult<Vec<u8>> {
-        borsh::to_vec(&self).map_err(|err| {
-            DbError::borsh_cast_message(
-                err,
-                Some("Failed to serialize last breakpoint id".to_owned()),
             )
         })
     }
@@ -145,6 +124,60 @@ impl SimpleWritableCell for BlockHashToBlockIdMapCell {
     }
 }
 
+#[derive(BorshDeserialize)]
+pub struct BlockEventsCellOwned(pub Vec<TxEvents>);
+
+impl SimpleStorableCell for BlockEventsCellOwned {
+    type KeyParams = u64;
+
+    const CELL_NAME: &'static str = BLOCK_EVENTS_CELL_NAME;
+    const CF_NAME: &'static str = CF_EVENTS;
+
+    fn key_constructor(params: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&params).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleReadableCell for BlockEventsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct BlockEventsCellRef<'events>(pub &'events [TxEvents]);
+
+impl SimpleStorableCell for BlockEventsCellRef<'_> {
+    type KeyParams = u64;
+
+    const CELL_NAME: &'static str = BLOCK_EVENTS_CELL_NAME;
+    const CF_NAME: &'static str = CF_EVENTS;
+
+    fn key_constructor(params: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&params).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleWritableCell for BlockEventsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize block events".to_owned()))
+        })
+    }
+}
+
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct TxHashToBlockIdMapCell(pub u64);
 
@@ -212,6 +245,27 @@ impl SimpleWritableCell for AccNumTxCell {
     }
 }
 
+/// The L1 inscription slot of the tip block, written atomically with the tip.
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct TipSlotCell(pub u64);
+
+impl SimpleStorableCell for TipSlotCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_TIP_SLOT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for TipSlotCell {}
+
+impl SimpleWritableCell for TipSlotCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize tip slot".to_owned()))
+        })
+    }
+}
+
 /// Opaque bytes for the zone-sdk indexer cursor `Option<(MsgId, Slot)>`.
 /// The caller serializes via `serde_json` (neither type derives borsh).
 #[derive(BorshDeserialize)]
@@ -225,6 +279,40 @@ impl SimpleStorableCell for ZoneSdkIndexerCursorCellOwned {
 }
 
 impl SimpleReadableCell for ZoneSdkIndexerCursorCellOwned {}
+
+/// The caller serializes via `borsh` (the segment list type lives in `indexer_core`).
+#[derive(BorshDeserialize)]
+pub struct EventFilterSegmentsCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for EventFilterSegmentsCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for EventFilterSegmentsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct EventFilterSegmentsCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for EventFilterSegmentsCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_EVENT_FILTER_SEGMENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for EventFilterSegmentsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize event-filter segments cell".to_owned()),
+            )
+        })
+    }
+}
 
 #[derive(BorshSerialize)]
 pub struct ZoneSdkIndexerCursorCellRef<'bytes>(pub &'bytes [u8]);
@@ -247,11 +335,81 @@ impl SimpleWritableCell for ZoneSdkIndexerCursorCellRef<'_> {
     }
 }
 
+/// Opaque JSON bytes for the indexer's persisted `Option<StallReason>`.
+#[derive(BorshDeserialize)]
+pub struct StallReasonCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for StallReasonCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_STALL_REASON_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for StallReasonCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct StallReasonCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for StallReasonCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_STALL_REASON_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for StallReasonCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize stall reason cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// Opaque JSON bytes for the indexer's persisted cross-zone halt record.
+#[derive(BorshDeserialize)]
+pub struct CrossZoneHaltCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for CrossZoneHaltCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_HALT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for CrossZoneHaltCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct CrossZoneHaltCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for CrossZoneHaltCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_HALT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for CrossZoneHaltCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize cross-zone halt cell".to_owned()),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod uniform_tests {
     use crate::{
         cells::SimpleStorableCell as _,
-        indexer::indexer_cells::{BreakpointCellOwned, BreakpointCellRef},
+        indexer::indexer_cells::{
+            BreakpointCellOwned, BreakpointCellRef, CrossZoneHaltCellOwned, CrossZoneHaltCellRef,
+        },
     };
 
     #[test]
@@ -261,6 +419,18 @@ mod uniform_tests {
         assert_eq!(
             BreakpointCellRef::key_constructor(1000).unwrap(),
             BreakpointCellOwned::key_constructor(1000).unwrap()
+        );
+    }
+
+    #[test]
+    fn cross_zone_halt_ref_and_owned_is_aligned() {
+        assert_eq!(
+            CrossZoneHaltCellRef::CELL_NAME,
+            CrossZoneHaltCellOwned::CELL_NAME
+        );
+        assert_eq!(
+            CrossZoneHaltCellRef::CF_NAME,
+            CrossZoneHaltCellOwned::CF_NAME
         );
     }
 }

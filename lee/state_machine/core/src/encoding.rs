@@ -7,7 +7,7 @@ use std::io::Read as _;
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::encryption::EphemeralPublicKey;
+use crate::encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN};
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
@@ -21,9 +21,7 @@ impl Account {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        for word in &self.program_owner {
-            bytes.extend_from_slice(&word.to_le_bytes());
-        }
+        bytes.extend_from_slice(self.program_owner.as_ref());
         bytes.extend_from_slice(&self.balance.to_le_bytes());
         bytes.extend_from_slice(&self.nonce.0.to_le_bytes());
         let data_length: u32 = u32::try_from(self.data.len()).expect("Invalid u32");
@@ -37,15 +35,12 @@ impl Account {
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
         use crate::account::{Nonce, data::Data};
 
-        let mut u32_bytes = [0_u8; 4];
         let mut u128_bytes = [0_u8; 16];
 
         // program owner
-        let mut program_owner = [0_u32; 8];
-        for word in &mut program_owner {
-            cursor.read_exact(&mut u32_bytes)?;
-            *word = u32::from_le_bytes(u32_bytes);
-        }
+        let mut program_owner_bytes = [0_u8; 32];
+        cursor.read_exact(&mut program_owner_bytes)?;
+        let program_owner = AccountId::new(program_owner_bytes);
 
         // balance
         cursor.read_exact(&mut u128_bytes)?;
@@ -97,11 +92,6 @@ impl NullifierPublicKey {
 
 #[cfg(feature = "host")]
 impl Nullifier {
-    #[must_use]
-    pub const fn to_byte_array(&self) -> [u8; 32] {
-        self.0
-    }
-
     #[cfg(feature = "host")]
     #[must_use]
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
@@ -127,6 +117,11 @@ impl Ciphertext {
         bytes.extend_from_slice(&self.0);
 
         bytes
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 
     #[cfg(feature = "host")]
@@ -168,7 +163,7 @@ impl EphemeralPublicKey {
     /// Deserializes an ML-KEM-768 ciphertext from a cursor.
     /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut value = vec![0_u8; 1088];
+        let mut value = vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN];
         cursor.read_exact(&mut value)?;
         Ok(Self(value))
     }
@@ -188,7 +183,7 @@ mod tests {
     #[test]
     fn enconding() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
             nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),
@@ -249,7 +244,7 @@ mod tests {
     #[test]
     fn account_to_bytes_roundtrip() {
         let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
             nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),

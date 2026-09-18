@@ -25,8 +25,22 @@ impl KeyChain {
     #[must_use]
     pub fn new_os_random() -> Self {
         // Currently dropping SeedHolder at the end of initialization.
-        // Now entirely sure if we need it in the future.
+        // Not entirely sure if we need it in the future.
         let seed_holder = SeedHolder::new_os_random();
+
+        Self::from_seed_holder(&seed_holder)
+    }
+
+    #[must_use]
+    pub fn new_mnemonic(passphrase: &str) -> (Self, bip39::Mnemonic) {
+        // Currently dropping SeedHolder at the end of initialization.
+        // Not entirely sure if we need it in the future.
+        let (seed_holder, mnemonic) = SeedHolder::new_mnemonic(passphrase);
+
+        (Self::from_seed_holder(&seed_holder), mnemonic)
+    }
+
+    fn from_seed_holder(seed_holder: &SeedHolder) -> Self {
         let secret_spending_key = seed_holder.produce_top_secret_key_holder();
 
         let private_key_holder = secret_spending_key.produce_private_key_holder(None);
@@ -40,29 +54,6 @@ impl KeyChain {
             nullifier_public_key,
             viewing_public_key,
         }
-    }
-
-    #[must_use]
-    pub fn new_mnemonic(passphrase: &str) -> (Self, bip39::Mnemonic) {
-        // Currently dropping SeedHolder at the end of initialization.
-        // Not entirely sure if we need it in the future.
-        let (seed_holder, mnemonic) = SeedHolder::new_mnemonic(passphrase);
-        let secret_spending_key = seed_holder.produce_top_secret_key_holder();
-
-        let private_key_holder = secret_spending_key.produce_private_key_holder(None);
-
-        let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
-        let viewing_public_key = private_key_holder.generate_viewing_public_key();
-
-        (
-            Self {
-                secret_spending_key,
-                private_key_holder,
-                nullifier_public_key,
-                viewing_public_key,
-            },
-            mnemonic,
-        )
     }
 
     #[must_use]

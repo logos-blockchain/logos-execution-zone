@@ -9,12 +9,25 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  packages: read
 
 name: bench-regression
 
 jobs:
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
   crypto-primitives:
+    needs: ci-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -23,17 +36,6 @@ jobs:
           # criterion-compare-action checks out the base branch in a second
           # working tree, so we need the full history.
           fetch-depth: 0
-
-      - uses: ./.github/actions/install-system-deps
-
-      - uses: ./.github/actions/install-risc0
-
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install active toolchain
-        run: rustup install
 
       - name: Run criterion-compare against base branch
         uses: boa-dev/criterion-compare-action@v3

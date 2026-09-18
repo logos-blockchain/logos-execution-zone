@@ -1,6 +1,8 @@
 use bip39::Mnemonic;
 use common::HashType;
-use lee_core::{NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey};
+use lee_core::{
+    AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey,
+};
 use ml_kem;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -36,23 +38,14 @@ impl ViewingSecretKey {
 /// for recepient.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateKeyHolder {
-    pub nullifier_secret_key: NullifierSecretKey,
+    pub authorization_secret_key: AuthorizationSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
 }
 
 impl SeedHolder {
     #[must_use]
     pub fn new_os_random() -> Self {
-        let mut enthopy_bytes: [u8; 32] = [0; 32];
-        OsRng.fill_bytes(&mut enthopy_bytes);
-
-        let mnemonic = Mnemonic::from_entropy(&enthopy_bytes)
-            .expect("Enthropy must be a multiple of 32 bytes");
-        let seed_wide = mnemonic.to_seed("mnemonic");
-
-        Self {
-            seed: seed_wide.to_vec(),
-        }
+        Self::new_mnemonic("mnemonic").0
     }
 
     #[must_use]
@@ -62,14 +55,8 @@ impl SeedHolder {
 
         let mnemonic =
             Mnemonic::from_entropy(&entropy_bytes).expect("Entropy must be a multiple of 32 bytes");
-        let seed_wide = mnemonic.to_seed(passphrase);
 
-        (
-            Self {
-                seed: seed_wide.to_vec(),
-            },
-            mnemonic,
-        )
+        (Self::from_mnemonic(&mnemonic, passphrase), mnemonic)
     }
 
     #[must_use]
@@ -102,58 +89,39 @@ impl SeedHolder {
 impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-    pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[1];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+    pub fn generate_authorization_secret_key(&self, index: Option<u32>) -> AuthorizationSecretKey {
+        const DOMAIN: &[u8; 33] = b"/LEE-Keys/v1/Authorization/Secret";
 
-        let index = match index {
-            None => 0_u32,
-            _ => index.expect("Expect a valid u32"),
-        };
+        let index = index.unwrap_or(0);
 
         let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
+        hasher.update(DOMAIN);
         hasher.update(self.0);
-        hasher.update(SUFFIX_1);
         hasher.update(index.to_be_bytes());
-        hasher.update(SUFFIX_2);
 
-        <NullifierSecretKey>::from(hasher.finalize_fixed())
+        AuthorizationSecretKey(hasher.finalize_fixed().into())
+    }
+
+    #[must_use]
+    pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
+        <NullifierSecretKey>::from(&self.generate_authorization_secret_key(index))
     }
 
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[2];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+        const DOMAIN: &[u8; 27] = b"/LEE-Keys/v1/Viewing/Secret";
 
-        let index = match index {
-            None => 0_u32,
-            _ => index.expect("Expect a valid u32"),
-        };
+        let index = index.unwrap_or(0);
 
-        let mut bytes: Vec<u8> = Vec::with_capacity(64);
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&self.0);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(&index.to_be_bytes());
-        bytes.extend_from_slice(SUFFIX_2);
-        let bytes: [u8; 64] = bytes
-            .try_into()
-            .expect("`generate_viewing_secret_seed_key`: bytes must be exactly 64");
+        let mut bytes = [0_u8; 27 + 32 + 4];
+        bytes[..27].copy_from_slice(DOMAIN);
+        bytes[27..59].copy_from_slice(&self.0);
+        bytes[59..].copy_from_slice(&index.to_be_bytes());
 
-        let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
+        let full_seed = hmac_sha512::HMAC::mac(bytes, b"/LEE-Keys/v1/Viewing/Seed");
 
-        ViewingSecretKey::new(
-            *full_seed
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-            *full_seed
-                .last_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get last 32"),
-        )
+        Self::generate_viewing_secret_key(full_seed)
     }
 
     #[must_use]
@@ -167,7 +135,7 @@ impl SecretSpendingKey {
     #[must_use]
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
         PrivateKeyHolder {
-            nullifier_secret_key: self.generate_nullifier_secret_key(index),
+            authorization_secret_key: self.generate_authorization_secret_key(index),
             viewing_secret_key: self.generate_viewing_secret_seed_key(index),
         }
     }
@@ -181,14 +149,19 @@ impl From<&ViewingSecretKey> for ViewingPublicKey {
         seed_bytes[32..].copy_from_slice(&sk.z);
         let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
         Self::from_bytes(dk.encapsulation_key().to_bytes().to_vec())
-            .expect("key_protocol::secret_holders::From<&ViewingSecretKey>: ML-KEM-768 encapsulation key is always 1184 bytes")
+            .expect("key_protocol::secret_holders::From<&ViewingSecretKey>: ML-KEM-768 encapsulation key is always ViewingPublicKey::LEN bytes")
     }
 }
 
 impl PrivateKeyHolder {
     #[must_use]
+    pub fn nullifier_secret_key(&self) -> NullifierSecretKey {
+        (&self.authorization_secret_key).into()
+    }
+
+    #[must_use]
     pub fn generate_nullifier_public_key(&self) -> NullifierPublicKey {
-        (&self.nullifier_secret_key).into()
+        NullifierPublicKey::from(&self.nullifier_secret_key())
     }
 
     #[must_use]
@@ -201,7 +174,6 @@ impl PrivateKeyHolder {
 mod tests {
     use super::*;
 
-    // TODO? are these necessary?
     #[test]
     fn seed_generation_test() {
         let seed_holder = SeedHolder::new_os_random();

@@ -7,5 +7,12 @@ license = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+image_id = ["dep:build_utils"]
+
 [dependencies]
-serde.workspace = true
+borsh.workspace = true
+lee_core.workspace = true
+
+[build-dependencies]
+build_utils = { workspace = true, optional = true }
