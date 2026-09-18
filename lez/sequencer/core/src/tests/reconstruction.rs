@@ -563,12 +563,10 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     );
 }
 
-// /// A sequencer config whose genesis funds the bridge account, so replayed bridge
-// /// deposit transactions have a source balance to mint from.
+// /// The escrow is funded at genesis, so this is `setup_sequencer_config()`.
+// /// Kept as a name because the parked tests below call it.
 // fn bridge_funded_config() -> SequencerConfig {
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
-//     config
+//     setup_sequencer_config()
 // }
 
 // /// Builds an unfulfilled pending deposit event for `recipient`, matching the

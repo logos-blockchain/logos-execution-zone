@@ -71,6 +71,8 @@ pub struct WalletConfig {
     pub seq_block_poll_max_amount: u64,
     #[serde(default = "MultiSequencerClientConfig::default")]
     pub multi_sequencer_client_config: MultiSequencerClientConfig,
+    #[serde(default = "default_gas_limit")]
+    pub gas_limit: u64,
 }
 
 impl Default for WalletConfig {
@@ -85,6 +87,7 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             multi_sequencer_client_config: MultiSequencerClientConfig::default(),
+            gas_limit: default_gas_limit(),
         }
     }
 }
@@ -135,6 +138,7 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             multi_sequencer_client_config,
+            gas_limit,
         } = self;
 
         let WalletConfigOverrides {
@@ -144,6 +148,7 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             multi_sequencer_client_config: o_multi_sequencer_client_config,
+            gas_limit: o_gas_limit,
         } = overrides;
 
         if let Some(v) = o_sequencers {
@@ -170,5 +175,13 @@ impl WalletConfig {
             warn!("Overriding wallet config 'multi_sequencer_client_config' to {v:?}");
             *multi_sequencer_client_config = v;
         }
+        if let Some(v) = o_gas_limit {
+            warn!("Overriding wallet config 'gas_limit' to {v}");
+            *gas_limit = v;
+        }
     }
+}
+
+const fn default_gas_limit() -> u64 {
+    crate::DEFAULT_GAS_LIMIT
 }

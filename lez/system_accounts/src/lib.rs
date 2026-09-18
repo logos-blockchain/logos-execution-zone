@@ -23,28 +23,17 @@ pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 pub type Slots = u32;
 
 #[must_use]
-pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id().into())
-}
-
-#[must_use]
-pub fn faucet_account() -> Account {
-    Account {
-        program_owner: programs::authenticated_transfer().id().into(),
-        balance: u128::MAX,
-        ..Account::default()
-    }
-}
-
-#[must_use]
 pub fn bridge_account_id() -> AccountId {
     bridge_core::compute_bridge_account_id(programs::bridge().id().into())
 }
 
+/// Holds the whole supply: genesis allocations and L1 deposits are both
+/// `Deposit`s that draw on it, so what it still holds is the unissued supply.
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
         program_owner: programs::authenticated_transfer().id().into(),
+        balance: u128::MAX,
         ..Account::default()
     }
 }

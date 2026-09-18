@@ -102,6 +102,7 @@ pub fn execute_and_prove(
         instruction_data,
         account_identities,
         vec![],
+        None,
         program_with_dependencies,
     )
 }
@@ -117,6 +118,7 @@ pub fn execute_and_prove_with_padded_inputs(
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     dummy_inputs: Vec<DummyInput>,
+    ciphertext_padding: Option<u32>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
@@ -332,6 +334,7 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_account_id: *initial_account_id,
         dummy_inputs,
+        ciphertext_padding,
         initial_pre_states,
         program_image_claims,
     };

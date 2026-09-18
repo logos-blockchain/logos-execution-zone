@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::AccountIdentity;
+pub use account_manager::{AccountIdentity, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -69,12 +69,7 @@ const ASSUMED_BASE_FEE: u128 = 64;
 const ASSUMED_DATA_BYTES: u128 = 100_000;
 
 /// Default cap on the fee reservation for wallet-built public transactions.
-#[expect(
-    clippy::as_conversions,
-    reason = "u128::from is not const; the widening is lossless"
-)]
-pub const DEFAULT_MAX_FEE: u128 =
-    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+pub const DEFAULT_MAX_FEE: u128 = max_fee_for(DEFAULT_GAS_LIMIT);
 
 pub enum AccDecodeData {
     Skip,
@@ -104,6 +99,13 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
+    #[error("Program bytecode is not a valid RISC0 program binary")]
+    InvalidProgramBinary(#[source] anyhow::Error),
+    #[error(
+        "Program uses a non-default kernel ELF; only programs built with the protocol's \
+         default kernel can be deployed"
+    )]
+    UnsupportedKernelElf,
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
@@ -803,6 +805,13 @@ impl WalletCore {
                 .collect::<Vec<_>>(),
         )?;
 
+        for account_id in acc_manager.accounts_outgrowing_pad() {
+            warn!(
+                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
+                 identifiable by length in this transaction"
+            );
+        }
+
         let private_account_keys = acc_manager.private_account_keys();
         let (output, proof) =
             lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
@@ -810,6 +819,7 @@ impl WalletCore {
                 instruction_data,
                 acc_manager.account_identities(),
                 acc_manager.dummy_inputs_default(),
+                Some(CIPHERTEXT_PAD_SIZE),
                 &program.to_owned(),
             )?;
 
@@ -952,9 +962,9 @@ impl WalletCore {
             instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
-                DEFAULT_GAS_LIMIT,
+                self.config.gas_limit,
                 0,
-                DEFAULT_MAX_FEE,
+                max_fee_for(self.config.gas_limit),
             )),
         );
 
@@ -1159,6 +1169,22 @@ impl WalletCore {
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
+}
+
+/// Sizes a fee cap for a given gas limit: a wallet that raises its gas limit
+/// must raise its fee cap in step, or the reservation cannot cover the gas.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "u128::from is not const; the widening is lossless"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "gas_limit and ASSUMED_DATA_BYTES both fit well within u128::MAX, so the widened \
+              sum and product cannot overflow"
+)]
+pub const fn max_fee_for(gas_limit: u64) -> u128 {
+    (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
 }
 
 /// Collapses the per-sequencer send results into one outcome: the first

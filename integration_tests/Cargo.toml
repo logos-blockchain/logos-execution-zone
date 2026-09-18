@@ -19,7 +19,6 @@ wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-faucet_core.workspace = true
 bridge_core.workspace = true
 ping_core.workspace = true
 cross_zone_outbox_core.workspace = true
@@ -67,6 +66,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+fee_core.workspace = true
 sequencer_core = { workspace = true, features = ["test-utils"] }
 
 [features]
