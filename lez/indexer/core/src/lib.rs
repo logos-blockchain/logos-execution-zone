@@ -8,13 +8,14 @@ use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
 use log::{error, warn};
-use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage};
 use retry::ApplyRetryGate;
 
 use crate::{
     block_store::IndexerStore,
     config::IndexerConfig,
     cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError, ForgedDispatch, SeenKey},
+    node_client::{NodeClient, node_client},
     status::{CrossZoneHalt, IndexerStatus, IndexerSyncStatus},
 };
 
@@ -22,6 +23,7 @@ pub mod block_store;
 pub mod config;
 pub mod cross_zone_verifier;
 pub mod event_filter;
+pub mod node_client;
 mod retry;
 pub mod status;
 
@@ -40,9 +42,9 @@ struct SlotProgress(Option<Slot>);
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
+    pub zone_indexer: Arc<ZoneIndexer<NodeClient>>,
     /// Direct node handle for queries outside `ZoneIndexer`'s streaming API.
-    pub node: NodeHttpClient,
+    pub node: NodeClient,
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
@@ -109,11 +111,7 @@ impl IndexerCore {
         // share a storage dir without their RocksDB state colliding.
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
-        let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
-        let node = NodeHttpClient::new(
-            CommonHttpClient::new(basic_auth),
-            config.bedrock_config.addr.clone(),
-        );
+        let node = node_client(&config.bedrock_config);
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
