@@ -31,11 +31,6 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
 pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
-/// Sentinel nullifier public key for the immutable-mirror commitment — not a real key, since the
-/// mirror can never be written to or scanned for. Exists only to satisfy
-/// `AccountId::for_private_pda`'s signature.
-const IMMUTABLE_MIRROR_NPK: NullifierPublicKey = NullifierPublicKey([0; 32]);
-
 pub type ProgramId = [u32; 8];
 
 /// Derives the `AccountId` under which a program's data is stored, directly from its
@@ -199,6 +194,24 @@ impl AccountId {
         let mut bytes = [0_u8; 64];
         bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
         bytes[32..64].copy_from_slice(Self::from(*image_id).value());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives the `AccountId` of the private commitment mirroring an immutable header's
+    /// `ProgramHeader`.
+    #[must_use]
+    pub fn for_immutable_mirror(header_account_id: Self) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const IMMUTABLE_MIRROR_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/ImmutMirror/";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(IMMUTABLE_MIRROR_PREFIX);
+        bytes[32..64].copy_from_slice(header_account_id.as_ref());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -1049,24 +1062,6 @@ fn validate_uniqueness_of_account_ids(state_diffs: &[AccountStateDiff]) -> bool 
     number_of_accounts == number_of_account_ids
 }
 
-fn immutable_mirror_vpk() -> ViewingPublicKey {
-    ViewingPublicKey::from_seed(&[0; 32], &[0; 32])
-}
-
-/// Derives the `AccountId` of the private commitment mirroring an immutable header's
-/// `ProgramHeader`. Seeded by the header's own `account_id`, not by content inside the header —
-/// headers live at arbitrary, caller-claimed addresses, so `account_id` is what ties a given
-/// `ProgramHeader` to this specific deployment rather than another one with the same content.
-fn immutable_mirror_account_id(header_account_id: AccountId) -> AccountId {
-    AccountId::for_private_pda(
-        &PROGRAM_LOADER_ACCOUNT_ID,
-        &PdaSeed::new(*header_account_id.value()),
-        &IMMUTABLE_MIRROR_NPK,
-        &immutable_mirror_vpk(),
-        0,
-    )
-}
-
 /// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
 /// state.
 ///
@@ -1078,7 +1073,7 @@ pub fn immutable_mirror_commitment(
     header_account_id: AccountId,
     program_header: &ProgramHeader,
 ) -> Commitment {
-    let mirror_account_id = immutable_mirror_account_id(header_account_id);
+    let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
     let mirrored_account = Account {
         program_owner: PROGRAM_LOADER_ACCOUNT_ID,
         balance: 0,
