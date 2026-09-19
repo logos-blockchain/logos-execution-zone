@@ -133,6 +133,15 @@ typedef enum FfiAccountIdentityKind {
 } FfiAccountIdentityKind;
 
 /**
+ * Which of `Public`/`Shadow`/`Private` a program (or dependency) is resolved as.
+ */
+typedef enum FfiProgramKind {
+  PUBLIC = 0,
+  SHADOW = 1,
+  PRIVATE = 2,
+} FfiProgramKind;
+
+/**
  * Opaque pointer to the Wallet instance.
  *
  * This type is never instantiated directly - it's used as an opaque handle
@@ -282,12 +291,40 @@ typedef struct FfiProgram {
   uintptr_t elf_size;
 } FfiProgram;
 
+typedef struct FfiProgramHeader {
+  struct FfiProgramId image_id;
+  struct FfiBytes32 program_first_segment;
+  bool immutable;
+} FfiProgramHeader;
+
+/**
+ * Intended to be created manually.
+ */
+typedef struct FfiMembershipProof {
+  uintptr_t index;
+  const struct FfiBytes32 *path;
+  uintptr_t path_len;
+} FfiMembershipProof;
+
+/**
+ * Intended to be created manually.
+ */
+typedef struct FfiDependency {
+  struct FfiProgram program;
+  enum FfiProgramKind kind;
+  struct FfiProgramHeader program_header;
+  struct FfiMembershipProof membership_proof;
+} FfiDependency;
+
 /**
  * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
   struct FfiProgram program;
-  const struct FfiProgram *deps;
+  enum FfiProgramKind self_kind;
+  struct FfiProgramHeader self_program_header;
+  struct FfiMembershipProof self_membership_proof;
+  const struct FfiDependency *deps;
   uintptr_t deps_size;
 } FfiProgramWithDependencies;
 

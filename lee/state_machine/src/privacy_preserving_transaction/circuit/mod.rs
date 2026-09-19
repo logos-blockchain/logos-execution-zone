@@ -46,20 +46,37 @@ impl Proof {
 }
 
 #[derive(Clone)]
+pub enum ProgramKind {
+    /// Publicly disclosed.
+    Public,
+    /// Never deployed to LEZ's public state.
+    Shadow,
+    /// An immutable program executed without disclosing which one it is.
+    Private {
+        program_header: ProgramHeader,
+        membership_proof: MembershipProof,
+    },
+}
+
+#[derive(Clone)]
+pub struct Dependency {
+    pub program: Program,
+    pub kind: ProgramKind,
+}
+
+#[derive(Clone)]
 pub struct ProgramWithDependencies {
     pub program: Program,
     /// Where `program` is actually deployed — never assumed to be its bytecode's bijection
     /// address, since the same bytecode may be deployed more than once at different addresses.
     pub self_account_id: AccountId,
+    pub self_kind: ProgramKind,
     // TODO: avoid having a copy of the bytecode of each dependency.
     /// Every program a chained call may target, keyed by the account address it's deployed at —
     /// never its bytecode identity, for the same reason. The caller building this off-chain
     /// (e.g. the wallet) already knows which program lives where; there's no live state to look
     /// it up against inside a pure proving function.
-    pub dependencies: HashMap<AccountId, Program>,
-    /// `account_id`s resolved as shadow programs.
-    pub shadow_account_ids: HashSet<AccountId>,
-    pub private_program_headers: HashMap<AccountId, (ProgramHeader, MembershipProof)>,
+    pub dependencies: HashMap<AccountId, Dependency>,
 }
 
 impl ProgramWithDependencies {
@@ -69,12 +86,23 @@ impl ProgramWithDependencies {
         self_account_id: AccountId,
         dependencies: HashMap<AccountId, Program>,
     ) -> Self {
+        let dependencies = dependencies
+            .into_iter()
+            .map(|(account_id, program)| {
+                (
+                    account_id,
+                    Dependency {
+                        program,
+                        kind: ProgramKind::Public,
+                    },
+                )
+            })
+            .collect();
         Self {
             program,
             self_account_id,
+            self_kind: ProgramKind::Public,
             dependencies,
-            shadow_account_ids: HashSet::new(),
-            private_program_headers: HashMap::new(),
         }
     }
 
@@ -84,15 +112,15 @@ impl ProgramWithDependencies {
     #[must_use]
     pub fn as_shadow_program(mut self) -> Self {
         self.self_account_id = AccountId::for_shadow_program(&self.program.id());
-        self.shadow_account_ids.insert(self.self_account_id);
+        self.self_kind = ProgramKind::Shadow;
         self
     }
 
-    /// Marks the dependency already inserted at `account_id` (which must be
-    /// `AccountId::for_shadow_program(dependency.id())`) as a shadow program.
     #[must_use]
     pub fn with_shadow_dependency(mut self, account_id: AccountId) -> Self {
-        self.shadow_account_ids.insert(account_id);
+        if let Some(dependency) = self.dependencies.get_mut(&account_id) {
+            dependency.kind = ProgramKind::Shadow;
+        }
         self
     }
 
@@ -103,13 +131,13 @@ impl ProgramWithDependencies {
         program_header: ProgramHeader,
         membership_proof: MembershipProof,
     ) -> Self {
-        self.private_program_headers
-            .insert(self.self_account_id, (program_header, membership_proof));
+        self.self_kind = ProgramKind::Private {
+            program_header,
+            membership_proof,
+        };
         self
     }
 
-    /// Marks the dependency already inserted at `account_id` as an immutable program referenced
-    /// privately: resolved via `ProgramImageClaim::Private` instead of `Public`.
     #[must_use]
     pub fn with_private_dependency(
         mut self,
@@ -117,8 +145,12 @@ impl ProgramWithDependencies {
         program_header: ProgramHeader,
         membership_proof: MembershipProof,
     ) -> Self {
-        self.private_program_headers
-            .insert(account_id, (program_header, membership_proof));
+        if let Some(dependency) = self.dependencies.get_mut(&account_id) {
+            dependency.kind = ProgramKind::Private {
+                program_header,
+                membership_proof,
+            };
+        }
         self
     }
 }
@@ -166,9 +198,8 @@ pub fn execute_and_prove_with_padded_inputs(
     let ProgramWithDependencies {
         program: initial_program,
         self_account_id: initial_account_id,
+        self_kind: initial_kind,
         dependencies,
-        shadow_account_ids,
-        private_program_headers,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
@@ -338,11 +369,12 @@ pub fn execute_and_prove_with_padded_inputs(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_account_id).ok_or(
-                InvalidProgramBehaviorError::UndeclaredProgramDependency {
+            let next_program = &dependencies
+                .get(&new_call.program_account_id)
+                .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency {
                     program_account_id: new_call.program_account_id,
-                },
-            )?;
+                })?
+                .program;
             chained_calls.push_front((
                 new_call,
                 next_program,
@@ -356,42 +388,38 @@ pub fn execute_and_prove_with_padded_inputs(
             .expect("we check the max depth at the beginning of the loop");
     }
 
-    let all_programs_by_account_id = std::iter::once((*initial_account_id, initial_program)).chain(
-        dependencies
-            .iter()
-            .map(|(account_id, program)| (*account_id, program)),
-    );
+    let all_programs_by_account_id =
+        std::iter::once((*initial_account_id, initial_program, initial_kind)).chain(
+            dependencies.iter().map(|(account_id, dependency)| {
+                (*account_id, &dependency.program, &dependency.kind)
+            }),
+        );
 
     // Every program actually invoked, claimed against its real bytecode identity — the guest
     // circuit uses these for `env::verify`, unchecked; the sequencer verifies each `Public` one
     // against real chain state before accepting the proof, while `Private` is checked in-circuit —
     // unless it's resolved as shadow instead.
-    let program_image_witnesses: Vec<ProgramImageWitness> = all_programs_by_account_id
-        .clone()
-        .filter(|(account_id, _)| {
-            !shadow_account_ids.contains(account_id)
-                && !private_program_headers.contains_key(account_id)
-        })
-        .map(|(account_id, program)| ProgramImageWitness::Public {
-            account_id,
-            image_id: program.id(),
-        })
-        .chain(private_program_headers.iter().map(
-            |(account_id, (program_header, membership_proof))| ProgramImageWitness::Private {
-                account_id: *account_id,
+    let mut program_image_witnesses = Vec::new();
+    let mut shadow_program_witnesses = Vec::new();
+    for (account_id, program, kind) in all_programs_by_account_id {
+        match kind {
+            ProgramKind::Public => program_image_witnesses.push(ProgramImageWitness::Public {
+                account_id,
+                image_id: program.id(),
+            }),
+            ProgramKind::Private {
+                program_header,
+                membership_proof,
+            } => program_image_witnesses.push(ProgramImageWitness::Private {
+                account_id,
                 program_header: *program_header,
                 membership_proof: membership_proof.clone(),
-            },
-        ))
-        .collect();
-
-    // Every program resolved as shadow instead of a Public/Private claim.
-    let shadow_program_witnesses: Vec<ShadowProgramWitness> = all_programs_by_account_id
-        .filter(|(account_id, _)| shadow_account_ids.contains(account_id))
-        .map(|(_, program)| ShadowProgramWitness {
-            image_id: program.id(),
-        })
-        .collect();
+            }),
+            ProgramKind::Shadow => shadow_program_witnesses.push(ShadowProgramWitness {
+                image_id: program.id(),
+            }),
+        }
+    }
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,

@@ -5,8 +5,11 @@ use std::{
 
 use common::HashType;
 use lee::{
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, ProgramId,
+    privacy_preserving_transaction::circuit::{Dependency, ProgramKind, ProgramWithDependencies},
+    program::Program,
+    AccountId, ProgramId,
 };
+use lee_core::{program::ProgramHeader, MembershipProof};
 
 use crate::{
     block_on,
@@ -51,51 +54,224 @@ impl From<Program> for FfiProgram {
     }
 }
 
+/// Which of `Public`/`Shadow`/`Private` a program (or dependency) is resolved as.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiProgramKind {
+    Public = 0,
+    Shadow = 1,
+    Private = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiProgramHeader {
+    pub image_id: FfiProgramId,
+    pub program_first_segment: FfiBytes32,
+    pub immutable: bool,
+}
+
+impl Default for FfiProgramHeader {
+    fn default() -> Self {
+        Self {
+            image_id: FfiProgramId { data: [0; 8] },
+            program_first_segment: FfiBytes32::default(),
+            immutable: false,
+        }
+    }
+}
+
+impl From<&FfiProgramHeader> for ProgramHeader {
+    fn from(value: &FfiProgramHeader) -> Self {
+        Self {
+            image_id: value.image_id.data,
+            program_first_segment: value.program_first_segment.into(),
+            immutable: value.immutable,
+        }
+    }
+}
+
+impl From<ProgramHeader> for FfiProgramHeader {
+    fn from(value: ProgramHeader) -> Self {
+        Self {
+            image_id: FfiProgramId {
+                data: value.image_id,
+            },
+            program_first_segment: value.program_first_segment.into(),
+            immutable: value.immutable,
+        }
+    }
+}
+
+#[repr(C)]
+/// Intended to be created manually.
+pub struct FfiMembershipProof {
+    pub index: usize,
+    pub path: *const FfiBytes32,
+    pub path_len: usize,
+}
+
+impl Default for FfiMembershipProof {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            path: std::ptr::null(),
+            path_len: 0,
+        }
+    }
+}
+
+impl TryFrom<&FfiMembershipProof> for MembershipProof {
+    type Error = WalletFfiError;
+
+    fn try_from(value: &FfiMembershipProof) -> Result<Self, Self::Error> {
+        let mut path = Vec::with_capacity(value.path_len);
+        for i in 0..value.path_len {
+            let hash = unsafe { value.path.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            path.push(hash.data);
+        }
+        Ok((value.index, path))
+    }
+}
+
+impl From<MembershipProof> for FfiMembershipProof {
+    fn from(value: MembershipProof) -> Self {
+        let (index, path) = value;
+        let ffi_path: Vec<FfiBytes32> = path.into_iter().map(FfiBytes32::from).collect();
+        let path_len = ffi_path.len();
+        let path = Box::into_raw(ffi_path.into_boxed_slice()) as *const FfiBytes32;
+
+        Self {
+            index,
+            path,
+            path_len,
+        }
+    }
+}
+
+#[repr(C)]
+/// Intended to be created manually.
+pub struct FfiDependency {
+    pub program: FfiProgram,
+    pub kind: FfiProgramKind,
+    pub program_header: FfiProgramHeader,
+    pub membership_proof: FfiMembershipProof,
+}
+
 #[repr(C)]
 /// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
     pub program: FfiProgram,
-    pub deps: *const FfiProgram,
+    pub self_kind: FfiProgramKind,
+    pub self_program_header: FfiProgramHeader,
+    pub self_membership_proof: FfiMembershipProof,
+    pub deps: *const FfiDependency,
     pub deps_size: usize,
+}
+
+/// Derived from `kind`, never caller-supplied, so it can't disagree with the circuit's own.
+fn ffi_kind_account_id(program: &Program, kind: FfiProgramKind) -> AccountId {
+    match kind {
+        FfiProgramKind::Shadow => AccountId::for_shadow_program(&program.id()),
+        FfiProgramKind::Public | FfiProgramKind::Private => AccountId::from(program.id()),
+    }
 }
 
 impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
-        let mut program_map = HashMap::new();
-
         let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = orig_program.id().into();
+        let self_account_id = ffi_kind_account_id(&orig_program, value.self_kind);
+        let self_kind = match value.self_kind {
+            FfiProgramKind::Public => ProgramKind::Public,
+            FfiProgramKind::Shadow => ProgramKind::Shadow,
+            FfiProgramKind::Private => ProgramKind::Private {
+                program_header: (&value.self_program_header).into(),
+                membership_proof: (&value.self_membership_proof).try_into()?,
+            },
+        };
+
+        let mut dependencies = HashMap::new();
 
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.deps_size {
-            let program_dep: Program = unsafe { value.deps.add(i).as_ref() }
-                .ok_or(WalletFfiError::NullPointer)?
-                .try_into()?;
+            let ffi_dep =
+                unsafe { value.deps.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            let program: Program = (&ffi_dep.program).try_into()?;
+            let account_id = ffi_kind_account_id(&program, ffi_dep.kind);
+            let kind = match ffi_dep.kind {
+                FfiProgramKind::Public => ProgramKind::Public,
+                FfiProgramKind::Shadow => ProgramKind::Shadow,
+                FfiProgramKind::Private => ProgramKind::Private {
+                    program_header: (&ffi_dep.program_header).into(),
+                    membership_proof: (&ffi_dep.membership_proof).try_into()?,
+                },
+            };
 
-            program_map.insert(program_dep.id().into(), program_dep);
+            dependencies.insert(account_id, Dependency { program, kind });
         }
 
-        Ok(Self::new(orig_program, self_account_id, program_map))
+        Ok(Self {
+            program: orig_program,
+            self_account_id,
+            self_kind,
+            dependencies,
+        })
+    }
+}
+
+fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMembershipProof) {
+    match kind {
+        ProgramKind::Public => (
+            FfiProgramKind::Public,
+            FfiProgramHeader::default(),
+            FfiMembershipProof::default(),
+        ),
+        ProgramKind::Shadow => (
+            FfiProgramKind::Shadow,
+            FfiProgramHeader::default(),
+            FfiMembershipProof::default(),
+        ),
+        ProgramKind::Private {
+            program_header,
+            membership_proof,
+        } => (
+            FfiProgramKind::Private,
+            program_header.into(),
+            membership_proof.into(),
+        ),
     }
 }
 
 impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
     fn from(value: ProgramWithDependencies) -> Self {
-        let ffi_program = value.program.into();
+        let program = value.program.into();
+        let (self_kind, self_program_header, self_membership_proof) =
+            ffi_kind_parts(value.self_kind);
 
-        let ffi_deps: Vec<FfiProgram> = value
+        let ffi_deps: Vec<FfiDependency> = value
             .dependencies
             .into_values()
-            .map(Into::into)
+            .map(|dependency| {
+                let (kind, program_header, membership_proof) = ffi_kind_parts(dependency.kind);
+                FfiDependency {
+                    program: dependency.program.into(),
+                    kind,
+                    program_header,
+                    membership_proof,
+                }
+            })
             .collect::<Vec<_>>();
 
         let deps_size = ffi_deps.len();
-        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgram;
+        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiDependency;
 
         Self {
-            program: ffi_program,
+            program,
+            self_kind,
+            self_program_header,
+            self_membership_proof,
             deps,
             deps_size,
         }
