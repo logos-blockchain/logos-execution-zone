@@ -13,6 +13,7 @@ use super::{
     super::{
         log_step,
         transfers::helpers::{ensure_transfer_name_available, insert_transfer_artifact},
+        wait_until,
     },
     parse_committee_config, parse_sequencer_registrations, require_sequencer,
 };
@@ -32,28 +33,20 @@ async fn wait_for_height(
     timeout_seconds: u64,
     description: &str,
 ) -> StepResult {
-    let timeout = Duration::from_secs(timeout_seconds);
-    let wait = async {
-        loop {
-            if client
+    wait_until(
+        POLL_INTERVAL,
+        Duration::from_secs(timeout_seconds),
+        format!("{description} at block {target}"),
+        || async move {
+            Ok((client
                 .get_last_block_id()
                 .await
                 .map_err(StepError::query_failed)?
-                >= target
-            {
-                return Ok::<(), StepError>(());
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    };
-    tokio::time::timeout(timeout, wait)
-        .await
-        .map_err(|_elapsed| StepError::Timeout {
-            message: format!(
-                "timed out waiting for {description} at block {target} within {timeout:?}"
-            ),
-        })??;
-    Ok(())
+                >= target)
+                .then_some(()))
+        },
+    )
+    .await
 }
 
 #[given("the following LEZ sequencers are registered")]
