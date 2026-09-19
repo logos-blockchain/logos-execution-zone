@@ -58,9 +58,9 @@ impl From<Program> for FfiProgram {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiProgramKind {
-    Public = 0,
-    Shadow = 1,
-    Private = 2,
+    ProgramPublic = 0,
+    ProgramShadow = 1,
+    ProgramPrivate = 2,
 }
 
 #[repr(C)]
@@ -172,8 +172,10 @@ pub struct FfiProgramWithDependencies {
 /// Derived from `kind`, never caller-supplied, so it can't disagree with the circuit's own.
 fn ffi_kind_account_id(program: &Program, kind: FfiProgramKind) -> AccountId {
     match kind {
-        FfiProgramKind::Shadow => AccountId::for_shadow_program(&program.id()),
-        FfiProgramKind::Public | FfiProgramKind::Private => AccountId::from(program.id()),
+        FfiProgramKind::ProgramShadow => AccountId::for_shadow_program(&program.id()),
+        FfiProgramKind::ProgramPublic | FfiProgramKind::ProgramPrivate => {
+            AccountId::from(program.id())
+        }
     }
 }
 
@@ -184,9 +186,9 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
         let orig_program: Program = (&value.program).try_into()?;
         let self_account_id = ffi_kind_account_id(&orig_program, value.self_kind);
         let self_kind = match value.self_kind {
-            FfiProgramKind::Public => ProgramKind::Public,
-            FfiProgramKind::Shadow => ProgramKind::Shadow,
-            FfiProgramKind::Private => ProgramKind::Private {
+            FfiProgramKind::ProgramPublic => ProgramKind::Public,
+            FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
+            FfiProgramKind::ProgramPrivate => ProgramKind::Private {
                 program_header: (&value.self_program_header).into(),
                 membership_proof: (&value.self_membership_proof).try_into()?,
             },
@@ -201,9 +203,9 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             let program: Program = (&ffi_dep.program).try_into()?;
             let account_id = ffi_kind_account_id(&program, ffi_dep.kind);
             let kind = match ffi_dep.kind {
-                FfiProgramKind::Public => ProgramKind::Public,
-                FfiProgramKind::Shadow => ProgramKind::Shadow,
-                FfiProgramKind::Private => ProgramKind::Private {
+                FfiProgramKind::ProgramPublic => ProgramKind::Public,
+                FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
+                FfiProgramKind::ProgramPrivate => ProgramKind::Private {
                     program_header: (&ffi_dep.program_header).into(),
                     membership_proof: (&ffi_dep.membership_proof).try_into()?,
                 },
@@ -224,12 +226,12 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
 fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMembershipProof) {
     match kind {
         ProgramKind::Public => (
-            FfiProgramKind::Public,
+            FfiProgramKind::ProgramPublic,
             FfiProgramHeader::default(),
             FfiMembershipProof::default(),
         ),
         ProgramKind::Shadow => (
-            FfiProgramKind::Shadow,
+            FfiProgramKind::ProgramShadow,
             FfiProgramHeader::default(),
             FfiMembershipProof::default(),
         ),
@@ -237,7 +239,7 @@ fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMe
             program_header,
             membership_proof,
         } => (
-            FfiProgramKind::Private,
+            FfiProgramKind::ProgramPrivate,
             program_header.into(),
             membership_proof.into(),
         ),

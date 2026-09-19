@@ -136,9 +136,9 @@ typedef enum FfiAccountIdentityKind {
  * Which of `Public`/`Shadow`/`Private` a program (or dependency) is resolved as.
  */
 typedef enum FfiProgramKind {
-  PUBLIC = 0,
-  SHADOW = 1,
-  PRIVATE = 2,
+  PROGRAM_PUBLIC = 0,
+  PROGRAM_SHADOW = 1,
+  PROGRAM_PRIVATE = 2,
 } FfiProgramKind;
 
 /**
