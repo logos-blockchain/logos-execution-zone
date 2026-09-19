@@ -151,8 +151,7 @@ pub fn create_header(
 /// Executes `UpdateHeader`.
 ///
 /// Returns a private [`Commitment`] alongside the diffs when this call is what flips `immutable`
-/// to `true` — the only transition possible, since a target that's already `immutable` is
-/// rejected outright.
+/// to `true`.
 #[must_use]
 pub fn update_header(
     pre_states: &[AccountWithMetadata],
@@ -185,8 +184,7 @@ pub fn update_header(
 
 /// Shared tail of `create_header`/`update_header`, once each has run its own distinct validation:
 /// recomputes the real `image_id` from the segment chain, builds the finalized `ProgramHeader`,
-/// emits its mirror commitment if `immutable` is set, and diffs the header account (every segment
-/// behind it is left unchanged).
+/// emits its mirror commitment if `immutable` is set, and diffs the header account.
 fn finalize_header(
     pre_states: &[AccountWithMetadata],
     first_segment: AccountId,

@@ -57,12 +57,8 @@ pub struct ProgramWithDependencies {
     /// (e.g. the wallet) already knows which program lives where; there's no live state to look
     /// it up against inside a pure proving function.
     pub dependencies: HashMap<AccountId, Program>,
-    /// `account_id`s (of `program` itself, or of a dependency) resolved as shadow programs
-    /// instead of `ProgramImageClaim::Public` claims.
+    /// `account_id`s resolved as shadow programs.
     pub shadow_account_ids: HashSet<AccountId>,
-    /// `account_id` → (finalized `ProgramHeader`, membership proof) for every program resolved as
-    /// `ProgramImageClaim::Private` instead of `Public` — checked in-circuit, so neither is ever
-    /// disclosed in the output.
     pub private_program_headers: HashMap<AccountId, (ProgramHeader, MembershipProof)>,
 }
 
@@ -100,11 +96,7 @@ impl ProgramWithDependencies {
         self
     }
 
-    /// Marks `program` itself as an immutable program referenced privately: resolved via
-    /// `ProgramImageClaim::Private` instead of `Public`, so which program this is stays hidden
-    /// from anyone inspecting public chain state. `program_header` must be `program`'s real,
-    /// currently-immutable header at `self_account_id`, and `membership_proof` a real proof of
-    /// its membership in the private commitment tree.
+    /// `ProgramImageClaim::Private` instead of `Public`.
     #[must_use]
     pub fn as_private_program(
         mut self,
@@ -393,13 +385,11 @@ pub fn execute_and_prove_with_padded_inputs(
         ))
         .collect();
 
-    // Every program resolved as shadow instead — carries the full elf rather than just a
-    // claimed image_id, since nothing about a shadow program's identity is ever committed to.
+    // Every program resolved as shadow instead of a Public/Private claim.
     let shadow_program_witnesses: Vec<ShadowProgramWitness> = all_programs_by_account_id
         .filter(|(account_id, _)| shadow_account_ids.contains(account_id))
-        .map(|(account_id, program)| ShadowProgramWitness {
-            account_id,
-            full_binary: program.elf().to_vec(),
+        .map(|(_, program)| ShadowProgramWitness {
+            image_id: program.id(),
         })
         .collect();
 

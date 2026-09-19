@@ -321,8 +321,7 @@ fn for_private_pda_differs_from_public_pda() {
 }
 
 /// Pins `AccountId::for_shadow_program` against a hardcoded expected output for a specific
-/// `image_id`. Any change to `SHADOW_PROGRAM_PREFIX`, byte ordering, or the underlying hash
-/// breaks this test.
+/// `image_id`.
 #[test]
 fn for_shadow_program_matches_pinned_value() {
     let image_id: ProgramId = [1, 2, 3, 4, 5, 6, 7, 8];

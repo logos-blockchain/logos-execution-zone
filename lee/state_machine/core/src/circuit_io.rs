@@ -13,23 +13,18 @@ use crate::{
 };
 
 /// Untrusted circuit input claiming a program's real `image_id`, used for `env::verify` in place
-/// of a header's address (which doesn't encode its image id).
+/// of a header's address.
 ///
 /// The circuit derives the published [`ProgramImageClaim`] from this — for `Private`, by checking
-/// membership in-circuit rather than echoing the witness unchanged, so which program this is
-/// stays genuinely hidden in the output.
+/// membership in-circuit.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum ProgramImageWitness {
-    /// Anchored against real, live public chain state. Every publicly-anchored program invoked
-    /// in a private transaction's call graph is visible via the resulting claim.
+    /// Public program data
     Public {
         account_id: AccountId,
         image_id: ProgramId,
     },
-    /// Anchored against the private commitment mirroring an immutable header's `ProgramHeader`.
-    /// The membership proof is checked against a commitment recomputed from
-    /// `account_id`/`program_header` — the same values used for `env::verify` — so the asserted
-    /// `image_id` can never be decoupled from the proof; only the resulting digest is published.
+    /// Private program data.
     Private {
         account_id: AccountId,
         program_header: ProgramHeader,
@@ -53,11 +48,6 @@ impl ProgramImageWitness {
         }
     }
 
-    /// Derives the claim this witness commits to in the circuit output.
-    ///
-    /// For `Private`, this is where membership is actually checked: the Merkle path is walked
-    /// in-circuit from a commitment recomputed here, so a wrong pair produces a `root` that won't
-    /// match any real historical commitment-tree state.
     #[must_use]
     pub fn to_claim(&self) -> ProgramImageClaim {
         match self {
@@ -82,12 +72,6 @@ impl ProgramImageWitness {
     }
 }
 
-/// A claim of a program's real `image_id`, committed into the circuit's public output.
-///
-/// The circuit doesn't independently verify `Public` against real state — the sequencer does,
-/// before accepting the proof, which fails naturally if a claim is a lie. `Private` needs no such
-/// follow-up: `root` is only ever produced by an in-circuit membership check, so the receipt's
-/// own soundness is the whole guarantee.
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub enum ProgramImageClaim {
@@ -100,17 +84,9 @@ pub enum ProgramImageClaim {
     },
 }
 
-/// A shadow program's identity, established fresh in this one proof from a real ELF supplied as a
-/// private witness.
-///
-/// Never echoed into the output or anchored against chain state, since a shadow program was never
-/// deployed. `image_id` is hashed from `full_binary` here every time — nothing attested to it
-/// before now.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct ShadowProgramWitness {
-    pub account_id: AccountId,
-    /// The full two-ELF `ProgramBinary` blob — same format `Program::elf()` produces.
-    pub full_binary: Vec<u8>,
+    pub image_id: ProgramId,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]

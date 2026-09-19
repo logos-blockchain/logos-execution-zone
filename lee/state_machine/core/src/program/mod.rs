@@ -31,9 +31,7 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
 pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
-/// Sentinel nullifier public key for the immutable-mirror commitment — not a real key, since the
-/// mirror can never be written to or scanned for. Exists only to satisfy
-/// `AccountId::for_private_pda`'s signature.
+/// Nullifier public key for the immutable-mirror commitment.
 const IMMUTABLE_MIRROR_NPK: NullifierPublicKey = NullifierPublicKey([0; 32]);
 
 pub type ProgramId = [u32; 8];
@@ -188,9 +186,7 @@ impl AccountId {
         )
     }
 
-    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone. Identical
-    /// bytecode from different provers intentionally collides on the same address — fine,
-    /// since ownership is still gated by account authorization.
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone.
     #[must_use]
     pub fn for_shadow_program(image_id: &ProgramId) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -1053,10 +1049,7 @@ fn immutable_mirror_vpk() -> ViewingPublicKey {
     ViewingPublicKey::from_seed(&[0; 32], &[0; 32])
 }
 
-/// Derives the `AccountId` of the private commitment mirroring an immutable header's
-/// `ProgramHeader`. Seeded by the header's own `account_id`, not by content inside the header —
-/// headers live at arbitrary, caller-claimed addresses, so `account_id` is what ties a given
-/// `ProgramHeader` to this specific deployment rather than another one with the same content.
+/// Derives the `AccountId` of the private commitment mirroring an immutable `ProgramHeader`.
 fn immutable_mirror_account_id(header_account_id: AccountId) -> AccountId {
     AccountId::for_private_pda(
         &PROGRAM_LOADER_ACCOUNT_ID,
@@ -1069,10 +1062,6 @@ fn immutable_mirror_account_id(header_account_id: AccountId) -> AccountId {
 
 /// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
 /// state.
-///
-/// No proof, nullifier, or ciphertext needed to construct it: `ProgramHeader` isn't confidential
-/// (it mirrors data that was already public), so every validating node can recompute it
-/// independently from the same public transaction.
 #[must_use]
 pub fn immutable_mirror_commitment(
     header_account_id: AccountId,

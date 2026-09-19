@@ -1920,40 +1920,6 @@ fn shadow_program_claims_a_public_pda_it_legitimately_owns() {
     );
 }
 
-/// A shadow dependency whose witness elf doesn't hash to its declared `account_id`, never
-/// actually dispatched by the call graph. Every supplied shadow witness is resolved up front, so
-/// this is still rejected — the call graph never reaching it doesn't matter.
-#[test]
-fn shadow_witness_that_does_not_match_its_account_id_is_rejected_even_if_unused() {
-    let program = crate::test_methods::noop();
-    let account_id = AccountId::new([7; 32]);
-    let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
-
-    let unused_dependency = crate::test_methods::noop();
-    let wrong_shadow_account_id = AccountId::new([0xEE; 32]);
-    let program_with_deps = ProgramWithDependencies::new(
-        program.clone(),
-        AccountId::from(program.id()),
-        std::collections::HashMap::from([(wrong_shadow_account_id, unused_dependency)]),
-    )
-    .with_shadow_dependency(wrong_shadow_account_id);
-
-    let result = execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
-        &program_with_deps,
-    );
-
-    let err = result.expect_err(
-        "an invalid shadow witness must be rejected even when the call graph never dispatches it",
-    );
-    assert!(
-        format!("{err:?}").contains("does not hash to its own declared account_id"),
-        "rejection should cite the mismatched witness, got: {err:?}"
-    );
-}
-
 /// Deploys a program with an immutable header (landing the private mirror commitment via
 /// `CreateHeader`), then references it in a privacy-preserving transaction through a
 /// `ProgramImageClaim::Private` claim instead of a `Public` one. The circuit checks the supplied

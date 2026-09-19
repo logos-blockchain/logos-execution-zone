@@ -9,6 +9,23 @@ use program_loader_core::Instruction;
 
 use super::*;
 
+fn loader_tx(
+    account_ids: Vec<AccountId>,
+    nonces: Vec<Nonce>,
+    instruction: Instruction,
+    signers: &[&PrivateKey],
+) -> PublicTransaction {
+    let message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids,
+        nonces,
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, signers);
+    PublicTransaction::new(message, witness_set)
+}
+
 /// Proof that a program's bytecode split across multiple segment accounts reconstructs into
 /// something that executes identically to the original: writes several segments (linked
 /// tail-to-head, at arbitrary addresses) plus a `ProgramHeader` directly via
@@ -215,18 +232,15 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
 
     let mut account_ids = vec![header_account_id];
     account_ids.extend_from_slice(&segment_account_ids);
-    let message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let tx = loader_tx(
         account_ids,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
-    )
-    .expect("CreateHeader instruction data should always be serializable");
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
-    let tx = PublicTransaction::new(message, witness_set);
+        &[&header_key],
+    );
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
@@ -252,38 +266,30 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
 
     let segment_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let write_segment_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let write_segment_tx = loader_tx(
         vec![segment_account_id],
         vec![Nonce(0)],
         Instruction::WriteSegment {
             bytecode: program.elf().to_vec(),
             next_segment: None,
         },
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let write_segment_witness =
-        public_transaction::WitnessSet::for_message(&write_segment_message, &[&segment_key]);
-    let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
+        &[&segment_key],
+    );
     state
         .transition_from_public_transaction(&write_segment_tx, 1, 0)
         .expect("WriteSegment should succeed against a fresh account");
 
     let header_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
-    let create_header_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let create_header_tx = loader_tx(
         vec![header_account_id, segment_account_id],
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_id,
             immutable: true,
         },
-    )
-    .expect("CreateHeader instruction data should always be serializable");
-    let create_header_witness =
-        public_transaction::WitnessSet::for_message(&create_header_message, &[&header_key]);
-    let create_header_tx = PublicTransaction::new(create_header_message, create_header_witness);
+        &[&header_key],
+    );
     state
         .transition_from_public_transaction(&create_header_tx, 2, 0)
         .expect("CreateHeader should succeed once the segment it names already exists");
@@ -326,18 +332,15 @@ fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
 
     let mut account_ids = vec![header_account_id];
     account_ids.extend_from_slice(&segment_account_ids);
-    let message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let tx = loader_tx(
         account_ids,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
-    let tx = PublicTransaction::new(message, witness_set);
+        &[&header_key],
+    );
 
     state
         .transition_from_public_transaction(&tx, 1, 0)
@@ -370,18 +373,15 @@ fn create_header_mutable_leaves_commitment_tree_unchanged() {
 
     let mut account_ids = vec![header_account_id];
     account_ids.extend_from_slice(&segment_account_ids);
-    let message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let tx = loader_tx(
         account_ids,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
         },
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
-    let tx = PublicTransaction::new(message, witness_set);
+        &[&header_key],
+    );
 
     state
         .transition_from_public_transaction(&tx, 1, 0)
@@ -407,47 +407,33 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
 
     let mut account_ids = vec![header_account_id];
     account_ids.extend_from_slice(&segment_account_ids);
-    let create_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let create_tx = loader_tx(
         account_ids.clone(),
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
         },
-    )
-    .unwrap();
-    let create_witness_set =
-        public_transaction::WitnessSet::for_message(&create_message, &[&header_key]);
+        &[&header_key],
+    );
     state
-        .transition_from_public_transaction(
-            &PublicTransaction::new(create_message, create_witness_set),
-            1,
-            0,
-        )
+        .transition_from_public_transaction(&create_tx, 1, 0)
         .expect("the initial mutable CreateHeader should succeed");
 
     let root_after_create = state.commitment_root();
     let current_nonce = state.get_account_by_id(header_account_id).nonce;
 
-    let update_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
+    let update_tx = loader_tx(
         account_ids,
         vec![current_nonce],
         Instruction::UpdateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
-    )
-    .unwrap();
-    let update_witness_set =
-        public_transaction::WitnessSet::for_message(&update_message, &[&header_key]);
+        &[&header_key],
+    );
     state
-        .transition_from_public_transaction(
-            &PublicTransaction::new(update_message, update_witness_set),
-            2,
-            0,
-        )
+        .transition_from_public_transaction(&update_tx, 2, 0)
         .expect("flipping immutable to true via UpdateHeader should succeed");
 
     assert_ne!(

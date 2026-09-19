@@ -76,15 +76,12 @@ impl ExecutionState {
             .iter()
             .map(|witness| (witness.account_id(), witness.image_id()))
             .collect();
-        // Resolved once per witness rather than per dispatch, so a shadow program invoked N
-        // times in the call graph isn't decoded and hashed N times.
         for witness in shadow_program_witnesses {
-            let previous =
-                image_id_by_account_id.insert(witness.account_id, resolve_shadow_witness(witness));
+            let account_id = AccountId::for_shadow_program(&witness.image_id);
+            let previous = image_id_by_account_id.insert(account_id, witness.image_id);
             assert!(
                 previous.is_none(),
-                "account {} claimed by both a program-image claim and a shadow witness",
-                witness.account_id
+                "account {account_id} claimed by both a program-image claim and a shadow witness"
             );
         }
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
@@ -693,21 +690,4 @@ fn assert_authorization_and_record_bindings(
         pre_is_authorized, is_authorized,
         "Inconsistent authorization for account {pre_account_id}",
     );
-}
-
-/// Decodes and hashes a shadow program's witness elf, asserting it genuinely hashes to its own
-/// declared `account_id`, and returns the resulting `image_id`. Called once per witness — no
-/// cheaper way to establish a shadow program's identity than hashing its elf.
-fn resolve_shadow_witness(witness: &ShadowProgramWitness) -> ProgramId {
-    let image_id: ProgramId = risc0_binfmt::ProgramBinary::decode(&witness.full_binary)
-        .expect("shadow program witness must be a well-formed ProgramBinary")
-        .compute_image_id()
-        .expect("shadow program witness must be a valid RISC0 program binary")
-        .into();
-    assert_eq!(
-        witness.account_id,
-        AccountId::for_shadow_program(&image_id),
-        "shadow program witness's elf does not hash to its own declared account_id"
-    );
-    image_id
 }
