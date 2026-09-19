@@ -2050,7 +2050,8 @@ fn config_target(
         .iter()
         .filter_map(|key| sequencer_stake_core::SequencerKey::new(key.to_bytes()))
         .collect();
-    let new_keys = committee_discovery::committee_update(final_state, &live_keys)?;
+    let new_keys =
+        committee_discovery::committee_update(final_state, &live_keys, live.required_signatures)?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
         warn!("sequencer_stake config carries no channel posting params; no committee update");
         return None;
