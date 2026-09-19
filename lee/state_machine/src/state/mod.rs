@@ -7,7 +7,7 @@ use lee_core::{
     account::{Account, AccountId, Data},
     program::{
         PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
-        get_program_via,
+        get_program_via, immutable_mirror_commitment,
     },
 };
 
@@ -186,11 +186,18 @@ impl V03State {
         self
     }
 
-    /// Initializes state with given builtin programs.
     #[must_use]
-    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
-        for program in programs {
-            self.insert_program(&program);
+    pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
+        self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
+    }
+
+    #[must_use]
+    pub fn with_genesis_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (Program, bool)>,
+    ) -> Self {
+        for (program, immutable) in programs {
+            self.insert_program(&program, immutable);
         }
         self
     }
@@ -201,7 +208,7 @@ impl V03State {
     /// (`AccountId::from(program.id())`) so existing call sites addressing builtins by `ProgramId`
     /// keep working; the segment's address is this function's own internal convention, never
     /// independently recomputed elsewhere.
-    pub(crate) fn insert_program(&mut self, program: &Program) {
+    pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
         let header_account_id = AccountId::from(program.id());
         let segment_account_id = genesis_segment_account_id(header_account_id);
 
@@ -217,21 +224,24 @@ impl V03State {
             .expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
         };
+        let program_header = ProgramHeader {
+            image_id: program.id(),
+            program_first_segment: segment_account_id,
+            immutable,
+        };
         let header = Account {
             program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
-                ProgramHeader {
-                    image_id: program.id(),
-                    program_first_segment: segment_account_id,
-                    immutable: true,
-                }
-                .to_bytes(),
-            )
-            .expect("program header fits under DATA_MAX_LENGTH"),
+            data: Data::try_from(program_header.to_bytes())
+                .expect("program header fits under DATA_MAX_LENGTH"),
             ..Account::default()
         };
         self.public_state.insert(segment_account_id, segment);
         self.public_state.insert(header_account_id, header);
+
+        if immutable {
+            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
+            self.private_state.0.extend(&[commitment]);
+        }
     }
 
     #[must_use]
