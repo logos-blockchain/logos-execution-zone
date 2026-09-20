@@ -19,31 +19,6 @@ use crate::{
     },
 };
 
-fn decrypt_kind(
-    output: &PrivacyPreservingCircuitOutput,
-    ssk: &SharedSecretKey,
-    idx: usize,
-) -> PrivateAccountKind {
-    let (kind, _) = EncryptionScheme::decrypt(
-        &output.private_actions[idx].encrypted_post_state.ciphertext,
-        ssk,
-        &output.private_actions[idx].nullifier,
-    )
-    .unwrap();
-    kind
-}
-
-#[test]
-fn proof_inner_roundtrip() {
-    // `Proof::from_inner(b).into_inner()` must return exactly `b`. Catches
-    // mutations of `into_inner` returning `vec![]`, `vec![0]`, or `vec![1]`,
-    // and of `from_inner` discarding its argument.
-    let bytes = vec![0xDE_u8, 0xAD, 0xBE, 0xEF];
-    assert_eq!(Proof::from_inner(bytes.clone()).into_inner(), bytes);
-    assert!(Proof::from_inner(vec![]).into_inner().is_empty());
-    assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
-}
-
 #[derive(borsh::BorshSerialize)]
 enum StrippedTokenInstruction {
     Initialize { balance: u128 },
@@ -61,6 +36,164 @@ enum TokenDiff {
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct TokenAccountData {
     balance: u128,
+}
+
+/// `lying_probe_instruction` always claims to be answering `A`, regardless of what it's
+/// actually asked. `verify_probe_receipt` binds a `Probe` answer to the instruction its real
+/// `Execute` call received, so proving `B` (with `A`'s dishonest `Probe` receipt attached) must
+/// be rejected, not silently accepted as covering `B`.
+#[derive(borsh::BorshSerialize)]
+enum LyingProbeInstruction {
+    #[expect(dead_code, reason = "discriminant must match the guest's `Instruction::A` (0)")]
+    A,
+    B,
+}
+
+/// Which receipt(s) `execute_and_prove_omitting_a_receipt` should withhold — simulating a
+/// dishonest *prover* that skips proving something the honest pipeline always supplies, as
+/// opposed to a dishonest *guest* that lies inside a receipt it does supply.
+enum Omit {
+    /// Withholds `Update` too: leaving it queued would misattribute it as the `Probe` slot
+    /// instead of leaving the queue genuinely empty where `Probe` is expected.
+    Probe,
+    Update,
+}
+
+fn decrypt_kind(
+    output: &PrivacyPreservingCircuitOutput,
+    ssk: &SharedSecretKey,
+    idx: usize,
+) -> PrivateAccountKind {
+    let (kind, _) = EncryptionScheme::decrypt(
+        &output.private_actions[idx].encrypted_post_state.ciphertext,
+        ssk,
+        &output.private_actions[idx].nullifier,
+    )
+    .unwrap();
+    kind
+}
+
+/// A single-call, no-chaining rebuild of `execute_and_prove`'s proving pipeline, with `omit`
+/// withholding one receipt the honest pipeline always supplies for a call that writes a public
+/// account. `PrivateBackend` treats every receipt as untrusted prover input verified only by
+/// `env::verify`, so this exercises what happens when the prover simply doesn't supply one,
+/// distinct from `lying_*`'s dishonest-but-present receipts.
+fn execute_and_prove_omitting_a_receipt(
+    program: &Program,
+    self_account_id: AccountId,
+    pre: &AccountWithMetadata,
+    instruction_data: &InstructionData,
+    omit: &Omit,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    let mut program_outputs = Vec::new();
+    let pre_states = vec![pre.clone()];
+
+    let execute_receipt = execute_and_prove_program(
+        program,
+        self_account_id,
+        None,
+        &pre_states,
+        instruction_data,
+    )?;
+    let execute_output: ProgramOutput =
+        borsh::from_slice(from_frame(&execute_receipt.journal.bytes).ok_or_else(|| {
+            LeeError::ProgramOutputDeserializationError(
+                "malformed inner-receipt journal frame".to_owned(),
+            )
+        })?)
+        .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+    program_outputs.push(execute_output.clone());
+    env_builder.add_assumption(execute_receipt);
+
+    if !matches!(omit, Omit::Probe) {
+        let probe_receipt = execute_and_prove_probe(
+            program,
+            self_account_id,
+            None,
+            &pre_states,
+            instruction_data,
+        )?;
+        let probe_output: ProgramOutput =
+            borsh::from_slice(from_frame(&probe_receipt.journal.bytes).ok_or_else(|| {
+                LeeError::ProgramOutputDeserializationError(
+                    "malformed inner-receipt journal frame".to_owned(),
+                )
+            })?)
+            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        program_outputs.push(probe_output);
+        env_builder.add_assumption(probe_receipt);
+    }
+
+    let diff = execute_output
+        .state_diffs
+        .first()
+        .expect("test guest always emits exactly one diff");
+    let post_data = diff
+        .post_data
+        .as_ref()
+        .expect("test guest's one diff is always a write");
+    // Omitting `Probe` alone would leave `Update` next in the queue, where `verify_probe_receipt`
+    // would pop and reject it as a malformed `Probe` envelope instead of finding the queue empty
+    // — a different, misattributed panic. Testing the empty-queue path cleanly requires nothing
+    // queued after `Execute` at all.
+    if !matches!(omit, Omit::Update | Omit::Probe) {
+        let update_receipt =
+            execute_and_prove_incremental(program, self_account_id, &diff.pre_state, post_data)?;
+        let update_output: ProgramOutput =
+            borsh::from_slice(from_frame(&update_receipt.journal.bytes).ok_or_else(|| {
+                LeeError::ProgramOutputDeserializationError(
+                    "malformed inner-receipt journal frame".to_owned(),
+                )
+            })?)
+            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        program_outputs.push(update_output);
+        env_builder.add_assumption(update_receipt);
+    }
+
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs,
+        account_identities: vec![InputAccountIdentity::Public],
+        program_account_id: self_account_id,
+        dummy_inputs: vec![],
+        ciphertext_padding: None,
+        initial_pre_states: vec![pre.account_id],
+        program_image_claims: vec![ProgramImageClaim {
+            account_id: self_account_id,
+            image_id: program.id(),
+        }],
+    };
+
+    let circuit_input_payload = borsh::to_vec(&circuit_input)?;
+    env_builder.write_slice(&to_frame(&circuit_input_payload));
+    let env = env_builder.build().unwrap();
+    let prover = default_prover();
+    let prove_info = prover
+        .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+
+    let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
+    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
+        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
+            LeeError::CircuitOutputDeserializationError(
+                "malformed circuit journal frame".to_owned(),
+            )
+        })?,
+    )
+    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+
+    Ok((circuit_output, proof))
+}
+
+#[test]
+fn proof_inner_roundtrip() {
+    // `Proof::from_inner(b).into_inner()` must return exactly `b`. Catches
+    // mutations of `into_inner` returning `vec![]`, `vec![0]`, or `vec![1]`,
+    // and of `from_inner` discarding its argument.
+    let bytes = vec![0xDE_u8, 0xAD, 0xBE, 0xEF];
+    assert_eq!(Proof::from_inner(bytes.clone()).into_inner(), bytes);
+    assert!(Proof::from_inner(vec![]).into_inner().is_empty());
+    assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
 }
 
 /// `PrivateBackend::resolve_write`'s counterpart to the public-side `incremental_update_cycles_*`
@@ -111,7 +244,10 @@ fn prove_privacy_preserving_execution_circuit_resolves_an_incremental_write() {
     assert_eq!(returned_account_id, account_id);
     let [resolution] = resolutions.try_into().unwrap();
     assert_eq!(resolution.executing_account_id, program_id);
-    let expected_post_data: Data = borsh::to_vec(&TokenDiff::Add(42)).unwrap().try_into().unwrap();
+    let expected_post_data: Data = borsh::to_vec(&TokenDiff::Add(42))
+        .unwrap()
+        .try_into()
+        .unwrap();
     assert_eq!(resolution.post_data, Some(expected_post_data));
 }
 
@@ -199,8 +335,7 @@ fn prove_privacy_preserving_execution_circuit_transfer_defers_both_diffs() {
     let receiver = AccountWithMetadata::new(Account::default(), true, receiver_id);
 
     let instruction_data =
-        Program::serialize_instruction(StrippedTokenInstruction::Transfer { amount: 30 })
-            .unwrap();
+        Program::serialize_instruction(StrippedTokenInstruction::Transfer { amount: 30 }).unwrap();
 
     let (output, proof) = execute_and_prove(
         vec![sender, receiver],
@@ -218,6 +353,299 @@ fn prove_privacy_preserving_execution_circuit_transfer_defers_both_diffs() {
             "expected both diffs to be Deferred, got {action:?}"
         );
     }
+}
+
+#[test]
+fn probe_answered_for_a_different_instruction_is_rejected() {
+    let program = crate::test_methods::lying_probe_instruction();
+    let account_id = AccountId::new([12; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let instruction_data = Program::serialize_instruction(LyingProbeInstruction::B).unwrap();
+
+    let result = execute_and_prove(
+        vec![pre],
+        instruction_data,
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "a Probe receipt answered for a different instruction must be rejected, got {result:?}"
+    );
+}
+
+/// `verify_probe_receipt` checks a `Probe` receipt was actually produced by the program it
+/// claims to answer for. `lying_probe_self_id` always reports `DEFAULT_PROGRAM_ID` instead.
+#[test]
+fn probe_self_id_mismatch_is_rejected() {
+    let program = crate::test_methods::lying_probe_self_id();
+    let account_id = AccountId::new([13; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let result = execute_and_prove(
+        vec![pre],
+        Vec::new(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "a Probe receipt produced by the wrong program must be rejected, got {result:?}"
+    );
+}
+
+/// `verify_probe_receipt` checks a `Probe` receipt names the same caller as the real `Execute`
+/// call it answers for. `lying_probe_caller_id` always reports a spoofed caller.
+#[test]
+fn probe_caller_id_mismatch_is_rejected() {
+    let program = crate::test_methods::lying_probe_caller_id();
+    let account_id = AccountId::new([14; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let result = execute_and_prove(
+        vec![pre],
+        Vec::new(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "a Probe receipt with a spoofed caller must be rejected, got {result:?}"
+    );
+}
+
+/// `resolve_write`'s in-circuit `Update` check requires `caller_account_id == None` — `Update` is
+/// never caller-gated. `lying_update_caller_id` always reports `Some(caller)` instead.
+#[test]
+fn update_caller_must_be_none() {
+    let program = crate::test_methods::lying_update_caller_id();
+    let account_id = AccountId::new([15; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let result = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![1_u8, 2, 3]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "an Update resolution with a non-None caller must be rejected, got {result:?}"
+    );
+}
+
+/// `resolve_write` checks an `Update` resolution was actually produced by the program it claims
+/// to be. `lying_update_self_id` always reports `DEFAULT_PROGRAM_ID` instead.
+#[test]
+fn update_self_id_mismatch_is_rejected() {
+    let program = crate::test_methods::lying_update_self_id();
+    let account_id = AccountId::new([21; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let result = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![1_u8, 2, 3]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "an Update resolution produced by the wrong program must be rejected, got {result:?}"
+    );
+}
+
+/// `resolve_write` checks an `Update` resolution names the account it was given, not a
+/// different one. `lying_update_wrong_account` always resolves against a hardcoded account.
+#[test]
+fn update_resolving_a_different_account_is_rejected() {
+    let program = crate::test_methods::lying_update_wrong_account();
+    let account_id = AccountId::new([16; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let result = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![1_u8, 2, 3]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "an Update resolution for the wrong account must be rejected, got {result:?}"
+    );
+}
+
+/// `resolve_write` checks an `Update` resolution was actually run against the real pre-state it
+/// was given. `lying_update_wrong_pre_state` fabricates a different balance to resolve against.
+#[test]
+fn update_resolving_against_a_fabricated_pre_state_is_rejected() {
+    let program = crate::test_methods::lying_update_wrong_pre_state();
+    let account_id = AccountId::new([17; 32]);
+    let pre = AccountWithMetadata::new(
+        Account {
+            balance: 100,
+            ..Account::default()
+        },
+        true,
+        account_id,
+    );
+
+    let result = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![1_u8, 2, 3]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    );
+
+    assert!(
+        result.is_err(),
+        "an Update resolution run against a fabricated pre-state must be rejected, got {result:?}"
+    );
+}
+
+/// A program that implements `Incremental` but always declines (`Probe` returns `None`) forces
+/// `Bound`, exactly like a program that never implemented `Incremental` at all — declining a
+/// claim and never making one are indistinguishable to the caller.
+#[test]
+fn declining_probe_forces_bound() {
+    let program = crate::test_methods::declining_probe();
+    let account_id = AccountId::new([18; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![9_u8, 9, 9]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    let [action] = output.public_actions.try_into().unwrap();
+    assert!(
+        matches!(action, PublicAction::Bound { .. }),
+        "a declined Probe claim must force Bound, got {action:?}"
+    );
+}
+
+/// `DeferReads::WriteOnly` covers only writes. `write_only_touches_a_read` writes its first
+/// account and merely reads its second in the same call — the write is deferrable, but the
+/// uncovered read still forces its own account `Bound`, independent of the covered write.
+#[test]
+fn write_only_claim_does_not_cover_a_read() {
+    let program = crate::test_methods::write_only_touches_a_read();
+    let written_id = AccountId::new([19; 32]);
+    let read_id = AccountId::new([20; 32]);
+    let written = AccountWithMetadata::new(Account::default(), true, written_id);
+    let read = AccountWithMetadata::new(Account::default(), true, read_id);
+
+    let (output, proof) = execute_and_prove(
+        vec![written, read],
+        Program::serialize_instruction(vec![4_u8, 5, 6]).unwrap(),
+        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.public_actions.len(), 2);
+    assert!(
+        matches!(output.public_actions[0], PublicAction::Deferred { .. }),
+        "the covered write must be Deferred, got {:?}",
+        output.public_actions[0]
+    );
+    assert!(
+        matches!(output.public_actions[1], PublicAction::Bound { .. }),
+        "the uncovered read must force Bound, got {:?}",
+        output.public_actions[1]
+    );
+}
+
+/// The other half of `DeferReads::covers`'s asymmetry: `ReadOnly` covers reads, not writes.
+/// `read_only_touches_a_write` writes its one account but claims `ReadOnly`, so the write is
+/// uncovered and forced `Bound` — exactly as if the program had declined entirely.
+#[test]
+fn read_only_claim_does_not_cover_a_write() {
+    let program = crate::test_methods::read_only_touches_a_write();
+    let account_id = AccountId::new([22; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let (output, proof) = execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(vec![7_u8, 8, 9]).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    let [action] = output.public_actions.try_into().unwrap();
+    assert!(
+        matches!(action, PublicAction::Bound { .. }),
+        "a ReadOnly claim must not cover a write, got {action:?}"
+    );
+}
+
+/// A dishonest prover that simply never proves a `Probe` for a call that writes a public
+/// account — distinct from `lying_probe_*`, which supply one but lie inside it. `PrivateBackend`
+/// requires exactly one `Probe` per such call and panics outright if none is queued.
+#[test]
+fn missing_probe_receipt_is_rejected() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([23; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+    let instruction_data =
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance: 42 })
+            .unwrap();
+
+    let result = execute_and_prove_omitting_a_receipt(
+        &program,
+        program_id,
+        &pre,
+        &instruction_data,
+        &Omit::Probe,
+    );
+
+    assert!(
+        result.is_err(),
+        "a call writing a public account with no Probe receipt at all must be rejected, got \
+         {result:?}"
+    );
+}
+
+/// A dishonest prover that simply never proves an `Update` for a write — distinct from
+/// `lying_update_*`, which supply one but lie inside it. Every write requires exactly one
+/// `Update` resolution regardless of its eventual `Bound`/`Deferred` classification, so
+/// `PrivateBackend` panics outright if none is queued.
+#[test]
+fn missing_update_receipt_is_rejected() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([24; 32]);
+    let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+    let instruction_data =
+        Program::serialize_instruction(StrippedTokenInstruction::Initialize { balance: 42 })
+            .unwrap();
+
+    let result = execute_and_prove_omitting_a_receipt(
+        &program,
+        program_id,
+        &pre,
+        &instruction_data,
+        &Omit::Update,
+    );
+
+    assert!(
+        result.is_err(),
+        "a write with no Update receipt at all must be rejected, got {result:?}"
+    );
 }
 
 #[test]

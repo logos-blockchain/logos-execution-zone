@@ -423,6 +423,36 @@ body {
   margin-left: 0.5rem;
 }
 
+.action-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.action-badge-bound {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+}
+
+.action-badge-deferred {
+  background-color: #fff3e0;
+  color: #e65100;
+}
+
+.resolution-list {
+  margin-top: 0.5rem;
+  margin-left: 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.resolution-item {
+  font-size: 0.9rem;
+}
+
 /* Loading and error states */
 .loading,
 .loading-more {

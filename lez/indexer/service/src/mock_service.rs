@@ -338,7 +338,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                         .message
                         .public_actions
                         .iter()
-                        .any(|action| action.account_id == account_id),
+                        .any(|action| action.account_id() == account_id),
                 })
                 .cloned()
                 .collect()
@@ -463,7 +463,7 @@ fn mock_privacy_preserving_tx(
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_actions: vec![PublicActionWithID {
+            public_actions: vec![PublicActionWithID::Bound {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
                 post_state: Account {
                     program_owner: AccountId { value: [1_u8; 32] },

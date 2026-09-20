@@ -766,9 +766,9 @@ pub struct UnsupportedCallKind {
 }
 
 impl UnsupportedCallKind {
-    pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
     /// `sha256(SELECTOR_NAME)[..8]`.
     pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
+    pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
 
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -776,8 +776,9 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Self-attested claim that this program's touches this call are safe to leave `Deferred`,
-/// scoped by write or read. Emitted once per call, on `Probe`'s response. Absence (or a decode
+/// Self-attested claim that this program's touches this call are safe to leave `Deferred`.
+///
+/// Scoped by write or read. Emitted once per call, on `Probe`'s response. Absence (or a decode
 /// failure) means no claim: every touch forces `Bound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum DeferReads {
@@ -790,9 +791,9 @@ pub enum DeferReads {
 }
 
 impl DeferReads {
-    pub const SELECTOR_NAME: &str = "lee_core::DeferReads";
     /// `sha256(SELECTOR_NAME)[..8]`.
     pub const SELECTOR: [u8; 8] = [0x60, 0x6f, 0x93, 0x93, 0xba, 0xa1, 0x3c, 0x50];
+    pub const SELECTOR_NAME: &str = "lee_core::DeferReads";
 
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -883,25 +884,30 @@ fn dispatch_call<T: BorshDeserialize>(
                 instruction_data,
             )
         }
-        CallKind::Incremental => match borsh::from_slice::<IncrementalCall>(&envelope.instruction)
-        {
-            Ok(IncrementalCall::Probe(probe_bytes)) => match borsh::from_slice::<T>(&probe_bytes) {
-                Ok(instruction) => ProgramCall::Probe(ProgramInput {
+        CallKind::Incremental => {
+            match borsh::from_slice::<IncrementalCall>(&envelope.instruction) {
+                Ok(IncrementalCall::Probe(probe_bytes)) => {
+                    match borsh::from_slice::<T>(&probe_bytes) {
+                        Ok(instruction) => ProgramCall::Probe(ProgramInput {
+                            self_account_id: envelope.self_account_id,
+                            caller_account_id: envelope.caller_account_id,
+                            pre_states: envelope.pre_states,
+                            instruction,
+                        }),
+                        Err(_) => {
+                            ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant())
+                        }
+                    }
+                }
+                Ok(IncrementalCall::Update(delta)) => ProgramCall::Update(ProgramInput {
                     self_account_id: envelope.self_account_id,
                     caller_account_id: envelope.caller_account_id,
                     pre_states: envelope.pre_states,
-                    instruction,
+                    instruction: delta,
                 }),
                 Err(_) => ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant()),
-            },
-            Ok(IncrementalCall::Update(delta)) => ProgramCall::Update(ProgramInput {
-                self_account_id: envelope.self_account_id,
-                caller_account_id: envelope.caller_account_id,
-                pre_states: envelope.pre_states,
-                instruction: delta,
-            }),
-            Err(_) => ProgramCall::Unsupported(envelope, CallKind::Incremental.discriminant()),
-        },
+            }
+        }
         CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
     }
 }

@@ -87,6 +87,86 @@ mod test_methods {
         )
     }
 
+    #[must_use]
+    pub const fn lying_probe_instruction() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_PROBE_INSTRUCTION_ID,
+            Cow::Borrowed(test_methods::LYING_PROBE_INSTRUCTION_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_probe_self_id() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_PROBE_SELF_ID_ID,
+            Cow::Borrowed(test_methods::LYING_PROBE_SELF_ID_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_probe_caller_id() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_PROBE_CALLER_ID_ID,
+            Cow::Borrowed(test_methods::LYING_PROBE_CALLER_ID_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_update_caller_id() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_UPDATE_CALLER_ID_ID,
+            Cow::Borrowed(test_methods::LYING_UPDATE_CALLER_ID_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_update_wrong_account() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_UPDATE_WRONG_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::LYING_UPDATE_WRONG_ACCOUNT_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_update_wrong_pre_state() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_UPDATE_WRONG_PRE_STATE_ID,
+            Cow::Borrowed(test_methods::LYING_UPDATE_WRONG_PRE_STATE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn declining_probe() -> Program {
+        Program::new_unchecked(
+            test_methods::DECLINING_PROBE_ID,
+            Cow::Borrowed(test_methods::DECLINING_PROBE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn write_only_touches_a_read() -> Program {
+        Program::new_unchecked(
+            test_methods::WRITE_ONLY_TOUCHES_A_READ_ID,
+            Cow::Borrowed(test_methods::WRITE_ONLY_TOUCHES_A_READ_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn read_only_touches_a_write() -> Program {
+        Program::new_unchecked(
+            test_methods::READ_ONLY_TOUCHES_A_WRITE_ID,
+            Cow::Borrowed(test_methods::READ_ONLY_TOUCHES_A_WRITE_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn lying_update_self_id() -> Program {
+        Program::new_unchecked(
+            test_methods::LYING_UPDATE_SELF_ID_ID,
+            Cow::Borrowed(test_methods::LYING_UPDATE_SELF_ID_ELF),
+        )
+    }
+
     #[cfg(feature = "prove")]
     #[must_use]
     pub const fn multi_segment_burner() -> Program {

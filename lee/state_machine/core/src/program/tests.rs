@@ -1,5 +1,10 @@
 use super::*;
 
+#[derive(BorshDeserialize)]
+enum TestInstruction {
+    A,
+}
+
 #[test]
 fn unsupported_call_kind_selector_matches_its_derivation() {
     use sha2::Digest as _;
@@ -31,11 +36,6 @@ fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
             CallKind::Unknown(byte)
         );
     }
-}
-
-#[derive(BorshDeserialize)]
-enum TestInstruction {
-    A,
 }
 
 fn envelope(instruction: InstructionData) -> ProgramInput<InstructionData> {

@@ -701,7 +701,10 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while the
     // journal exports the credential view: a seed grant is not a signer-backed claim.
     assert_eq!(output.public_actions.len(), 1);
-    assert_eq!(expect_bound_pre(&output.public_actions[0]).account_id, account_id);
+    assert_eq!(
+        expect_bound_pre(&output.public_actions[0]).account_id,
+        account_id
+    );
     assert!(!expect_bound_pre(&output.public_actions[0]).is_authorized);
 }
 

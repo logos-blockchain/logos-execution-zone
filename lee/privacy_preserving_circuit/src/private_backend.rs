@@ -431,14 +431,17 @@ impl<'input> PrivateBackend<'input> {
         diff: &AccountStateDiff,
         ctx: &CallContext<'_>,
     ) {
-        let position = *self.position_by_account.entry(account_id).or_insert_with(|| {
-            let pos = self.next_position;
-            self.next_position = self
-                .next_position
-                .checked_add(1)
-                .expect("account position count cannot overflow usize");
-            pos
-        });
+        let position = *self
+            .position_by_account
+            .entry(account_id)
+            .or_insert_with(|| {
+                let pos = self.next_position;
+                self.next_position = self
+                    .next_position
+                    .checked_add(1)
+                    .expect("account position count cannot overflow usize");
+                pos
+            });
         let is_public = matches!(
             self.account_identities.get(position),
             Some(InputAccountIdentity::Public)
@@ -471,17 +474,19 @@ impl<'input> PrivateBackend<'input> {
                         unreachable!("the Bound case already returned above")
                     };
                     resolutions.push(resolution());
+                } else {
+                    // A covered read is a no-op, exactly as if this touch never happened.
                 }
-                // A covered read is a no-op, exactly as if this touch never happened.
             }
             Entry::Vacant(entry) => {
                 if !covered {
                     entry.insert(WriteFate::Bound);
                 } else if is_write {
                     entry.insert(WriteFate::Deferred(vec![resolution()]));
+                } else {
+                    // A covered read on a not-yet-classified account stays unclassified - the
+                    // same as `Bound` at output time, since nothing was ever written.
                 }
-                // A covered read on a not-yet-classified account stays unclassified - the same
-                // as `Bound` at output time, since nothing was ever written.
             }
         }
     }
@@ -606,16 +611,16 @@ impl Backend for PrivateBackend<'_> {
                 diff.clone()
             } else {
                 let expected_pre_account = diff.pre_state.account.clone();
-                let [resolved]: [AccountStateDiff; 1] =
-                    update_output.state_diffs.try_into().unwrap_or_else(
-                        |diffs: Vec<AccountStateDiff>| {
-                            panic!(
-                                "Incremental resolution for account {account_id} returned {} \
+                let [resolved]: [AccountStateDiff; 1] = update_output
+                    .state_diffs
+                    .try_into()
+                    .unwrap_or_else(|diffs: Vec<AccountStateDiff>| {
+                        panic!(
+                            "Incremental resolution for account {account_id} returned {} \
                                  diffs, expected 1",
-                                diffs.len()
-                            )
-                        },
-                    );
+                            diffs.len()
+                        )
+                    });
                 assert_eq!(
                     resolved.pre_state.account_id, account_id,
                     "Incremental resolution returned a diff for the wrong account"

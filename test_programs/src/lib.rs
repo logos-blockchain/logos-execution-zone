@@ -108,3 +108,13 @@ pub const fn clock_chain_caller() -> Program {
 
     Program::new_unchecked(CLOCK_CHAIN_CALLER_ID, Cow::Borrowed(CLOCK_CHAIN_CALLER_ELF))
 }
+
+#[must_use]
+#[inline]
+pub const fn stripped_token() -> Program {
+    use guests::{STRIPPED_TOKEN_ELF, STRIPPED_TOKEN_ID, STRIPPED_TOKEN_PATH};
+
+    let _unused = STRIPPED_TOKEN_PATH;
+
+    Program::new_unchecked(STRIPPED_TOKEN_ID, Cow::Borrowed(STRIPPED_TOKEN_ELF))
+}

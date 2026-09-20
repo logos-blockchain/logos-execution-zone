@@ -1,10 +1,10 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicActionWithID, PublicMessage,
-    PublicTransaction, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage, PublicTransaction,
+    WitnessSet,
 };
 use leptos::prelude::*;
 
-use super::AccountNonceList;
+use super::{AccountNonceList, PublicActionList};
 
 /// Public transaction details component
 #[component]
@@ -87,17 +87,15 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     } = tx;
     let PrivacyPreservingMessage {
         public_actions,
-        nonces,
+        // `nonces` are the message's signers' own nonces, not one per public action (a
+        // `PublicNoSign` action signs nothing and has none) — nothing here to pair them against.
+        nonces: _,
         private_actions,
         block_validity_window,
         timestamp_validity_window,
     } = message;
     let private_action_count = private_actions.len();
-    let public_account_ids: Vec<_> = public_actions
-        .iter()
-        .map(PublicActionWithID::account_id)
-        .collect();
-    let public_account_count = public_account_ids.len();
+    let public_account_count = public_actions.len();
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -132,8 +130,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 </div>
             </div>
 
-            <h3>"Public Accounts"</h3>
-            <AccountNonceList account_ids=public_account_ids nonces=nonces />
+            <h3>"Public Actions"</h3>
+            <PublicActionList actions=public_actions />
         </div>
     }
 }

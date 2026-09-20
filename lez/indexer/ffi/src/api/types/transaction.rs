@@ -1,9 +1,9 @@
 use indexer_service_protocol::{
-    AccountId, BalanceDiff, Ciphertext, Commitment, CommitmentSetDigest, Data,
-    DeferredResolution, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
-    Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId,
-    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature,
-    Transaction, ValidityWindow, WitnessSet,
+    AccountId, BalanceDiff, Ciphertext, Commitment, CommitmentSetDigest, Data, DeferredResolution,
+    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, Nullifier,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -279,7 +279,11 @@ impl From<DeferredResolution> for FfiDeferredResolution {
             post_balance_diff_is_sub,
             post_balance_diff_amount: post_balance_diff_amount.into(),
             has_post_data: value.post_data.is_some(),
-            post_data: value.post_data.map(|data| data.0).unwrap_or_default().into(),
+            post_data: value
+                .post_data
+                .map(|data| data.0)
+                .unwrap_or_default()
+                .into(),
         }
     }
 }
@@ -317,8 +321,9 @@ impl From<PublicActionWithID> for FfiPublicAction {
                 account_id,
                 post_state,
             } => {
-                let post_state: lee::Account =
-                    post_state.try_into().expect("Source is in blocks, must fit");
+                let post_state: lee::Account = post_state
+                    .try_into()
+                    .expect("Source is in blocks, must fit");
                 Self {
                     account_id: account_id.into(),
                     is_deferred: false,

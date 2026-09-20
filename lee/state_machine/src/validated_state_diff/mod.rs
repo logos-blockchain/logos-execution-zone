@@ -12,7 +12,7 @@ use lee_core::{
         AccountStateDiff, ChainedCall, DEFAULT_PROGRAM_OWNER, ExecutionValidationError,
         ProgramOutput, TransactionEvent, post_state,
     },
-    validation::{Backend, CallContext, Declarations, validate_state_diff},
+    validation::{Backend as _, CallContext, Declarations, validate_state_diff},
 };
 use program_loader_core::Instruction as ProgramLoaderInstruction;
 
@@ -20,7 +20,8 @@ use crate::{
     V03State, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof,
+        PrivacyPreservingTransaction,
+        circuit::Proof,
         message::{Message, PublicActionWithID},
     },
     public_transaction::PublicTransaction,

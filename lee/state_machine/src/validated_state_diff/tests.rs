@@ -27,7 +27,10 @@ struct TokenAccountData {
 
 #[derive(borsh::BorshSerialize)]
 enum TokenDiff {
-    #[expect(dead_code, reason = "mirrors stripped_token's own TokenDiff shape exactly")]
+    #[expect(
+        dead_code,
+        reason = "mirrors stripped_token's own TokenDiff shape exactly"
+    )]
     Add(u128),
     Sub(u128),
 }
@@ -106,7 +109,11 @@ fn transfer_stripped_token(
 /// A `Deferred` action carrying a `TokenDiff::Sub(amount)` delta for `stripped_token` — as if
 /// this had been the payload a privacy-preserving proof committed to, unresolved, for
 /// settlement to replay.
-fn deferred_sub_action(account_id: AccountId, program_id: AccountId, amount: u128) -> PublicActionWithID {
+fn deferred_sub_action(
+    account_id: AccountId,
+    program_id: AccountId,
+    amount: u128,
+) -> PublicActionWithID {
     PublicActionWithID::Deferred {
         account_id,
         resolutions: vec![DeferredResolution {
@@ -144,6 +151,55 @@ fn resolve_public_action_replays_a_deferred_action_against_live_state() {
     let data: TokenAccountData = borsh::from_slice(resolved.data.as_ref())
         .expect("resolved data must decode as TokenAccountData: did Incremental resolution run?");
     assert_eq!(data.balance, 70);
+}
+
+/// A `Deferred` action can carry more than one resolution — one per touch by an
+/// `Incremental`-supporting program across the transaction's call graph. Confirms they replay in
+/// order, each building on the previous one's result (`resolved_so_far`), not each resolving
+/// independently against the original live state.
+#[test]
+fn resolve_public_action_replays_multiple_resolutions_in_order() {
+    let program = crate::test_methods::stripped_token();
+    let program_id: AccountId = program.id().into();
+    let account_id = AccountId::new([1; 32]);
+
+    let mut state = V03State::new().with_test_programs();
+    initialize_stripped_token_account(&mut state, program_id, account_id, 100, 1);
+
+    let action = PublicActionWithID::Deferred {
+        account_id,
+        resolutions: vec![
+            DeferredResolution {
+                executing_account_id: program_id,
+                post_balance_diff: BalanceDiff::Add(0),
+                post_data: Some(
+                    borsh::to_vec(&TokenDiff::Sub(30))
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ),
+            },
+            DeferredResolution {
+                executing_account_id: program_id,
+                post_balance_diff: BalanceDiff::Add(0),
+                post_data: Some(
+                    borsh::to_vec(&TokenDiff::Sub(20))
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
+                ),
+            },
+        ],
+    };
+    let mut backend = backend_for(&state);
+    let (_, resolved) =
+        super::resolve_public_action(&action, &state, &mut backend).expect("resolves");
+
+    // 100 - 30 - 20 = 50 — the second resolution must see the first's result (70), not replay
+    // against the original 100 a second time (which would also give 70, masking the bug this
+    // test exists to catch).
+    let data: TokenAccountData = borsh::from_slice(resolved.data.as_ref()).unwrap();
+    assert_eq!(data.balance, 50);
 }
 
 /// The actual point of `Deferred`: the resolved value reflects whatever the account holds at
@@ -823,8 +879,7 @@ fn incremental_update_cycles_accumulate_across_diffs_in_the_same_call() {
 
     // The sender's `Update` alone, measured directly, against its real (post-`Initialize`)
     // balance so the guest's balance check actually succeeds.
-    let sender_pre_state =
-        AccountWithMetadata::new(state.get_account_by_id(sender), false, sender);
+    let sender_pre_state = AccountWithMetadata::new(state.get_account_by_id(sender), false, sender);
     let sender_post_data: lee_core::account::Data = borsh::to_vec(&TokenDiff::Sub(amount))
         .unwrap()
         .try_into()

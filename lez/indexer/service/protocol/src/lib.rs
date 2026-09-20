@@ -258,9 +258,10 @@ pub struct DeferredResolution {
     pub post_data: Option<Data>,
 }
 
-/// Mirrors `lee::privacy_preserving_transaction::message::PublicActionWithID` — `Bound` carries
-/// the account's fully resolved post-state; `Deferred` carries its pending, unresolved
-/// resolutions for the sequencer to replay at settlement.
+/// Mirrors `lee::privacy_preserving_transaction::message::PublicActionWithID`.
+///
+/// `Bound` carries the account's fully resolved post-state; `Deferred` carries its pending,
+/// unresolved resolutions for the sequencer to replay at settlement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum PublicActionWithID {
     Bound {

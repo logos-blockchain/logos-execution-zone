@@ -78,6 +78,6 @@ async fn main() {
 }
 
 #[cfg(not(feature = "ssr"))]
-fn main() {
+const fn main() {
     // Client-only main - no-op since hydration is done via wasm_bindgen
 }

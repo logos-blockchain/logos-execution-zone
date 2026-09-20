@@ -200,7 +200,8 @@ pub fn execute_and_prove_with_padded_inputs(
                     },
                 )?;
 
-                let position = position_of(&mut position_by_account, &mut next_position, *account_id);
+                let position =
+                    position_of(&mut position_by_account, &mut next_position, *account_id);
                 let private_pda_witness = account_identities
                     .get(position)
                     .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
@@ -312,10 +313,9 @@ pub fn execute_and_prove_with_padded_inputs(
                 )
                 .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
-                let unsupported = update_output
-                    .events
-                    .iter()
-                    .any(|event| event.selector == lee_core::program::UnsupportedCallKind::SELECTOR);
+                let unsupported = update_output.events.iter().any(|event| {
+                    event.selector == lee_core::program::UnsupportedCallKind::SELECTOR
+                });
                 let resolved = if unsupported {
                     diff.clone()
                 } else {
@@ -474,15 +474,18 @@ fn incremental_env(
     call: &IncrementalCall,
 ) -> Result<ExecutorEnv<'static>, LeeError> {
     let mut env_builder = ExecutorEnv::builder();
-    env_builder.write_slice(&lee_core::to_borsh_frame(&lee_core::program::CallKind::Incremental));
+    env_builder.write_slice(&lee_core::to_borsh_frame(
+        &lee_core::program::CallKind::Incremental,
+    ));
     let input = lee_core::program::ProgramInput {
         self_account_id,
         caller_account_id,
         pre_states: pre_states.to_vec(),
-        instruction: borsh::to_vec(call).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
+        instruction: borsh::to_vec(call)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?,
     };
-    let payload = borsh::to_vec(&input)
-        .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+    let payload =
+        borsh::to_vec(&input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
     env_builder.write_slice(&to_frame(&payload));
     Ok(env_builder.build().unwrap())
 }

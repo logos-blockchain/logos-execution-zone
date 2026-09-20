@@ -324,9 +324,9 @@ pub fn validate_state_diff<B: Backend>(
             .collect::<Result<Vec<_>, _>>()?;
 
         validate_execution(&resolved_diffs, chained_call.program_account_id).map_err(|err| {
-            ValidationError::ProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-                err,
-            ))
+            ValidationError::ProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(err),
+            )
         })?;
 
         backend.observe_windows(
