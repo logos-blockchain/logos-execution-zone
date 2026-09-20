@@ -463,15 +463,25 @@ fn mock_privacy_preserving_tx(
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_actions: vec![PublicActionWithID::Bound {
-                account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post_state: Account {
-                    program_owner: AccountId { value: [1_u8; 32] },
-                    balance: 500,
-                    data: Data(vec![0xdd, 0xee]),
-                    nonce: block_id as u128,
+            public_actions: vec![
+                PublicActionWithID::Bound {
+                    account_id: account_ids[tx_idx as usize % account_ids.len()],
+                    post_state: Account {
+                        program_owner: AccountId { value: [1_u8; 32] },
+                        balance: 500,
+                        data: Data(vec![0xdd, 0xee]),
+                        nonce: block_id as u128,
+                    },
                 },
-            }],
+                PublicActionWithID::Deferred {
+                    account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
+                    resolutions: vec![indexer_service_protocol::DeferredResolution {
+                        executing_account_id: AccountId { value: [2_u8; 32] },
+                        post_balance_diff: indexer_service_protocol::BalanceDiff::Add(50),
+                        post_data: Some(Data(vec![0xaa, 0xbb])),
+                    }],
+                },
+            ],
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {
                 nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
