@@ -146,7 +146,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: joiner_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::from_builtin_program(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -155,23 +157,28 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         "Staking sequencer key {}",
         hex::encode(joiner_key.to_bytes())
     );
+    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id),
-                AccountIdentity::Public(ownership_id),
-                AccountIdentity::PublicNoSign(funds_id),
-                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
+                AccountIdentity::Public(funding_id).balance(),
+                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(funds_id).balance(),
+                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+                    .select_program_shard(stake_id),
             ],
             stake_instruction_data,
-            programs::sequencer_stake().id().into(),
+            stake_id,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
 
     integration_tests::wait_until("stake to take ownership", || async {
-        Ok(get_account(&ctx, ownership_id).await?.program_owner
-            == programs::sequencer_stake().id().into())
+        Ok(!get_account(&ctx, ownership_id)
+            .await?
+            .data
+            .shard(stake_id)
+            .is_empty())
     })
     .await?;
     ensure!(

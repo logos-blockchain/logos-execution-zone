@@ -859,14 +859,14 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        // A draft still short of signatures a full rotation after funding has
-        // outlived its fee-note reservation, which the block below may spend.
+        // A draft short of signatures is dropped here, before its fee-note
+        // reservation lapses and the block below spends that note.
         if self
             .config_draft
             .as_ref()
             .is_some_and(|draft| !draft.submitted)
         {
-            warn!("A channel-config draft went a full turn unsigned; funding another");
+            warn!("A channel-config draft is still unsigned; funding another");
             self.discard_config_draft().await;
         }
 
