@@ -37,6 +37,12 @@ const BLOAT_SHARD_BYTES: usize = 96 * 1024;
 
 const BLOAT_WRITERS: usize = 30;
 
+// This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
+// so `bytecode` is never decoded or validated as a real program - arbitrary filler well under
+// `MAX_SEGMENT_DATA_LEN` stands in for "a segment's content", same as `bloat_account`'s own
+// shard writes use plain filler rather than real program data.
+const SEGMENT_FILLER_BYTES: usize = 1024;
+
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<sequencer_service_rpc::ClientError>(),
@@ -447,7 +453,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
         )],
         vec![Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
-            bytecode: test_programs::data_writer().elf().to_vec(),
+            bytecode: vec![0xAB_u8; SEGMENT_FILLER_BYTES],
             next_segment: None,
         },
         payer,
@@ -471,7 +477,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     loader
         .write_segment(
             head_id,
-            test_programs::data_writer().elf().to_vec(),
+            vec![0xAB_u8; SEGMENT_FILLER_BYTES],
             Some(segment_id),
             Some(payer.account_id),
         )
