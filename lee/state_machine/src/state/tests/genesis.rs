@@ -48,33 +48,18 @@ fn new_includes_nullifiers_for_private_accounts() {
 fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
-    let account_id = AccountId::from(program_to_insert.id());
+    let account_id = AccountId::from_builtin_program(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
     state.insert_program(&program_to_insert);
 
-    let header = ProgramHeader::from_bytes(
-        state
-            .get_account_by_id(account_id)
-            .data
-            .shard(PROGRAM_LOADER_ACCOUNT_ID),
-    )
-    .expect("the header lands in the loader's shard at the bijection address");
-    assert_eq!(header.image_id, program_to_insert.id());
-    let segment = ProgramSegment::from_bytes(
-        state
-            .get_account_by_id(header.program_first_segment)
-            .data
-            .shard(PROGRAM_LOADER_ACCOUNT_ID),
-    )
-    .expect("the segment lands in the loader's shard at the address the header names");
-    assert_eq!(
-        segment.bytecode,
-        program_to_insert
-            .user_elf()
-            .expect("a builtin decodes as a ProgramBinary")
-    );
-    assert_eq!(segment.next_segment, None);
+    // Walks the full segment chain regardless of how many chunks the elf split into,
+    // exercising the same reconstruction a real caller uses.
+    let (image_id, elf) = state
+        .get_builtin_program(program_to_insert.id())
+        .expect("the header and its segment chain must reconstruct the inserted program");
+    assert_eq!(image_id, program_to_insert.id());
+    assert_eq!(elf, program_to_insert.elf().to_vec());
 }
 
 #[test]

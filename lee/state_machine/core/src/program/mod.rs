@@ -24,32 +24,17 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
 pub type ProgramId = [u32; 8];
 
-/// Derives the `AccountId` under which a program's data is stored, directly from its
-/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
-///
-/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
-/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
-/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
-impl From<ProgramId> for AccountId {
-    fn from(program_id: ProgramId) -> Self {
+impl AccountId {
+    /// The default `AccountId` a builtin program is deployed at — not a live address once
+    /// redeployed via `program_loader`. A byte reinterpretation, not a hash, since `ProgramId`
+    /// is already content-derived.
+    #[must_use]
+    pub fn from_builtin_program(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect();
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
-    }
-}
-
-impl From<AccountId> for ProgramId {
-    fn from(account_id: AccountId) -> Self {
-        let mut program_id = [0_u32; 8];
-        for (word, chunk) in program_id
-            .iter_mut()
-            .zip(account_id.value().chunks_exact(4))
-        {
-            *word = u32::from_le_bytes(chunk.try_into().expect("chunk is exactly 4 bytes"));
-        }
-        program_id
     }
 }
 
@@ -640,28 +625,6 @@ impl ProgramOutput {
     ) -> Self {
         self.timestamp_validity_window = window.into();
         self
-    }
-
-    /// Sets the timestamp validity window from a fallible range conversion.
-    /// Returns `Err` if the range is empty.
-    pub fn try_with_timestamp_validity_window<
-        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
-    >(
-        mut self,
-        window: W,
-    ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
-        Ok(self)
     }
 }
 

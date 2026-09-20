@@ -21,7 +21,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_pub_tx(
@@ -45,7 +45,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -80,7 +80,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -115,7 +115,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -152,7 +152,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_pub_tx(
@@ -177,7 +177,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -216,7 +216,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -255,7 +255,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -291,7 +291,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -327,7 +327,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -363,7 +363,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_pub_tx(
@@ -389,7 +389,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -426,7 +426,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -462,7 +462,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -498,7 +498,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_pub_tx(
@@ -523,7 +523,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -562,7 +562,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -601,7 +601,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -637,7 +637,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(
@@ -675,7 +675,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id: AccountId = programs::token().id().into();
+        let token_program_id = AccountId::from_builtin_program(programs::token().id());
 
         self.0
             .send_privacy_preserving_tx(

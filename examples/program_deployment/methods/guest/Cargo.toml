@@ -11,8 +11,6 @@ workspace = true
 borsh.workspace = true
 lee_core.workspace = true
 
-hex.workspace = true
-bytemuck.workspace = true
 risc0-zkvm.workspace = true
 
 [package.metadata.cargo-machete]

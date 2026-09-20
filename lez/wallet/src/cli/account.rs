@@ -704,7 +704,7 @@ fn print_account_details(account: &Account, indent: &str) {
         "{indent}Balance {}, nonce {}",
         account.data.balance, account.nonce.0
     );
-    let token_prog_id: AccountId = programs::token().id().into();
+    let token_prog_id = AccountId::from_builtin_program(programs::token().id());
     for (program, data) in &account.data.shards {
         let (description, json_view) = if *program == token_prog_id {
             TokenDefinition::try_from(data)

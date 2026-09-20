@@ -1,7 +1,7 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use borsh::to_vec;
 use lee_core::{
-    account::ProgramShardSelector,
+    account::{AccountId, ProgramShardSelector},
     program::{
         AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
         ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -39,7 +39,7 @@ fn main() {
     let mut chained_calls = Vec::new();
     for _i in 0..num_chain_calls {
         let new_chained_call = ChainedCall {
-            program_account_id: auth_transfer_id.into(),
+            program_account_id: AccountId::from_builtin_program(auth_transfer_id),
             instruction_data: call_instruction_data.clone(),
             // Account order permuted here (sender before recipient).
             shard_selectors: vec![

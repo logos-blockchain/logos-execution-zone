@@ -49,7 +49,9 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id(),
+            ))
             .as_ref(),
     )
     .context("Config account should decode as SequencerStakeConfig")
@@ -61,7 +63,9 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        if public.message().program_account_id != programs::sequencer_stake().id().into() {
+        if public.message().program_account_id
+            != AccountId::from_builtin_program(programs::sequencer_stake().id())
+        {
             return None;
         }
         match borsh::from_slice(&public.message().instruction_data) {
@@ -127,7 +131,9 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
     let offender_account = AccountId::from(&lee::PublicKey::new_from_private_key(&offender_owner));
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
-    let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id().into());
+    let sink = sequencer_stake_core::slash_sink_account_id(AccountId::from_builtin_program(
+        programs::sequencer_stake().id(),
+    ));
 
     let bedrock_config = BedrockConfig {
         channel_id: channel,

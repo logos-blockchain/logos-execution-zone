@@ -71,7 +71,7 @@ fn test_transaction() -> LeeTransaction {
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let instruction = 1337;
     let message = Message::try_new_with_fees(
-        test_programs::simple_balance_transfer().id().into(),
+        AccountId::from_builtin_program(test_programs::simple_balance_transfer().id()),
         vec![
             ProgramShardSelector::balance(payer),
             ProgramShardSelector::balance(acc2),
@@ -112,7 +112,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
             (
                 system_accounts::sequencer_stake_config_account_id(),
                 Account::default().with_shard(
-                    programs::sequencer_stake().id().into(),
+                    AccountId::from_builtin_program(programs::sequencer_stake().id()),
                     sequencer_stake_core::SequencerStakeConfig {
                         channel_params: Some(sequencer_stake_core::ChannelParams {
                             minimum_sequencer_stake: 0,
@@ -414,7 +414,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
-        test_programs::simple_balance_transfer().id().into(),
+        AccountId::from_builtin_program(test_programs::simple_balance_transfer().id()),
         vec![
             ProgramShardSelector::balance(payer),
             ProgramShardSelector::balance(acc2),

@@ -404,7 +404,7 @@ impl WalletCore {
 
         if let Some(seed) = entry.pda_seed {
             Some(AccountIdentity::PrivatePdaShared {
-                authority: AccountId::from(entry.authority_program_id?),
+                authority: AccountId::from_builtin_program(entry.authority_program_id?),
                 seed,
                 nsk: keys.nullifier_secret_key(),
                 vpk,
@@ -517,7 +517,7 @@ impl WalletCore {
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::for_private_pda(
-            &AccountId::from(program_id),
+            &AccountId::from_builtin_program(program_id),
             &pda_seed,
             &npk,
             &vpk,

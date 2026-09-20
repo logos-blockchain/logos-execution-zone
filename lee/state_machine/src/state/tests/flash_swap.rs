@@ -6,10 +6,14 @@ fn flash_swap_successful() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
-    let receiver_id =
-        AccountId::for_public_pda(&AccountId::from(callback.id()), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(callback.id()),
+        &PdaSeed::new([1; 32]),
+    );
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
@@ -24,14 +28,14 @@ fn flash_swap_successful() {
     // Callback instruction: return funds
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
-        callback_program_id: callback.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
+        callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -54,10 +58,14 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
-    let receiver_id =
-        AccountId::for_public_pda(&AccountId::from(callback.id()), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(callback.id()),
+        &PdaSeed::new([1; 32]),
+    );
 
     let initial_balance: u128 = 1000;
     let amount_out: u128 = 100;
@@ -72,14 +80,14 @@ fn flash_swap_callback_keeps_funds_rollback() {
     // Callback instruction: do NOT return funds
     let cb_instruction = CallbackInstruction {
         return_funds: false,
-        token_program_id: token.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
-        callback_program_id: callback.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
+        callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
         callback_instruction_data: cb_data,
     };
@@ -109,10 +117,14 @@ fn flash_swap_self_call_targets_correct_program() {
     let callback = crate::test_methods::flash_swap_callback();
     let token = crate::test_methods::simple_balance_transfer();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
-    let receiver_id =
-        AccountId::for_public_pda(&AccountId::from(callback.id()), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(callback.id()),
+        &PdaSeed::new([1; 32]),
+    );
 
     let initial_balance: u128 = 1000;
 
@@ -125,14 +137,14 @@ fn flash_swap_self_call_targets_correct_program() {
 
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: token.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: 0,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: token.id().into(),
-        callback_program_id: callback.id().into(),
+        token_program_id: AccountId::from_builtin_program(token.id()),
+        callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out: 0,
         callback_instruction_data: cb_data,
     };
@@ -151,8 +163,10 @@ fn flash_swap_standalone_invariant_check_rejected() {
     // because caller_program_id will be None.
     let initiator = crate::test_methods::flash_swap_initiator();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
 
     let vault_account = Account::funded(1000);
 
@@ -164,7 +178,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
     };
 
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
+        AccountId::from_builtin_program(initiator.id()),
         vec![ProgramShardSelector::balance(vault_id)],
         vec![],
         instruction,
@@ -190,7 +204,7 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         vec![ProgramShardSelector::balance(acc_id)],
         vec![],
         (),
@@ -216,7 +230,7 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         vec![ProgramShardSelector::balance(acc_id)],
         vec![],
         (),

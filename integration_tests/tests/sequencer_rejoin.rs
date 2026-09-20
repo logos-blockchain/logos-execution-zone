@@ -71,7 +71,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .add_imported_public_account(owner_b);
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id: AccountId = programs::sequencer_stake().id().into();
+    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
 
     let settlement = AccountId::from(&PublicKey::new_from_private_key(
         &config::default_public_accounts_for_wallet()[0].0,
@@ -143,7 +143,9 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::from_builtin_program(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -197,7 +199,11 @@ async fn send_stake_tx(
     let data = Program::serialize_instruction(instruction.clone())
         .context("Failed to serialize the sequencer_stake instruction")?;
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake().id().into())
+        .send_pub_tx(
+            accounts,
+            data,
+            AccountId::from_builtin_program(programs::sequencer_stake().id()),
+        )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())
@@ -214,7 +220,9 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id(),
+            ))
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

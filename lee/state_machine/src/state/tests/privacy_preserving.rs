@@ -283,7 +283,8 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
     let program = crate::test_methods::foreign_shard_writer();
     let target_id = AccountId::new([0; 32]);
     let other_id = AccountId::new([1; 32]);
-    let foreign_program_account_id: AccountId = crate::test_methods::data_changer().id().into();
+    let foreign_program_account_id =
+        AccountId::from_builtin_program(crate::test_methods::data_changer().id());
 
     let result = execute_and_prove(
         ProvingInput {
@@ -303,7 +304,7 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
 #[test]
 fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
     let program = crate::test_methods::data_changer();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::from_builtin_program(program.id());
     let account_id = AccountId::new([0; 32]);
 
     let large_data: Vec<u8> =

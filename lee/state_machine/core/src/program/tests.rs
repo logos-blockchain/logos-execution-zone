@@ -160,7 +160,7 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 
 #[test]
 fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() {
-    let executing_program_id: AccountId = AccountId::from([1; 8]);
+    let executing_program_id = AccountId::from_builtin_program([1; 8]);
     let account_id = AccountId::new([7; 32]);
     let pre = AccountInput::with_shard(
         account_id,
@@ -181,7 +181,7 @@ fn validate_execution_rejects_insufficient_balance_even_if_globally_conserved() 
 
 #[test]
 fn validate_execution_rejects_add_overflow() {
-    let executing_program_id: AccountId = AccountId::from([1; 8]);
+    let executing_program_id = AccountId::from_builtin_program([1; 8]);
     let account_id = AccountId::new([7; 32]);
     let pre = AccountInput::with_shard(
         account_id,
@@ -418,7 +418,7 @@ fn get_program_via_reads_the_loader_shard() {
 /// ordering, or the underlying hash breaks this test.
 #[test]
 fn for_private_pda_matches_pinned_value() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -436,7 +436,7 @@ fn for_private_pda_matches_pinned_value() {
 /// Two groups with different viewing keys at the same (program, seed) get different addresses.
 #[test]
 fn for_private_pda_differs_for_different_npk() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk_a = NullifierPublicKey([3; 32]);
     let npk_b = NullifierPublicKey([4; 32]);
@@ -450,7 +450,7 @@ fn for_private_pda_differs_for_different_npk() {
 /// Different seeds produce different addresses, even with the same program and npk.
 #[test]
 fn for_private_pda_differs_for_different_seed() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed_a = PdaSeed::new([2; 32]);
     let seed_b = PdaSeed::new([5; 32]);
     let npk = NullifierPublicKey([3; 32]);
@@ -464,8 +464,8 @@ fn for_private_pda_differs_for_different_seed() {
 /// Different programs produce different addresses, even with the same seed and npk.
 #[test]
 fn for_private_pda_differs_for_different_program_id() {
-    let program_id_a: AccountId = AccountId::from([1; 8]);
-    let program_id_b: AccountId = AccountId::from([9; 8]);
+    let program_id_a = AccountId::from_builtin_program([1; 8]);
+    let program_id_b = AccountId::from_builtin_program([9; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -479,7 +479,7 @@ fn for_private_pda_differs_for_different_program_id() {
 /// confirming that each `(program_id, seed, npk)` tuple controls a family of 2^128 addresses.
 #[test]
 fn for_private_pda_differs_for_different_identifier() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -497,7 +497,7 @@ fn for_private_pda_differs_for_different_identifier() {
 /// because the private formula uses a different prefix and includes npk.
 #[test]
 fn for_private_pda_differs_from_public_pda() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -535,7 +535,7 @@ fn private_account_kind_unknown_discriminant_returns_none() {
 
 #[test]
 fn for_private_account_dispatches_correctly() {
-    let program_id: AccountId = AccountId::from([1; 8]);
+    let program_id = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
@@ -561,7 +561,7 @@ fn for_private_account_dispatches_correctly() {
 
 #[test]
 fn compute_public_authorized_pdas_with_seeds() {
-    let caller: AccountId = AccountId::from([1; 8]);
+    let caller = AccountId::from_builtin_program([1; 8]);
     let seed = PdaSeed::new([2; 32]);
     let result = compute_public_authorized_pdas(Some(caller), &[seed]);
     let expected = AccountId::for_public_pda(&caller, &seed);
@@ -578,7 +578,7 @@ fn compute_public_authorized_pdas_no_caller_returns_empty() {
 }
 
 #[test]
-fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
+fn account_id_from_builtin_program_reinterprets_words_as_le_bytes() {
     let program_id: ProgramId = [
         0x0403_0201,
         0x0807_0605,
@@ -593,41 +593,10 @@ fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
         26, 27, 28, 29, 30, 31, 32,
     ];
-    assert_eq!(AccountId::from(program_id).value(), &expected);
-}
-
-#[test]
-fn program_id_from_account_id_reinterprets_le_bytes_as_words() {
-    let account_id = AccountId::new([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26, 27, 28, 29, 30, 31, 32,
-    ]);
-    let expected: ProgramId = [
-        0x0403_0201,
-        0x0807_0605,
-        0x0c0b_0a09,
-        0x100f_0e0d,
-        0x1413_1211,
-        0x1817_1615,
-        0x1c1b_1a19,
-        0x201f_1e1d,
-    ];
-    assert_eq!(ProgramId::from(account_id), expected);
-}
-
-#[test]
-fn program_id_account_id_conversion_round_trips() {
-    let program_id: ProgramId = [
-        0x1122_3344,
-        0x5566_7788,
-        0x99aa_bbcc,
-        0xddee_ff00,
-        0xcafe_babe,
-        0xdead_beef,
-        0x0bad_f00d,
-        0xfeed_face,
-    ];
-    assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
+    assert_eq!(
+        AccountId::from_builtin_program(program_id).value(),
+        &expected
+    );
 }
 
 fn foreign_shard_with_history() -> AccountInput {

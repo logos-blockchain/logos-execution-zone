@@ -10,11 +10,11 @@ use lee_core::account::Nonce;
 use token_core::TokenHolding;
 
 fn token_program_id() -> AccountId {
-    programs::token().id().into()
+    AccountId::from_builtin_program(programs::token().id())
 }
 
 fn ata_program_id() -> AccountId {
-    programs::ata().id().into()
+    AccountId::from_builtin_program(programs::ata().id())
 }
 
 fn owner_keys() -> (PrivateKey, AccountId) {

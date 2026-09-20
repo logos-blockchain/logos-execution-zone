@@ -14,8 +14,8 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
-        ProgramId, ProgramSegment, TimestampValidityWindow, TransactionEvent,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow,
+        TransactionEvent,
     },
 };
 
@@ -155,7 +155,8 @@ fn transfer_transaction(
         ProgramShardSelector::balance(to),
     ];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message =
         public_transaction::Message::try_new(program_id, shard_selectors, nonces, balance).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
@@ -169,7 +170,7 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
+        AccountId::from_builtin_program(initiator.id()),
         vec![
             ProgramShardSelector::balance(vault_id),
             ProgramShardSelector::balance(receiver_id),

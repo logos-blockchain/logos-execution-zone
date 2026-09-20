@@ -5,7 +5,7 @@ use std::{
 
 use common::HashType;
 use lee::{
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, ProgramId,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, AccountId,
 };
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     error::{print_error, WalletFfiError},
     map_execution_error, read_optional_account_id,
     wallet::get_wallet,
-    FfiAccountMention, FfiBytes32, FfiProgramId, WalletHandle,
+    FfiAccountMention, FfiBytes32, WalletHandle,
 };
 
 #[repr(C)]
@@ -52,10 +52,20 @@ impl From<Program> for FfiProgram {
 }
 
 #[repr(C)]
+/// A program paired with the account id it's deployed at.
+///
+/// Intended to be created manually.
+pub struct FfiProgramDependency {
+    pub program: FfiProgram,
+    pub account_id: FfiBytes32,
+}
+
+#[repr(C)]
 /// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
     pub program: FfiProgram,
-    pub deps: *const FfiProgram,
+    pub self_account_id: FfiBytes32,
+    pub deps: *const FfiProgramDependency,
     pub deps_size: usize,
 }
 
@@ -66,15 +76,14 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
         let mut program_map = HashMap::new();
 
         let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = orig_program.id().into();
+        let self_account_id = AccountId::from(value.self_account_id);
 
         // Alignment will be different, we need to read elements one-by-one
         for i in 0..value.deps_size {
-            let program_dep: Program = unsafe { value.deps.add(i).as_ref() }
-                .ok_or(WalletFfiError::NullPointer)?
-                .try_into()?;
+            let dep = unsafe { value.deps.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            let program_dep: Program = (&dep.program).try_into()?;
 
-            program_map.insert(program_dep.id().into(), program_dep);
+            program_map.insert(AccountId::from(dep.account_id), program_dep);
         }
 
         Ok(Self {
@@ -88,18 +97,23 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
 impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
     fn from(value: ProgramWithDependencies) -> Self {
         let ffi_program = value.program.into();
+        let self_account_id = value.self_account_id.into();
 
-        let ffi_deps: Vec<FfiProgram> = value
+        let ffi_deps: Vec<FfiProgramDependency> = value
             .dependencies
-            .into_values()
-            .map(Into::into)
+            .into_iter()
+            .map(|(account_id, program)| FfiProgramDependency {
+                program: program.into(),
+                account_id: account_id.into(),
+            })
             .collect::<Vec<_>>();
 
         let deps_size = ffi_deps.len();
-        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgram;
+        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgramDependency;
 
         Self {
             program: ffi_program,
+            self_account_id,
             deps,
             deps_size,
         }
@@ -136,6 +150,7 @@ impl Default for FfiTransactionResult {
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_mentions`: Valid pointer to list of `FfiAccountMention`
 /// - `instruction_data`: Valid pointer to instruction data bytes
+/// - `program_account_id`: Account id the target program is deployed at
 /// - `payer`: Fee payer, or null to self-pay from the first funded signing account in
 ///   `account_mentions` (the first signing account if none is funded). May be one of those signing
 ///   accounts, or any other public account whose signing key the wallet holds (it co-signs without
@@ -159,7 +174,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     account_mentions_size: usize,
     instruction_data: *const u8,
     instruction_data_size: usize,
-    program_id: FfiProgramId,
+    program_account_id: FfiBytes32,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
@@ -211,7 +226,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     match block_on(wallet.send_pub_tx_paid_by(
         accounts,
         instruction_data.to_vec(),
-        ProgramId::from(program_id).into(),
+        AccountId::from(program_account_id),
         payer,
     )) {
         Ok(tx_hash) => {

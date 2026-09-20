@@ -132,7 +132,7 @@ async fn deploy_at_bijection(
 
     ProgramLoader(ctx.wallet())
         .deploy(
-            program.id().into(),
+            AccountId::from_builtin_program(program.id()),
             &segments,
             program.elf().to_vec(),
             true,

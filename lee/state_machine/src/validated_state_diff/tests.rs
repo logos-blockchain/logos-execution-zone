@@ -22,7 +22,8 @@ fn public_diff_reflects_a_successful_transfer() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message = Message::try_new(
         program_id,
         vec![
@@ -121,7 +122,8 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message = Message::try_new(
         program_id,
         vec![
@@ -187,7 +189,7 @@ fn chained_calls_share_one_budget() {
     );
     // The chain_caller program permutes the account order in the chain call.
     let message = Message::try_new(
-        chain_caller.id().into(),
+        AccountId::from_builtin_program(chain_caller.id()),
         vec![
             ProgramShardSelector::balance(to),
             ProgramShardSelector::balance(from),
@@ -245,7 +247,8 @@ fn metered_guest_panic_is_charged_the_full_budget() {
         .with_programs(std::iter::once(
             crate::test_methods::simple_balance_transfer(),
         ));
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message = Message::try_new(
         program_id,
         vec![
@@ -278,7 +281,7 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(crate::test_methods::exits_nonzero()));
-    let program_id: AccountId = crate::test_methods::exits_nonzero().id().into();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
     let message = Message::try_new(
         program_id,
         vec![ProgramShardSelector::balance(from)],
@@ -329,7 +332,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
             None,
         );
         let message = Message::try_new(
-            chain_caller.id().into(),
+            AccountId::from_builtin_program(chain_caller.id()),
             vec![
                 ProgramShardSelector::balance(to),
                 ProgramShardSelector::balance(from),
@@ -349,7 +352,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     // The callee alone, so the assertion below fails if its cycles are never folded in: a
     // caller with one chained call burns only marginally more than with none.
     let callee_message = Message::try_new(
-        crate::test_methods::exits_nonzero().id().into(),
+        AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
         vec![ProgramShardSelector::balance(from)],
         vec![Nonce(0)],
         (),

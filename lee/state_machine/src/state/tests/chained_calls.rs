@@ -30,7 +30,7 @@ fn public_chained_call() {
     };
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
             ProgramShardSelector::balance(to),
@@ -72,7 +72,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
     );
 
     let message = public_transaction::Message::try_new(
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
             ProgramShardSelector::balance(to),
@@ -96,7 +96,10 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
 fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
     let chain_caller = crate::test_methods::chain_caller();
     let pda_seed = PdaSeed::new([37; 32]);
-    let from = AccountId::for_public_pda(&AccountId::from(chain_caller.id()), &pda_seed);
+    let from = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(chain_caller.id()),
+        &pda_seed,
+    );
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let mut state = V03State::new()
@@ -112,7 +115,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
 
     let expected_to_post = Account::funded(amount);
     let message = public_transaction::Message::try_new(
-        chain_caller.id().into(),
+        AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
             ProgramShardSelector::balance(to),
@@ -163,7 +166,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
         None,
     );
     let message = public_transaction::Message::try_new(
-        chain_caller.id().into(),
+        AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
             ProgramShardSelector::balance(to),
@@ -226,9 +229,15 @@ fn private_chained_call(number_of_calls: u32) {
 
     let mut dependencies = HashMap::new();
 
-    dependencies.insert(simple_transfers.id().into(), simple_transfers);
-    let program_with_deps =
-        ProgramWithDependencies::new(chain_caller.clone(), chain_caller.id().into(), dependencies);
+    dependencies.insert(
+        AccountId::from_builtin_program(simple_transfers.id()),
+        simple_transfers,
+    );
+    let program_with_deps = ProgramWithDependencies::new(
+        chain_caller.clone(),
+        AccountId::from_builtin_program(chain_caller.id()),
+        dependencies,
+    );
 
     let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
     let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());
