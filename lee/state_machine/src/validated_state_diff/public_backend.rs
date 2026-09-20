@@ -126,7 +126,6 @@ impl<'state> PublicBackend<'state> {
             .unwrap_or_else(|| self.state.get_account_by_id(account_id))
     }
 
-    /// Loads `program_account_id`'s program, resolved via [`Self::touched_or_live`].
     fn load_program(
         &self,
         ctx: &CallContext<'_>,

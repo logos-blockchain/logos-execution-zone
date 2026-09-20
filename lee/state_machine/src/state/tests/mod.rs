@@ -40,6 +40,7 @@ mod events;
 mod flash_swap;
 mod genesis;
 mod implicit_claiming;
+mod incremental_diff;
 mod privacy_preserving;
 mod public_program_rules;
 mod validity_window;

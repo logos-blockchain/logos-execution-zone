@@ -592,6 +592,79 @@ fn read_only_claim_does_not_cover_a_write() {
     );
 }
 
+/// The §3 `stripped_token_robinhood` scenario, proven for real rather than asserted: robinhood
+/// reads both accounts to pick a route but never implements `Incremental` itself (its `Probe`
+/// answer is always `UnsupportedCallKind`), so its own reads are uncovered and force both
+/// accounts `Bound` - even though the chained `Transfer` on `stripped_token` (which genuinely
+/// supports `Incremental`) would otherwise defer its own write.
+#[test]
+fn stripped_token_robinhood_forces_both_accounts_bound() {
+    let robinhood = crate::test_methods::stripped_token_robinhood();
+    let stripped_token = crate::test_methods::stripped_token();
+    let stripped_token_id: AccountId = stripped_token.id().into();
+
+    let account1_id = AccountId::new([30; 32]);
+    let account2_id = AccountId::new([31; 32]);
+    let account1_data: Data = borsh::to_vec(&TokenAccountData { balance: 100 })
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let account2_data: Data = borsh::to_vec(&TokenAccountData { balance: 40 })
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let account1 = AccountWithMetadata::new(
+        Account {
+            program_owner: stripped_token_id,
+            data: account1_data,
+            ..Account::default()
+        },
+        true,
+        account1_id,
+    );
+    let account2 = AccountWithMetadata::new(
+        Account {
+            program_owner: stripped_token_id,
+            data: account2_data,
+            ..Account::default()
+        },
+        true,
+        account2_id,
+    );
+
+    let program_with_deps = ProgramWithDependencies::new(
+        robinhood.clone(),
+        robinhood.id().into(),
+        [(stripped_token_id, stripped_token)].into(),
+    );
+
+    let (output, proof) = execute_and_prove(
+        vec![account1, account2],
+        Program::serialize_instruction(stripped_token_id).unwrap(),
+        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        &program_with_deps,
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    let [action1, action2]: [_; 2] = output.public_actions.try_into().unwrap();
+
+    let PublicAction::Bound { post: post1, .. } = action1 else {
+        panic!("robinhood's own uncovered read of account1 must force it Bound, got {action1:?}");
+    };
+    let PublicAction::Bound { post: post2, .. } = action2 else {
+        panic!("robinhood's own uncovered read of account2 must force it Bound, got {action2:?}");
+    };
+
+    // Both accounts are Bound, but `resolve_write` still resolved the chained `Transfer` for
+    // real - confirms the composition actually ran, rather than both accounts merely defaulting
+    // to Bound through some unrelated early exit.
+    let balance1: TokenAccountData = borsh::from_slice(post1.data.as_ref()).unwrap();
+    let balance2: TokenAccountData = borsh::from_slice(post2.data.as_ref()).unwrap();
+    assert_eq!(balance1.balance, 99);
+    assert_eq!(balance2.balance, 41);
+}
+
 /// A dishonest prover that simply never proves a `Probe` for a call that writes a public
 /// account — distinct from `lying_probe_*`, which supply one but lie inside it. `PrivateBackend`
 /// requires exactly one `Probe` per such call and panics outright if none is queued.
