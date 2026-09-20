@@ -7,26 +7,14 @@ use crate::{
     BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
     EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus,
     IndexerSyncState, Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector, Proof, PublicActionWithID,
+    PublicKey, PublicMessage, PublicTransaction, Selector, ShardData, Signature, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
 // Account-related conversions
 // ============================================================================
-
-impl From<[u32; 8]> for ProgramId {
-    fn from(value: [u32; 8]) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ProgramId> for [u32; 8] {
-    fn from(value: ProgramId) -> Self {
-        value.0
-    }
-}
 
 impl From<lee_core::account::AccountId> for AccountId {
     fn from(value: lee_core::account::AccountId) -> Self {
@@ -326,7 +314,7 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             fee,
         } = value;
         Self {
-            program_id: ProgramId(program_account_id.into()),
+            program_account_id: program_account_id.into(),
             shard_selectors: shard_selectors.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
@@ -338,14 +326,14 @@ impl From<lee::public_transaction::Message> for PublicMessage {
 impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             shard_selectors,
             nonces,
             instruction_data,
             fee,
         } = value;
         Self::new_preserialized(
-            lee::AccountId::from(program_id.0),
+            program_account_id.into(),
             shard_selectors.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
@@ -984,7 +972,7 @@ impl EventRecord {
                 block_id,
                 tx_index,
                 tx_hash: tx_hash.into(),
-                program_id: ProgramId(event.account_id.into()),
+                program_account_id: event.account_id.into(),
                 selector: event.event.selector.into(),
                 data: event.event.data,
             })
@@ -1023,7 +1011,7 @@ mod tests {
     #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
-            account_id: lee_core::account::AccountId::from([7_u32; 8]),
+            account_id: lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
             event: lee_core::program::ProgramEvent {
                 selector: [selector; 8],
                 data: vec![selector; 2],
@@ -1039,11 +1027,10 @@ mod tests {
 
         assert_eq!(records.len(), 3);
         assert!(records.iter().all(|r| r.block_id == 77 && r.tx_index == 4));
-        assert!(
-            records
-                .iter()
-                .all(|r| r.tx_hash == HashType([9_u8; 32]) && r.program_id == ProgramId([7; 8]))
-        );
+        let expected_program_account_id: AccountId =
+            lee_core::account::AccountId::from_builtin_program([7; 8]).into();
+        assert!(records.iter().all(|r| r.tx_hash == HashType([9_u8; 32])
+            && r.program_account_id == expected_program_account_id));
         assert_eq!(records[1].selector, Selector([2; 8]));
         assert_eq!(records[2].data, vec![3, 3]);
     }
@@ -1058,7 +1045,7 @@ mod tests {
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            [7_u32; 8].into(),
+            lee::AccountId::new([7; 32]),
             vec![lee::ProgramShardSelector::balance(signer_id)],
             vec![0_u128.into()],
             0_u32,
@@ -1092,7 +1079,7 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let message = lee::public_transaction::Message::try_new(
-            [7_u32; 8].into(),
+            lee::AccountId::new([7; 32]),
             vec![lee::ProgramShardSelector::balance(signer_id)],
             vec![0_u128.into()],
             0_u32,

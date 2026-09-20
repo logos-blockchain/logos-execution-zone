@@ -103,7 +103,7 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = programs::authenticated_transfer().id().into();
+    let program_id = AccountId::from_builtin_program(programs::authenticated_transfer().id());
     let shard_selectors = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
@@ -160,7 +160,7 @@ pub fn create_transaction_native_token_transfer_with_fees(
         ProgramShardSelector::balance(to),
     ];
     let nonces = vec![nonce.into()];
-    let program_id = programs::authenticated_transfer().id().into();
+    let program_id = AccountId::from_builtin_program(programs::authenticated_transfer().id());
     let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
         shard_selectors,
@@ -191,7 +191,7 @@ pub fn create_transaction_native_token_transfer_without_fee(
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer().id().into(),
+        AccountId::from_builtin_program(programs::authenticated_transfer().id()),
         vec![
             ProgramShardSelector::balance(from),
             ProgramShardSelector::balance(to),

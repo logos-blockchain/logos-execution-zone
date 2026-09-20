@@ -1,9 +1,9 @@
 use common::transaction::LeeTransaction;
 use lee::{
     AccountId, ProgramShardSelector, PublicTransaction,
-    program::Program,
     public_transaction::{Message, WitnessSet},
 };
+use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -17,19 +17,20 @@ use wallet::WalletCore;
 //
 //
 // Usage:
-//   ./run_hello_world_with_authorization /path/to/guest/binary <account_id>
+//   ./run_hello_world_with_authorization /path/to/guest/binary <account_id> <payer_account_id>
 //
 // Note: the provided account_id needs to be of a public self owned account
 //
 // Example:
 //   cargo run --bin run_hello_world_with_authorization \
 //      methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_authorization.bin \
-//      Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE
+//      Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE \
+//      <funded payer account_id>
 
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().await.unwrap();
+    let mut wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary
@@ -42,10 +43,20 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
+    // Third argument is an existing, funded account to pay the deployment fee
+    let payer: AccountId = std::env::args_os()
+        .nth(3)
+        .unwrap()
+        .into_string()
+        .unwrap()
+        .parse()
+        .unwrap();
 
-    // Load the program
+    // Deploy the program through `program_loader`; future calls dispatch to the returned header.
     let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-    let program = Program::new(bytecode.into()).unwrap();
+    let program_account_id = deploy_program(&mut wallet_core, bytecode, payer)
+        .await
+        .unwrap();
 
     // Load signing keys to provide authorization
     let signing_key = wallet_core
@@ -66,8 +77,8 @@ async fn main() {
         .expect("Node should be reachable to query account data");
     let signing_keys = [&signing_key];
     let message = Message::try_new(
-        program.id().into(),
-        vec![ProgramShardSelector::new(account_id, program.id().into())],
+        program_account_id,
+        vec![ProgramShardSelector::new(account_id, program_account_id)],
         nonces,
         greeting,
     )

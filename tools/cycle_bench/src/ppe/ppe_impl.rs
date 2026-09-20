@@ -105,8 +105,15 @@ fn prove_chain_caller(
     let auth_transfer = programs::authenticated_transfer();
     let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id().into(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, chain_caller_id.into(), deps);
+    deps.insert(
+        AccountId::from_builtin_program(auth_transfer.id()),
+        auth_transfer,
+    );
+    let pwd = ProgramWithDependencies::new(
+        chain_caller,
+        AccountId::from_builtin_program(chain_caller_id),
+        deps,
+    );
 
     let recipient_id = AccountId::new([2; 32]);
     let sender_id = AccountId::new([1; 32]);

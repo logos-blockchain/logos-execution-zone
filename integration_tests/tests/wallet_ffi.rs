@@ -33,8 +33,8 @@ use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
-    FfiBytes32, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult,
-    FfiU128, WalletHandle, error,
+    FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -210,7 +210,7 @@ unsafe extern "C" {
         account_mentions_size: usize,
         instruction_data: *const u8,
         instruction_data_size: usize,
-        program_id: FfiProgramId,
+        program_account_id: FfiBytes32,
         payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
@@ -645,7 +645,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     assert_eq!(balance_only.nonce.0, 2);
     assert!(balance_only.data.shards.is_empty());
 
-    let program_id = AccountId::from(programs::token().id());
+    let program_id = AccountId::from_builtin_program(programs::token().id());
     let mut out_program_full = FfiAccount::default();
     let program_full: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
@@ -1652,7 +1652,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_id = programs::authenticated_transfer().id();
+    let program_account_id =
+        AccountId::from_builtin_program(programs::authenticated_transfer().id());
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
@@ -1661,7 +1662,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             account_mentions_size,
             instruction_data_ptr,
             instruction_data_size,
-            program_id.into(),
+            program_account_id.into(),
             std::ptr::null(),
             &raw mut transaction_result,
         )

@@ -199,40 +199,49 @@ impl V03State {
         self
     }
 
-    /// Inserts a program at `AccountId::from(program.id())` with one segment holding its
-    /// `user_elf`; the kernel is re-attached on read.
+    /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
+    /// `user_elf`, chunked the same way a live `program_loader` deploy would.
     pub(crate) fn insert_program(&mut self, program: &Program) {
-        let header_account_id = AccountId::from(program.id());
-        let segment_account_id = genesis_segment_account_id(header_account_id);
-
+        let header_account_id = AccountId::from_builtin_program(program.id());
         let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
             .expect("builtin program must be a valid ProgramBinary")
             .user_elf
             .to_vec();
-        let segment = Account::default().with_shard(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(
-                ProgramSegment {
-                    bytecode: user_elf,
-                    next_segment: None,
-                }
-                .to_bytes(),
-            )
-            .expect("elf must fit under DATA_MAX_LENGTH"),
-        );
+
+        let chunks: Vec<&[u8]> = user_elf
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        let segment_account_ids: Vec<AccountId> = (0..chunks.len())
+            .map(|i| genesis_segment_account_id(header_account_id, i))
+            .collect();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let segment = Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ShardData::try_from(
+                    ProgramSegment {
+                        bytecode: chunk.to_vec(),
+                        next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+                    }
+                    .to_bytes(),
+                )
+                .expect("segment fits under DATA_MAX_LENGTH"),
+            );
+            self.public_state.insert(segment_account_ids[i], segment);
+        }
+
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
             ShardData::try_from(
                 ProgramHeader {
                     image_id: program.id(),
-                    program_first_segment: segment_account_id,
+                    program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
                 .to_bytes(),
             )
             .expect("program header fits under DATA_MAX_LENGTH"),
         );
-        self.public_state.insert(segment_account_id, segment);
         self.public_state.insert(header_account_id, header);
     }
 
@@ -302,18 +311,14 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Looks up a program deployed at its bijection address (`AccountId::from(program_id)`),
-    /// reconstructing its bytecode from its header and segment chain.
-    ///
-    /// Only meaningful for programs deployed at their bijection address — genesis-seeded
-    /// builtins, or anything created through the (removed) `ProgramDeploymentTransaction`.
-    /// A program deployed through `program_loader` at an arbitrary address must be resolved
-    /// through [`get_program_via`] with the real address instead.
+    /// Reconstructs a genesis-seeded builtin's bytecode from its default address's header and
+    /// segment chain — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
-    pub fn get_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
-        let (image_id, user_elf) = get_program_via(AccountId::from(program_id), |account_id| {
-            self.get_account_by_id_ref(account_id)
-        })?;
+    pub fn get_builtin_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
+        let (image_id, user_elf) =
+            get_program_via(AccountId::from_builtin_program(program_id), |account_id| {
+                self.get_account_by_id_ref(account_id)
+            })?;
         Some((image_id, crate::program::attach_kernel(&user_elf)))
     }
 
@@ -415,18 +420,20 @@ impl V03State {
     }
 }
 
-/// The deterministic `AccountId` a genesis-seeded builtin's single segment lives at, derived
-/// from the header's own bijection address.
-///
-/// Only `insert_program` needs this — a live `program_loader` deploy has a real signer and picks
-/// its own segment addresses instead, since genesis has no signer to ask.
-fn genesis_segment_account_id(header_account_id: AccountId) -> AccountId {
+/// The deterministic `AccountId` a genesis-seeded builtin's `index`-th segment lives at.
+/// Only `insert_program` needs this — a live deploy has a real signer to pick addresses instead.
+fn genesis_segment_account_id(header_account_id: AccountId, index: usize) -> AccountId {
     use sha2::{Digest as _, Sha256};
     const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
 
     let mut hasher = Sha256::new();
     hasher.update(GENESIS_SEGMENT_ID_PREFIX);
     hasher.update(header_account_id.as_ref());
+    hasher.update(
+        u32::try_from(index)
+            .expect("segment count fits in u32")
+            .to_le_bytes(),
+    );
     AccountId::new(hasher.finalize().into())
 }
 

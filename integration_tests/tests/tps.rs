@@ -89,7 +89,7 @@ impl TpsTestManager {
             .map(|pair| {
                 let amount: u128 = 1;
                 let message = putx::Message::try_new_with_fees(
-                    program.id().into(),
+                    AccountId::from_builtin_program(program.id()),
                     vec![
                         ProgramShardSelector::balance(pair[0].1),
                         ProgramShardSelector::balance(pair[1].1),

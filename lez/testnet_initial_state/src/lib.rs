@@ -415,7 +415,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(fee_program_id.into()),
+                .shard(AccountId::from_builtin_program(fee_program_id)),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
@@ -464,9 +464,12 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                with.get_builtin_program(id).is_some(),
+                "registered when declared"
+            );
+            assert!(
+                without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
         }

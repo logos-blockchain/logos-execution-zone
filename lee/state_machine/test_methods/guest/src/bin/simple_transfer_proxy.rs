@@ -1,5 +1,5 @@
 use lee_core::{
-    account::ProgramShardSelector,
+    account::{AccountId, ProgramShardSelector},
     program::{
         AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
         ProgramOutput, read_lee_call, respond_unsupported_call,
@@ -62,7 +62,7 @@ fn main() {
         // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let auth_call = ChainedCall::new(
-            simple_transfer_id.into(),
+            AccountId::from_builtin_program(simple_transfer_id),
             vec![
                 ProgramShardSelector::from(&pda_pre),
                 ProgramShardSelector::from(&recipient_pre),
@@ -90,7 +90,7 @@ fn main() {
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA.
         let auth_call = ChainedCall::new(
-            simple_transfer_id.into(),
+            AccountId::from_builtin_program(simple_transfer_id),
             vec![ProgramShardSelector::from(&pda_pre)],
             &amount,
         )
