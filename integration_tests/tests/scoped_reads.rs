@@ -33,9 +33,9 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_SHARD_BYTES: usize = 700 * 1024;
+const BLOAT_SHARD_BYTES: usize = 96 * 1024;
 
-const BLOAT_WRITERS: usize = 4;
+const BLOAT_WRITERS: usize = 30;
 
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
@@ -65,7 +65,7 @@ async fn submit(
         shard_selectors,
         nonces,
         instruction,
-        // A 700 KB shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
+        // A bloat shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
         // and an over-cap call is a charged revert: it settles and writes nothing.
         lee::FeeDeclaration::new(
             payer.account_id,
@@ -141,7 +141,10 @@ async fn deploy_at_bijection(
         .await
 }
 
-async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[AccountId; 4]> {
+async fn bloat_account(
+    ctx: &mut TestContext,
+    victim: AccountId,
+) -> Result<[AccountId; BLOAT_WRITERS]> {
     let payer = &genesis_payer(ctx);
     let writer = test_programs::data_writer();
 

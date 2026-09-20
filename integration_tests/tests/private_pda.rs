@@ -173,50 +173,75 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // The circuit anchors the PDAs' authority binding to `proxy_id`'s real on-chain image, so
     // `pda_spend_proxy` must actually be deployed there through `program_loader`, not just known
-    // locally — a `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
-    // `proxy_id` itself as the header.
+    // locally — one `WriteSegment` per `MAX_SEGMENT_DATA_LEN` chunk of the ELF (linked
+    // tail-to-head), then a `CreateHeader` naming `proxy_id` itself as the header.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = PrivateKey::try_new([230; 32]).unwrap();
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
 
     // Segments only ever hold `user_elf`.
     let user_elf = proxy.user_elf().expect("valid ProgramBinary");
-    let segment_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_id,
+    let chunks: Vec<&[u8]> = user_elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    // Base 230 avoids colliding with other fixed account ids in this test.
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(230); 32]).unwrap())
+        .collect();
+    let segment_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
+
+    let mut next_payer_nonce = payer_nonce.0;
+    for i in (0..chunks.len()).rev() {
+        let mut write_segment_account_ids = vec![segment_ids[i]];
+        write_segment_account_ids.extend(segment_ids.get(i.saturating_add(1)).copied());
+        let segment_message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        )],
-        vec![lee_core::account::Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
-            bytecode: user_elf,
-            next_segment: None,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )?;
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
-    ctx.sequencer_client()
-        .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
-            segment_message,
-            segment_witness_set,
-        )))
-        .await?;
+            write_segment_account_ids
+                .into_iter()
+                .map(|id| {
+                    ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID)
+                })
+                .collect(),
+            vec![
+                lee_core::account::Nonce(0),
+                lee_core::account::Nonce(next_payer_nonce),
+            ],
+            program_loader_core::Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_ids.get(i.saturating_add(1)).copied(),
+            },
+            common::test_utils::test_fee_declaration(payer.account_id),
+        )?;
+        let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
+            &segment_message,
+            &[&segment_keys[i], &payer.pub_sign_key],
+        );
+        ctx.sequencer_client()
+            .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
+                segment_message,
+                segment_witness_set,
+            )))
+            .await?;
+        next_payer_nonce = next_payer_nonce.saturating_add(1);
 
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+        // Segments link tail-to-head: the next chunk's `WriteSegment` must see this one
+        // already on chain before it can reference it.
+        tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    }
 
+    let mut header_account_ids = vec![proxy_id];
+    header_account_ids.extend(&segment_ids);
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![
-            ProgramShardSelector::new(proxy_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
-            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
-        ],
-        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
+        header_account_ids
+            .into_iter()
+            .map(|id| ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
+            .collect(),
+        vec![lee_core::account::Nonce(next_payer_nonce)],
         program_loader_core::Instruction::CreateHeader {
-            first_segment: segment_id,
+            first_segment: segment_ids[0],
             immutable: true,
         },
         common::test_utils::test_fee_declaration(payer.account_id),
