@@ -695,7 +695,7 @@ pub enum ExecutionValidationError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallKind {
     Execute,
-    /// Call kind program opts into for custom `data` update.
+    /// Call kind a program opts into for a custom `data` update.
     Incremental,
     /// An unrecognized discriminant, carrying the raw byte for diagnostics.
     Unknown(u8),
@@ -746,10 +746,9 @@ pub enum ProgramCall<T> {
 
 /// The instruction shape every `CallKind::Incremental` invocation carries.
 ///
-/// Shared by every caller and every implementer, so a capability check and a real resolution
-/// can never be confused for one another. A program that doesn't recognize this envelope at all
-/// (decode failure) falls back to `UnsupportedCallKind`, identical to "doesn't implement
-/// `Incremental`".
+/// Shared by every caller and implementer, so a capability check and a real resolution can
+/// never be confused. A decode failure falls back to `UnsupportedCallKind`, same as not
+/// implementing `Incremental` at all.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum IncrementalCall {
     Probe(InstructionData),
@@ -776,10 +775,10 @@ impl UnsupportedCallKind {
     }
 }
 
-/// Self-attested claim that this program's touches this call are safe to leave `Deferred`.
+/// Self-attested claim that this call's touches are safe to leave `Deferred`.
 ///
-/// Scoped by write or read. Emitted once per call, on `Probe`'s response. Absence (or a decode
-/// failure) means no claim: every touch forces `Bound`.
+/// Scoped by write or read, emitted once per call on `Probe`'s response. Absence (or a decode
+/// failure) means no claim - every touch forces `Bound`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum DeferReads {
     /// Safe to defer for accounts this call writes to.

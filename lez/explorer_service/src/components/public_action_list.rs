@@ -2,9 +2,8 @@ use indexer_service_protocol::{BalanceDiff, DeferredResolution, PublicActionWith
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-/// Renders each public action a privacy-preserving transaction names, distinguishing `Bound`
-/// (fully resolved, fixed in this message) from `Deferred` (an unresolved delta the sequencer
-/// replays against live state at settlement, so the value here is never final).
+/// Renders each public action, distinguishing `Bound` (fully resolved) from `Deferred`
+/// (an unresolved delta, not final until settlement).
 #[component]
 pub fn PublicActionList(actions: Vec<PublicActionWithID>) -> impl IntoView {
     view! {

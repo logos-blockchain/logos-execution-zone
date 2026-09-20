@@ -62,8 +62,7 @@ pub struct PrivacyPreservingCircuitInput {
 )]
 pub enum InputAccountIdentity {
     /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier. See [`PublicAction`] for how its outcome (`Bound`
-    /// or `Deferred`) gets decided.
+    /// commitment, ciphertext, or nullifier.
     Public,
     Private(PrivateWitness),
 }

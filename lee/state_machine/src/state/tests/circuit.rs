@@ -1,7 +1,7 @@
 use super::*;
 
-/// For tests below whose program never writes `post_data`, so no `Probe` claim ever covers a
-/// touch and the account is always `Bound` - never a stand-in for "everything's `Bound` for now".
+/// For tests whose program never writes `post_data`, so the account is always `Bound` - not a
+/// general stand-in for `Bound`.
 fn expect_bound_pre(action: &PublicAction) -> &AccountWithMetadata {
     let PublicAction::Bound { pre, .. } = action else {
         panic!("expected a Bound action");

@@ -570,17 +570,13 @@ fn authenticate_public_transaction_signers(
 
 /// Resolves one message-level public action to the `Account` it leaves behind. `Bound`'s
 /// `post_state` is already final and proven - used as-is. `Deferred` carries a list of raw,
-/// unresolved deltas, one per touch by an `Incremental`-supporting program, replayed in order
-/// via `PublicBackend::resolve_write` against live state - each resolution building on the
-/// previous one's result (`resolved_so_far`, standing in for `CallContext::touched`). `backend`
-/// is shared across every action in the message, so `cycles_used` accumulates the whole
-/// settlement's cost.
+/// unresolved deltas, replayed in order via `PublicBackend::resolve_write` against live state,
+/// each building on the previous result. `backend` is shared across the whole message, so
+/// `cycles_used` accumulates the entire settlement's cost.
 ///
-/// Also re-checks data ownership on each resolved diff (`validate_execution`'s own rule, but not
-/// the full check - its balance-sum check spans one program call's diffs together, which a lone
-/// `DeferredResolution` was never part of): an account's real owner can differ by settlement time
-/// from what the prover saw at proof time, so the circuit's own check isn't a substitute for
-/// checking again here.
+/// Also re-checks data ownership on each resolved diff: an account's real owner can differ by
+/// settlement time from what the prover saw at proof time, so the circuit's own check can't
+/// substitute for checking again here.
 fn resolve_public_action(
     action: &PublicActionWithID,
     state: &V03State,

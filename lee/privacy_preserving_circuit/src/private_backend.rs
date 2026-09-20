@@ -54,11 +54,8 @@ pub struct DerivedOutputs {
     pub classification: HashMap<AccountId, WriteFate>,
 }
 
-/// A public account's classification, decided across every call that touches it. Absence from
-/// the map means the same as `Bound` at output time - nothing was written, nothing to defer.
-///
-/// `Bound` is permanent: a later touch, even a covered one, can't move an account back to
-/// `Deferred` - see `classify_touch`.
+/// A public account's classification. Absence means `Bound` (nothing written). `Bound` is
+/// permanent.
 #[derive(Clone)]
 pub enum WriteFate {
     Bound,
@@ -92,19 +89,14 @@ pub struct PrivateBackend<'input> {
     globally_authorized: HashSet<AccountId>,
     block_bounds: (Option<BlockId>, Option<BlockId>),
     timestamp_bounds: (Option<Timestamp>, Option<Timestamp>),
-    /// Mirrors the traversal's own first-sight position assignment, one call ahead of it -
-    /// `output_for_call` needs positions before the traversal assigns them for this call's
-    /// diffs. Grown in the same order the traversal grows its own, so a lookup here always
-    /// agrees with what `judge_authorization` is later called with for the same account.
+    /// Mirrors the traversal's first-sight positions, one call ahead of it - `output_for_call`
+    /// needs them before the traversal assigns them for this call's diffs.
     position_by_account: HashMap<AccountId, usize>,
     next_position: usize,
-    /// This call's `Probe` claim, if any - `None` covers both "never asked" (no public account
-    /// touched) and "asked but declined". Reset every `output_for_call`; read by `resolve_write`
-    /// before the next call's `output_for_call` runs (the traversal always processes them in
-    /// that order).
+    /// This call's `Probe` claim, if any - `None` covers both "never asked" and "asked but
+    /// declined". Reset every `output_for_call`.
     current_call_defer_reads: Option<DeferReads>,
-    /// Each public account's classification, across every call that's touched it. See
-    /// [`WriteFate`].
+    /// Each public account's classification. See [`WriteFate`].
     classification: HashMap<AccountId, WriteFate>,
 }
 
@@ -320,7 +312,7 @@ impl<'input> PrivateBackend<'input> {
     }
 
     /// Verifies `output` as a genuine receipt from `self_account_id`'s real guest ELF, via
-    /// recursive proof composition rather than live re-execution.
+    /// recursive proof composition.
     fn verify_receipt(&self, self_account_id: AccountId, output: &ProgramOutput) {
         let image_id = self
             .image_id_by_account_id
@@ -332,9 +324,8 @@ impl<'input> PrivateBackend<'input> {
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
     }
 
-    /// Whether `program_output`'s diffs touch a public account - real position assignment,
-    /// moments later, just reuses what's mirrored here (`entry` is idempotent). See
-    /// `position_by_account`'s doc for why the mirror has to persist across calls.
+    /// Whether `program_output`'s diffs touch a public account. Real position assignment,
+    /// moments later, reuses what's mirrored here (`entry` is idempotent).
     fn touches_public(&mut self, program_output: &ProgramOutput) -> bool {
         let account_identities = self.account_identities;
         let position_by_account = &mut self.position_by_account;
@@ -355,19 +346,16 @@ impl<'input> PrivateBackend<'input> {
         })
     }
 
-    /// Pops the next `CallKind::Incremental` receipt and verifies it (see
-    /// [`Self::verify_receipt`]) as this call's single `Probe` response - one per program
-    /// invocation, covering every public account it touches, reads and writes alike (see
-    /// `DeferReads`'s doc).
+    /// Pops the next `CallKind::Incremental` receipt and verifies it as this call's single
+    /// `Probe` response, covering every public account the call touches, reads and writes
+    /// alike.
     ///
-    /// Binds the claim to the real `Execute` call it answers for by checking its
-    /// `instruction_data` matches `program_output.instruction_data` - without this a malicious
-    /// prover could answer `Probe` for a different instruction than the one it actually
-    /// executed, making a claim that was never really evaluated against this call.
+    /// Binds the claim to the real `Execute` call by checking its `instruction_data` matches
+    /// `program_output.instruction_data` - otherwise a malicious prover could answer `Probe` for
+    /// a different instruction than the one it actually executed.
     ///
-    /// Returns `None` for both a genuine `UnsupportedCallKind` response and a claim this program
-    /// simply declined to make - either way there's nothing to check `covers()` against, and the
-    /// caller treats both the same: force every touch `Bound`.
+    /// Returns `None` for a genuine `UnsupportedCallKind` response or a declined claim - both
+    /// cases force every touch `Bound`.
     fn verify_probe_receipt(
         &mut self,
         call: &ChainedCall,
@@ -418,12 +406,10 @@ impl<'input> PrivateBackend<'input> {
     }
 
     /// Classifies one touch of `account_id` as `Bound` or `Deferred`, using this call's `Probe`
-    /// claim (`current_call_defer_reads`). A no-op for a private account, or once already
-    /// permanently `Bound`. See [`WriteFate`]'s doc.
+    /// claim. A no-op for a private account, or once already permanently `Bound`.
     ///
-    /// `diff` is the *unresolved* diff `output_for_call` produced - a `Deferred` write is
-    /// recorded as this raw delta, never the value `resolve_write` computed, since settlement
-    /// replays it against live state later.
+    /// `diff` is the *unresolved* diff - a `Deferred` write is recorded as this raw delta, never
+    /// the resolved value, since settlement replays it against live state later.
     fn classify_touch(
         &mut self,
         account_id: AccountId,
@@ -507,7 +493,7 @@ impl Backend for PrivateBackend<'_> {
 
         // One `Probe` per call, covering every public account it touches - popped here, right
         // after `Execute`, so it lands before any `Update` receipts this call's own writes
-        // produce (see `execute_and_prove_probe`'s call site on the prover side).
+        // produce.
         self.current_call_defer_reads = if self.touches_public(&program_output) {
             self.verify_probe_receipt(call, ctx, &program_output)
         } else {
@@ -560,16 +546,14 @@ impl Backend for PrivateBackend<'_> {
         Ok(journalled)
     }
 
-    /// For a write, pops the next `CallKind::Incremental` receipt and verifies it (see
-    /// [`Self::verify_receipt`]) as the `Update` resolution - the in-circuit analog of
-    /// `PublicBackend::resolve_write`. Every write is resolved unconditionally, regardless of its
-    /// eventual `Bound`/`Deferred` classification: the account's real, resolved value is always
-    /// needed for chain continuity, and if it ends up `Bound`, it's the literal final value.
-    /// Falls back to `diff` verbatim if the program declines (`UnsupportedCallKind`). A read has
-    /// nothing to resolve and gets no receipt, so none is popped for one.
+    /// For a write, pops the next `CallKind::Incremental` receipt and verifies it as the
+    /// `Update` resolution. Every write is resolved unconditionally, regardless of its eventual
+    /// `Bound`/`Deferred` classification - the account's real, resolved value is always needed
+    /// for chain continuity. Falls back to `diff` verbatim if the program declines
+    /// (`UnsupportedCallKind`). A read has nothing to resolve and gets no receipt.
     ///
-    /// Every touch, write or read, is then classified `Bound`/`Deferred` - see `classify_touch`.
-    /// `Update`'s outcome never affects that classification, only what `resolved` is.
+    /// Every touch is then classified `Bound`/`Deferred`; `Update`'s outcome never affects that
+    /// classification, only what `resolved` is.
     fn resolve_write(
         &mut self,
         diff: &AccountStateDiff,
@@ -594,8 +578,7 @@ impl Backend for PrivateBackend<'_> {
                  program"
             );
             // `Update` is never caller-gated (whitelisting belongs at `Execute` time), and is
-            // proven with no caller for exactly that reason - see
-            // `execute_and_prove_incremental`.
+            // proven with no caller for exactly that reason.
             assert_eq!(
                 update_output.caller_account_id, None,
                 "Update resolution output for account {account_id} has the wrong caller"

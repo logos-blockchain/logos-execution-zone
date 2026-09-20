@@ -87,8 +87,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     } = tx;
     let PrivacyPreservingMessage {
         public_actions,
-        // `nonces` are the message's signers' own nonces, not one per public action (a
-        // `PublicNoSign` action signs nothing and has none) — nothing here to pair them against.
+        // Signers' nonces, not one per public action - a `PublicNoSign` action has none.
         nonces: _,
         private_actions,
         block_validity_window,
