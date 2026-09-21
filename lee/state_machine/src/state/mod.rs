@@ -332,10 +332,7 @@ impl V03State {
     /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
     pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        let (image_id, user_elf) = get_program_via(account_id, |account_id| {
-            self.get_account_by_id_ref(account_id)
-        })?;
-        Some((image_id, crate::program::attach_kernel(&user_elf)))
+        crate::program::resolve_program(account_id, |id| self.get_account_by_id_ref(id))
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there

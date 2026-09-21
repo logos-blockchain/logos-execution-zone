@@ -11,8 +11,8 @@ use lee_core::{
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
     program::{
         AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
-        TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        pre_states_match_shard_selectors, validate_execution,
+        TransactionEvent, compute_public_authorized_pdas, pre_states_match_shard_selectors,
+        validate_execution,
     },
 };
 use log::debug;
@@ -362,8 +362,8 @@ impl ValidatedStateDiff {
                 // Looks through `state_diff` first, falling back to `state` — so an earlier
                 // chained call in this same transaction that deployed this program is seen
                 // immediately, rather than only on the next transaction.
-                let Some((program_id, user_elf)) =
-                    get_program_via(chained_call.program_account_id, |id| {
+                let Some((program_id, elf)) =
+                    crate::program::resolve_program(chained_call.program_account_id, |id| {
                         state_diff
                             .get(&id)
                             .or_else(|| state.get_account_by_id_ref(id))
@@ -373,7 +373,6 @@ impl ValidatedStateDiff {
                         chained: caller_data.account_id.is_some(),
                     });
                 };
-                let elf = crate::program::attach_kernel(&user_elf);
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
                 let (program_output, call_cycles) = program.execute(
                     chained_call.program_account_id,

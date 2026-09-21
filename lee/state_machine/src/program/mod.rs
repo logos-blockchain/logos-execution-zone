@@ -2,9 +2,12 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Cycles},
+    account::{Account, AccountId, Cycles},
     from_frame,
-    program::{AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{
+        AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput,
+        get_program_via,
+    },
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
@@ -216,4 +219,16 @@ pub(crate) fn check_exit_code(
 /// blob ready to decode and execute.
 pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
     risc0_binfmt::ProgramBinary::new(user_elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode()
+}
+
+/// Resolves whatever's deployed at `account_id` into a runnable ELF: walks its header and
+/// segment chain via `lookup` ([`get_program_via`]), then re-attaches the kernel. Skip this and
+/// call `get_program_via` directly if only the `image_id` is needed — attaching the kernel is
+/// wasted work when the bytecode itself is going to be discarded.
+pub(crate) fn resolve_program<'state>(
+    account_id: AccountId,
+    lookup: impl Fn(AccountId) -> Option<&'state Account>,
+) -> Option<(ProgramId, Vec<u8>)> {
+    let (image_id, user_elf) = get_program_via(account_id, lookup)?;
+    Some((image_id, attach_kernel(&user_elf)))
 }
