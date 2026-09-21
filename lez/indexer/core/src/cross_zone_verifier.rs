@@ -10,7 +10,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use chain_state::zone_indexer::ZoneIndexer;
+use chain_state::zone_indexer::{ZoneIndexer, stop_at_read_error};
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -1051,6 +1051,15 @@ impl CrossZoneVerifier {
             .next_messages(cursor)
             .await
             .map_err(|err| anyhow!("channel read failed: {err}"))?;
+        // A failed read leaves the refetch empty, indistinguishable from "no longer
+        // served". Safe only because the evicted path never escalates to Forged.
+        let stream = stop_at_read_error(
+            stream,
+            format!(
+                "Refetch of peer zone {} block {block_id}",
+                hex::encode(zone)
+            ),
+        );
         refetched_block(stream, read_at, block_id, block_hash, self.pinned_for(zone)).await
     }
 
@@ -1230,6 +1239,10 @@ async fn read_peer(
         }
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
+                let stream = stop_at_read_error(
+                    stream,
+                    format!("Peer reader for {}", hex::encode(peer_zone)),
+                );
                 let pass =
                     consume_peer_stream(stream, peer_zone, &expected_pubkeys, &peers, cursor).await;
                 cursor = pass.cursor;

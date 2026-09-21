@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, ensure};
 use chain_state::zone_indexer::ZoneIndexer;
 use common::block::Block;
-use futures::{Stream, future::BoxFuture};
+use futures::{Stream, StreamExt as _, future::BoxFuture};
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
     ledger::NoteId,
@@ -223,10 +223,12 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
     /// from the channel's genesis.
+    ///
+    /// A failed read is an `Err` item, never the end of the stream.
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_>;
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>> + Send + '_>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -739,13 +741,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>> + Send + '_> {
         let stream = self
             .indexer
             .next_messages(after_slot)
             .await
             .context("Failed to start channel read stream")?;
-        Ok(stream)
+        Ok(stream.map(|item| item.map_err(anyhow::Error::from)))
     }
 }
 
