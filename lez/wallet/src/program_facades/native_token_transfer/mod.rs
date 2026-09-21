@@ -1,4 +1,4 @@
-use lee::{AccountInput, program::Program};
+use lee::{AccountInput, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
 use lee_core::program::InstructionData;
 
 use crate::{ExecutionFailureKind, WalletCore};
@@ -14,11 +14,14 @@ pub mod shielded;
 )]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
+/// Builds `authenticated_transfer`'s instruction data, its `ProgramWithDependencies` at its
+/// real, name-derived address (not [`Program`]'s bijection-address `.into()`, which no longer
+/// matches its genesis address), and a pre-check closure.
 fn auth_transfer_preparation(
     balance_to_move: u128,
 ) -> (
     InstructionData,
-    Program,
+    ProgramWithDependencies,
     impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
 ) {
     let instruction_data =
@@ -37,9 +40,11 @@ fn auth_transfer_preparation(
         }
     };
 
-    (
-        instruction_data,
+    let program = ProgramWithDependencies::new(
         programs::authenticated_transfer(),
-        tx_pre_check,
-    )
+        programs::authenticated_transfer_account_id(),
+        std::collections::HashMap::new(),
+    );
+
+    (instruction_data, program, tx_pre_check)
 }

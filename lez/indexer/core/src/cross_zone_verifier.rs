@@ -25,7 +25,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{AccountId, GENESIS_BLOCK_ID, PublicKey};
+use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -836,7 +836,7 @@ impl CrossZoneVerifier {
             return None;
         };
         if public_tx.message().program_account_id
-            != AccountId::from_builtin_program(programs::cross_zone_inbox().id())
+            != programs::cross_zone_inbox_account_id()
         {
             return None;
         }
@@ -1418,7 +1418,7 @@ mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey};
+    use lee::{PrivateKey, ProgramShardSelector, PublicKey};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use ping_core::{ping_record_pda, receiver_config_account_id};
@@ -1478,7 +1478,7 @@ mod tests {
     fn emission(payload: &[u8]) -> LeeTransaction {
         ping_emission(
             SELF_ZONE,
-            AccountId::from_builtin_program(programs::ping_receiver().id()),
+            programs::ping_receiver_account_id(),
             payload,
         )
     }
@@ -1549,14 +1549,14 @@ mod tests {
     }
 
     fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
-        let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+        let receiver_id = programs::ping_receiver_account_id();
         LeeTransaction::Public(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: PEER_ZONE,
                 src_block_id: PEER_BLOCK_ID,
                 src_block_hash,
                 src_tx_index: 0,
-                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
+                src_account_id: programs::ping_sender_account_id(),
             },
             receiver_id,
             &[

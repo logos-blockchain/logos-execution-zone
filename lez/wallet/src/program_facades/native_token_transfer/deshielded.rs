@@ -23,7 +23,7 @@ impl NativeTokenTransfer<'_> {
                     AccountIdentity::PublicNoSign(to).balance(),
                 ],
                 instruction_data,
-                &program.into(),
+                &program,
                 tx_pre_check,
             )
             .await

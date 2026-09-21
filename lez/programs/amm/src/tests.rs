@@ -1032,16 +1032,16 @@ impl BalanceForExeTests {
 impl IdForExeTests {
     fn pool_definition_id() -> AccountId {
         amm_core::compute_pool_pda(
-            AccountId::from_builtin_program(programs::amm().id()),
+            programs::amm_account_id(),
             Self::token_a_definition_id(),
             Self::token_b_definition_id(),
-            AccountId::from_builtin_program(programs::token().id()),
+            programs::token_account_id(),
         )
     }
 
     fn token_lp_definition_id() -> AccountId {
         amm_core::compute_liquidity_token_pda(
-            AccountId::from_builtin_program(programs::amm().id()),
+            programs::amm_account_id(),
             Self::pool_definition_id(),
         )
     }
@@ -1074,7 +1074,7 @@ impl IdForExeTests {
 
     fn vault_a_id() -> AccountId {
         amm_core::compute_vault_pda(
-            AccountId::from_builtin_program(programs::amm().id()),
+            programs::amm_account_id(),
             Self::pool_definition_id(),
             Self::token_a_definition_id(),
         )
@@ -1082,7 +1082,7 @@ impl IdForExeTests {
 
     fn vault_b_id() -> AccountId {
         amm_core::compute_vault_pda(
-            AccountId::from_builtin_program(programs::amm().id()),
+            programs::amm_account_id(),
             Self::pool_definition_id(),
             Self::token_b_definition_id(),
         )
@@ -1096,28 +1096,28 @@ impl AccountsForExeTests {
             ..Account::default()
         }
         .with_shard(
-            AccountId::from_builtin_program(programs::token().id()),
+            programs::token_account_id(),
             ShardData::from(holding),
         )
     }
 
     fn definition(definition: &TokenDefinition) -> Account {
         Account::default().with_shard(
-            AccountId::from_builtin_program(programs::token().id()),
+            programs::token_account_id(),
             ShardData::from(definition),
         )
     }
 
     fn pool(definition: &PoolDefinition) -> Account {
         Account::default().with_shard(
-            AccountId::from_builtin_program(programs::amm().id()),
+            programs::amm_account_id(),
             ShardData::from(definition),
         )
     }
 
     fn pool_base() -> PoolDefinition {
         PoolDefinition {
-            token_program_id: AccountId::from_builtin_program(programs::token().id()),
+            token_program_id: programs::token_account_id(),
             definition_token_a_id: IdForExeTests::token_a_definition_id(),
             definition_token_b_id: IdForExeTests::token_b_definition_id(),
             vault_a_id: IdForExeTests::vault_a_id(),
@@ -2811,35 +2811,35 @@ fn simple_amm_remove() {
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_lp_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into()],
@@ -2905,39 +2905,39 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        token_program_id: AccountId::from_builtin_program(programs::token().id()),
+        token_program_id: programs::token_account_id(),
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_lp_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
@@ -3011,39 +3011,39 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        token_program_id: AccountId::from_builtin_program(programs::token().id()),
+        token_program_id: programs::token_account_id(),
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_lp_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into(), 0_u128.into()],
@@ -3104,39 +3104,39 @@ fn simple_amm_new_definition_uninitialized_pool() {
     let instruction = amm_core::Instruction::NewDefinition {
         token_a_amount: BalanceForExeTests::vault_a_balance_init(),
         token_b_amount: BalanceForExeTests::vault_b_balance_init(),
-        token_program_id: AccountId::from_builtin_program(programs::token().id()),
+        token_program_id: programs::token_account_id(),
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_lp_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
@@ -3192,35 +3192,35 @@ fn simple_amm_add() {
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_lp_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into(), 0_u128.into()],
@@ -3275,27 +3275,27 @@ fn simple_amm_swap_1() {
     };
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into()],
@@ -3340,27 +3340,27 @@ fn simple_amm_swap_2() {
         token_definition_id_in: IdForExeTests::token_a_definition_id(),
     };
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::amm().id()),
+        programs::amm_account_id(),
         vec![
             ProgramShardSelector::new(
                 IdForExeTests::pool_definition_id(),
-                AccountId::from_builtin_program(programs::amm().id()),
+                programs::amm_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::vault_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_b_id(),
-                AccountId::from_builtin_program(programs::token().id()),
+                programs::token_account_id(),
             ),
         ],
         vec![0_u128.into()],

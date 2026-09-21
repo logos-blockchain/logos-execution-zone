@@ -13,6 +13,19 @@ include!(concat!(
     "/authenticated_transfer_image_id.rs"
 ));
 
+/// This program's stable, `image_id`-independent name (see
+/// [`lee_core::account::AccountId::from_builtin_program_name`]). Lives here, not in the
+/// `programs` aggregator crate, since `programs` depends on this crate and `custody_transfer`
+/// needs its own address.
+pub const AUTHENTICATED_TRANSFER_NAME: [u8; 32] =
+    lee_core::account::AccountId::pad_builtin_program_name(b"authenticated_transfer");
+
+#[cfg(feature = "image_id")]
+#[must_use]
+pub fn authenticated_transfer_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)
+}
+
 /// Instruction type for the Authenticated Transfer program.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
@@ -32,7 +45,7 @@ pub fn custody_transfer(
     amount: u128,
 ) -> ChainedCall {
     ChainedCall::new(
-        AccountId::from_builtin_program(AUTHENTICATED_TRANSFER_IMAGE_ID),
+        authenticated_transfer_account_id(),
         vec![
             ProgramShardSelector::balance(from),
             ProgramShardSelector::balance(to),

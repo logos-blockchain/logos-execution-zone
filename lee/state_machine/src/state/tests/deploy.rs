@@ -79,7 +79,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     );
 
     let (found_image_id, reconstructed_binary) = state
-        .get_builtin_program(header_program_id)
+        .get_builtin_program(header_account_id)
         .expect("a fully-landed multi-segment program must be found");
     assert_eq!(
         found_image_id,
@@ -194,7 +194,7 @@ fn program_with_more_than_max_segments_is_rejected() {
     );
 
     assert!(
-        state.get_builtin_program(header_program_id).is_none(),
+        state.get_builtin_program(header_account_id).is_none(),
         "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
         MAX_PROGRAM_SEGMENTS + 1
     );

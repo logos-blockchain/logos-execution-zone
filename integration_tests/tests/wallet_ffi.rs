@@ -645,7 +645,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     assert_eq!(balance_only.nonce.0, 2);
     assert!(balance_only.data.shards.is_empty());
 
-    let program_id = AccountId::from_builtin_program(programs::token().id());
+    let program_id = programs::token_account_id();
     let mut out_program_full = FfiAccount::default();
     let program_full: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
@@ -1653,7 +1653,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
     let program_account_id =
-        AccountId::from_builtin_program(programs::authenticated_transfer().id());
+        programs::authenticated_transfer_account_id();
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(

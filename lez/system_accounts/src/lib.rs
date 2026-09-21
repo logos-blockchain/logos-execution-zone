@@ -24,7 +24,7 @@ pub type Slots = u32;
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(programs::bridge().id()))
+    bridge_core::compute_bridge_account_id(programs::bridge_account_id())
 }
 
 /// Holds the whole supply: genesis allocations and L1 deposits are both
@@ -42,22 +42,22 @@ pub fn bridge_account() -> Account {
 
 #[must_use]
 pub fn fee_program_id() -> AccountId {
-    AccountId::from_builtin_program(programs::fee().id())
+    programs::fee_account_id()
 }
 
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
-    fee_core::compute_fee_state_account_id(AccountId::from_builtin_program(programs::fee().id()))
+    fee_core::compute_fee_state_account_id(programs::fee_account_id())
 }
 
 #[must_use]
 pub fn fee_escrow_account_id() -> AccountId {
-    fee_core::compute_fee_escrow_account_id(AccountId::from_builtin_program(programs::fee().id()))
+    fee_core::compute_fee_escrow_account_id(programs::fee_account_id())
 }
 
 #[must_use]
 pub fn fee_inbox_account_id() -> AccountId {
-    fee_core::compute_fee_inbox_account_id(AccountId::from_builtin_program(programs::fee().id()))
+    fee_core::compute_fee_inbox_account_id(programs::fee_account_id())
 }
 
 /// Fee program account IDs in the order expected by the fee program.
@@ -74,7 +74,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn fee_state_account() -> Account {
     Account::default().with_shard(
-        AccountId::from_builtin_program(programs::fee().id()),
+        programs::fee_account_id(),
         fee_core::state::FeeState::genesis()
             .to_bytes()
             .try_into()
@@ -89,15 +89,13 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(AccountId::from_builtin_program(
-        programs::sequencer_stake().id(),
-    ))
+    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake_account_id())
 }
 
 #[must_use]
 pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
     sequencer_stake_core::stake_funds_account_id(
-        AccountId::from_builtin_program(programs::sequencer_stake().id()),
+        programs::sequencer_stake_account_id(),
         ownership_id,
     )
 }
@@ -115,7 +113,7 @@ pub fn sequencer_stake_config_account(
     channel_id: Option<[u8; 32]>,
 ) -> Account {
     Account::default().with_shard(
-        AccountId::from_builtin_program(programs::sequencer_stake().id()),
+        programs::sequencer_stake_account_id(),
         sequencer_stake_core::SequencerStakeConfig {
             channel_params,
             channel_id,
@@ -130,7 +128,7 @@ pub fn sequencer_stake_config_account(
 #[must_use]
 pub fn clock_account() -> Account {
     Account::default().with_shard(
-        AccountId::from_builtin_program(programs::clock().id()),
+        programs::clock_account_id(),
         ClockAccountData {
             block_id: 0,
             timestamp: 0,

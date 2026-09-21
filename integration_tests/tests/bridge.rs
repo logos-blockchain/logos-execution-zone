@@ -12,8 +12,8 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    AccountId, ProgramShardSelector, execute_and_prove, privacy_preserving_transaction,
-    program::Program, public_transaction,
+    ProgramShardSelector, execute_and_prove, privacy_preserving_transaction, program::Program,
+    public_transaction,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -26,18 +26,18 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
     let receipt_id = bridge_core::deposit_receipt_account_id(
-        AccountId::from_builtin_program(programs::bridge().id()),
+        programs::bridge_account_id(),
         [0_u8; 32],
     );
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::bridge().id()),
+        programs::bridge_account_id(),
         vec![
             ProgramShardSelector::balance(bridge_account_id),
             ProgramShardSelector::balance(recipient_id),
             ProgramShardSelector::new(
                 receipt_id,
-                AccountId::from_builtin_program(programs::bridge().id()),
+                programs::bridge_account_id(),
             ),
         ],
         vec![],
@@ -82,18 +82,18 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
     let receipt_id = bridge_core::deposit_receipt_account_id(
-        AccountId::from_builtin_program(programs::bridge().id()),
+        programs::bridge_account_id(),
         [0_u8; 32],
     );
 
     let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::bridge().id()),
+        programs::bridge_account_id(),
         vec![
             ProgramShardSelector::balance(bridge_account_id),
             ProgramShardSelector::balance(recipient_id),
             ProgramShardSelector::new(
                 receipt_id,
-                AccountId::from_builtin_program(programs::bridge().id()),
+                programs::bridge_account_id(),
             ),
         ],
         vec![],
@@ -150,7 +150,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
     let receipt_id = bridge_core::deposit_receipt_account_id(
-        AccountId::from_builtin_program(programs::bridge().id()),
+        programs::bridge_account_id(),
         [0_u8; 32],
     );
 
@@ -164,9 +164,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let program_with_deps =
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
-            AccountId::from_builtin_program(programs::bridge().id()),
+            programs::bridge_account_id(),
             [(
-                AccountId::from_builtin_program(programs::authenticated_transfer().id()),
+                programs::authenticated_transfer_account_id(),
                 programs::authenticated_transfer(),
             )]
             .into(),
@@ -185,7 +185,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         ProgramShardSelector::balance(recipient_id),
         ProgramShardSelector::new(
             receipt_id,
-            AccountId::from_builtin_program(programs::bridge().id()),
+            programs::bridge_account_id(),
         ),
     ];
     let nonces = vec![

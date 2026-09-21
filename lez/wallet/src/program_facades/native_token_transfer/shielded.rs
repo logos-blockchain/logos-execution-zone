@@ -26,7 +26,7 @@ impl NativeTokenTransfer<'_> {
                         .balance(),
                 ],
                 instruction_data,
-                &program.into(),
+                &program,
                 tx_pre_check,
             )
             .await
@@ -60,7 +60,7 @@ impl NativeTokenTransfer<'_> {
                     .balance(),
                 ],
                 instruction_data,
-                &program.into(),
+                &program,
                 tx_pre_check,
             )
             .await

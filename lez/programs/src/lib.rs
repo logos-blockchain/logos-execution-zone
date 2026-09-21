@@ -16,11 +16,39 @@ mod inner {
         PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
         SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
-    use lee::program::Program;
+    use lee::{AccountId, program::Program};
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
+
+    /// A builtin's stable, `image_id`-independent name, hashed via
+    /// [`AccountId::from_builtin_program_name`] for its genesis address.
+    ///
+    /// Duplicated from `authenticated_transfer_core` (whose own copy backs
+    /// `custody_transfer`) since that crate isn't a dependency of this `artifacts` build;
+    /// `authenticated_transfer_name_matches_core` below guards against drift.
+    pub const AUTHENTICATED_TRANSFER_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"authenticated_transfer");
+    pub const TOKEN_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"token");
+    pub const AMM_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"amm");
+    pub use clock_core::CLOCK_NAME;
+    pub const FEE_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"fee");
+    pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"associated_token_account");
+    pub const BRIDGE_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"bridge");
+    pub const CROSS_ZONE_OUTBOX_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"cross_zone_outbox");
+    pub const CROSS_ZONE_INBOX_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"cross_zone_inbox");
+    pub const PING_SENDER_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"ping_sender");
+    pub const PING_RECEIVER_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"ping_receiver");
+    pub const BRIDGE_LOCK_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"bridge_lock");
+    pub const WRAPPED_TOKEN_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"wrapped_token");
+    pub const SEQUENCER_STAKE_NAME: [u8; 32] =
+        AccountId::pad_builtin_program_name(b"sequencer_stake");
 
     #[must_use]
     #[inline]
@@ -33,8 +61,20 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn authenticated_transfer_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn token() -> Program {
         Program::new_unchecked(TOKEN_ID, Cow::Borrowed(TOKEN_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn token_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&TOKEN_NAME)
     }
 
     #[must_use]
@@ -45,14 +85,32 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn amm_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&AMM_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn clock() -> Program {
         Program::new_unchecked(CLOCK_ID, Cow::Borrowed(CLOCK_ELF))
     }
 
     #[must_use]
     #[inline]
+    pub fn clock_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&CLOCK_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn fee() -> Program {
         Program::new_unchecked(FEE_ID, Cow::Borrowed(FEE_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn fee_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&FEE_NAME)
     }
 
     #[must_use]
@@ -66,8 +124,20 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn ata_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&ASSOCIATED_TOKEN_ACCOUNT_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn bridge() -> Program {
         Program::new_unchecked(BRIDGE_ID, Cow::Borrowed(BRIDGE_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn bridge_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&BRIDGE_NAME)
     }
 
     #[must_use]
@@ -78,8 +148,20 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn cross_zone_outbox_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&CROSS_ZONE_OUTBOX_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn cross_zone_inbox() -> Program {
         Program::new_unchecked(CROSS_ZONE_INBOX_ID, Cow::Borrowed(CROSS_ZONE_INBOX_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn cross_zone_inbox_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&CROSS_ZONE_INBOX_NAME)
     }
 
     #[must_use]
@@ -90,8 +172,20 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn ping_sender_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&PING_SENDER_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn ping_receiver() -> Program {
         Program::new_unchecked(PING_RECEIVER_ID, Cow::Borrowed(PING_RECEIVER_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn ping_receiver_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&PING_RECEIVER_NAME)
     }
 
     #[must_use]
@@ -102,14 +196,32 @@ mod inner {
 
     #[must_use]
     #[inline]
+    pub fn bridge_lock_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&BRIDGE_LOCK_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn wrapped_token() -> Program {
         Program::new_unchecked(WRAPPED_TOKEN_ID, Cow::Borrowed(WRAPPED_TOKEN_ELF))
     }
 
     #[must_use]
     #[inline]
+    pub fn wrapped_token_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&WRAPPED_TOKEN_NAME)
+    }
+
+    #[must_use]
+    #[inline]
     pub const fn sequencer_stake() -> Program {
         Program::new_unchecked(SEQUENCER_STAKE_ID, Cow::Borrowed(SEQUENCER_STAKE_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn sequencer_stake_account_id() -> AccountId {
+        AccountId::from_builtin_program_name(&SEQUENCER_STAKE_NAME)
     }
 
     #[cfg(test)]
@@ -121,20 +233,26 @@ mod inner {
 
         use super::*;
 
+        #[test]
+        fn authenticated_transfer_name_matches_core() {
+            assert_eq!(
+                AUTHENTICATED_TRANSFER_NAME,
+                authenticated_transfer_core::AUTHENTICATED_TRANSFER_NAME,
+                "this crate's copy must track authenticated_transfer_core's"
+            );
+        }
+
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                AccountId::from_builtin_program(bridge().id()),
+                bridge_account_id(),
                 vec![
                     ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
-                        AccountId::from_builtin_program(bridge().id()),
+                        bridge_account_id(),
                     )),
                     ProgramShardSelector::balance(recipient_id),
                     ProgramShardSelector::new(
-                        bridge_core::deposit_receipt_account_id(
-                            AccountId::from_builtin_program(bridge().id()),
-                            op_id,
-                        ),
-                        AccountId::from_builtin_program(bridge().id()),
+                        bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
+                        bridge_account_id(),
                     ),
                 ],
                 vec![],
@@ -159,21 +277,19 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
-                        bridge().id(),
-                    )),
+                    bridge_core::compute_bridge_account_id(bridge_account_id()),
                     Account::funded(u128::from(amount)),
                 )])
-                .with_programs([bridge(), authenticated_transfer()]);
+                .with_named_programs([
+                    (bridge_account_id(), bridge()),
+                    (authenticated_transfer_account_id(), authenticated_transfer()),
+                ]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
-            assert_eq!(
-                events[0].account_id,
-                AccountId::from_builtin_program(bridge().id())
-            );
+            assert_eq!(events[0].account_id, bridge_account_id());
             assert_eq!(
                 events[0].event.selector,
                 bridge_core::event::Deposit::SELECTOR

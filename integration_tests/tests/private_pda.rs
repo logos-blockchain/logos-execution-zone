@@ -13,8 +13,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramId, ProgramShardSelector,
-    ProvingInput, PublicKey,
+    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector, ProvingInput,
+    PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -117,7 +117,6 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    auth_transfer_id: ProgramId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
@@ -130,7 +129,7 @@ async fn spend_private_pda(
                 }
                 .balance(),
             ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id))
+            Program::serialize_instruction((seed, amount))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
         )
@@ -164,10 +163,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let proxy = test_programs::pda_spend_proxy();
     let auth_transfer = programs::authenticated_transfer();
     let proxy_id = AccountId::from_builtin_program(proxy.id());
-    // Kept as a `ProgramId`: the `pda_spend_proxy` guest's instruction carries the delegate's
-    // bytecode identity, converting to `AccountId` only at its own `ChainedCall` dispatch site.
-    let auth_transfer_id: ProgramId = auth_transfer.id();
-    let auth_transfer_account_id = AccountId::from_builtin_program(auth_transfer_id);
+    let auth_transfer_account_id = programs::authenticated_transfer_account_id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -366,7 +362,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_0,
         &spend_program,
-        auth_transfer_id,
     )
     .await?;
 
@@ -379,7 +374,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         seed,
         amount_spend_1,
         &spend_program,
-        auth_transfer_id,
     )
     .await?;
 

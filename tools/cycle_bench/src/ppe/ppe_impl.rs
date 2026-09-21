@@ -103,12 +103,9 @@ fn prove_chain_caller(
     let chain_caller = test_programs::chain_caller();
     let chain_caller_id = chain_caller.id();
     let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
+    let auth_transfer_account_id = programs::authenticated_transfer_account_id();
     let mut deps = HashMap::new();
-    deps.insert(
-        AccountId::from_builtin_program(auth_transfer.id()),
-        auth_transfer,
-    );
+    deps.insert(auth_transfer_account_id, auth_transfer);
     let pwd = ProgramWithDependencies::new(
         chain_caller,
         AccountId::from_builtin_program(chain_caller_id),
@@ -132,7 +129,7 @@ fn prove_chain_caller(
 
     let balance: u128 = 1;
     let pda_seed: Option<lee_core::program::PdaSeed> = None;
-    let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
+    let instruction = (balance, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 
     Ok(execute_and_prove(

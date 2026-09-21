@@ -98,9 +98,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
-            mover_account_id: AccountId::from_builtin_program(
-                programs::authenticated_transfer().id(),
-            ),
+            mover_account_id: programs::authenticated_transfer_account_id(),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -110,7 +108,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         hex::encode(demo_sequencer_key.to_bytes())
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
     ctx.wallet()
         .send_pub_tx(
             vec![
@@ -362,9 +360,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         config_account
             .data
-            .shard(AccountId::from_builtin_program(
-                programs::sequencer_stake().id(),
-            ))
+            .shard(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

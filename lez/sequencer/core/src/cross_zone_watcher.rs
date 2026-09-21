@@ -751,7 +751,6 @@ mod tests {
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
     use kameo::actor::Spawn as _;
-    use lee::AccountId;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use sequencer_storage_actor::{
@@ -824,9 +823,7 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE`.
     fn emission() -> LeeTransaction {
-        emission_to(AccountId::from_builtin_program(
-            programs::ping_receiver().id(),
-        ))
+        emission_to(programs::ping_receiver_account_id())
     }
 
     /// A `ping_sender` emission aimed at `target_program_id`.
@@ -1081,7 +1078,7 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                AccountId::from_builtin_program(programs::cross_zone_inbox().id()),
+                programs::cross_zone_inbox_account_id(),
             )]),
             &peer_context(),
             &storage_ref,
@@ -1120,7 +1117,7 @@ mod tests {
             stream::iter(vec![peer_block_msg_to(
                 1,
                 0,
-                AccountId::from_builtin_program(programs::wrapped_token().id()),
+                programs::wrapped_token_account_id(),
             )]),
             &peer_context(),
             &storage_ref,

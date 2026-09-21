@@ -75,7 +75,7 @@ required-features = ["programs"]
 
 # This feature is only usable for library target.
 # Activating this will cause library to include built binary artifacts and pack them into `Program` structs.
-artifacts = ["dep:build_utils", "dep:lee"]
+artifacts = ["dep:build_utils", "dep:lee", "dep:clock_core"]
 
 # Import dependencies required for program binaries.
 # You don't need this if you only want to use the library target.
@@ -130,4 +130,5 @@ build_utils = { workspace = true, optional = true }
 
 [dev-dependencies]
 lee_core = { workspace = true, features = ["test_utils"] }
+authenticated_transfer_core = { workspace = true }
 bridge_core = { workspace = true }

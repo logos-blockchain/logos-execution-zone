@@ -1,6 +1,5 @@
 //! Discovery process for the `sequencer_stake` committee.
 
-use lee::AccountId;
 use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
 
@@ -114,7 +113,7 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         return None;
     };
     let sequencer_stake_program_id =
-        AccountId::from_builtin_program(programs::sequencer_stake().id());
+        programs::sequencer_stake_account_id();
     let config =
         SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
     if config.is_none() {
@@ -134,7 +133,7 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
     let sequencer_stake_program_id =
-        AccountId::from_builtin_program(programs::sequencer_stake().id());
+        programs::sequencer_stake_account_id();
     StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
 }
 
@@ -190,7 +189,7 @@ mod tests {
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
         let sequencer_stake_program_id =
-            AccountId::from_builtin_program(programs::sequencer_stake().id());
+            programs::sequencer_stake_account_id();
 
         let ownership_accounts = stakes.iter().map(|staked| {
             (

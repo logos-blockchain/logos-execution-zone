@@ -21,8 +21,8 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -56,8 +56,8 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -94,8 +94,8 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -127,8 +127,8 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -163,8 +163,8 @@ impl Ata<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -201,8 +201,8 @@ impl Ata<'_> {
         definition_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = AccountId::from_builtin_program(programs::ata().id());
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let ata_program_id = programs::ata_account_id();
+        let token_program_id = programs::token_account_id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
@@ -237,8 +237,8 @@ impl Ata<'_> {
 fn ata_with_token_dependency() -> ProgramWithDependencies {
     let token = programs::token();
     let mut deps = HashMap::new();
-    deps.insert(AccountId::from_builtin_program(token.id()), token);
+    deps.insert(programs::token_account_id(), token);
     let ata = programs::ata();
-    let ata_id = AccountId::from_builtin_program(ata.id());
+    let ata_id = programs::ata_account_id();
     ProgramWithDependencies::new(ata, ata_id, deps)
 }
