@@ -216,8 +216,7 @@ fn sources_for_target(
             );
             assert!(
                 route.mint_cap.is_none()
-                    || route.target_account_id
-                        == programs::wrapped_token_account_id(),
+                    || route.target_account_id == programs::wrapped_token_account_id(),
                 "cross-zone route sets a mint cap, but its target {:?} does not mint",
                 route.target_account_id
             );
@@ -323,10 +322,7 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
 /// The holding PDA a holder's bridgeable balance lives in.
 #[must_use]
 pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
-    bridge_lock_core::holding_account_id(
-        programs::bridge_lock_account_id(),
-        &holder.into_value(),
-    )
+    bridge_lock_core::holding_account_id(programs::bridge_lock_account_id(), &holder.into_value())
 }
 
 /// The genesis transaction naming the peer sources `ping_receiver` accepts a

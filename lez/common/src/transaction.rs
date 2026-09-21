@@ -190,12 +190,7 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
     let message = lee::public_transaction::Message::try_new(
         programs::clock_account_id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| {
-                ProgramShardSelector::new(
-                    id,
-                    programs::clock_account_id(),
-                )
-            })
+            .map(|id| ProgramShardSelector::new(id, programs::clock_account_id()))
             .to_vec(),
         vec![],
         timestamp,
@@ -236,9 +231,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             Ok(bridge_core::Instruction::Deposit { .. })
         );
     }
-    if message.program_account_id
-        == programs::cross_zone_inbox_account_id()
-    {
+    if message.program_account_id == programs::cross_zone_inbox_account_id() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
             Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
@@ -286,8 +279,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().program_account_id
-        == programs::sequencer_stake_account_id()
+    public_tx.message().program_account_id == programs::sequencer_stake_account_id()
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.

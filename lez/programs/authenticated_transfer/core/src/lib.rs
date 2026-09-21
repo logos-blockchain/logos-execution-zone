@@ -13,18 +13,7 @@ include!(concat!(
     "/authenticated_transfer_image_id.rs"
 ));
 
-/// This program's stable, `image_id`-independent name (see
-/// [`lee_core::account::AccountId::from_builtin_program_name`]). Lives here, not in the
-/// `programs` aggregator crate, since `programs` depends on this crate and `custody_transfer`
-/// needs its own address.
-pub const AUTHENTICATED_TRANSFER_NAME: [u8; 32] =
-    lee_core::account::AccountId::pad_builtin_program_name(b"authenticated_transfer");
-
-#[cfg(feature = "image_id")]
-#[must_use]
-pub fn authenticated_transfer_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)
-}
+pub const AUTHENTICATED_TRANSFER_NAME: [u8; 22] = *b"authenticated_transfer";
 
 /// Instruction type for the Authenticated Transfer program.
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -33,6 +22,12 @@ pub enum Instruction {
     ///
     /// Required accounts: `[sender, recipient]`.
     Transfer { amount: u128 },
+}
+
+#[cfg(feature = "image_id")]
+#[must_use]
+pub fn authenticated_transfer_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)
 }
 
 /// A chained transfer out of an account the caller holds under `seed`.

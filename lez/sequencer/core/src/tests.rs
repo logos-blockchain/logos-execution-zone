@@ -159,11 +159,19 @@ fn setup_sequencer_config() -> SequencerConfig {
 
 #[test]
 fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
-    assert!(is_sequencer_only_program(programs::cross_zone_inbox_account_id()));
+    assert!(is_sequencer_only_program(
+        programs::cross_zone_inbox_account_id()
+    ));
     assert!(is_sequencer_only_program(programs::fee_account_id()));
-    assert!(!is_sequencer_only_program(programs::cross_zone_outbox_account_id()));
-    assert!(!is_sequencer_only_program(programs::wrapped_token_account_id()));
-    assert!(!is_sequencer_only_program(programs::ping_sender_account_id()));
+    assert!(!is_sequencer_only_program(
+        programs::cross_zone_outbox_account_id()
+    ));
+    assert!(!is_sequencer_only_program(
+        programs::wrapped_token_account_id()
+    ));
+    assert!(!is_sequencer_only_program(
+        programs::ping_sender_account_id()
+    ));
     assert!(!is_sequencer_only_program(programs::clock_account_id()));
 }
 
@@ -273,9 +281,7 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_account_id
-        != programs::bridge_account_id()
-    {
+    if public_tx.message.program_account_id != programs::bridge_account_id() {
         return false;
     }
 
@@ -3843,8 +3849,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         })
         .unwrap();
 
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -3910,8 +3915,7 @@ fn stake_transaction(
         })
         .unwrap();
 
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -3944,8 +3948,7 @@ fn stake_entry(
     state: &V03State,
     sequencer_key: sequencer_stake_core::SequencerKey,
 ) -> Option<sequencer_stake_core::SequencerEntry> {
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         state
             .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
@@ -3995,8 +3998,7 @@ fn unstake_request_transaction(
     destination: AccountId,
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4246,8 +4248,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     );
 
     // Full exit, releasing back to the (now drained) funding account.
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4380,8 +4381,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         &PrivateKey::try_new([56; 32]).unwrap(),
     ));
 
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4441,8 +4441,7 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     // A mover that moves balance the wrong way: out of the custody account it was
     // handed, into the staker's own funding account.
     let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![

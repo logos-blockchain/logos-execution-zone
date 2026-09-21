@@ -1095,24 +1095,15 @@ impl AccountsForExeTests {
             nonce: nonce.into(),
             ..Account::default()
         }
-        .with_shard(
-            programs::token_account_id(),
-            ShardData::from(holding),
-        )
+        .with_shard(programs::token_account_id(), ShardData::from(holding))
     }
 
     fn definition(definition: &TokenDefinition) -> Account {
-        Account::default().with_shard(
-            programs::token_account_id(),
-            ShardData::from(definition),
-        )
+        Account::default().with_shard(programs::token_account_id(), ShardData::from(definition))
     }
 
     fn pool(definition: &PoolDefinition) -> Account {
-        Account::default().with_shard(
-            programs::amm_account_id(),
-            ShardData::from(definition),
-        )
+        Account::default().with_shard(programs::amm_account_id(), ShardData::from(definition))
     }
 
     fn pool_base() -> PoolDefinition {
@@ -2817,14 +2808,8 @@ fn simple_amm_remove() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
                 programs::token_account_id(),
@@ -2915,14 +2900,8 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
                 programs::token_account_id(),
@@ -3021,14 +3000,8 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
                 programs::token_account_id(),
@@ -3114,14 +3087,8 @@ fn simple_amm_new_definition_uninitialized_pool() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
                 programs::token_account_id(),
@@ -3198,14 +3165,8 @@ fn simple_amm_add() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::token_lp_definition_id(),
                 programs::token_account_id(),
@@ -3281,14 +3242,8 @@ fn simple_amm_swap_1() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
                 programs::token_account_id(),
@@ -3346,14 +3301,8 @@ fn simple_amm_swap_2() {
                 IdForExeTests::pool_definition_id(),
                 programs::amm_account_id(),
             ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_a_id(),
-                programs::token_account_id(),
-            ),
-            ProgramShardSelector::new(
-                IdForExeTests::vault_b_id(),
-                programs::token_account_id(),
-            ),
+            ProgramShardSelector::new(IdForExeTests::vault_a_id(), programs::token_account_id()),
+            ProgramShardSelector::new(IdForExeTests::vault_b_id(), programs::token_account_id()),
             ProgramShardSelector::new(
                 IdForExeTests::user_token_a_id(),
                 programs::token_account_id(),

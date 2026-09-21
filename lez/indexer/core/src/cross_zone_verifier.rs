@@ -835,9 +835,7 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_account_id
-            != programs::cross_zone_inbox_account_id()
-        {
+        if public_tx.message().program_account_id != programs::cross_zone_inbox_account_id() {
             return None;
         }
         match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
@@ -1476,11 +1474,7 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
     fn emission(payload: &[u8]) -> LeeTransaction {
-        ping_emission(
-            SELF_ZONE,
-            programs::ping_receiver_account_id(),
-            payload,
-        )
+        ping_emission(SELF_ZONE, programs::ping_receiver_account_id(), payload)
     }
 
     /// A peer-stream item inscribing `data` at `slot`.

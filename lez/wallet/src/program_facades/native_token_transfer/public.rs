@@ -13,8 +13,7 @@ impl NativeTokenTransfer<'_> {
         to: AccountIdentity,
         balance_to_move: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let (instruction_data, _program, tx_pre_check) =
-            auth_transfer_preparation(balance_to_move);
+        let (instruction_data, _program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         self.0
             .send_pub_tx_with_pre_check(

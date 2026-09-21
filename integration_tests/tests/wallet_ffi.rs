@@ -1652,8 +1652,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_account_id =
-        programs::authenticated_transfer_account_id();
+    let program_account_id = programs::authenticated_transfer_account_id();
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(

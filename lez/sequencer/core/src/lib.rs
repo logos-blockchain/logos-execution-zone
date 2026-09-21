@@ -2451,8 +2451,7 @@ fn genesis_stake_message(
     // funds this account needs no signature from it, so its count starts at 0.
     let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
 
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -2499,8 +2498,7 @@ fn build_init_channel_params_transaction(
     channel_params: config::ChannelParams,
     channel_id: [u8; 32],
 ) -> PublicTransaction {
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = Message::try_new(
         sequencer_stake_program_id,
         vec![ProgramShardSelector::new(
@@ -2700,9 +2698,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     };
 
     let message = tx.message();
-    if message.program_account_id
-        != programs::sequencer_stake_account_id()
-    {
+    if message.program_account_id != programs::sequencer_stake_account_id() {
         return None;
     }
 
@@ -2734,8 +2730,7 @@ fn build_finalize_unstake_tx(
     ownership_id: AccountId,
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
-    let sequencer_stake_program_id =
-        programs::sequencer_stake_account_id();
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -2789,9 +2784,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_account_id
-        != programs::cross_zone_inbox_account_id()
-    {
+    if message.program_account_id != programs::cross_zone_inbox_account_id() {
         return None;
     }
 

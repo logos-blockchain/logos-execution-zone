@@ -37,34 +37,18 @@ impl AccountId {
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
     }
 
-    /// Left-aligns `name` in a 32-byte buffer, zero-padding the rest, for use with
-    /// [`Self::from_builtin_program_name`].
     #[must_use]
-    pub const fn pad_builtin_program_name(name: &[u8]) -> [u8; 32] {
-        assert!(name.len() <= 32, "builtin program name must fit in 32 bytes");
-        let mut bytes = [0_u8; 32];
-        let mut i = 0;
-        while i < name.len() {
-            bytes[i] = name[i];
-            i += 1;
-        }
-        bytes
-    }
-
-    /// The `AccountId` a builtin program is deployed at, derived from its stable name rather
-    /// than its `image_id` — unlike [`Self::from_builtin_program`], this address doesn't move
-    /// when the builtin is later upgraded to a new ELF (and therefore a new `image_id`).
-    #[must_use]
-    pub fn from_builtin_program_name(name: &[u8; 32]) -> Self {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
+    pub fn from_builtin_program_name(name: &[u8]) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
         const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
 
-        let mut bytes = [0_u8; 64];
-        bytes[0..32].copy_from_slice(BUILTIN_PROGRAM_NAME_PREFIX);
-        bytes[32..64].copy_from_slice(name);
+        let mut hasher = Sha256::new();
+        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
+        hasher.update(name);
         Self::new(
-            Impl::hash_bytes(&bytes)
-                .as_bytes()
+            hasher
+                .finalize()
+                .as_slice()
                 .try_into()
                 .expect("Hash output must be exactly 32 bytes long"),
         )

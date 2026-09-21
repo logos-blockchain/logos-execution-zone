@@ -42,13 +42,8 @@ pub fn ping_emission(
         payload: payload.to_vec(),
         ordinal: 0,
     };
-    let message = Message::try_new(
-        programs::ping_sender_account_id(),
-        vec![],
-        vec![],
-        send,
-    )
-    .expect("emission serializes");
+    let message = Message::try_new(programs::ping_sender_account_id(), vec![], vec![], send)
+        .expect("emission serializes");
     LeeTransaction::Public(PublicTransaction::new(
         message,
         WitnessSet::from_raw_parts(vec![]),

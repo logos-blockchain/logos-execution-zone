@@ -251,18 +251,12 @@ fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
                 programs::cross_zone_outbox_account_id(),
                 programs::cross_zone_outbox(),
             ),
-            (
-                programs::ping_sender_account_id(),
-                programs::ping_sender(),
-            ),
+            (programs::ping_sender_account_id(), programs::ping_sender()),
             (
                 programs::ping_receiver_account_id(),
                 programs::ping_receiver(),
             ),
-            (
-                programs::bridge_lock_account_id(),
-                programs::bridge_lock(),
-            ),
+            (programs::bridge_lock_account_id(), programs::bridge_lock()),
             (
                 programs::wrapped_token_account_id(),
                 programs::wrapped_token(),

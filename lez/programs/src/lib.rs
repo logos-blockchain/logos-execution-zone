@@ -22,33 +22,20 @@ mod inner {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
 
-    /// A builtin's stable, `image_id`-independent name, hashed via
-    /// [`AccountId::from_builtin_program_name`] for its genesis address.
-    ///
-    /// Duplicated from `authenticated_transfer_core` (whose own copy backs
-    /// `custody_transfer`) since that crate isn't a dependency of this `artifacts` build;
-    /// `authenticated_transfer_name_matches_core` below guards against drift.
-    pub const AUTHENTICATED_TRANSFER_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"authenticated_transfer");
-    pub const TOKEN_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"token");
-    pub const AMM_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"amm");
+    pub const AUTHENTICATED_TRANSFER_NAME: [u8; 22] = *b"authenticated_transfer";
+    pub const TOKEN_NAME: [u8; 5] = *b"token";
+    pub const AMM_NAME: [u8; 3] = *b"amm";
     pub use clock_core::CLOCK_NAME;
-    pub const FEE_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"fee");
-    pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"associated_token_account");
-    pub const BRIDGE_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"bridge");
-    pub const CROSS_ZONE_OUTBOX_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"cross_zone_outbox");
-    pub const CROSS_ZONE_INBOX_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"cross_zone_inbox");
-    pub const PING_SENDER_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"ping_sender");
-    pub const PING_RECEIVER_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"ping_receiver");
-    pub const BRIDGE_LOCK_NAME: [u8; 32] = AccountId::pad_builtin_program_name(b"bridge_lock");
-    pub const WRAPPED_TOKEN_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"wrapped_token");
-    pub const SEQUENCER_STAKE_NAME: [u8; 32] =
-        AccountId::pad_builtin_program_name(b"sequencer_stake");
+    pub const FEE_NAME: [u8; 3] = *b"fee";
+    pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 24] = *b"associated_token_account";
+    pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
+    pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
+    pub const CROSS_ZONE_INBOX_NAME: [u8; 16] = *b"cross_zone_inbox";
+    pub const PING_SENDER_NAME: [u8; 11] = *b"ping_sender";
+    pub const PING_RECEIVER_NAME: [u8; 13] = *b"ping_receiver";
+    pub const BRIDGE_LOCK_NAME: [u8; 11] = *b"bridge_lock";
+    pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
+    pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
 
     #[must_use]
     #[inline]
@@ -282,7 +269,10 @@ mod inner {
                 )])
                 .with_named_programs([
                     (bridge_account_id(), bridge()),
-                    (authenticated_transfer_account_id(), authenticated_transfer()),
+                    (
+                        authenticated_transfer_account_id(),
+                        authenticated_transfer(),
+                    ),
                 ]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);

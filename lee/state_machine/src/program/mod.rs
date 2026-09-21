@@ -221,10 +221,8 @@ pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
     risc0_binfmt::ProgramBinary::new(user_elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode()
 }
 
-/// Resolves whatever's deployed at `account_id` into a runnable ELF: walks its header and
-/// segment chain via `lookup` ([`get_program_via`]), then re-attaches the kernel. Skip this and
-/// call `get_program_via` directly if only the `image_id` is needed — attaching the kernel is
-/// wasted work when the bytecode itself is going to be discarded.
+/// Resolves whatever's deployed at `account_id` into a runnable ELF via [`get_program_via`],
+/// then re-attaches the kernel.
 pub(crate) fn resolve_program<'state>(
     account_id: AccountId,
     lookup: impl Fn(AccountId) -> Option<&'state Account>,

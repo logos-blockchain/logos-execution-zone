@@ -213,9 +213,9 @@ fn seed_ping_sender_config(state: &mut V03State) {
         Account::default().with_shard(
             sender_id,
             outbox_bytes(programs::cross_zone_outbox_account_id())
-            .to_vec()
-            .try_into()
-            .expect("outbox id fits in account data"),
+                .to_vec()
+                .try_into()
+                .expect("outbox id fits in account data"),
         ),
     )]);
 }
@@ -397,13 +397,8 @@ fn send_tx(
         payload,
         ordinal,
     };
-    let message = Message::try_new(
-        programs::ping_sender_account_id(),
-        accounts,
-        vec![],
-        send,
-    )
-    .expect("build ping_sender message");
+    let message = Message::try_new(programs::ping_sender_account_id(), accounts, vec![], send)
+        .expect("build ping_sender message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
@@ -1737,10 +1732,7 @@ fn the_token_authority_path_holds() {
             signer,
         )
     };
-    let bridge_source = vec![(
-        src_zone,
-        programs::bridge_lock_account_id(),
-    )];
+    let bridge_source = vec![(src_zone, programs::bridge_lock_account_id())];
 
     // With no authority configured, nothing moves in either direction.
     let mut unset = base_state();
@@ -1838,10 +1830,7 @@ fn the_token_authority_path_holds() {
     );
 
     // Acting again with a different list must replace it, not accumulate.
-    let sender_source = vec![(
-        src_zone,
-        programs::ping_sender_account_id(),
-    )];
+    let sender_source = vec![(src_zone, programs::ping_sender_account_id())];
     let second = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 1, sender_source.clone()),
         &state,
@@ -1910,10 +1899,7 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
     seed_receiver_config(
         &mut state,
         None,
-        vec![(
-            src_zone,
-            programs::bridge_lock_account_id(),
-        )],
+        vec![(src_zone, programs::bridge_lock_account_id())],
     );
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
@@ -2095,10 +2081,7 @@ fn the_receiver_authority_path_holds() {
     drop(state.apply_state_diff(diff));
     let cfg = receiver_config(&state, config_id);
     assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
-    assert_eq!(
-        cfg.deliverer,
-        programs::cross_zone_inbox_account_id()
-    );
+    assert_eq!(cfg.deliverer, programs::cross_zone_inbox_account_id());
 
     let renounce_diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
@@ -2142,10 +2125,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
             config_id,
             authority,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: uncapped_policies(&[(
-                    src_zone,
-                    programs::bridge_lock_account_id()
-                )]),
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock_account_id())]),
             }),
         )
     };
@@ -2210,10 +2190,7 @@ fn the_governance_path_holds() {
     };
 
     let first = ValidatedStateDiff::from_public_transaction(
-        &update(vec![(
-            src_zone,
-            programs::bridge_lock_account_id(),
-        )]),
+        &update(vec![(src_zone, programs::bridge_lock_account_id())]),
         &state,
         1,
         0,
@@ -2224,10 +2201,7 @@ fn the_governance_path_holds() {
     let cfg = wrapped_token_config(&state, config_id);
     assert_eq!(
         cfg.sources,
-        uncapped_entries(&[(
-            src_zone,
-            programs::bridge_lock_account_id()
-        )])
+        uncapped_entries(&[(src_zone, programs::bridge_lock_account_id())])
     );
     assert!(
         state.get_account_by_id(authority).data.shards.is_empty(),
@@ -2252,10 +2226,7 @@ fn the_governance_path_holds() {
 
     rejects_at(
         &state,
-        &update(vec![(
-            src_zone,
-            programs::bridge_lock_account_id(),
-        )]),
+        &update(vec![(src_zone, programs::bridge_lock_account_id())]),
         4,
         "fixed at genesis",
     );
@@ -2286,10 +2257,7 @@ fn the_governance_path_guards_hold() {
             authority,
             delegated,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-                sources: uncapped_policies(&[(
-                    src_zone,
-                    programs::bridge_lock_account_id()
-                )]),
+                sources: uncapped_policies(&[(src_zone, programs::bridge_lock_account_id())]),
             }),
         )
     };
@@ -2333,10 +2301,7 @@ fn the_governance_path_guards_hold() {
             receiver_id,
             receiver_config_account_id(receiver_id),
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-                sources: vec![(
-                    src_zone,
-                    programs::ping_sender_account_id()
-                )],
+                sources: vec![(src_zone, programs::ping_sender_account_id())],
             }),
         ),
         (
@@ -2393,10 +2358,7 @@ fn the_receiver_governance_path_holds() {
         authority,
         Some(seed),
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-            sources: vec![(
-                src_zone,
-                programs::ping_sender_account_id()
-            )],
+            sources: vec![(src_zone, programs::ping_sender_account_id())],
         }),
     );
 
@@ -2406,10 +2368,7 @@ fn the_receiver_governance_path_holds() {
     let cfg = receiver_config(&state, config_id);
     assert_eq!(
         cfg.sources,
-        vec![(
-            src_zone,
-            programs::ping_sender_account_id()
-        )]
+        vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
         state.get_account_by_id(authority).data.shards.is_empty(),
@@ -2443,10 +2402,7 @@ fn a_shared_authority_serves_both_targets() {
         authority,
         Some(seed),
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
-            sources: uncapped_policies(&[(
-                src_zone,
-                programs::bridge_lock_account_id()
-            )]),
+            sources: uncapped_policies(&[(src_zone, programs::bridge_lock_account_id())]),
         }),
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
@@ -2464,10 +2420,7 @@ fn a_shared_authority_serves_both_targets() {
         authority,
         Some(seed),
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-            sources: vec![(
-                src_zone,
-                programs::ping_sender_account_id()
-            )],
+            sources: vec![(src_zone, programs::ping_sender_account_id())],
         }),
     );
     let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
@@ -2476,10 +2429,7 @@ fn a_shared_authority_serves_both_targets() {
     let receiver_cfg = receiver_config(&state, receiver_config_id);
     assert_eq!(
         receiver_cfg.sources,
-        vec![(
-            src_zone,
-            programs::ping_sender_account_id()
-        )]
+        vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
         state.get_account_by_id(authority).data.shards.is_empty(),
@@ -2528,10 +2478,7 @@ fn the_remaining_authority_guards_hold() {
     // Config address, on both receiver instructions.
     for instruction_data in [
         bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-            sources: vec![(
-                src_zone,
-                programs::ping_sender_account_id()
-            )],
+            sources: vec![(src_zone, programs::ping_sender_account_id())],
         }),
         bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
     ] {
@@ -2573,10 +2520,7 @@ fn the_remaining_authority_guards_hold() {
             receiver_id,
             receiver_config_account_id(receiver_id),
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
-                sources: vec![(
-                    src_zone,
-                    programs::ping_sender_account_id()
-                )],
+                sources: vec![(src_zone, programs::ping_sender_account_id())],
             }),
             "must be the receiver config PDA",
         ),
@@ -2729,10 +2673,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     seed_wrapped_config(
         &mut state,
         None,
-        &[(
-            src_zone,
-            programs::bridge_lock_account_id(),
-        )],
+        &[(src_zone, programs::bridge_lock_account_id())],
     );
 
     let msg = CrossZoneMessage {
@@ -2793,10 +2734,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     seed_wrapped_config(
         &mut state,
         None,
-        &[(
-            src_zone,
-            programs::bridge_lock_account_id(),
-        )],
+        &[(src_zone, programs::bridge_lock_account_id())],
     );
 
     let msg = CrossZoneMessage {

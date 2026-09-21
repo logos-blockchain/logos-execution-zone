@@ -190,8 +190,7 @@ impl V03State {
         self
     }
 
-    /// Initializes state with given builtin programs, each deployed at its image-id-derived
-    /// default address. Real builtins use [`Self::with_named_programs`] instead.
+    /// Initializes state with given builtin programs.
     #[must_use]
     pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
         for program in programs {
@@ -200,8 +199,6 @@ impl V03State {
         self
     }
 
-    /// Like [`Self::with_programs`], but each program is deployed at an explicit, name-derived
-    /// address (see [`AccountId::from_builtin_program_name`]) instead of its `image_id`.
     #[must_use]
     pub fn with_named_programs(
         mut self,

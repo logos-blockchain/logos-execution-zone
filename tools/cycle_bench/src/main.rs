@@ -395,10 +395,7 @@ fn amm_vault_b_id() -> AccountId {
     )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(
-        programs::amm_account_id(),
-        amm_pool_id(),
-    )
+    compute_liquidity_token_pda(programs::amm_account_id(), amm_pool_id())
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -455,10 +452,7 @@ fn ata_create_pre_states() -> Vec<AccountInput> {
     let owner = AccountInput::balance(owner_id, true, 0);
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
-    let ata_id = get_associated_token_account_id(
-        &programs::ata_account_id(),
-        &seed,
-    );
+    let ata_id = get_associated_token_account_id(&programs::ata_account_id(), &seed);
     let ata_account = AccountInput::with_shard(
         ata_id,
         false,
