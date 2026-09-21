@@ -64,15 +64,8 @@ pub struct SetZoneAnchor {
     pub anchor: ZoneAnchorRecord,
 }
 
-pub struct GetPublishedHighWater;
-
-/// The `MsgId` of the newest channel inscription processed, block or not.
-pub struct GetChannelCursor;
-
-/// Raises the published high water mark to `block_id`, never lowering it.
-pub struct RaisePublishedHighWater {
-    pub block_id: BlockId,
-}
+/// The `MsgId` of the newest channel inscription seen finalized.
+pub struct GetFinalizedEntry;
 
 pub struct GetPendingDepositEvents;
 
@@ -138,7 +131,9 @@ pub struct AtomicUpdate {
 
     /// The `MsgId` of the newest inscription this update processed, block or
     /// not; `None` leaves the stored cursor untouched.
-    pub channel_cursor: Option<MsgId>,
+    /// The newest entry seen finalized, so a restart knows where the chain
+    /// walk terminates.
+    pub finalized_entry: Option<MsgId>,
 
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<BlockMeta>,
@@ -167,8 +162,6 @@ pub struct AtomicUpdate {
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
 
-    /// Lower the published high water mark to this height if it is above.
-    pub lower_published_high_water: Option<BlockId>,
 }
 
 impl AtomicUpdate {
@@ -181,7 +174,7 @@ impl AtomicUpdate {
             checkpoint: None,
             head_tip: Some(BlockMeta::from(&block)),
             blocks: vec![block],
-            channel_cursor: None,
+            finalized_entry: None,
             head_state: state,
             final_snapshot: None,
             finalized_up_to: None,
@@ -191,7 +184,6 @@ impl AtomicUpdate {
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
-            lower_published_high_water: None,
         }
     }
 }

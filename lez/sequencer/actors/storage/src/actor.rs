@@ -27,13 +27,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock, GetChannelCursor,
+        DropSettledCrossZoneDispatches, DumpDb, GetAllBlocks, GetBlock,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFinalizedEntry, GetFirstBlockId,
+        GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
         GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
+        PutSlashRecordBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
         WithdrawalReconciliationKey, ZoneAnchorRecord,
@@ -230,30 +231,6 @@ impl StorageActor {
         }
 
         removed_block_ids
-    }
-
-    /// Stages the published high water mark down to `block_id`, leaving a mark
-    /// already at or below it alone.
-    fn lower_published_high_water(
-        &self,
-        batch: &mut db::WriteBatch,
-        block_id: BlockId,
-    ) -> Result<()> {
-        let stored = self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?;
-
-        if stored.is_none_or(|stored| stored.block_id <= block_id) {
-            return Ok(());
-        }
-
-        self.db()
-            .put_batch(
-                batch,
-                &encoding::SingletonKey,
-                &entities::PublishedHighWater { block_id },
-            )
-            .map_err(Into::into)
     }
 
     /// Records the deposits `new_deposit_events` observes and drops the records
@@ -675,58 +652,18 @@ impl Message<SetZoneAnchor> for StorageActor {
     }
 }
 
-impl Message<GetChannelCursor> for StorageActor {
+impl Message<GetFinalizedEntry> for StorageActor {
     type Reply = Result<Option<MsgId>>;
 
     async fn handle(
         &mut self,
-        GetChannelCursor: GetChannelCursor,
+        GetFinalizedEntry: GetFinalizedEntry,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self
             .db()
-            .get::<entities::ChannelCursor>(&encoding::SingletonKey)?
-            .map(|cursor| cursor.msg_id))
-    }
-}
-
-impl Message<GetPublishedHighWater> for StorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        GetPublishedHighWater: GetPublishedHighWater,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?
-            .map(|high_water| high_water.block_id))
-    }
-}
-
-impl Message<RaisePublishedHighWater> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        RaisePublishedHighWater { block_id }: RaisePublishedHighWater,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let stored = self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?;
-
-        if stored.is_some_and(|stored| stored.block_id >= block_id) {
-            return Ok(());
-        }
-
-        self.db().put(
-            &encoding::SingletonKey,
-            &entities::PublishedHighWater { block_id },
-        )?;
-
-        Ok(())
+            .get::<entities::FinalizedEntry>(&encoding::SingletonKey)?
+            .map(|entry| entry.msg_id))
     }
 }
 
@@ -771,7 +708,7 @@ impl Message<AtomicUpdate> for StorageActor {
         let AtomicUpdate {
             checkpoint,
             blocks,
-            channel_cursor,
+            finalized_entry,
             head_tip,
             head_state,
             final_snapshot,
@@ -782,23 +719,17 @@ impl Message<AtomicUpdate> for StorageActor {
             new_withdraw_intents,
             finalized_dispatch_records,
             zone_anchor,
-            lower_published_high_water,
         } = msg;
 
         let mut batch = db::WriteBatch::default();
 
-        // Channel cursor
-        if let Some(msg_id) = channel_cursor {
+        // Finalized entry: where the chain walk terminates after a restart.
+        if let Some(msg_id) = finalized_entry {
             self.db().put_batch(
                 &mut batch,
                 &encoding::SingletonKey,
-                &entities::ChannelCursor { msg_id },
+                &entities::FinalizedEntry { msg_id },
             )?;
-        }
-
-        // Published high water
-        if let Some(block_id) = lower_published_high_water {
-            self.lower_published_high_water(&mut batch, block_id)?;
         }
 
         // Checkpoint

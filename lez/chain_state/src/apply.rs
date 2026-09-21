@@ -139,8 +139,8 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
 }
 
 /// Applies a block's transactions to `state`, mapping every failure to a
-/// [`BlockIngestError`] so the caller can park rather than crash. Operates in
-/// place; the caller commits only on `Ok`.
+/// [`BlockIngestError`] so the caller can skip the block rather than crash.
+/// Operates in place; the caller commits only on `Ok`.
 ///
 /// On `Ok` also returns the indexed transaction events in emission order.
 pub fn apply_block_to_state(

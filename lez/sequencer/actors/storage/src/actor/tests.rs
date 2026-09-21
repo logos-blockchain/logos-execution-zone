@@ -17,12 +17,12 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetBlock, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetBlock, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
+        GetPendingDepositEvents, GetTransactionByHash,
         GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        RecordDispatchFailure, RequeueDeadLetterDispatch,
         SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
     },
 };
@@ -31,6 +31,7 @@ use crate::{
 fn bookkeeping_update() -> AtomicUpdate {
     AtomicUpdate {
         checkpoint: None,
+        finalized_entry: None,
         blocks: Vec::new(),
         head_tip: None,
         head_state: Arc::new(V03State::new()),
@@ -42,8 +43,6 @@ fn bookkeeping_update() -> AtomicUpdate {
         consumed_withdrawals: HashSet::new(),
         new_withdraw_intents: HashSet::new(),
         zone_anchor: None,
-        channel_cursor: None,
-        lower_published_high_water: None,
     }
 }
 
@@ -1385,84 +1384,6 @@ async fn dead_letters_evict_the_oldest_at_the_cap_but_keep_counting() {
             .await
             .expect("Failed to read the dead letter count"),
         u64::try_from(retirements).expect("Test retirement count fits")
-    );
-}
-
-/// The cursor has to outlive the process: a restart that cannot recover it has
-/// nothing to chain the next publish onto.
-#[tokio::test]
-async fn channel_cursor_survives_a_reopen() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    assert_eq!(
-        storage_ref
-            .ask(GetChannelCursor)
-            .await
-            .expect("Failed to read the channel cursor"),
-        None,
-        "A store written without a cursor has none to report"
-    );
-
-    storage_ref
-        .ask(AtomicUpdate {
-            channel_cursor: Some([7; 32]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to apply the update");
-    storage_ref
-        .ask(bookkeeping_update())
-        .await
-        .expect("Failed to apply the update");
-
-    let storage_weak = storage_ref.downgrade();
-    drop(storage_ref);
-    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-    let reopened_ref = spawn_with_blocks(dir.path(), vec![]).await;
-    assert_eq!(
-        reopened_ref
-            .ask(GetChannelCursor)
-            .await
-            .expect("Failed to read the channel cursor"),
-        Some([7; 32]),
-        "The cursor comes back after a restart, and an update carrying none left it alone"
-    );
-}
-
-/// The mark otherwise only rises. Lowering it frees a height to be inscribed
-/// again, which is only ever right for a block the channel dropped, so an
-/// update naming a height above the mark must not raise it by the back door.
-#[tokio::test]
-async fn published_high_water_is_lowered_only_from_above() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(RaisePublishedHighWater { block_id: 9 })
-        .await
-        .expect("Failed to raise the high water mark");
-
-    let lower_to = async |block_id| {
-        storage_ref
-            .ask(AtomicUpdate {
-                lower_published_high_water: Some(block_id),
-                ..bookkeeping_update()
-            })
-            .await
-            .expect("Failed to apply the update");
-        storage_ref
-            .ask(GetPublishedHighWater)
-            .await
-            .expect("Failed to read the high water mark")
-    };
-
-    assert_eq!(lower_to(4).await, Some(4));
-    assert_eq!(
-        lower_to(7).await,
-        Some(4),
-        "A height the mark is already below leaves it where it is"
     );
 }
 

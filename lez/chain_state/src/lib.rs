@@ -3,12 +3,12 @@
 //! [`Tip`], and [`AcceptOutcome`]. See [`ChainState`] for the two-tier model.
 
 pub use apply::{AcceptOutcome, Tip, apply_block, apply_block_to_state, validate_against_tip};
-pub use chain::{ChainState, FollowOutcome};
+pub use chain::{ChainState, TipDerivation};
 pub use consistency::{
     Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, verify_chain_consistency,
 };
 pub use ingest_error::BlockIngestError;
-pub use lineage::{ChannelLineage, InscribedBlock, LineageEntry, PublishVerdict};
+pub use lineage::{ChannelLineage, LineageEntry, Stale};
 pub use stall_reason::StallReason;
 
 pub mod apply;

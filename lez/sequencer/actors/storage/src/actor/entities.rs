@@ -151,31 +151,19 @@ impl db::Storable<ColumnFamily> for ZoneAnchor {
     const TYPE_NAME: &'static str = db::type_name!(ZoneAnchor);
 }
 
-/// The `MsgId` of the newest channel inscription processed, block or not: the
-/// parent the next produced block is pinned on.
+/// The `MsgId` of the newest channel inscription seen finalized: where the
+/// unfinalized entries the checkpoint carries end, and so where the chain walk
+/// terminates. Without it a restart cannot tell the boundary from a gap.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct ChannelCursor {
+pub struct FinalizedEntry {
     pub msg_id: MsgId,
 }
 
-impl db::Storable<ColumnFamily> for ChannelCursor {
+impl db::Storable<ColumnFamily> for FinalizedEntry {
     type Key = SingletonKey;
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
-    const TYPE_NAME: &'static str = db::type_name!(ChannelCursor);
-}
-
-/// The highest block id this sequencer must not inscribe on the channel again.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct PublishedHighWater {
-    pub block_id: BlockId,
-}
-
-impl db::Storable<ColumnFamily> for PublishedHighWater {
-    type Key = SingletonKey;
-
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
-    const TYPE_NAME: &'static str = db::type_name!(PublishedHighWater);
+    const TYPE_NAME: &'static str = db::type_name!(FinalizedEntry);
 }
 
 /// An L1 deposit event observed but not yet seen finalized.

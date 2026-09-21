@@ -9,11 +9,11 @@ use sequencer_storage_actor::{
     protocol::{
         CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DeleteBlock,
         DeleteZoneCheckpoint, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetAllBlocks, GetBlock, GetChannelCursor, GetDeadLetterDispatchCount,
+        GetAllBlocks, GetBlock, GetDeadLetterDispatchCount, GetFinalizedEntry,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetZoneAnchor, SetZoneCheckpointBytes,
         ZoneAnchorRecord,
     },
@@ -135,28 +135,11 @@ impl<S: StorageActorTrait> SequencerStore<S> {
             .map_err(Into::into)
     }
 
-    /// The highest block id ever inscribed on the channel by this sequencer,
-    /// or `None` before it has published anything.
-    pub async fn published_high_water(&self) -> Result<Option<u64>> {
+    /// The `MsgId` of the newest channel inscription seen finalized, where the
+    /// chain walk terminates.
+    pub async fn finalized_entry(&self) -> Result<Option<MsgId>> {
         self.storage_ref
-            .ask(GetPublishedHighWater)
-            .await
-            .map_err(Into::into)
-    }
-
-    /// The `MsgId` of the newest channel inscription processed, or `None` if
-    /// none was recorded.
-    pub async fn channel_cursor(&self) -> Result<Option<MsgId>> {
-        self.storage_ref
-            .ask(GetChannelCursor)
-            .await
-            .map_err(Into::into)
-    }
-
-    /// Raises the published high water mark to `block_id`, never lowering it.
-    pub async fn raise_published_high_water(&self, block_id: u64) -> Result<()> {
-        self.storage_ref
-            .ask(RaisePublishedHighWater { block_id })
+            .ask(GetFinalizedEntry)
             .await
             .map_err(Into::into)
     }

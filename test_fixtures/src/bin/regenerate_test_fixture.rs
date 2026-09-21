@@ -121,6 +121,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let state = Arc::new(state);
     storage_ref
         .ask(AtomicUpdate {
+            finalized_entry: None,
             checkpoint: None,
             blocks: vec![],
             channel_cursor: None,
@@ -135,7 +136,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
-            lower_published_high_water: None,
         })
         .await
         .context("Failed to stamp the fixture final snapshot at the tip")?;

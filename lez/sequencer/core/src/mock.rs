@@ -41,8 +41,6 @@ pub struct MockBlockPublisher {
     messages: Vec<(ZoneMessage, Slot)>,
     /// Last entry a publish left the channel at, for the pinned-parent check.
     channel_tip: Arc<Mutex<Option<MsgId>>>,
-    /// When set, the tip a read reports instead of the real one.
-    stale_tip_read: Arc<Mutex<Option<MsgId>>>,
     /// When set, fails every publish, as zone-sdk does for an atomic withdraw
     /// at this revision.
     publish_fails: Arc<AtomicBool>,
@@ -64,7 +62,6 @@ impl MockBlockPublisher {
             tip_slot,
             messages,
             channel_tip: Arc::new(Mutex::new(None)),
-            stale_tip_read: Arc::new(Mutex::new(None)),
             publish_fails: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -77,11 +74,6 @@ impl MockBlockPublisher {
     /// Moves the canned channel tip, as an L1 reorg dropping inscriptions does.
     pub fn set_channel_tip(&self, tip: Option<MsgId>) {
         *self.channel_tip.lock().expect("channel tip lock poisoned") = tip;
-    }
-
-    /// Makes tip reads report `tip` while the channel stays where it is.
-    pub fn set_stale_tip_read(&self, tip: MsgId) {
-        *self.stale_tip_read.lock().expect("stale tip lock poisoned") = Some(tip);
     }
 
     /// Records `block` as the channel tip and reports what its publish produced.
@@ -124,7 +116,6 @@ impl BlockPublisherTrait for MockBlockPublisher {
                 .then(|| Slot::from(0)),
             messages: Vec::new(),
             channel_tip: Arc::new(Mutex::new(None)),
-            stale_tip_read: Arc::new(Mutex::new(None)),
             publish_fails: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -195,10 +186,6 @@ impl BlockPublisherTrait for MockBlockPublisher {
     }
 
     async fn channel_tip_message(&self) -> Result<Option<MsgId>> {
-        let stale = *self.stale_tip_read.lock().expect("stale tip lock poisoned");
-        if stale.is_some() {
-            return Ok(stale);
-        }
         Ok(*self.channel_tip.lock().expect("channel tip lock poisoned"))
     }
 

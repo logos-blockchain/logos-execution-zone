@@ -19,7 +19,7 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    PinBehindTip, PublishVerdict, SequencerCore, TransactionOrigin,
+    SequencerCore, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     gossip::AccreditedKeysReceiver,
@@ -72,22 +72,22 @@ pub struct ExecutorActor<S: StorageActorTrait, BP: BlockPublisherTrait> {
     failed_attempts: u32,
 }
 
-/// Consecutive production attempts skipped because the pin trailed the tip.
-/// The run restarts on a new tip, so its length separates catching up from
-/// being stuck.
+/// Consecutive production attempts skipped with the pin stuck where it was.
+/// The run restarts when the pin moves, so its length separates catching up
+/// from being stuck.
 #[derive(Default)]
 pub(crate) struct BlockedAttempts {
     count: u32,
-    behind: Option<MsgId>,
+    behind: Option<Option<MsgId>>,
 }
 
 impl BlockedAttempts {
     /// Counts a skipped attempt and returns the run's new length.
-    pub(crate) fn record(&mut self, tip: MsgId) -> u32 {
-        if self.behind == Some(tip) {
+    pub(crate) fn record(&mut self, pin: Option<MsgId>) -> u32 {
+        if self.behind == Some(pin) {
             self.count = self.count.saturating_add(1);
         } else {
-            self.behind = Some(tip);
+            self.behind = Some(pin);
             self.count = 1;
         }
         self.count
@@ -224,57 +224,27 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
             return Ok(());
         }
 
-        // Never inscribe a second block at a height we already published: the
-        // channel would carry two chains from there and nothing resolves that.
-        if let Some(high_water) = self.sequencer.rewound_below_published().await {
-            warn!(
-                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
-                 waiting for the channel to restore it",
-                self.sequencer.next_block_height().await.saturating_sub(1),
-            );
-            // The count is only for skips behind a frozen pin, so keeping it
-            // here would warn about the wrong problem.
-            self.clear_blocked_attempts();
-            return Ok(());
-        }
-
-        // The channel moved past our pin, so every publish this turn would be refused.
-        if let Some(PinBehindTip { pin, tip }) = self.sequencer.pin_behind_channel_tip().await {
-            let attempts = self.blocked_attempts.record(tip);
+        // The head is frozen behind a chain the last checkpoint could not
+        // account for. The run is counted against the pin: one that stops
+        // moving while the channel keeps going cannot recover on its own.
+        if !self.sequencer.may_publish().await {
+            let pin = self.sequencer.pin_parent().await;
+            let attempts = self.blocked_attempts.record(pin);
             sequencer_executor_actor_metrics::record_publish_blocked_attempts(attempts);
+            let height = self.sequencer.next_block_height().await.saturating_sub(1);
             if attempts >= BLOCKED_ATTEMPTS_BEFORE_WEDGED {
                 warn!(
-                    "Skipped {attempts} production attempts behind an unchanging channel tip \
-                     {tip}: our pin {pin} is frozen and cannot recover on its own. Land any \
-                     inscription on the channel to trigger recovery, or reset the store.",
+                    "Skipped {attempts} production attempts with the chain above our head \
+                     {height} underivable and our pin {} unchanged: it cannot recover on its \
+                     own. Land any inscription on the channel to trigger recovery, or reset \
+                     the store.",
+                    pin.map_or_else(|| "none".to_owned(), |pin| pin.to_string()),
                 );
             } else {
-                info!(
-                    "Skipping turn: channel tip {tip} moved past our pin {pin}; catching up first"
+                warn!(
+                    "Skipping turn: the channel chain above our head {height} is not derivable \
+                     from the sdk's last checkpoint",
                 );
-            }
-            return Ok(());
-        }
-        // A block of someone else's sits between our head and our pin, so this
-        // turn would pair a stale height with the live channel tip.
-        if let Some(verdict) = self.sequencer.publish_blocker().await {
-            match verdict {
-                PublishVerdict::HeadTrailsPin { block_id } => {
-                    info!(
-                        "Skipping turn: block {block_id} is on the channel above our head {}; \
-                         applying it first",
-                        self.sequencer.next_block_height().await.saturating_sub(1),
-                    );
-                    self.clear_blocked_attempts();
-                }
-                // The pin may be frozen behind the missing entries, so the
-                // blocked run keeps counting.
-                PublishVerdict::LineageGap => warn!(
-                    "Skipping turn: the channel entries between our head {} and our pin are \
-                     missing from the sdk's view",
-                    self.sequencer.next_block_height().await.saturating_sub(1),
-                ),
-                PublishVerdict::Allowed => {}
             }
             return Ok(());
         }

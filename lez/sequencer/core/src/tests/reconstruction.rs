@@ -425,7 +425,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
         &seq_b.chain(),
         &mempool_b,
         FollowUpdate {
-            finalized,
+            finalized: crate::tests::finalized_blocks(&finalized),
             ..empty_follow_update()
         },
     )
@@ -514,14 +514,17 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     let competitor =
         common::test_utils::produce_dummy_block(tip_a.id, Some(genesis_b.hash), vec![]);
     assert_ne!(competitor.header.hash, tip_a.hash);
+    let genesis_b_block = seq_b
+        .block_store()
+        .block_at_id(genesis_b.id)
+        .await
+        .unwrap()
+        .unwrap();
     apply_follow_update(
         seq_b.block_store().storage_ref(),
         &seq_b.chain(),
         &mempool_b,
-        FollowUpdate {
-            adopted: vec![competitor],
-            ..empty_follow_update()
-        },
+        crate::tests::follow_update_with_chain(&[genesis_b_block, competitor]),
     )
     .await;
     assert_eq!(

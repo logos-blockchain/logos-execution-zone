@@ -5,12 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use borsh::BorshDeserialize;
-pub use chain_state::PublishVerdict;
 use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
-    FollowOutcome, Tip,
+    Tip, TipDerivation,
 };
 use common::{
     HashType,
@@ -52,7 +51,7 @@ use crate::{
     gossip::{
         AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
     },
-    logging::{log_drained, log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
+    logging::{log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
 
@@ -73,6 +72,11 @@ pub mod task_group;
 /// One attempt per block, so this is tens of seconds of retrying. Enough for a
 /// failure that is not the message's fault to clear, short enough that a message
 /// which will never execute stops being retried.
+/// Consecutive regressed derivations before the pin is reported stranded.
+/// Two in a row are ordinary: the sdk buffers a checkpoint across a reconnect,
+/// and the bootstrap publishes outrun the first one.
+const REGRESSIONS_BEFORE_STRANDED: u32 = 3;
+
 const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 
 /// Cross-zone deliveries one block may carry.
@@ -170,8 +174,8 @@ struct DepositMetadata {
 }
 
 pub struct SequencerCore<S: StorageActorTrait, BP: BlockPublisherTrait = ZoneSdkPublisher> {
-    /// Two-tier chain state: production builds on its head; the publisher's
-    /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
+    /// Two-tier chain state: production builds on its head, which the
+    /// publisher's `on_follow` sink derives from the channel chain.
     chain: Arc<Mutex<ChainState>>,
     store: SequencerStore<S>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
@@ -233,22 +237,26 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 panic!("Stored block {block_id} does not replay while restoring chain state (does the config cross_zone presence still match the chain genesis?): {err}")
             });
         }
-        if let Some(cursor) = store
-            .channel_cursor()
-            .await
-            .unwrap_or_else(|err| panic!("Failed to read the stored channel cursor: {err:#}"))
-        {
-            chain.restore_cursor(MsgId::from(cursor));
-        } else if let Some(checkpoint) = store
+        // The pin comes back from the sdk checkpoint, which is the resume
+        // cursor the sdk itself restores from. Nothing stored means nothing
+        // followed yet, and the bootstrap publishes seed the pin.
+        if let Some(checkpoint) = store
             .get_zone_checkpoint()
             .await
             .unwrap_or_else(|err| panic!("Failed to read the stored zone checkpoint: {err:#}"))
         {
-            // A store from before the cursor cell existed still pins: the sdk
-            // checkpoint carries the channel tip it was built on.
             chain.restore_cursor(checkpoint.last_msg_id);
-        } else {
-            // Nothing followed yet; the bootstrap publishes seed the pin.
+        }
+
+        // Where the chain walk terminates. Without it the walk cannot tell the
+        // finalized boundary from a gap, and every derivation after a restart
+        // fails until something new finalizes — on a quiet channel, for ever.
+        if let Some(entry) = store
+            .finalized_entry()
+            .await
+            .unwrap_or_else(|err| panic!("Failed to read the stored finalized entry: {err:#}"))
+        {
+            chain.restore_finalized_entry(MsgId::from(entry));
         }
 
         // The replayed head must reproduce the persisted state, else store
@@ -430,23 +438,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         // The committee the slasher loaded with predates this catch-up.
         refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
 
-        // Seed the high water mark from the tip we are starting on. Every stored
-        // block reached the store by being published or by being adopted from
-        // the channel, so the channel holds them all and none is ours to write
-        // again. Without this the mark is absent until the first publish of this
-        // run, leaving that window unguarded — which is exactly the window a
-        // store written before the mark existed starts in.
-        if let Some(tip) = store
-            .latest_block_meta()
-            .await
-            .expect("Failed to read latest block meta")
-        {
-            store
-                .raise_published_high_water(tip.id)
-                .await
-                .expect("Failed to seed published high water mark");
-        }
-
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
         // sequencer created it), we adopted its blocks during reconstruction
@@ -501,12 +492,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 chain
                     .lock()
                     .await
-                    .record_own_inscription(outcome.checkpoint.last_msg_id, block);
+                    .record_own_inscription(outcome.checkpoint.last_msg_id);
                 last_checkpoint = Some(outcome.checkpoint);
-                store
-                    .raise_published_high_water(block.header.block_id)
-                    .await
-                    .expect("Failed to persist published high water mark");
             }
 
             // These blocks are already stored, so only the sdk's pending set
@@ -770,7 +757,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .ask(AtomicUpdate {
                 blocks: vec![block.clone()],
                 head_tip,
-                channel_cursor: Some(this_msg.into()),
+                finalized_entry: chain.finalized_entry().map(Into::into),
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
                 finalized_deposit_records: finalized_deposit_ids,
@@ -781,7 +768,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 new_deposit_events: Vec::new(),
                 consumed_withdrawals: HashSet::new(),
                 new_withdraw_intents: HashSet::new(),
-                lower_published_high_water: None,
             })
             .await
             .context("Failed to persist reconstructed block")?;
@@ -804,10 +790,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             let slasher = slasher.clone();
             let accredited_keys_tx = accredited_keys_tx.clone();
             Box::pin(async move {
-                report_offences(&slasher, &update.undecodable).await;
-                let moved_head = !update.adopted.is_empty();
-                apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await;
-                if moved_head {
+                let undecodable: Vec<_> = update.undecodable().collect();
+                report_offences(&slasher, &undecodable).await;
+                // Gated on the head actually moving, not on the sdk having
+                // reported something: the head comes from the channel chain,
+                // so a reported entry need not have changed it.
+                if apply_follow_update(&storage_ref, &chain, &mempool_handle, update).await {
                     refresh_committee(&slasher, &chain, &accredited_keys_tx).await;
                 }
             })
@@ -822,7 +810,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         let BlockWithMeta {
             block,
-            withdrawals,
             committee_update,
             parent,
         } = self
@@ -832,41 +819,41 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         // Height and pin together: the height comes from the head and the pin
         // from the cursor, and only this line records what they were as a pair.
-        // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
         info!(
             "Publishing block {} on pin {}",
             block.header.block_id,
-            pin_str(parent.filter(|_| withdrawals.is_empty())),
+            pin_str(parent),
         );
+
+        let published = match parent {
+            // Chained on the channel tip the cursor sat on when the block was
+            // built, so a tip that moved since costs this turn instead of
+            // inscribing a second block at a height the channel already
+            // carries.
+            Some(parent) => {
+                self.block_publisher
+                    .publish_block_chained_on(&block, parent)
+                    .await
+            }
+            // No cursor yet: nothing has been followed or restored, so there is
+            // no pin to build against and the sdk picks the parent.
+            None => self.block_publisher.publish_block(&block, Vec::new()).await,
+        }
+        .context("Failed to publish block to Bedrock");
 
         let block_publisher::PublishOutcome {
             this_msg,
             checkpoint,
             released_notes,
-        } = match parent {
-            // Chained on the channel tip the cursor sat on when the block was
-            // built, so a tip that moved since costs this turn instead of
-            // inscribing a second block at a height the channel already
-            // carries.
-            Some(parent) if withdrawals.is_empty() => {
-                self.block_publisher
-                    .publish_block_chained_on(&block, parent)
-                    .await
+        } = match published {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                // The block never reached the channel, so nothing will ever
+                // report it: its transactions go back now or they are lost.
+                self.requeue_doomed_block(&block);
+                return Err(err);
             }
-            _ => {
-                self.block_publisher
-                    .publish_block(&block, withdrawals)
-                    .await
-            }
-        }
-        .context("Failed to publish block to Bedrock")?;
-
-        // The inscription is on L1 from here on, whatever the head does with the
-        // block below, so this height must never be published again.
-        self.store
-            .raise_published_high_water(block.header.block_id)
-            .await
-            .context("Failed to persist published high water mark")?;
+        };
 
         // Independent Mantle tx, not bundled with the block above — join/exit
         // config updates don't need to be.
@@ -979,9 +966,22 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         }
     }
 
-    /// Applies our own freshly-published block to the head with the [`MsgId`] the
-    /// publish assigned it, so the head advances and the later adopted
-    /// redelivery dedups, then persists it.
+    /// Applies our own freshly-published block to the head with the [`MsgId`]
+    /// the publish assigned it, then persists it.
+    ///
+    /// This is an optimistic local extension, not a derivation: a publish is
+    /// never evidence about the rest of the channel, and the entries below our
+    /// own are not all in the checkpoint it returns — a peer's `Custom`-shaped
+    /// entry, the genesis block included, never enters the sdk's pending set.
+    /// The next follow update derives the head from the channel and corrects
+    /// this if our block did not land.
+    ///
+    /// The block is appended to the head rather than derived from the
+    /// checkpoint the publish returned. That checkpoint describes the sdk's
+    /// local pending set, so a head block it does not carry — genesis on a node
+    /// that joined an existing channel, or any entry the local sdk never
+    /// mirrored — reads as the head having regressed, and deriving would drop
+    /// work that is on the channel. Appending cannot make that mistake.
     ///
     /// Persistence is gated on the block actually becoming the head: if a peer
     /// block won this height while we were publishing (`AlreadyApplied`, or
@@ -989,7 +989,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     /// block is persisted by the follow path instead, and our invalidated
     /// inscription comes back via `orphaned`.
     async fn record_produced_block(
-        &self,
+        &mut self,
         this_msg: MsgId,
         block: Block,
         withdrawal_reconciliation_keys: HashSet<WithdrawalReconciliationKey>,
@@ -997,41 +997,63 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     ) -> Result<()> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
 
-        let mut chain = self.chain.lock().await;
-        match chain.apply_produced(&block, this_msg) {
-            AcceptOutcome::Applied => {
-                let block_id = block.header.block_id;
-                self.store
-                    .storage_ref()
-                    .ask(AtomicUpdate {
-                        new_withdraw_intents: withdrawal_reconciliation_keys,
-                        checkpoint: Some(checkpoint_bytes.clone()),
-                        channel_cursor: Some(this_msg.into()),
-                        ..AtomicUpdate::from_block(block.clone(), chain.share_head_state())
-                    })
-                    .await?;
+        let became_head = {
+            let mut chain = self.chain.lock().await;
+            match chain.apply_produced(&block, this_msg) {
+                AcceptOutcome::Applied => {
+                    let block_id = block.header.block_id;
+                    self.store
+                        .storage_ref()
+                        .ask(AtomicUpdate {
+                            new_withdraw_intents: withdrawal_reconciliation_keys,
+                            checkpoint: Some(checkpoint_bytes.clone()),
+                            finalized_entry: chain.finalized_entry().map(Into::into),
+                            ..AtomicUpdate::from_block(block.clone(), chain.share_head_state())
+                        })
+                        .await?;
 
-                sequencer_core_metrics::increment_blocks_produced_total();
-                sequencer_core_metrics::record_chain_height(block_id);
+                    sequencer_core_metrics::increment_blocks_produced_total();
+                    sequencer_core_metrics::record_chain_height(block_id);
+                    true
+                }
+                // Neither branch persists anything, checkpoint included: the
+                // inscription it holds as pending belongs to a block that is
+                // not ours to keep.
+                AcceptOutcome::AlreadyApplied => {
+                    warn!(
+                        "Produced block {} lost a competing-write race, skipping persistence",
+                        block.header.block_id
+                    );
+                    false
+                }
+                AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
+                    warn!(
+                        "Produced block {} no longer chains on the head, skipping persistence: \
+                         {err}",
+                        block.header.block_id
+                    );
+                    false
+                }
             }
-            // Neither branch persists anything, checkpoint included: the
-            // inscription it holds as pending belongs to a block that is not
-            // ours to keep.
-            AcceptOutcome::AlreadyApplied => {
-                warn!(
-                    "Produced block {} lost a competing-write race, skipping persistence",
-                    block.header.block_id
-                );
-            }
-            AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
-                warn!(
-                    "Produced block {} no longer chains on the head, skipping persistence: {err}",
-                    block.header.block_id
-                );
-            }
+        };
+
+        if !became_head {
+            self.requeue_doomed_block(&block);
         }
 
         Ok(())
+    }
+
+    /// Returns a doomed block's user transactions to the mempool.
+    ///
+    /// A block that never entered the head is never reported `dropped` by a
+    /// later derivation, and the follow path's resubmit only covers blocks
+    /// that were on it — so without this the work in a block that lost its
+    /// race, or that failed to publish, is lost outright.
+    fn requeue_doomed_block(&mut self, block: &Block) {
+        for tx in resubmittable_txs(block) {
+            self.mempool.push_front((TransactionOrigin::User, tx));
+        }
     }
 
     /// Validates and applies a single mempool transaction to the current state.
@@ -1047,7 +1069,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         tx: &LeeTransaction,
         block_height: u64,
         timestamp: u64,
-        withdrawals: &mut Vec<WithdrawArg>,
         opening: &fee_core::state::FeeState,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
@@ -1094,8 +1115,17 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                             );
                             return false;
                         }
-                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
-                            withdrawals.push(withdraw_data);
+                        // The bridge guest rejects every withdrawal today, so
+                        // this drops nothing that reaches it. It is the builder
+                        // half of the guarantee: re-enabling the guest cannot by
+                        // itself put a withdrawal in a block, which would need
+                        // the sdk-chosen parent and so lose the pin the height
+                        // was built against.
+                        if extract_bridge_withdraw_data(tx).is_some() {
+                            log::warn!(
+                                "Transaction {tx_hash} carries a bridge withdrawal; dropping it"
+                            );
+                            return false;
                         }
                         *state = scratch;
                         *summary = scratch_summary;
@@ -1204,17 +1234,13 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             parent,
         ) = {
             let chain = self.chain.lock().await;
-            // The pin must chain back to our head with no block in between, or
-            // this turn would pair a stale height with the live channel tip.
-            match chain.publishing_verdict() {
-                PublishVerdict::Allowed => {}
-                PublishVerdict::HeadTrailsPin { block_id } => bail!(
-                    "Skipping turn: block {block_id} is on the channel between our head and the pin"
-                ),
-                PublishVerdict::LineageGap => bail!(
-                    "Skipping turn: the channel entries between our head and the pin are missing"
-                ),
-            }
+            // The head must be one the last derivation could check against
+             // the channel, or this turn would pair a stale height with the
+             // live channel tip.
+            ensure!(
+                chain.may_publish(),
+                "Skipping turn: the channel chain is not derivable from the last checkpoint"
+            );
             let tip = chain.head_tip();
             let parent = chain.pin_parent();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
@@ -1305,7 +1331,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         }
 
         let mut valid_transactions = Vec::new();
-        let mut withdrawals = Vec::new();
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -1515,7 +1540,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
                 &tx,
                 new_block_height,
                 new_block_timestamp,
-                &mut withdrawals,
                 &opening,
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
@@ -1582,7 +1606,6 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
 
         Ok(BlockWithMeta {
             block,
-            withdrawals,
             committee_update,
             parent,
         })
@@ -1781,50 +1804,16 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             })
     }
 
-    /// `Some(high_water)` when the head has rewound below what we already
-    /// inscribed, so the next block would be a *second*, different block at a
-    /// height the channel already carries. Callers must skip their turn.
-    ///
-    /// The follow path lowers the mark when the channel drops our inscription
-    /// for good, so this only holds while a re-adopted block of ours fails to apply.
-    pub async fn rewound_below_published(&self) -> Option<u64> {
-        let high_water = self.store.published_high_water().await.ok().flatten()?;
-        (self.next_block_height().await <= high_water).then_some(high_water)
+    /// Whether the next publish may run: the head must be one the last
+    /// derivation could check against the channel.
+    pub async fn may_publish(&self) -> bool {
+        self.chain.lock().await.may_publish()
     }
 
-    /// Why the next publish is not allowed, if the pin no longer chains back to
-    /// the head. `None` when the turn may run.
-    pub async fn publish_blocker(&self) -> Option<PublishVerdict> {
-        let verdict = self.chain.lock().await.publishing_verdict();
-        match verdict {
-            PublishVerdict::Allowed => None,
-            verdict @ (PublishVerdict::HeadTrailsPin { .. } | PublishVerdict::LineageGap) => {
-                Some(verdict)
-            }
-        }
-    }
-
-    /// Our pin and the live channel tip when the tip has moved past it, meaning
-    /// the next publish would be refused and the caller should skip its turn.
-    pub async fn pin_behind_channel_tip(&self) -> Option<PinBehindTip> {
-        let pin = {
-            let chain = self.chain.lock().await;
-            // A read can trail a publish of ours, so it cannot judge one.
-            if chain.pin_is_ours() {
-                return None;
-            }
-            chain.pin_parent()?
-        };
-        match self.block_publisher.channel_tip_message().await {
-            Ok(Some(tip)) if tip != pin => Some(PinBehindTip { pin, tip }),
-            Ok(_) => None,
-            Err(err) => {
-                warn!(
-                    "Failed to read the channel tip, leaving the refusal to the publish: {err:#}"
-                );
-                None
-            }
-        }
+    /// The channel entry the next publish would pin on. `None` before anything
+    /// has been followed.
+    pub async fn pin_parent(&self) -> Option<MsgId> {
+        self.chain.lock().await.pin_parent()
     }
 
     /// Shared handle to the two-tier follow state, for tests to drive the
@@ -1835,16 +1824,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
     }
 }
 
-/// A pin that trails the live channel tip: the parent we would publish on, and
-/// where the channel actually ends.
-pub struct PinBehindTip {
-    pub pin: MsgId,
-    pub tip: MsgId,
-}
-
 struct BlockWithMeta {
     block: Block,
-    withdrawals: Vec<WithdrawArg>,
     committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
     /// The channel tip the cursor sat on when this block was built, read under
     /// the same lock as its height.
@@ -1984,22 +1965,29 @@ async fn report_offences<S: StorageActorTrait>(
 /// relies on a valid successor or a restart. `ChainState` never emits
 /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
 /// follow-up.
+/// Returns whether the head moved, which is what a committee refresh waits on.
 async fn apply_follow_update<S: StorageActorTrait>(
     storage_ref: &ActorRef<S>,
     chain: &Mutex<ChainState>,
     mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     update: block_publisher::FollowUpdate,
-) {
+) -> bool {
+    // Derived before the move: the walk terminus, and the finalized entries
+    // that actually carry a block.
+    let finalized_entry = update.finalized_entry();
+    let finalized: Vec<(Block, Slot)> = update
+        .finalized_blocks()
+        .map(|(block, slot)| (block.clone(), slot))
+        .collect();
+
     let block_publisher::FollowUpdate {
         checkpoint,
-        adopted,
         orphaned,
-        finalized,
         deposits,
         withdrawals,
-        undecodable: _,
         lineage,
-        finalized_entry,
+        supplement,
+        finalized: _,
     } = update;
 
     let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)
@@ -2022,26 +2010,83 @@ async fn apply_follow_update<S: StorageActorTrait>(
 
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
-    let (resubmit_txs, outcome, head_height) = {
+    let (resubmit_txs, outcome, head_height, head_moved) = {
         let mut chain = chain.lock().await;
 
         let head_before = chain.head_tip().map(|tip| tip.block_id);
-        log_update(&orphaned, &adopted, &finalized, head_before);
-        chain.set_channel_lineage(lineage, finalized_entry);
 
         // A pin that stops moving while the channel keeps going is a wedge, so
         // log each move.
-        let cursor_before = chain.channel_cursor();
+        let cursor_before = chain.pin_parent();
 
-        // The whole delta in one call. Outcomes align with the blocks passed in.
-        let FollowOutcome {
-            adopted: outcomes,
-            drained,
-            finalized: finalized_outcomes,
-            cursor_moved: _,
-        } = chain.apply_follow(&orphaned, &adopted, &finalized, checkpoint.last_msg_id);
+        // Entries this update supplies that the checkpoint does not carry are
+        // kept, not consumed: `adopted` never reports one twice, so the walk
+        // would gap on them from the next event onwards.
+        chain.remember_supplement(supplement);
 
-        let cursor_after = chain.channel_cursor();
+        // Finalized first: it is monotonic, and it moves the boundary the
+        // chain walk terminates at.
+        let finalized_outcomes: Vec<AcceptOutcome> = finalized
+            .iter()
+            .map(|(block, l1_slot)| chain.apply_finalized(block, *l1_slot))
+            .collect();
+
+        // The head is then whatever the channel chain says it is, rather than
+        // the delta applied to what we had. A derivation that cannot account
+        // for the chain keeps the current head and is retried on the next
+        // update — nothing depends on it having succeeded.
+        // A checkpoint this event could not be derived from must not be
+        // persisted: it is the resume cursor, and storing one older than the
+        // state it failed against would restore a pending set missing work a
+        // later event already covered.
+        let mut resume_from_checkpoint = true;
+        let derivation = match chain.derive_head(
+            checkpoint.last_msg_id,
+            &lineage,
+            finalized_entry,
+            &orphaned,
+        ) {
+            Ok(derivation) => derivation,
+            // A checkpoint behind the head is ordinary — the sdk buffers one
+            // across a reconnect, and the bootstrap publishes outrun the first
+            // — and it does not hold the turn. Only a chain that cannot be
+            // accounted for does.
+            Err(stale @ chain_state::Stale::Regressed { .. }) => {
+                // The pin only moves on a derivation that commits, so a run of
+                // these is a pin frozen on an entry the channel never took —
+                // every publish from here is refused and nothing sheds it,
+                // because a shed needs the channel tip to move.
+                let regressions = chain.consecutive_regressions();
+                // Only on crossing: a regression repeats on every event until
+                // the chain catches up, and one line per event buries the log.
+                if regressions == REGRESSIONS_BEFORE_STRANDED {
+                    warn!(
+                        "Channel chain has been behind our head for {regressions} updates: \
+                         head {:?} holds a block the chain does not carry and no orphan report \
+                         says it left. Pin {}, chain entries {}.",
+                        chain.head_tip().map(|tip| tip.block_id),
+                        chain
+                            .pin_parent()
+                            .map_or_else(|| "none".to_owned(), |pin| pin.to_string()),
+                        lineage.len(),
+                    );
+                } else {
+                    debug!("Checkpoint is behind the head, keeping the head: {stale:?}");
+                }
+                resume_from_checkpoint = false;
+                TipDerivation::default()
+            }
+            Err(stale) => {
+                warn!(
+                    "Channel chain cannot be accounted for, keeping the head and holding the \
+                     turn: {stale:?}"
+                );
+                resume_from_checkpoint = false;
+                TipDerivation::default()
+            }
+        };
+
+        let cursor_after = chain.pin_parent();
         if cursor_before != cursor_after {
             info!(
                 "Channel pin moved to {}",
@@ -2050,19 +2095,10 @@ async fn apply_follow_update<S: StorageActorTrait>(
         }
 
         let head_after = chain.head_tip().map(|tip| tip.block_id);
-        log_parked(&adopted, &outcomes, head_after, chain.channel_cursor());
-        log_rewind(head_before, head_after, chain.channel_cursor());
-
-        let mut to_persist: Vec<&Block> = adopted
-            .iter()
-            .zip(&outcomes)
-            .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
-            .map(|(block, _)| block)
-            .collect();
-        // Parked by an earlier update and applied now, so the store gets them
-        // with the head they are part of.
-        to_persist.extend(&drained);
-        log_drained(&drained);
+        log_update(&orphaned, &finalized, &derivation.applied, head_after);
+        log_rewind(head_before, head_after, chain.pin_parent());
+        let head_moved = head_before != head_after;
+        let mut to_persist: Vec<&Block> = derivation.applied.iter().collect();
 
         // Only blocks the final tier holds drive the bookkeeping below: a parked
         // one never became irreversible, so marking blocks finalized through it
@@ -2105,13 +2141,15 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // transactions applied, so only the ones the channel actually dropped
         // are resubmitted. Matched by hash, like `none_back_on_channel` below.
         let final_height = chain.final_tip().map(|tip| tip.block_id);
-        let resubmit_txs: Vec<LeeTransaction> = orphaned
+        let resubmit_txs: Vec<LeeTransaction> = derivation
+            .dropped
             .iter()
             .filter(|block| final_height.is_none_or(|id| block.header.block_id > id))
             .filter(|block| {
-                !adopted
+                !derivation
+                    .applied
                     .iter()
-                    .any(|readopted| readopted.header.hash == block.header.hash)
+                    .any(|reapplied| reapplied.header.hash == block.header.hash)
             })
             .flat_map(resubmittable_txs)
             .collect();
@@ -2123,33 +2161,6 @@ async fn apply_follow_update<S: StorageActorTrait>(
         });
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
         let head_tip_id = head_tip.as_ref().map_or(0, |tip| tip.id);
-
-        // zone-sdk drops an orphan from its pending set, so a height above the new
-        // head is ours to write again once the channel holds nothing there. An
-        // in-flight publish above the head cannot land to reclaim it: it is
-        // pinned on an entry this rewind dropped.
-        let head_height = head_tip.as_ref().map(|tip| tip.id);
-        let orphans_above_head: Vec<&Block> = orphaned
-            .iter()
-            .filter(|block| head_height.is_none_or(|id| block.header.block_id > id))
-            .collect();
-        let none_back_on_channel = orphans_above_head
-            .iter()
-            .all(|block| !adopted.iter().any(|a| a.header.hash == block.header.hash));
-        // Only a parked adoption above the head still claims a height we would
-        // free; one below it is a duplicate the channel already carries.
-        let all_adopted_applied = adopted.iter().zip(&outcomes).all(|(block, outcome)| {
-            matches!(
-                outcome,
-                AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied
-            ) || head_height.is_some_and(|id| block.header.block_id <= id)
-        });
-        let lower_published_high_water =
-            (!orphans_above_head.is_empty() && none_back_on_channel && all_adopted_applied)
-                .then_some(head_height)
-                .flatten();
-
-        log_high_water_lowered(lower_published_high_water, &orphans_above_head);
 
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
@@ -2179,9 +2190,9 @@ async fn apply_follow_update<S: StorageActorTrait>(
         // ends the drive task, whose cancellation halts the node.
         let outcome = storage_ref
             .ask(AtomicUpdate {
-                checkpoint: Some(checkpoint_bytes),
+                checkpoint: resume_from_checkpoint.then_some(checkpoint_bytes),
                 blocks: to_persist.into_iter().cloned().collect(),
-                channel_cursor: chain.channel_cursor().map(Into::into),
+                finalized_entry: chain.finalized_entry().map(Into::into),
                 head_tip,
                 head_state: chain.share_head_state(),
                 final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
@@ -2192,12 +2203,11 @@ async fn apply_follow_update<S: StorageActorTrait>(
                 consumed_withdrawals,
                 new_withdraw_intents: HashSet::new(),
                 zone_anchor: None,
-                lower_published_high_water,
             })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
 
-        (resubmit_txs, outcome, head_tip_id)
+        (resubmit_txs, outcome, head_tip_id, head_moved)
     };
 
     sequencer_core_metrics::record_chain_height(head_height);
@@ -2234,6 +2244,8 @@ async fn apply_follow_update<S: StorageActorTrait>(
             warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
         }
     }
+
+    head_moved
 }
 
 /// The genesis block and state `config` describes.

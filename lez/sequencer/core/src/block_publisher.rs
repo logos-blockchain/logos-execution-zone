@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
-use borsh::BorshDeserialize as _;
-use chain_state::{ChannelLineage, InscribedBlock, LineageEntry, zone_indexer::ZoneIndexer};
-use common::block::{Block, BlockHeader};
+use chain_state::{ChannelLineage, LineageEntry, zone_indexer::ZoneIndexer};
+use common::block::Block;
 use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
@@ -66,30 +65,101 @@ pub struct FollowUpdate {
     /// the view this update leaves behind — non-block entries and the rewind
     /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: SequencerCheckpoint,
-    /// Blocks newly on the followed L1 branch, in channel order; they extend
-    /// the `head` tier, or replace part of it together with `orphaned`.
-    /// Entries carrying no block surface only through the checkpoint's tip and
-    /// `lineage`. No inscription ids ride along: blocks correlate by hash (a
-    /// re-inscription changes the id, never the hash), and the only publishable
-    /// id is the checkpoint's.
-    pub adopted: Vec<Block>,
     /// Blocks dropped from the branch by an L1 reorg: reverted from the
     /// `head`, their user txs resubmitted to the mempool.
     pub orphaned: Vec<Block>,
-    /// Blocks whose containing L1 block reached finality, each with that L1
-    /// block's slot: they move into the irreversible `final` tier.
-    pub finalized: Vec<(Block, Slot)>,
+    /// Every inscription that reached finality, in channel order: the blocks
+    /// to move into the irreversible `final` tier, and the entries carrying
+    /// none, which still mark where the unfinalized entries end.
+    pub finalized: Vec<FinalizedInscription>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
     pub withdrawals: Vec<WithdrawInfo>,
-    /// Finalized inscriptions that are not blocks, with the key that signed each.
-    pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
-    /// Every unfinalized channel entry this checkpoint reports, for the
-    /// produce path's [`publishing_verdict`](chain_state::ChainState::publishing_verdict).
+    /// Every unfinalized channel entry this checkpoint reports.
     pub lineage: ChannelLineage,
-    /// The newest entry this update reports finalized, where `lineage` ends.
-    pub finalized_entry: Option<MsgId>,
+    /// Entries this update reports that the checkpoint does not carry — a
+    /// peer's `Custom`-shaped inscription, the genesis block included. Kept by
+    /// the chain across events, since `adopted` never reports one twice.
+    pub supplement: Vec<(MsgId, LineageEntry)>,
+}
+
+impl FollowUpdate {
+    /// Where the unfinalized entries end, and so where the chain walk
+    /// terminates: the newest entry this update reports finalized.
+    #[must_use]
+    pub fn finalized_entry(&self) -> Option<MsgId> {
+        self.finalized.last().map(|entry| entry.msg)
+    }
+
+    /// The blocks to move into the irreversible tier, with the slot each
+    /// finalized in.
+    pub fn finalized_blocks(&self) -> impl Iterator<Item = (&Block, Slot)> {
+        self.finalized
+            .iter()
+            .filter_map(|entry| match &entry.content {
+                FinalizedContent::Block(block) => Some((block, entry.slot)),
+                FinalizedContent::Empty { .. } | FinalizedContent::Undecodable { .. } => None,
+            })
+    }
+
+    /// The finalized entries whose payload this build cannot decode, with the
+    /// key that signed each — the slashing path's evidence.
+    ///
+    /// An entry the sdk reports without a signer cannot be attributed, so it
+    /// is logged rather than reported. Unreachable at this sdk revision, where
+    /// every `ChannelInscribe` carries one and configs arrive as their own op.
+    pub fn undecodable(&self) -> impl Iterator<Item = (MsgId, Ed25519PublicKey)> + '_ {
+        self.finalized
+            .iter()
+            .filter_map(|entry| match entry.content {
+                FinalizedContent::Undecodable { signer: Some(signer) } => {
+                    Some((entry.msg, signer))
+                }
+                FinalizedContent::Undecodable { signer: None } => {
+                    warn!(
+                        "Finalized entry {} carries an undecodable payload with no signer; \
+                         it cannot be attributed",
+                        entry.msg
+                    );
+                    None
+                }
+                FinalizedContent::Block(_) | FinalizedContent::Empty { .. } => None,
+            })
+    }
+}
+
+/// One finalized channel inscription, in channel order.
+///
+/// Every inscription is reported, decodable or not: the newest one's `msg` is
+/// where the chain walk terminates, so dropping the ones that carry no block
+/// would move that boundary and gap the walk.
+pub struct FinalizedInscription {
+    /// The channel entry id.
+    pub msg: MsgId,
+    /// The L1 slot it finalized in.
+    pub slot: Slot,
+    /// What the entry carries.
+    pub content: FinalizedContent,
+}
+
+/// What a finalized inscription turned out to hold, by the shape of its
+/// payload alone.
+///
+/// Deliberately not a verdict: an empty inscription is an entry its holder
+/// wrote on its turn, not a turn it missed, and whether either non-block shape
+/// is an offence is the fault taxonomy's call rather than this type's.
+pub enum FinalizedContent {
+    /// A LEZ block, to move into the irreversible tier.
+    Block(Block),
+    /// An entry carrying nothing.
+    Empty {
+        signer: Option<Ed25519PublicKey>,
+    },
+    /// A non-empty payload this build cannot decode.
+    Undecodable {
+        signer: Option<Ed25519PublicKey>,
+    },
 }
 
 /// Sink for the follow path: apply the channel delta to chain state and
@@ -448,22 +518,15 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     channel_update,
                                     finalized,
                                 } => {
-                                    let adopted = channel_update
-                                        .adopted
-                                        .iter()
-                                        .flat_map(|tx| channel_blocks(tx, channel_id))
-                                        .collect();
                                     let orphaned = channel_update
                                         .orphaned
                                         .iter()
                                         .flat_map(|tx| channel_blocks(tx, channel_id))
                                         .collect();
 
-                                    let mut finalized_blocks = Vec::new();
+                                    let mut finalized_inscriptions = Vec::new();
                                     let mut deposits = Vec::new();
                                     let mut withdrawals = Vec::new();
-                                    let mut undecodable = Vec::new();
-                                    let mut finalized_entry = None;
                                     for (l1_slot, op) in finalized
                                         .into_iter()
                                         .flat_map(|item| {
@@ -473,27 +536,32 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                finalized_entry = Some(inscription.this_msg);
-                                                match block_from_inscription(&inscription) {
-                                                    Some(block) => {
-                                                        finalized_blocks.push((block, l1_slot));
-                                                    }
-                                                    // An empty payload is a
-                                                    // missed turn, for the
-                                                    // liveness fault to judge.
+                                                // By payload shape only: the
+                                                // signer rides along on both
+                                                // non-block shapes so nothing
+                                                // is classified out of the
+                                                // taxonomy's reach.
+                                                let signer = inscription.signer;
+                                                let content = match block_from_inscription(
+                                                    &inscription,
+                                                ) {
+                                                    Some(block) => FinalizedContent::Block(block),
                                                     None if <Inscription as AsRef<[u8]>>::as_ref(
                                                         &inscription.payload,
                                                     )
-                                                    .is_empty() => {}
-                                                    // Only a config entry has no
-                                                    // signer, and those arrive as
-                                                    // `FinalizedOp::Config`.
-                                                    None => undecodable.extend(
-                                                        inscription.signer.map(|signer| {
-                                                            (inscription.this_msg, signer)
-                                                        }),
-                                                    ),
-                                                }
+                                                    .is_empty() =>
+                                                    {
+                                                        FinalizedContent::Empty { signer }
+                                                    }
+                                                    None => {
+                                                        FinalizedContent::Undecodable { signer }
+                                                    }
+                                                };
+                                                finalized_inscriptions.push(FinalizedInscription {
+                                                    msg: inscription.this_msg,
+                                                    slot: l1_slot,
+                                                    content,
+                                                });
                                             }
                                             FinalizedOp::Deposit(deposit) => deposits.push(deposit),
                                             FinalizedOp::Withdraw(withdraw) => {
@@ -506,16 +574,20 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         }
                                     }
 
+                                    let lineage =
+                                        lineage_from_checkpoint(&checkpoint, channel_id);
                                     on_follow(FollowUpdate {
-                                        lineage: lineage_from_checkpoint(&checkpoint, channel_id),
-                                        finalized_entry,
+                                        supplement: supplement_from_adopted(
+                                            &lineage,
+                                            &channel_update.adopted,
+                                            channel_id,
+                                        ),
+                                        lineage,
                                         checkpoint,
-                                        adopted,
                                         orphaned,
-                                        finalized: finalized_blocks,
+                                        finalized: finalized_inscriptions,
                                         deposits,
                                         withdrawals,
-                                        undecodable,
                                     }).await;
                                 }
                                 Event::Ready => {}
@@ -783,17 +855,11 @@ pub(crate) fn lineage_from_checkpoint(
         .iter()
         .flat_map(|(_, signed_tx)| channel_inscriptions(signed_tx, channel_id))
         .map(|inscription| {
-            // Only the header, so a few hundred pending entries cost a header
-            // parse each rather than a full block decode.
-            let block = BlockHeader::deserialize(&mut <Inscription as AsRef<[u8]>>::as_ref(
-                &inscription.payload,
-            ))
-            .ok()
-            .map(|header| InscribedBlock {
-                block_id: header.block_id,
-                hash: header.hash,
-                prev_hash: header.prev_block_hash,
-            });
+            // The whole block, not just its header: this is the only place a
+            // peer's block bytes are available on every update, so a header
+            // here would leave the head unable to build what the chain says
+            // belongs to it.
+            let block = block_from_inscription(&inscription);
             (
                 inscription.this_msg,
                 LineageEntry {
@@ -804,6 +870,51 @@ pub(crate) fn lineage_from_checkpoint(
         })
         .collect();
     ChannelLineage::new(entries)
+}
+
+/// The entries this update reports that its checkpoint does not carry.
+///
+/// They must be kept across events, not merged for this one: `adopted` is a
+/// set difference that never re-sends, so an entry supplied only here would
+/// gap the walk from the very next event.
+///
+/// The sdk mirrors an inscription into its pending set only for the two clean
+/// shapes it builds itself. A `Custom`-shaped one is on the channel and is
+/// reported adopted, but never pending — and the genesis block is that shape,
+/// since it bundles the channel config with its inscription. Without this the
+/// walk would gap on it and every follower would stall until it finalized.
+pub(crate) fn supplement_from_adopted(
+    lineage: &ChannelLineage,
+    adopted: &[ChannelUpdateTx],
+    channel_id: ChannelId,
+) -> Vec<(MsgId, LineageEntry)> {
+    adopted
+        .iter()
+        .flat_map(|tx| adopted_inscriptions(tx, channel_id))
+        .filter(|info| lineage.get(&info.this_msg).is_none())
+        .map(|info| {
+            let block = block_from_inscription(&info);
+            (
+                info.this_msg,
+                LineageEntry {
+                    parent: info.parent_msg,
+                    block,
+                },
+            )
+        })
+        .collect()
+}
+
+/// The channel inscriptions an adopted entry carries, in op order.
+fn adopted_inscriptions(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<InscriptionInfo> {
+    match tx {
+        // The sdk cannot demystify a custom tx, so its entries are read off
+        // the tx itself.
+        ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id),
+        clean @ (ChannelUpdateTx::Inscription(_)
+        | ChannelUpdateTx::AtomicWithdraw(_)
+        | ChannelUpdateTx::Config(_)) => clean.inscription().cloned().into_iter().collect(),
+    }
 }
 
 /// Every block a channel tx carries, in op order.

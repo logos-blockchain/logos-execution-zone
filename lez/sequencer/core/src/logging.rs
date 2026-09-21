@@ -2,7 +2,6 @@
 //!
 //! Kept apart from the logic so the callers stay one line each.
 
-use chain_state::AcceptOutcome;
 use common::block::Block;
 use log::{info, warn};
 use logos_blockchain_zone_sdk::Slot;
@@ -35,48 +34,25 @@ pub(crate) fn pin_str(pin: Option<MsgId>) -> String {
 ///
 /// Counts, entry ids and the channel tip are zone-sdk's `ChannelUpdate` debug
 /// line; this carries only what that cannot know.
+/// What the update reported, and what the derivation then did with it. The
+/// two differ: the head comes from the channel chain, not from the delta.
 pub(crate) fn log_update(
     orphaned: &[Block],
-    adopted: &[Block],
     finalized: &[(Block, Slot)],
+    applied: &[Block],
     head: Option<u64>,
 ) {
     info!(
-        "Channel update: orphaned {}, adopted {}, finalized {}, head {head:?}",
+        "Channel update: orphaned {}, finalized {}, applied {}, head {head:?}",
         id_span(&block_ids(orphaned)),
-        id_span(&block_ids(adopted)),
         id_span(
             &finalized
                 .iter()
                 .map(|(b, _)| b.header.block_id)
                 .collect::<Vec<_>>()
         ),
+        id_span(&block_ids(applied)),
     );
-}
-
-/// Adoptions that did not apply, with the pin they were left behind by.
-pub(crate) fn log_parked(
-    adopted: &[Block],
-    outcomes: &[AcceptOutcome],
-    head: Option<u64>,
-    pin: Option<MsgId>,
-) {
-    for (block, outcome) in adopted.iter().zip(outcomes) {
-        if let AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) = outcome {
-            warn!(
-                "Adopted block {} did not apply, head stays at {head:?} with the pin at {}: {err}",
-                block.header.block_id,
-                pin_str(pin),
-            );
-        }
-    }
-}
-
-/// Blocks a hole in front of them held back until now.
-pub(crate) fn log_drained(drained: &[Block]) {
-    if !drained.is_empty() {
-        info!("Applied {} parked blocks", id_span(&block_ids(drained)));
-    }
 }
 
 pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: Option<MsgId>) {
@@ -86,22 +62,6 @@ pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: Option<Ms
         warn!(
             "Head rewound from {before} to {after}, pin now {}",
             pin_str(pin)
-        );
-    }
-}
-
-/// Dropping the mark permits a second block at a height already inscribed, so
-/// name the heights it frees: they are checkable on L1.
-pub(crate) fn log_high_water_lowered(mark: Option<u64>, orphans_above_head: &[&Block]) {
-    if let Some(mark) = mark {
-        let ids: Vec<u64> = orphans_above_head
-            .iter()
-            .map(|block| block.header.block_id)
-            .collect();
-        warn!(
-            "Lowering the published high water to {mark}, every height above it is writable \
-             again; orphaned above the head and not re-adopted: {}",
-            id_span(&ids),
         );
     }
 }

@@ -189,20 +189,12 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(|_, _| Ok(None));
 
     mock_storage
-        .expect_handle_get_channel_cursor()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
         .expect_handle_get_slash_record_bytes()
         .returning(|_, _| Ok(None));
 
     mock_storage
         .expect_handle_get_latest_block_meta()
         .returning(move |_, _| Ok(Some(genesis_block_meta.clone())));
-
-    mock_storage
-        .expect_handle_raise_published_high_water()
-        .returning(|_, _| Ok(()));
 
     mock_storage
         .expect_handle_get_dead_letter_dispatches()

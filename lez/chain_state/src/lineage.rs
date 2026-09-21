@@ -3,34 +3,41 @@
 
 use std::collections::HashMap;
 
-use common::HashType;
+use common::{HashType, block::Block};
 use logos_blockchain_core::mantle::ops::channel::MsgId;
 
-/// The block an entry inscribes, as far as its header goes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct InscribedBlock {
-    pub block_id: u64,
-    pub hash: HashType,
-    pub prev_hash: HashType,
-}
-
 /// One channel entry: what it chains on, and the block it carries, if any.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// The block is carried whole. An entry's bytes reach a node once, in the
+/// update that reports it, so a header-only entry would leave the head knowing
+/// a block belongs to it without being able to build it.
+#[derive(Clone, Debug)]
 pub struct LineageEntry {
     pub parent: MsgId,
     /// `None` for an entry carrying no block (garbage, an undecodable payload).
-    pub block: Option<InscribedBlock>,
+    pub block: Option<Block>,
 }
 
-/// Why a production turn may not publish.
+/// Why the above-LIB chain could not be derived from the reported entries.
+///
+/// Soft by construction: every update re-derives from a fresh checkpoint, so a
+/// failed derivation keeps the previous chain and is retried on the next one.
+/// It never discards state and never blocks the finalized tier.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PublishVerdict {
-    /// The pin chains back to the head with no block in between.
-    Allowed,
-    /// A block the head does not hold sits between the head and the pin.
-    HeadTrailsPin { block_id: u64 },
-    /// The walk ran out of entries before reaching the head.
-    LineageGap,
+pub enum Stale {
+    /// The walk left the reported entries before reaching the finalized
+    /// boundary: an entry on the chain is one this checkpoint does not carry.
+    /// A peer's `Custom`-shaped inscription lands here, the genesis block
+    /// included, because the sdk never mirrors those into its pending set.
+    LineageGap { at: MsgId },
+    /// The walk ran longer than the reported entries can account for, so they
+    /// describe a cycle rather than a chain.
+    Unbounded,
+    /// The chain does not carry a block the head holds, and no orphan report
+    /// says it left. A checkpoint older than the state it is applied to looks
+    /// exactly like this, so believing it would silently drop finalized-bound
+    /// work; the head is kept and the next update is tried instead.
+    Regressed { dropped: HashType },
 }
 
 /// The unfinalized channel entries keyed by their own id. Empty means the sdk
@@ -59,22 +66,4 @@ impl ChannelLineage {
         self.0.get(msg)
     }
 
-    /// The entry carrying this exact block, if the sdk still reports it.
-    #[must_use]
-    pub fn entry_carrying(&self, block_id: u64, hash: HashType) -> Option<MsgId> {
-        self.0
-            .iter()
-            .find(|(_, entry)| {
-                entry
-                    .block
-                    .is_some_and(|block| block.block_id == block_id && block.hash == hash)
-            })
-            .map(|(msg, _)| *msg)
-    }
-
-    /// Adds an entry of our own, so the walk reaches it before the next
-    /// snapshot arrives.
-    pub fn insert(&mut self, msg: MsgId, entry: LineageEntry) {
-        self.0.insert(msg, entry);
-    }
 }
