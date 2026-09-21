@@ -1,5 +1,5 @@
 use common::{test_utils::produce_dummy_block, transaction::TxEvents};
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountData, AccountId, PublicKey};
 use tempfile::tempdir;
 
 use super::*;
@@ -78,8 +78,10 @@ fn initial_state() -> lee::V03State {
         (
             id,
             Account {
-                program_owner: programs::authenticated_transfer().id().into(),
-                balance,
+                data: AccountData {
+                    balance,
+                    ..AccountData::default()
+                },
                 ..Account::default()
             },
         )
@@ -100,12 +102,12 @@ fn initial_state() -> lee::V03State {
         system_accounts::fee_escrow_account_id(),
         system_accounts::fee_inbox_account_id(),
     ] {
-        public_accounts.push((fee_id, system_accounts::fee_account()));
+        public_accounts.push((fee_id, Account::default()));
     }
 
     // simulate the producer's stake so charged blocks
     // can credit its reward account
-    public_accounts.push(common::test_utils::claimed_producer_seed());
+    public_accounts.push(common::test_utils::producer_seed());
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
@@ -194,13 +196,13 @@ fn one_block_insertion() {
     // The recipient gains exactly the transferred amount; the sender also
     // pays a real fee on top of it.
     assert_eq!(
-        final_state.get_account_by_id(acc2()).balance
-            - breakpoint.get_account_by_id(acc2()).balance,
+        final_state.get_account_by_id(acc2()).data.balance
+            - breakpoint.get_account_by_id(acc2()).data.balance,
         1
     );
     assert!(
-        breakpoint.get_account_by_id(acc1()).balance
-            - final_state.get_account_by_id(acc1()).balance
+        breakpoint.get_account_by_id(acc1()).data.balance
+            - final_state.get_account_by_id(acc1()).data.balance
             > 1
     );
 }
@@ -249,13 +251,20 @@ fn put_block_stores_breakpoint_in_same_batch() {
     }
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
-    assert_eq!(bp1.get_account_by_id(acc1()).balance, INITIAL_ACC1_BALANCE);
-    assert_eq!(bp1.get_account_by_id(acc2()).balance, INITIAL_ACC2_BALANCE);
+    assert_eq!(
+        bp1.get_account_by_id(acc1()).data.balance,
+        INITIAL_ACC1_BALANCE
+    );
+    assert_eq!(
+        bp1.get_account_by_id(acc2()).data.balance,
+        INITIAL_ACC2_BALANCE
+    );
     // Only the boundary block schedules a write: breakpoint 0 must be the only other one.
     assert_eq!(
         dbio.get_breakpoint(0)
             .unwrap()
             .get_account_by_id(acc1())
+            .data
             .balance,
         INITIAL_ACC1_BALANCE
     );
@@ -299,11 +308,11 @@ fn state_replay_falls_back_over_missing_breakpoints() {
     // pays a real fee per charged transfer (none in the genesis block, whose
     // transactions are exempt).
     assert_eq!(
-        final_state.get_account_by_id(acc2()).balance - INITIAL_ACC2_BALANCE,
+        final_state.get_account_by_id(acc2()).data.balance - INITIAL_ACC2_BALANCE,
         u128::from(BREAKPOINT_INTERVAL) + 1
     );
     assert!(
-        INITIAL_ACC1_BALANCE - final_state.get_account_by_id(acc1()).balance
+        INITIAL_ACC1_BALANCE - final_state.get_account_by_id(acc1()).data.balance
             > u128::from(BREAKPOINT_INTERVAL) + 1
     );
 }

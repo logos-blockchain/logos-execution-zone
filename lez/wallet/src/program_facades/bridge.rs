@@ -23,11 +23,11 @@ impl Bridge<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
-                    AccountIdentity::PublicNoSign(bridge_account_id),
+                    AccountIdentity::Public(sender_account_id).balance(),
+                    AccountIdentity::PublicNoSign(bridge_account_id).balance(),
                 ],
                 instruction_data,
-                programs::bridge().id().into(),
+                AccountId::from_builtin_program(programs::bridge().id()),
             )
             .await
     }

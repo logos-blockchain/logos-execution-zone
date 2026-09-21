@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
@@ -12,9 +12,9 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
+    AccountId, ProgramShardSelector, execute_and_prove, privacy_preserving_transaction,
+    program::Program, public_transaction,
 };
-use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -25,12 +25,21 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
-        vec![bridge_account_id, recipient_id, receipt_id],
+        AccountId::from_builtin_program(programs::bridge().id()),
+        vec![
+            ProgramShardSelector::balance(bridge_account_id),
+            ProgramShardSelector::balance(recipient_id),
+            ProgramShardSelector::new(
+                receipt_id,
+                AccountId::from_builtin_program(programs::bridge().id()),
+            ),
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -72,12 +81,21 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     let message = public_transaction::Message::try_new(
-        programs::bridge().id().into(),
-        vec![bridge_account_id, recipient_id, receipt_id],
+        AccountId::from_builtin_program(programs::bridge().id()),
+        vec![
+            ProgramShardSelector::balance(bridge_account_id),
+            ProgramShardSelector::balance(recipient_id),
+            ProgramShardSelector::new(
+                receipt_id,
+                AccountId::from_builtin_program(programs::bridge().id()),
+            ),
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -131,28 +149,24 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let recipient_id = ctx.existing_public_accounts()[0];
     let bridge_account_id = system_accounts::bridge_account_id();
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), [0_u8; 32]);
+    let receipt_id = bridge_core::deposit_receipt_account_id(
+        AccountId::from_builtin_program(programs::bridge().id()),
+        [0_u8; 32],
+    );
 
     // Get pre-state of bridge and recipient accounts; the receipt is unminted (a
     // default account), so the program would create it on a first mint.
-    let bridge_pre = AccountWithMetadata::new(
-        get_account(&ctx, bridge_account_id).await?,
-        false,
-        bridge_account_id,
-    );
-    let recipient_pre =
-        AccountWithMetadata::new(get_account(&ctx, recipient_id).await?, false, recipient_id);
-    let receipt_pre =
-        AccountWithMetadata::new(lee_core::account::Account::default(), false, receipt_id);
+    let bridge_account = get_account(&ctx, bridge_account_id).await?;
+    let recipient_account = get_account(&ctx, recipient_id).await?;
+    let receipt_account = lee::Account::default();
 
     // Create program with dependencies
     let program_with_deps =
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
-            programs::bridge().id().into(),
+            AccountId::from_builtin_program(programs::bridge().id()),
             [(
-                programs::authenticated_transfer().id().into(),
+                AccountId::from_builtin_program(programs::authenticated_transfer().id()),
                 programs::authenticated_transfer(),
             )]
             .into(),
@@ -166,32 +180,38 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     })
     .context("Failed to serialize bridge deposit instruction")?;
 
+    let shard_selectors = vec![
+        ProgramShardSelector::balance(bridge_account_id),
+        ProgramShardSelector::balance(recipient_id),
+        ProgramShardSelector::new(
+            receipt_id,
+            AccountId::from_builtin_program(programs::bridge().id()),
+        ),
+    ];
+    let nonces = vec![
+        bridge_account.nonce,
+        recipient_account.nonce,
+        receipt_account.nonce,
+    ];
+
     // Execute and prove the bridge deposit
     let (output, proof) = execute_and_prove(
-        vec![
-            bridge_pre.clone(),
-            recipient_pre.clone(),
-            receipt_pre.clone(),
-        ],
-        instruction,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Public,
-        ],
+        lee::ProvingInput {
+            shard_selectors,
+            public_accounts: HashMap::from([
+                (bridge_account_id, bridge_account),
+                (recipient_id, recipient_account),
+                (receipt_id, receipt_account),
+            ]),
+            instruction_data: instruction,
+            ..Default::default()
+        },
         &program_with_deps,
     )
     .context("Failed to execute/prove bridge deposit")?;
 
     // Create privacy-preserving transaction from circuit output
-    let message = privacy_preserving_transaction::Message::from_circuit_output(
-        vec![
-            bridge_pre.account.nonce,
-            recipient_pre.account.nonce,
-            receipt_pre.account.nonce,
-        ],
-        output,
-    );
+    let message = privacy_preserving_transaction::Message::from_circuit_output(nonces, output);
 
     let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
     let attack_tx = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(

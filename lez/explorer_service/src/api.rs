@@ -1,4 +1,4 @@
-use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Transaction};
+use indexer_service_protocol::{AccountId, AccountSummary, Block, BlockId, HashType, Transaction};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -7,20 +7,24 @@ use serde::{Deserialize, Serialize};
 pub struct SearchResults {
     pub blocks: Vec<Block>,
     pub transactions: Vec<Transaction>,
-    pub accounts: Vec<(AccountId, Account)>,
+    pub accounts: Vec<(AccountId, AccountSummary)>,
 }
 
 /// RPC client type.
 #[cfg(feature = "ssr")]
 pub type IndexerRpcClient = jsonrpsee::http_client::HttpClient;
 
-/// Get account information by ID
+/// Get an account's balance, nonce, and per-shard sizes.
+///
+/// Deliberately not the whole account: shard contents are unbounded and any third
+/// party can add to them, so a full read can be made to exceed the response cap for
+/// a chosen account permanently. Everything this explorer renders is covered here.
 #[server]
-pub async fn get_account(account_id: AccountId) -> Result<Account, ServerFnError> {
+pub async fn get_account_summary(account_id: AccountId) -> Result<AccountSummary, ServerFnError> {
     use indexer_service_rpc::RpcClient as _;
     let client = expect_context::<IndexerRpcClient>();
     client
-        .get_account(account_id)
+        .get_account_summary(account_id)
         .await
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
@@ -53,7 +57,7 @@ pub async fn search(query: String) -> Result<SearchResults, ServerFnError> {
 
     // Try as account ID
     if let Ok(account_id) = AccountId::from_str(&query)
-        && let Ok(account) = client.get_account(account_id).await
+        && let Ok(account) = client.get_account_summary(account_id).await
     {
         accounts.push((account_id, account));
     }

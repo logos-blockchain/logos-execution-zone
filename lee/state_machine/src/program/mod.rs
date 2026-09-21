@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, AccountWithMetadata, Cycles},
+    account::{AccountId, Cycles},
     from_frame,
-    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
@@ -84,7 +84,7 @@ impl Program {
         &self,
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
-        pre_states: &[AccountWithMetadata],
+        pre_states: &[AccountInput],
         instruction_data: &InstructionData,
         cycle_budget: Cycles,
     ) -> Result<(ProgramOutput, Cycles), LeeError> {
@@ -166,7 +166,7 @@ impl Program {
         &self,
         self_account_id: AccountId,
         caller_account_id: Option<AccountId>,
-        pre_states: &[AccountWithMetadata],
+        pre_states: &[AccountInput],
         instruction_data: &[u8],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {

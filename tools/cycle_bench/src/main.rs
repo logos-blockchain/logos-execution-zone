@@ -34,8 +34,8 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     Timestamp,
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::InstructionData,
+    account::{AccountId, ShardData},
+    program::{AccountInput, InstructionData},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -174,7 +174,7 @@ struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
-    pre_states: Vec<AccountWithMetadata>,
+    pre_states: Vec<AccountInput>,
     instruction_data: InstructionData,
 }
 
@@ -183,7 +183,7 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
-        pre_states: Vec<AccountWithMetadata>,
+        pre_states: Vec<AccountInput>,
         instruction: &I,
     ) -> Result<Self> {
         Ok(Self {
@@ -203,7 +203,7 @@ impl Case {
             pre_states,
             instruction_data,
         } = self;
-        let self_account_id: AccountId = program.id().into();
+        let self_account_id = AccountId::from_builtin_program(program.id());
         let caller_account_id: Option<AccountId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
@@ -286,20 +286,9 @@ impl Case {
     }
 }
 
-fn authenticated_transfer_transfer() -> Vec<AccountWithMetadata> {
-    let sender = AccountWithMetadata {
-        account: Account {
-            balance: 1_000_000,
-            ..Account::default()
-        },
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    let recipient = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: AccountId::new([2; 32]),
-    };
+fn authenticated_transfer_transfer() -> Vec<AccountInput> {
+    let sender = AccountInput::balance(AccountId::new([1; 32]), true, 1_000_000);
+    let recipient = AccountInput::balance(AccountId::new([2; 32]), false, 0);
     vec![sender, recipient]
 }
 
@@ -308,84 +297,68 @@ fn token_holding(
     account_id: AccountId,
     balance: u128,
     is_authorized: bool,
-) -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account {
-            program_owner: programs::token().id().into(),
-            balance: 0,
-            data: Data::from(&TokenHolding::Fungible {
-                definition_id,
-                balance,
-            }),
-            nonce: 0_u128.into(),
-        },
-        is_authorized,
+) -> AccountInput {
+    AccountInput::with_shard(
         account_id,
-    }
+        is_authorized,
+        0,
+        AccountId::from_builtin_program(programs::token().id()),
+        ShardData::from(&TokenHolding::Fungible {
+            definition_id,
+            balance,
+        }),
+    )
 }
 
 fn token_definition(
     account_id: AccountId,
     total_supply: u128,
     is_authorized: bool,
-) -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account {
-            program_owner: programs::token().id().into(),
-            balance: 0,
-            data: Data::from(&TokenDefinition::Fungible {
-                name: String::from("test"),
-                total_supply,
-                metadata_id: None,
-            }),
-            nonce: 0_u128.into(),
-        },
-        is_authorized,
+) -> AccountInput {
+    AccountInput::with_shard(
         account_id,
-    }
+        is_authorized,
+        0,
+        AccountId::from_builtin_program(programs::token().id()),
+        ShardData::from(&TokenDefinition::Fungible {
+            name: String::from("test"),
+            total_supply,
+            metadata_id: None,
+        }),
+    )
 }
 
-fn token_transfer_pre_states() -> Vec<AccountWithMetadata> {
+fn token_transfer_pre_states() -> Vec<AccountInput> {
     let def = AccountId::new([15; 32]);
     let sender = token_holding(def, AccountId::new([17; 32]), 100_000, true);
     let recipient = token_holding(def, AccountId::new([42; 32]), 50_000, true);
     vec![sender, recipient]
 }
 
-fn token_mint_pre_states() -> Vec<AccountWithMetadata> {
+fn token_definition_and_holding_pre_states() -> Vec<AccountInput> {
     let def_id = AccountId::new([15; 32]);
     let def = token_definition(def_id, 100_000, true);
     let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
     vec![def, holding]
 }
 
-fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
-    let def_id = AccountId::new([15; 32]);
-    let def = token_definition(def_id, 100_000, true);
-    let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
-    vec![def, holding]
-}
-
-fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
-    AccountWithMetadata {
-        account: Account {
-            program_owner: programs::clock().id().into(),
-            balance: 0,
-            data: ClockAccountData {
-                block_id,
-                timestamp: Timestamp::from(0_u64),
-            }
-            .to_bytes()
-            .try_into()
-            .expect("ClockAccountData should fit in account data"),
-            nonce: 0_u128.into(),
-        },
-        is_authorized: false,
+fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
+    AccountInput::with_shard(
         account_id,
-    }
+        false,
+        0,
+        AccountId::from_builtin_program(programs::clock().id()),
+        ClockAccountData {
+            block_id,
+            timestamp: Timestamp::from(0_u64),
+        }
+        .to_bytes()
+        .try_into()
+        .expect("ClockAccountData should fit in account data"),
+    )
 }
 
-fn clock_pre_states_tick_at(block_id: u64) -> Vec<AccountWithMetadata> {
+fn clock_pre_states_tick_at(block_id: u64) -> Vec<AccountInput> {
     vec![
         clock_account(CLOCK_01_PROGRAM_ACCOUNT_ID, block_id),
         clock_account(CLOCK_10_PROGRAM_ACCOUNT_ID, block_id),
@@ -401,58 +374,60 @@ fn amm_token_b_def_id() -> AccountId {
 }
 fn amm_pool_id() -> AccountId {
     compute_pool_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
+        AccountId::from_builtin_program(programs::token().id()),
     )
 }
 fn amm_vault_a_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_pool_id(),
         amm_token_a_def_id(),
     )
 }
 fn amm_vault_b_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_pool_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
+    compute_liquidity_token_pda(
+        AccountId::from_builtin_program(programs::amm().id()),
+        amm_pool_id(),
+    )
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
-fn amm_pool_account() -> AccountWithMetadata {
+fn amm_pool_account() -> AccountInput {
     let reserve_a: u128 = 1_000;
     let reserve_b: u128 = 500;
     let lp_supply = (reserve_a * reserve_b).isqrt();
-    AccountWithMetadata {
-        account: Account {
-            program_owner: programs::amm().id().into(),
-            balance: 0,
-            data: Data::from(&PoolDefinition {
-                definition_token_a_id: amm_token_a_def_id(),
-                definition_token_b_id: amm_token_b_def_id(),
-                vault_a_id: amm_vault_a_id(),
-                vault_b_id: amm_vault_b_id(),
-                liquidity_pool_id: amm_lp_def_id(),
-                liquidity_pool_supply: lp_supply,
-                reserve_a,
-                reserve_b,
-                fees: 0,
-                active: true,
-            }),
-            nonce: 0_u128.into(),
-        },
-        is_authorized: true,
-        account_id: amm_pool_id(),
-    }
+    AccountInput::with_shard(
+        amm_pool_id(),
+        true,
+        0,
+        AccountId::from_builtin_program(programs::amm().id()),
+        ShardData::from(&PoolDefinition {
+            token_program_id: AccountId::from_builtin_program(programs::token().id()),
+            definition_token_a_id: amm_token_a_def_id(),
+            definition_token_b_id: amm_token_b_def_id(),
+            vault_a_id: amm_vault_a_id(),
+            vault_b_id: amm_vault_b_id(),
+            liquidity_pool_id: amm_lp_def_id(),
+            liquidity_pool_supply: lp_supply,
+            reserve_a,
+            reserve_b,
+            fees: 0,
+            active: true,
+        }),
+    )
 }
 
-fn amm_swap_pre_states() -> Vec<AccountWithMetadata> {
+fn amm_swap_pre_states() -> Vec<AccountInput> {
     let pool = amm_pool_account();
     let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
     let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
@@ -461,7 +436,7 @@ fn amm_swap_pre_states() -> Vec<AccountWithMetadata> {
     vec![pool, vault_a, vault_b, user_a, user_b]
 }
 
-fn amm_add_liquidity_pre_states() -> Vec<AccountWithMetadata> {
+fn amm_add_liquidity_pre_states() -> Vec<AccountInput> {
     let pool = amm_pool_account();
     let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
     let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
@@ -473,22 +448,24 @@ fn amm_add_liquidity_pre_states() -> Vec<AccountWithMetadata> {
     vec![pool, vault_a, vault_b, lp_def, user_a, user_b, user_lp]
 }
 
-fn ata_create_pre_states() -> Vec<AccountWithMetadata> {
+fn ata_create_pre_states() -> Vec<AccountInput> {
     let owner_id = AccountId::new([91; 32]);
     let definition_id = AccountId::new([15; 32]);
-    let owner = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: owner_id,
-    };
+    let token_program_id = AccountId::from_builtin_program(programs::token().id());
+    let owner = AccountInput::balance(owner_id, true, 0);
     let token_def = token_definition(definition_id, 100_000, false);
-    let seed = compute_ata_seed(owner_id, definition_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
-    let ata_account = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: false,
-        account_id: ata_id,
-    };
+    let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
+    let ata_id = get_associated_token_account_id(
+        &AccountId::from_builtin_program(programs::ata().id()),
+        &seed,
+    );
+    let ata_account = AccountInput::with_shard(
+        ata_id,
+        false,
+        0,
+        AccountId::from_builtin_program(programs::token().id()),
+        ShardData::empty(),
+    );
     vec![owner, token_def, ata_account]
 }
 
@@ -521,7 +498,7 @@ fn main() -> Result<()> {
             "token",
             "Mint",
             programs::token(),
-            token_mint_pre_states(),
+            token_definition_and_holding_pre_states(),
             &token_core::Instruction::Mint {
                 amount_to_mint: 5_000,
             },
@@ -530,7 +507,7 @@ fn main() -> Result<()> {
             "token",
             "Burn",
             programs::token(),
-            token_burn_pre_states(),
+            token_definition_and_holding_pre_states(),
             &token_core::Instruction::Burn {
                 amount_to_burn: 500,
             },
@@ -570,7 +547,7 @@ fn main() -> Result<()> {
             programs::ata(),
             ata_create_pre_states(),
             &associated_token_account_core::Instruction::Create {
-                ata_program_id: programs::ata().id().into(),
+                token_program_id: AccountId::from_builtin_program(programs::token().id()),
             },
         )?,
     ];

@@ -1,6 +1,6 @@
 use std::str::FromStr as _;
 
-use indexer_service_protocol::{Account, AccountId};
+use indexer_service_protocol::{AccountId, AccountSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -25,7 +25,7 @@ pub fn AccountPage() -> impl IntoView {
     // Load account data
     let account_resource = Resource::new(account_id, |acc_id_opt| async move {
         match acc_id_opt {
-            Some(acc_id) => api::get_account(acc_id).await,
+            Some(acc_id) => api::get_account_summary(acc_id).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
                 "Invalid account ID".to_owned(),
             )),
@@ -86,19 +86,16 @@ pub fn AccountPage() -> impl IntoView {
                         .get()
                         .map(|result| match result {
                             Ok(acc) => {
-                                let Account {
-                                    program_owner,
-                                    balance,
-                                    data,
-                                    nonce,
-                                } = acc;
+                                let AccountSummary {
+                        nonce,
+                        balance,
+                        shards,
+                    } = acc;
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
-                                let program_id = program_owner.to_string();
                                 let balance_str = balance.to_string();
                                 let nonce_str = nonce.to_string();
-                                let data_len = data.0.len();
                                 view! {
                                     <div class="account-detail">
                                         <div class="page-header">
@@ -117,18 +114,43 @@ pub fn AccountPage() -> impl IntoView {
                                                     <span class="info-value">{balance_str}</span>
                                                 </div>
                                                 <div class="info-row">
-                                                    <span class="info-label">"Program Owner:"</span>
-                                                    <span class="info-value hash">{program_id}</span>
-                                                </div>
-                                                <div class="info-row">
                                                     <span class="info-label">"Nonce:"</span>
                                                     <span class="info-value">{nonce_str}</span>
                                                 </div>
-                                                <div class="info-row">
-                                                    <span class="info-label">"Data:"</span>
-                                                    <span class="info-value">{format!("{data_len} bytes")}</span>
-                                                </div>
                                             </div>
+                                        </div>
+
+                                        <div class="account-shards">
+                                            <h2>"Shards"</h2>
+                                            {if shards.is_empty() {
+                                                view! { <div class="no-shards">"No shards"</div> }
+                                                    .into_any()
+                                            } else {
+                                                view! {
+                                                    <div class="info-grid">
+                                                        {shards
+                                                            .into_iter()
+                                                            .map(|shard| {
+                                                                let program_str = shard
+                                                                    .program_account_id
+                                                                    .to_string();
+                                                                let data_len = shard.len;
+                                                                view! {
+                                                                    <div class="info-row">
+                                                                        <span class="info-label hash">
+                                                                            {program_str}
+                                                                        </span>
+                                                                        <span class="info-value">
+                                                                            {format!("{data_len} bytes")}
+                                                                        </span>
+                                                                    </div>
+                                                                }
+                                                            })
+                                                            .collect::<Vec<_>>()}
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }}
                                         </div>
 
                                         <div class="account-transactions">

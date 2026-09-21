@@ -6,7 +6,7 @@ use common::{
     test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
 };
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{Account, AccountId, V03State};
+use lee::{Account, AccountData, AccountId, V03State};
 
 use crate::{
     StorageActor,
@@ -109,7 +109,10 @@ fn state_with_balance(balance: u128) -> Arc<V03State> {
     Arc::new(V03State::new().with_public_accounts([(
         marker_id(),
         Account {
-            balance,
+            data: AccountData {
+                balance,
+                ..AccountData::default()
+            },
             ..Account::default()
         },
     )]))
@@ -138,6 +141,7 @@ async fn stored_balance(storage_ref: &ActorRef<StorageActor>) -> u128 {
         .expect("Failed to read the stored state")
         .expect("The store holds a chain")
         .get_account_by_id(marker_id())
+        .data
         .balance
 }
 
@@ -816,7 +820,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .expect("The final snapshot is stored");
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
-    assert_eq!(final_state.get_account_by_id(marker_id()).balance, 200);
+    assert_eq!(final_state.get_account_by_id(marker_id()).data.balance, 200);
     assert_eq!(stored_balance(&storage_ref).await, 300);
 }
 

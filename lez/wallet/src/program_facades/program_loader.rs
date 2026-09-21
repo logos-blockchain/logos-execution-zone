@@ -1,10 +1,10 @@
 use anyhow::{Context as _, Result, bail};
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::{AccountId, ProgramShardSelector, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore};
 
 /// Facade for `program_loader`'s `WriteSegment`/`CreateHeader`/`UpdateHeader` instructions.
 ///
@@ -22,7 +22,7 @@ impl ProgramLoader<'_> {
     /// [`WalletCore::send_pub_tx_with_pre_check`]).
     async fn send(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: lee_core::program::InstructionData,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -31,10 +31,9 @@ impl ProgramLoader<'_> {
             .await
     }
 
-    /// Writes one bytecode segment at `target` (must already be a default/unclaimed account,
-    /// signed for by `target`'s own key — writing an unowned account's data is itself the claim,
-    /// so no separate authorization is required). `next_segment`, if present, must already hold a
-    /// valid segment — chains are always linked tail-to-head. See [`Self::send`] for `payer`.
+    /// Writes one bytecode segment to `target`'s empty loader shard.
+    /// `next_segment`, if given, must already contain a valid segment.
+    /// See [`Self::send`] for `payer`.
     pub async fn write_segment(
         &self,
         target: AccountId,
@@ -45,11 +44,16 @@ impl ProgramLoader<'_> {
         if let Some(next_segment_id) = next_segment {
             let next_segment_acc = self
                 .0
-                .get_account_public(next_segment_id)
+                .get_account_view(ProgramShardSelector::new(
+                    next_segment_id,
+                    PROGRAM_LOADER_ACCOUNT_ID,
+                ))
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
-            if next_segment_acc.program_owner != PROGRAM_LOADER_ACCOUNT_ID
-                || program_loader_core::ProgramSegment::from_bytes(&next_segment_acc.data).is_none()
+            if program_loader_core::ProgramSegment::from_bytes(
+                next_segment_acc.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .is_none()
             {
                 return Err(ExecutionFailureKind::AccountDataError(next_segment_id));
             }
@@ -62,16 +66,18 @@ impl ProgramLoader<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut accounts = vec![AccountIdentity::Public(target)];
-        accounts.extend(next_segment.map(AccountIdentity::PublicNoSign));
+        let mut accounts =
+            vec![AccountIdentity::Public(target).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
+        accounts.extend(next_segment.map(|id| {
+            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
+        }));
 
         self.send(accounts, instruction_data, payer).await
     }
 
-    /// Creates a new program header at `target` (must already be a default/unclaimed account,
-    /// signed for by `target`'s own key). The header stores only the id of the chain's head
-    /// segment account; `chain_segment_ids` (head included) lets `program_loader` verify the
-    /// chain and derive `image_id` itself. See [`Self::send`] for `payer`.
+    /// Creates a program header in `target`'s empty loader shard.
+    /// `chain_segment_ids` lists the chain in order, including `first_segment`,
+    /// so the loader can verify it and compute the image ID. See [`Self::send`] for `payer`.
     pub async fn create_header(
         &self,
         target: AccountId,
@@ -87,13 +93,11 @@ impl ProgramLoader<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut accounts = vec![AccountIdentity::Public(target)];
-        accounts.extend(
-            chain_segment_ids
-                .iter()
-                .copied()
-                .map(AccountIdentity::PublicNoSign),
-        );
+        let mut accounts =
+            vec![AccountIdentity::Public(target).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
+        accounts.extend(chain_segment_ids.iter().copied().map(|id| {
+            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
+        }));
 
         self.send(accounts, instruction_data, payer).await
     }
@@ -117,13 +121,11 @@ impl ProgramLoader<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut accounts = vec![AccountIdentity::Public(header)];
-        accounts.extend(
-            chain_segment_ids
-                .iter()
-                .copied()
-                .map(AccountIdentity::PublicNoSign),
-        );
+        let mut accounts =
+            vec![AccountIdentity::Public(header).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)];
+        accounts.extend(chain_segment_ids.iter().copied().map(|id| {
+            AccountIdentity::PublicNoSign(id).select_program_shard(PROGRAM_LOADER_ACCOUNT_ID)
+        }));
 
         self.send(accounts, instruction_data, payer).await
     }
@@ -193,9 +195,7 @@ impl ProgramLoader<'_> {
             .into());
         }
 
-        // FIXME: a partial failure here leaves landed segments claimed and write-once, so
-        // retrying with the same `segments` list fails instead of resuming. Consider making this
-        // resumable.
+        // FIXME: Resume after a partial upload; retrying the same segments currently fails.
         for i in (0..chunks.len()).rev() {
             let next_segment = segments.get(i.saturating_add(1)).copied();
             let tx_hash = self
@@ -242,11 +242,13 @@ impl ProgramLoader<'_> {
             }
             let account = self
                 .0
-                .get_account_public(id)
+                .get_account_view(ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
                 .with_context(|| format!("failed to fetch segment account {id}"))?;
-            let segment = program_loader_core::ProgramSegment::from_bytes(&account.data)
-                .with_context(|| format!("account {id} does not hold a valid program segment"))?;
+            let segment = program_loader_core::ProgramSegment::from_bytes(
+                account.data.shard(PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .with_context(|| format!("account {id} does not hold a valid program segment"))?;
             chain.push(id);
             next = segment.next_segment;
         }

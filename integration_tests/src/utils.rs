@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, ProgramShardSelector};
 use log::info;
 use sequencer_core::{
     block_publisher::{Ed25519PublicKey, read_channel_state},
@@ -185,6 +185,16 @@ pub async fn account_balance(ctx: &TestContext, account_id: AccountId) -> anyhow
 /// Fetch the full account state for `account_id` from the sequencer.
 pub async fn get_account(ctx: &TestContext, account_id: AccountId) -> anyhow::Result<lee::Account> {
     Ok(ctx.sequencer_client().get_account(account_id).await?)
+}
+
+pub async fn get_account_view(
+    ctx: &TestContext,
+    shard_selector: ProgramShardSelector,
+) -> anyhow::Result<lee::Account> {
+    Ok(ctx
+        .sequencer_client()
+        .get_account_view(shard_selector)
+        .await?)
 }
 
 /// Fetch the current commitment for `account_id` and assert it is present in the sequencer state.

@@ -24,9 +24,12 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
-    read_lee_call, respond_unsupported_call,
+use lee_core::{
+    account::ProgramShardSelector,
+    program::{
+        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        read_lee_call, respond_unsupported_call,
+    },
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -68,7 +71,10 @@ fn main() {
 
         chained_calls.push(ChainedCall {
             program_account_id: instruction.token_program_id,
-            pre_state_ids: vec![receiver_pre.account_id, vault_pre.account_id],
+            shard_selectors: vec![
+                ProgramShardSelector::from(&receiver_pre),
+                ProgramShardSelector::from(&vault_pre),
+            ],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });

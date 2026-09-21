@@ -1,9 +1,11 @@
+use std::str::FromStr;
+
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, PublicKey};
-use lee_core::Identifier;
+use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
+use lee_core::{Identifier, account::AccountIdError};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -11,6 +13,25 @@ use crate::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
 };
+
+#[derive(Debug, Clone)]
+pub enum ReadScope {
+    Balance,
+    Shard(AccountId),
+    All,
+}
+
+impl FromStr for ReadScope {
+    type Err = AccountIdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "balance" => Ok(Self::Balance),
+            "all" => Ok(Self::All),
+            _ => AccountId::from_str(s).map(Self::Shard),
+        }
+    }
+}
 
 /// Represents generic chain CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
@@ -32,6 +53,12 @@ pub enum AccountSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(short, long)]
         account_id: CliAccountMention,
+        #[arg(
+            long,
+            default_value = "balance",
+            help = "Read scope: balance, all, or a program account id"
+        )]
+        scope: ReadScope,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -326,6 +353,7 @@ impl AccountSubcommand {
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
+        scope: ReadScope,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
@@ -336,7 +364,33 @@ impl AccountSubcommand {
                 println!("Label: {label}");
             });
 
-        let account = wallet_core.get_account(resolved).await?;
+        let account = match resolved {
+            AccountIdWithPrivacy::Public(id) => match &scope {
+                ReadScope::All => wallet_core.get_account_public(id).await?,
+                ReadScope::Balance => {
+                    wallet_core
+                        .get_account_view(ProgramShardSelector::balance(id))
+                        .await?
+                }
+                ReadScope::Shard(program) => {
+                    wallet_core
+                        .get_account_view(ProgramShardSelector::new(id, *program))
+                        .await?
+                }
+            },
+            AccountIdWithPrivacy::Private(id) => {
+                let Some(found) = wallet_core.storage().key_chain().private_account(id) else {
+                    anyhow::bail!("Private account with id {id} not found in storage");
+                };
+                match &scope {
+                    ReadScope::All => found.account.clone(),
+                    ReadScope::Balance => project_private_account(found.account, None),
+                    ReadScope::Shard(program) => {
+                        project_private_account(found.account, Some(*program))
+                    }
+                }
+            }
+        };
 
         // Helper closure to display keys for the account
         let display_keys = |wallet_core: &WalletCore| -> Result<()> {
@@ -368,7 +422,7 @@ impl AccountSubcommand {
             Ok(())
         };
 
-        if account == Account::default() {
+        if matches!(scope, ReadScope::All) && account == Account::default() {
             println!("Account is Uninitialized");
 
             if keys {
@@ -385,9 +439,7 @@ impl AccountSubcommand {
             return Ok(SubcommandReturnValue::Empty);
         }
 
-        let (description, json_view) = format_account_details(&account);
-        println!("{description}");
-        println!("{json_view}");
+        print_account_details(&account, "");
 
         if keys {
             display_keys(wallet_core)?;
@@ -452,13 +504,11 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.get_account_public(id).await {
-                Ok(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
-                }
-                Ok(_) => println!("  Uninitialized"),
+            match wallet_core
+                .get_account_view(ProgramShardSelector::balance(id))
+                .await
+            {
+                Ok(account) => print_account_details(&account, "  "),
                 Err(e) => println!("  Error fetching account: {e}"),
             }
         }
@@ -473,13 +523,10 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.get_account_private(id) {
-                Some(account) if account != Account::default() => {
-                    let (description, json_view) = format_account_details(&account);
-                    println!("  {description}");
-                    println!("  {json_view}");
+            match wallet_core.storage().key_chain().private_account(id) {
+                Some(found) => {
+                    print_account_details(&project_private_account(found.account, None), "  ");
                 }
-                Some(_) => println!("  Uninitialized"),
                 None => println!("  Not found in local storage"),
             }
         }
@@ -547,7 +594,8 @@ impl WalletSubcommand for AccountSubcommand {
                 raw,
                 keys,
                 account_id,
-            } => Self::handle_get(raw, keys, account_id, wallet_core).await,
+                scope,
+            } => Self::handle_get(raw, keys, account_id, scope, wallet_core).await,
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
                 let curr_last_block = wallet_core.sync_to_latest_block().await?;
@@ -641,47 +689,49 @@ impl WalletSubcommand for ImportSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, `json_view`).
-fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id: AccountId = programs::authenticated_transfer().id().into();
-    let token_prog_id: AccountId = programs::token().id().into();
+fn project_private_account(account: &Account, program_account_id: Option<AccountId>) -> Account {
+    let mut data = account.data.project(program_account_id);
+    data.shards.retain(|_, shard| !shard.is_empty());
+    Account {
+        nonce: account.nonce,
+        data,
+    }
+}
 
-    match &account.program_owner {
-        o if *o == auth_tr_prog_id => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account owned by authenticated transfer program".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
-        o if *o == token_prog_id => TokenDefinition::try_from(&account.data)
-            .map(|token_def| {
-                (
-                    "Definition account owned by token program".to_owned(),
-                    serde_json::to_string(&token_def).unwrap(),
-                )
-            })
-            .or_else(|_| {
-                TokenHolding::try_from(&account.data).map(|token_hold| {
+/// Prints an account's balance, nonce, and program shards.
+fn print_account_details(account: &Account, indent: &str) {
+    println!(
+        "{indent}Balance {}, nonce {}",
+        account.data.balance, account.nonce.0
+    );
+    let token_prog_id = AccountId::from_builtin_program(programs::token().id());
+    for (program, data) in &account.data.shards {
+        let (description, json_view) = if *program == token_prog_id {
+            TokenDefinition::try_from(data)
+                .map(|token_def| {
                     (
-                        "Holding account owned by token program".to_owned(),
-                        serde_json::to_string(&token_hold).unwrap(),
+                        "Token program definition record".to_owned(),
+                        serde_json::to_string(&token_def).unwrap(),
                     )
                 })
-            })
-            .unwrap_or_else(|_| {
-                let account_hr: HumanReadableAccount = account.clone().into();
-                (
-                    "Unknown token program account".to_owned(),
-                    serde_json::to_string(&account_hr).unwrap(),
-                )
-            }),
-        _ => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account".to_owned(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
+                .or_else(|_err| {
+                    TokenHolding::try_from(data).map(|token_hold| {
+                        (
+                            "Token program holding record".to_owned(),
+                            serde_json::to_string(&token_hold).unwrap(),
+                        )
+                    })
+                })
+                .unwrap_or_else(|_err| {
+                    (
+                        "Unrecognized token program record".to_owned(),
+                        hex::encode(data),
+                    )
+                })
+        } else {
+            (format!("Record of program {program}"), hex::encode(data))
+        };
+        println!("{indent}{description}");
+        println!("{indent}{json_view}");
     }
 }

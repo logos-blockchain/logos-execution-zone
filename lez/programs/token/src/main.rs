@@ -33,12 +33,12 @@ fn main() {
             let [sender, recipient] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly two accounts");
-            token_program::transfer::transfer(&sender, &recipient, balance_to_move)
+            token_program::transfer::transfer(&sender, &recipient, self_account_id, balance_to_move)
         }
-        // TODO(squatting): nothing here checks the caller, so the cross-zone inbox
-        // can deliver into this program on a peer's word, letting the peer write
-        // token state at addresses it names. That is the same squatting any
-        // locally deployed program can already do; a peer just pays no local fee.
+        // TODO(cross-zone): nothing here checks the caller, so the cross-zone inbox
+        // can deliver into this program on a peer's word, letting the peer drive
+        // writes in token's own shard at addresses it names. That is the same
+        // reach any local caller has; a peer just pays no local fee.
         Instruction::NewFungibleDefinition { name, total_supply } => {
             let [definition_account, holding_account] = pre_states
                 .try_into()
@@ -46,6 +46,7 @@ fn main() {
             token_program::new_definition::new_fungible_definition(
                 &definition_account,
                 &holding_account,
+                self_account_id,
                 name,
                 total_supply,
             )
@@ -61,6 +62,7 @@ fn main() {
                 &definition_account,
                 &holding_account,
                 &metadata_account,
+                self_account_id,
                 new_definition,
                 *metadata,
             )
@@ -72,25 +74,36 @@ fn main() {
             token_program::initialize::initialize_account(
                 &definition_account,
                 &account_to_initialize,
+                self_account_id,
             )
         }
         Instruction::Burn { amount_to_burn } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Burn instruction requires exactly two accounts");
-            token_program::burn::burn(&definition_account, &user_holding_account, amount_to_burn)
+            token_program::burn::burn(
+                &definition_account,
+                &user_holding_account,
+                self_account_id,
+                amount_to_burn,
+            )
         }
         Instruction::Mint { amount_to_mint } => {
             let [definition_account, user_holding_account] = pre_states
                 .try_into()
                 .expect("Mint instruction requires exactly two accounts");
-            token_program::mint::mint(&definition_account, &user_holding_account, amount_to_mint)
+            token_program::mint::mint(
+                &definition_account,
+                &user_holding_account,
+                self_account_id,
+                amount_to_mint,
+            )
         }
         Instruction::PrintNft => {
             let [master_account, printed_account] = pre_states
                 .try_into()
                 .expect("PrintNft instruction requires exactly two accounts");
-            token_program::print_nft::print_nft(&master_account, &printed_account)
+            token_program::print_nft::print_nft(&master_account, &printed_account, self_account_id)
         }
     };
 

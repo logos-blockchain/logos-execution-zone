@@ -2,7 +2,7 @@ use common::HashType;
 
 use super::NativeTokenTransfer;
 use crate::{
-    AccountIdentity, ExecutionFailureKind,
+    AccountId, AccountIdentity, ExecutionFailureKind,
     program_facades::native_token_transfer::auth_transfer_preparation,
 };
 
@@ -17,9 +17,9 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_pub_tx_with_pre_check(
-                vec![from, to],
+                vec![from.balance(), to.balance()],
                 instruction_data,
-                program.id().into(),
+                AccountId::from_builtin_program(program.id()),
                 None,
                 tx_pre_check,
             )

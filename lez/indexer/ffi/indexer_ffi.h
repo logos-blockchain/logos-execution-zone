@@ -133,22 +133,26 @@ typedef struct FfiBlockHeader {
   FfiSignature signature;
 } FfiBlockHeader;
 
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
+/**
+ * Selects an account's balance and optionally one program shard.
+ *
+ * `program_account_id` is used only when `has_program_account_id` is true.
+ */
+typedef struct FfiProgramShardSelector {
+  FfiAccountId account_id;
+  bool has_program_account_id;
+  FfiAccountId program_account_id;
+} FfiProgramShardSelector;
+
+typedef struct FfiVec_FfiProgramShardSelector {
+  struct FfiProgramShardSelector *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccountId;
+} FfiVec_FfiProgramShardSelector;
 
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+typedef struct FfiVec_FfiProgramShardSelector FfiProgramShardSelectorList;
 
 /**
  * U128 - 16 bytes little endian.
@@ -188,8 +192,8 @@ typedef struct FfiFeeDeclaration {
 } FfiFeeDeclaration;
 
 typedef struct FfiPublicMessage {
-  struct FfiProgramId program_id;
-  FfiAccountIdList account_ids;
+  FfiAccountId program_account_id;
+  FfiProgramShardSelectorList shard_selectors;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
   bool has_fee;
@@ -216,38 +220,45 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
+ * One program's shard on an account.
  */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiShard {
+  struct FfiBytes32 program;
+  /**
+   * Pointer to shard data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of shard data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of shard data.
+   */
+  uintptr_t data_cap;
+} FfiShard;
+
+/**
+ * An account's balance and program shards.
+ */
+typedef struct FfiAccountData {
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Pointer to the account's shards.
    */
-  uint8_t *data;
+  struct FfiShard *shards;
   /**
-   * Length of account data.
+   * Number of shards.
    */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
+  uintptr_t shards_len;
+} FfiAccountData;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccount post_state;
+  struct FfiAccountData post;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -341,6 +352,31 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
 } PointerResult_FfiBlockOpt__OperationStatus;
 
 /**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * Balance as little-endian [u8; 16].
+   */
+  struct FfiU128 balance;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+  /**
+   * Pointer to the account's shards.
+   */
+  struct FfiShard *shards;
+  /**
+   * Number of shards.
+   */
+  uintptr_t shards_len;
+} FfiAccount;
+
+/**
  * Simple wrapper around a pointer to a value or an error.
  *
  * Pointer is not guaranteed. You should check the error field before
@@ -413,7 +449,7 @@ typedef struct FfiEventRecord {
   FfiBlockId block_id;
   uint32_t tx_index;
   FfiHashType tx_hash;
-  struct FfiProgramId program_id;
+  FfiAccountId program_account_id;
   FfiSelector selector;
   FfiVecU8 data;
 } FfiEventRecord;
@@ -690,7 +726,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * `to_block` (defaulting to the current tip when none) is read, capped at
  * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
  * past the indexed tip and queries outside the indexer's event-filter history.
- * `program_id` and `selector` are exact-match filters applied to the result.
+ * `program_account_id` and `selector` are exact-match filters applied to the result.
  *
  * # Arguments
  *
@@ -699,7 +735,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
  *   `tx_hash` is non-null.
  * - `tx_hash`: Optional transaction hash; null means absent.
- * - `program_id`: Optional emitting-program filter; null means absent.
+ * - `program_account_id`: Optional emitting-program filter; null means absent.
  * - `selector`: Optional event-selector filter; null means absent.
  *
  * # Returns
@@ -712,36 +748,23 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  * - if `to_block.is_some`, its `value` points to a valid `u64`.
- * - each of `tx_hash`, `program_id` and `selector` is either null or a valid pointer to its
- *   respective type.
+ * - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
+ *   its respective type.
  */
 struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(const struct IndexerServiceFFI *indexer,
                                                                             uint64_t from_block,
                                                                             struct FfiOption_u64 to_block,
                                                                             const FfiHashType *tx_hash,
-                                                                            const struct FfiProgramId *program_id,
+                                                                            const FfiAccountId *program_account_id,
                                                                             const FfiSelector *selector);
 
 /**
- * Frees the resources associated with the given ffi account.
- *
- * Takes ownership of the whole allocation produced by a `query_*` call: the
- * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
- * data buffer. Passing the struct by value previously freed only the inner
- * buffer and leaked the outer box.
- *
- * # Arguments
- *
- * - `val`: The `*mut FfiAccount` returned in `PointerResult.value`.
- *
- * # Returns
- *
- * void.
+ * Frees an account, its shard array, and each shard's data buffer.
  *
  * # Safety
  *
- * The caller must ensure that:
- * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
+ * `val` must be null or an unfreed `PointerResult.value` from an account query.
+ * Its shard array and data buffers must remain valid and owned by the account.
  */
 void free_ffi_account(struct FfiAccount *val);
 

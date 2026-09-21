@@ -7,7 +7,9 @@ use kameo::{
     actor::ActorRef,
     message::{Context, Message},
 };
-use lee::{AccountId, PublicTransaction, public_transaction::Message as LeeMessage};
+use lee::{
+    AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message as LeeMessage,
+};
 use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{
@@ -392,14 +394,17 @@ pub fn build_slash_tx(
     offence: &Offence,
     approvals: Vec<SlashApproval>,
 ) -> anyhow::Result<LeeTransaction> {
-    let program_id: AccountId = programs::sequencer_stake().id().into();
+    let program_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = LeeMessage::try_new(
         program_id,
         vec![
-            ownership_id,
-            system_accounts::stake_funds_account_id(&ownership_id),
-            sequencer_stake_core::slash_sink_account_id(program_id),
-            system_accounts::sequencer_stake_config_account_id(),
+            ProgramShardSelector::new(ownership_id, program_id),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+            ProgramShardSelector::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                program_id,
+            ),
         ],
         vec![],
         sequencer_stake_core::Instruction::Slash {

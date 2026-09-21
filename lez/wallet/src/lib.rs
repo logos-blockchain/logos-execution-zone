@@ -12,22 +12,23 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::{AccountIdentity, CIPHERTEXT_PAD_SIZE};
+pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies,
         message::{EncryptedAccountData, Message},
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
-    program::InstructionData,
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
+    account::{Nonce, ProgramShardSelector},
+    program::{AccountInput, InstructionData},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -401,9 +402,10 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
-        if entry.pda_seed.is_some() {
+        if let Some(seed) = entry.pda_seed {
             Some(AccountIdentity::PrivatePdaShared {
-                account_id,
+                authority: AccountId::from_builtin_program(entry.authority_program_id?),
+                seed,
                 nsk: keys.nullifier_secret_key(),
                 vpk,
                 identifier,
@@ -515,7 +517,7 @@ impl WalletCore {
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::for_private_pda(
-            &AccountId::from(program_id),
+            &AccountId::from_builtin_program(program_id),
             &pda_seed,
             &npk,
             &vpk,
@@ -595,6 +597,21 @@ impl WalletCore {
                 client.get_accounts_nonces(accs.to_vec()).await
             })
             .await?)
+    }
+
+    /// Returns the account's nonce, balance, and optionally one program shard.
+    pub async fn get_account_view(&self, shard_selector: ProgramShardSelector) -> Result<Account> {
+        let mut account = self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| {
+                client.get_account_view(shard_selector).await
+            })
+            .await?;
+
+        // RPC projections include empty shards; the wallet omits them.
+        account.data.shards.retain(|_, shard| !shard.is_empty());
+
+        Ok(account)
     }
 
     pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
@@ -777,7 +794,7 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
@@ -789,21 +806,14 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let pre_states = acc_manager.pre_states();
-
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&acc_manager.pre_states())?;
 
         for account_id in acc_manager.accounts_outgrowing_pad() {
             warn!(
@@ -813,15 +823,38 @@ impl WalletCore {
         }
 
         let private_account_keys = acc_manager.private_account_keys();
-        let (output, proof) =
-            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
-                pre_states,
-                instruction_data,
-                acc_manager.account_identities(),
-                acc_manager.dummy_inputs_default(),
-                Some(CIPHERTEXT_PAD_SIZE),
-                &program.to_owned(),
-            )?;
+        let input = ProvingInput {
+            shard_selectors: acc_manager.shard_selectors(),
+            signers: acc_manager.signers(),
+            public_accounts: acc_manager.public_accounts(),
+            private_witnesses: acc_manager.private_witnesses(),
+            instruction_data,
+            dummy_inputs: acc_manager.dummy_inputs_default(),
+            ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
+        };
+
+        // Prove on a blocking thread and use `block_on` for async shard lookups.
+        let handle = tokio::runtime::Handle::current();
+        let client = self.multi_sequencer_client.clone();
+        let program = program.clone();
+        let (output, proof) = tokio::task::spawn_blocking(move || {
+            lee::privacy_preserving_transaction::circuit::execute_and_prove_with(
+                input,
+                &program,
+                &mut |shard_selector: ProgramShardSelector| {
+                    let account = handle
+                        .block_on(client.metered_get(async |client: &SequencerClient| {
+                            client.get_account_view(shard_selector).await
+                        }))
+                        .map_err(|e| lee::error::LeeError::AccountResolution(e.to_string()))?;
+                    // Missing accounts and missing shards both resolve to empty data.
+                    Ok(Some(
+                        account.data.shards.into_values().next().unwrap_or_default(),
+                    ))
+                },
+            )
+        })
+        .await??;
 
         let message = lee::privacy_preserving_transaction::message::Message::from_circuit_output(
             acc_manager.public_account_nonces(),
@@ -857,7 +890,7 @@ impl WalletCore {
 
     pub async fn send_pub_tx(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -869,7 +902,7 @@ impl WalletCore {
     /// self-pay selection. See [`Self::send_pub_tx_with_pre_check`].
     pub async fn send_pub_tx_paid_by(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
         payer: Option<AccountId>,
@@ -896,14 +929,14 @@ impl WalletCore {
     /// and unfunded) can still be paid for.
     pub async fn send_pub_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountIdentity>,
+        accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
         payer: Option<AccountId>,
-        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
-        if accounts.iter().any(AccountIdentity::is_private) {
+        if accounts.iter().any(|mention| mention.identity.is_private()) {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(
                     "Private accounts are not allowed in public transactions".to_owned(),
@@ -913,14 +946,9 @@ impl WalletCore {
 
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let pre_states = acc_manager.pre_states();
-        tx_pre_check(
-            &pre_states
-                .iter()
-                .map(|pre| &pre.account)
-                .collect::<Vec<_>>(),
-        )?;
+        tx_pre_check(&acc_manager.pre_states())?;
 
+        let shard_selectors = acc_manager.shard_selectors();
         let account_ids = acc_manager.public_account_ids();
         let mut nonces = acc_manager.public_account_nonces();
 
@@ -947,7 +975,7 @@ impl WalletCore {
                     invalid_input("Fee payer's signing key is not held by this wallet")
                 })?;
                 let account = self
-                    .get_account_public(payer)
+                    .get_account_view(ProgramShardSelector::balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 nonces.push(account.nonce);
@@ -957,7 +985,7 @@ impl WalletCore {
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             Some(lee::FeeDeclaration::new(
