@@ -29,17 +29,8 @@ fn main() {
         return;
     };
 
-    let recipient_diff = AccountStateDiff::new(
-        recipient.clone(),
-        BalanceDiff::Add(amount),
-        recipient.account.data,
-    );
-
-    let source_diff = AccountStateDiff::new(
-        source.clone(),
-        BalanceDiff::Sub(amount),
-        source.account.data,
-    );
+    let recipient_diff = AccountStateDiff::balance(recipient, BalanceDiff::Add(amount));
+    let source_diff = AccountStateDiff::balance(source, BalanceDiff::Sub(amount));
 
     ProgramOutput::new(
         self_account_id,

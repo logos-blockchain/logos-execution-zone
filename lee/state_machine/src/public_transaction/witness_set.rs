@@ -56,6 +56,8 @@ impl WitnessSet {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::ProgramShardSelector;
+
     use super::*;
     use crate::AccountId;
 
@@ -70,8 +72,11 @@ mod tests {
         let nonces = vec![1_u128.into(), 2_u128.into()];
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new(
-            AccountId::from([0; 8]),
-            vec![addr1, addr2],
+            AccountId::from_builtin_program([0; 8]),
+            vec![
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
+            ],
             nonces,
             instruction,
         )

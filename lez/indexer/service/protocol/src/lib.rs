@@ -3,7 +3,7 @@
 //! Currently it mostly mimics types from `lee_core`, but it's important to have a separate crate
 //! to define a stable interface for the indexer service RPCs which evolves in its own way.
 
-use std::{fmt::Display, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use anyhow::anyhow;
 use base58::{FromBase58 as _, ToBase58 as _};
@@ -55,56 +55,17 @@ pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 pub type Nonce = u128;
 
 #[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
-)]
-pub struct ProgramId(
-    #[schemars(with = "String", description = "base58-encoded program id")] pub [u32; 8],
-);
-
-impl Display for ProgramId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bytes: Vec<u8> = self.0.iter().flat_map(|n| n.to_le_bytes()).collect();
-        write!(f, "{}", bytes.to_base58())
-    }
-}
-
-#[derive(Debug)]
-pub enum ProgramIdParseError {
-    InvalidBase58(base58::FromBase58Error),
-    InvalidLength(usize),
-}
-
-impl Display for ProgramIdParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidBase58(err) => write!(f, "invalid base58: {err:?}"),
-            Self::InvalidLength(len) => {
-                write!(f, "invalid length: expected 32 bytes, got {len}")
-            }
-        }
-    }
-}
-
-impl FromStr for ProgramId {
-    type Err = ProgramIdParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = s
-            .from_base58()
-            .map_err(ProgramIdParseError::InvalidBase58)?;
-        if bytes.len() != 32 {
-            return Err(ProgramIdParseError::InvalidLength(bytes.len()));
-        }
-        let mut arr = [0_u32; 8];
-        for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-            arr[i] = u32::from_le_bytes(chunk.try_into().unwrap());
-        }
-        Ok(Self(arr))
-    }
-}
-
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    SerializeDisplay,
+    DeserializeFromStr,
+    JsonSchema,
 )]
 #[schemars(with = "String", description = "base58-encoded account id")]
 pub struct AccountId {
@@ -138,10 +99,44 @@ impl FromStr for AccountId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
-    pub program_owner: AccountId,
-    pub balance: u128,
-    pub data: Data,
     pub nonce: Nonce,
+    pub data: AccountData,
+}
+
+/// An account's balance and program shards.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountData {
+    pub balance: u128,
+    pub shards: BTreeMap<AccountId, ShardData>,
+}
+
+/// An account's balance and nonce with one entry per shard, carrying each shard's
+/// size instead of its bytes.
+///
+/// Nothing bounds how many shards an account holds or how large each one is, so a
+/// whole-account read is not a safe way to enumerate them: any third party can write
+/// its own shard onto any account, and enough of them push the response past the
+/// server's size cap for good. This answers "which programs hold state here, and how
+/// much" in a response whose size follows the shard count alone.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct AccountSummary {
+    pub nonce: Nonce,
+    pub balance: u128,
+    pub shards: Vec<ShardSummary>,
+}
+
+/// One program's shard on an account, by size rather than content.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ShardSummary {
+    pub program_account_id: AccountId,
+    pub len: u64,
+}
+
+/// Selects an account's balance and optionally one program shard.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProgramShardSelector {
+    pub account_id: AccountId,
+    pub program_account_id: Option<AccountId>,
 }
 
 pub type BlockId = u64;
@@ -224,8 +219,8 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_id: ProgramId,
-    pub account_ids: Vec<AccountId>,
+    pub program_account_id: AccountId,
+    pub shard_selectors: Vec<ProgramShardSelector>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -245,7 +240,7 @@ pub type InstructionData = Vec<u8>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post_state: Account,
+    pub post: AccountData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -353,7 +348,7 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct Data(
+pub struct ShardData(
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded account data")]
     pub Vec<u8>,
@@ -567,7 +562,7 @@ pub struct EventRecord {
     pub block_id: BlockId,
     pub tx_index: u32,
     pub tx_hash: HashType,
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub selector: Selector,
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded event data")]
@@ -578,10 +573,11 @@ impl EventRecord {
     #[must_use]
     pub fn matches_fields(
         &self,
-        program_id: Option<ProgramId>,
+        program_account_id: Option<AccountId>,
         selector: Option<Selector>,
     ) -> bool {
-        program_id.is_none_or(|program_id| program_id == self.program_id)
+        program_account_id
+            .is_none_or(|program_account_id| program_account_id == self.program_account_id)
             && selector.is_none_or(|selector| selector == self.selector)
     }
 }
@@ -594,7 +590,7 @@ pub struct GetEventsFilter {
     pub from_block: Option<BlockId>,
     pub to_block: Option<BlockId>,
     pub tx_hash: Option<HashType>,
-    pub program_id: Option<ProgramId>,
+    pub program_account_id: Option<AccountId>,
     pub selector: Option<Selector>,
 }
 
@@ -603,7 +599,7 @@ pub struct GetEventsFilter {
 #[serde(deny_unknown_fields)]
 pub struct EventSubscriptionFilter {
     pub tx_hash: Option<HashType>,
-    pub program_id: Option<ProgramId>,
+    pub program_account_id: Option<AccountId>,
     pub selector: Option<Selector>,
 }
 
@@ -750,7 +746,6 @@ mod tests {
     #[test]
     fn identifier_encodings_are_pinned() {
         let account = AccountId { value: [1; 32] };
-        let program = ProgramId([1; 8]);
         let selector = Selector([1; 8]);
         let hash = HashType([1; 32]);
 
@@ -758,10 +753,6 @@ mod tests {
             (
                 serde_json::to_value(account).expect("serialize"),
                 "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
-            ),
-            (
-                serde_json::to_value(program).expect("serialize"),
-                "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
             ),
             (
                 serde_json::to_value(selector).expect("serialize"),
@@ -795,7 +786,12 @@ mod tests {
             block_id: 7,
             tx_index: 1,
             tx_hash: HashType([2; 32]),
-            program_id: ProgramId([1; 8]),
+            program_account_id: AccountId {
+                value: [
+                    1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+                    0, 0, 1, 0, 0, 0,
+                ],
+            },
             selector: Selector([1; 8]),
             data: vec![1, 2, 3],
         };
@@ -806,7 +802,7 @@ mod tests {
                 "block_id": 7,
                 "tx_index": 1,
                 "tx_hash": "0202020202020202020202020202020202020202020202020202020202020202",
-                "program_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+                "program_account_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
                 "selector": "0101010101010101",
                 "data": "AQID",
             })

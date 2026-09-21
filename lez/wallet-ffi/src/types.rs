@@ -8,12 +8,12 @@ use std::{
 };
 
 use common::HashType;
-use lee::{Data, ProgramId, SharedSecretKey};
+use lee::{AccountId, ShardData, SharedSecretKey};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
-    NullifierPublicKey, NullifierSecretKey,
+    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
 };
-use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
+use wallet::{account::AccountIdWithPrivacy, AccountIdentity, AccountMention};
 
 use crate::error::WalletFfiError;
 
@@ -63,18 +63,32 @@ impl From<NullifierPublicKey> for FfiNullifierPublicKey {
     }
 }
 
-/// Program ID - 8 u32 values (32 bytes total).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiProgramId {
-    pub data: [u32; 8],
-}
-
 /// U128 - 16 bytes little endian.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct FfiU128 {
     pub data: [u8; 16],
+}
+
+/// One program's shard on an account.
+#[repr(C)]
+pub struct FfiShard {
+    /// The program account ID.
+    pub program: FfiBytes32,
+    /// Pointer to shard data bytes.
+    pub data: *const u8,
+    /// Length of shard data.
+    pub data_len: usize,
+}
+
+impl Default for FfiShard {
+    fn default() -> Self {
+        Self {
+            program: FfiBytes32::default(),
+            data: std::ptr::null(),
+            data_len: 0,
+        }
+    }
 }
 
 /// Account data structure - C-compatible version of lee Account.
@@ -83,13 +97,12 @@ pub struct FfiU128 {
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    pub program_owner: FfiBytes32,
     /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
-    /// Pointer to account data bytes.
-    pub data: *const u8,
-    /// Length of account data.
-    pub data_len: usize,
+    /// Pointer to this account's shards, ordered by program address.
+    pub shards: *const FfiShard,
+    /// Number of shards.
+    pub shards_len: usize,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
 }
@@ -97,10 +110,9 @@ pub struct FfiAccount {
 impl Default for FfiAccount {
     fn default() -> Self {
         Self {
-            program_owner: FfiBytes32::default(),
             balance: FfiU128::default(),
-            data: std::ptr::null(),
-            data_len: 0,
+            shards: std::ptr::null(),
+            shards_len: 0,
             nonce: FfiU128::default(),
         }
     }
@@ -252,13 +264,21 @@ pub enum FfiAccountIdentityKind {
     PrivatePdaShared = 8,
 }
 
-/// Struct representing an account identity, given to `AccountManager` at intialization.
+/// An account identity used by `AccountManager`.
+///
+/// Foreign and shared private PDAs require `authority` and `seed`; other kinds ignore them.
+/// Their account IDs are checked on import and derived on export.
+///
+/// `PrivateOwned` and `PrivatePdaOwned` use the wallet's stored account data.
+/// Both are imported and exported as `PrivateOwned`.
 #[repr(C)]
 pub struct FfiAccountIdentity {
     pub kind: FfiAccountIdentityKind,
     pub account_id: FfiBytes32,
     /// C-compatible string.
     pub key_path: *mut c_char,
+    pub authority: FfiBytes32,
+    pub seed: FfiPdaSeed,
     pub authorization_secret_key: FfiBytes32,
     pub nullifier_secret_key: FfiBytes32,
     pub nullifier_public_key: FfiBytes32,
@@ -273,6 +293,8 @@ impl Default for FfiAccountIdentity {
             kind: FfiAccountIdentityKind::Public,
             account_id: FfiBytes32::default(),
             key_path: std::ptr::null_mut(),
+            authority: FfiBytes32::default(),
+            seed: FfiPdaSeed::default(),
             authorization_secret_key: FfiBytes32::default(),
             nullifier_secret_key: FfiBytes32::default(),
             nullifier_public_key: FfiBytes32::default(),
@@ -280,6 +302,29 @@ impl Default for FfiAccountIdentity {
             viewing_public_key_len: 0,
             identifier: FfiU128::default(),
         }
+    }
+}
+
+/// An account identity with an optional program shard selection.
+///
+/// `program_account_id` is ignored when `has_program_account_id` is false.
+#[repr(C)]
+pub struct FfiAccountMention {
+    pub identity: FfiAccountIdentity,
+    pub program_account_id: FfiBytes32,
+    pub has_program_account_id: bool,
+}
+
+impl TryFrom<&FfiAccountMention> for AccountMention {
+    type Error = WalletFfiError;
+
+    fn try_from(value: &FfiAccountMention) -> Result<Self, Self::Error> {
+        let identity = AccountIdentity::try_from(&value.identity)?;
+        Ok(if value.has_program_account_id {
+            identity.select_program_shard(value.program_account_id.into())
+        } else {
+            identity.balance()
+        })
     }
 }
 
@@ -321,21 +366,37 @@ impl From<lee::Account> for FfiAccount {
         reason = "We need to convert to byte arrays for FFI"
     )]
     fn from(value: lee::Account) -> Self {
-        // Convert account data to FFI type
-        let data_vec: Vec<u8> = value.data.into();
-        let data_len = data_vec.len();
-        let data = if data_len > 0 {
-            let data_boxed = data_vec.into_boxed_slice();
-            Box::into_raw(data_boxed) as *const u8
+        let shards_vec: Vec<FfiShard> = value
+            .data
+            .shards
+            .into_iter()
+            .map(|(program, record)| {
+                let record: Vec<u8> = record.into();
+                let data_len = record.len();
+                let data = if data_len > 0 {
+                    Box::into_raw(record.into_boxed_slice()) as *const u8
+                } else {
+                    ptr::null()
+                };
+                FfiShard {
+                    program: program.into(),
+                    data,
+                    data_len,
+                }
+            })
+            .collect();
+
+        let shards_len = shards_vec.len();
+        let shards = if shards_len > 0 {
+            Box::into_raw(shards_vec.into_boxed_slice()) as *const FfiShard
         } else {
             ptr::null()
         };
 
         Self {
-            program_owner: value.program_owner.into(),
-            balance: value.balance.into(),
-            data,
-            data_len,
+            balance: value.data.balance.into(),
+            shards,
+            shards_len,
             nonce: value.nonce.0.into(),
         }
     }
@@ -345,21 +406,32 @@ impl TryFrom<&FfiAccount> for lee::Account {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiAccount) -> Result<Self, Self::Error> {
-        let data = if value.data_len > 0 {
-            unsafe {
-                let slice = slice::from_raw_parts(value.data, value.data_len);
-                Data::try_from(slice.to_vec())
-                    .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
-            }
-        } else {
-            Data::default()
-        };
-        Ok(Self {
-            program_owner: value.program_owner.into(),
-            balance: value.balance.into(),
-            data,
+        let mut account = Self {
             nonce: lee_core::account::Nonce(value.nonce.into()),
-        })
+            data: lee_core::account::AccountData {
+                balance: value.balance.into(),
+                shards: std::collections::BTreeMap::new(),
+            },
+        };
+
+        if value.shards_len > 0 {
+            if value.shards.is_null() {
+                return Err(WalletFfiError::NullPointer);
+            }
+            let shards = unsafe { slice::from_raw_parts(value.shards, value.shards_len) };
+            for shard in shards {
+                let data = if shard.data_len > 0 {
+                    let bytes = unsafe { slice::from_raw_parts(shard.data, shard.data_len) };
+                    ShardData::try_from(bytes.to_vec())
+                        .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
+                } else {
+                    ShardData::default()
+                };
+                account.data.set_shard(shard.program.into(), data);
+            }
+        }
+
+        Ok(account)
     }
 }
 
@@ -410,11 +482,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 account_id: account_id.into(),
                 ..Default::default()
             },
-            AccountIdentity::PrivateForeign {
-                npk,
-                vpk,
-                identifier,
-            } => {
+            AccountIdentity::PrivateForeign { npk, vpk, kind } => {
                 let vpk_vec = vpk.to_bytes().to_vec();
                 let vpk_len = vpk_vec.len();
                 let vpk_data = if vpk_len > 0 {
@@ -424,43 +492,30 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     ptr::null()
                 };
 
-                Self {
-                    kind: FfiAccountIdentityKind::PrivateForeign,
+                let identity = Self {
                     nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
-                    identifier: identifier.into(),
+                    identifier: kind.identifier().into(),
                     ..Default::default()
-                }
-            }
-            AccountIdentity::PrivatePdaOwned(account_id) => Self {
-                kind: FfiAccountIdentityKind::PrivatePdaOwned,
-                account_id: account_id.into(),
-                ..Default::default()
-            },
-            AccountIdentity::PrivatePdaForeign {
-                account_id,
-                npk,
-                vpk,
-                identifier,
-            } => {
-                let vpk_vec = vpk.to_bytes().to_vec();
-                let vpk_len = vpk_vec.len();
-                let vpk_data = if vpk_len > 0 {
-                    let vpk_data_boxed = vpk_vec.into_boxed_slice();
-                    Box::into_raw(vpk_data_boxed) as *const u8
-                } else {
-                    ptr::null()
                 };
 
-                Self {
-                    kind: FfiAccountIdentityKind::PrivatePdaForeign,
-                    account_id: account_id.into(),
-                    nullifier_public_key: npk.0.into(),
-                    viewing_public_key: vpk_data,
-                    viewing_public_key_len: vpk_len,
-                    identifier: identifier.into(),
-                    ..Default::default()
+                match &kind {
+                    PrivateAccountKind::Regular(_) => Self {
+                        kind: FfiAccountIdentityKind::PrivateForeign,
+                        ..identity
+                    },
+                    PrivateAccountKind::Pda {
+                        account_id: authority,
+                        seed,
+                        ..
+                    } => Self {
+                        kind: FfiAccountIdentityKind::PrivatePdaForeign,
+                        account_id: AccountId::for_private_account(&npk, &vpk, &kind).into(),
+                        authority: (*authority).into(),
+                        seed: (*seed).into(),
+                        ..identity
+                    },
                 }
             }
             AccountIdentity::PrivateShared {
@@ -491,11 +546,15 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 }
             }
             AccountIdentity::PrivatePdaShared {
-                account_id,
+                authority,
+                seed,
                 nsk,
                 vpk,
                 identifier,
             } => {
+                let npk = NullifierPublicKey::from(&nsk);
+                let account_id =
+                    AccountId::for_private_pda(&authority, &seed, &npk, &vpk, identifier);
                 let vpk_vec = vpk.to_bytes().to_vec();
                 let vpk_len = vpk_vec.len();
                 let vpk_data = if vpk_len > 0 {
@@ -508,8 +567,10 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 Self {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
                     account_id: account_id.into(),
+                    authority: authority.into(),
+                    seed: seed.into(),
                     nullifier_secret_key: nsk.into(),
-                    nullifier_public_key: NullifierPublicKey::from(&nsk).0.into(),
+                    nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -540,8 +601,10 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     key_path,
                 })
             }
-            FfiAccountIdentityKind::PrivateOwned => Ok(Self::PrivateOwned(value.account_id.into())),
-            FfiAccountIdentityKind::PrivateForeign => {
+            FfiAccountIdentityKind::PrivateOwned | FfiAccountIdentityKind::PrivatePdaOwned => {
+                Ok(Self::PrivateOwned(value.account_id.into()))
+            }
+            FfiAccountIdentityKind::PrivateForeign | FfiAccountIdentityKind::PrivatePdaForeign => {
                 let vpk = if value.viewing_public_key_len == 1184 {
                     let slice = unsafe {
                         slice::from_raw_parts(
@@ -555,35 +618,26 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
-                Ok(Self::PrivateForeign {
-                    npk: NullifierPublicKey(value.nullifier_public_key.data),
-                    vpk,
-                    identifier: value.identifier.into(),
-                })
-            }
-            FfiAccountIdentityKind::PrivatePdaOwned => {
-                Ok(Self::PrivatePdaOwned(value.account_id.into()))
-            }
-            FfiAccountIdentityKind::PrivatePdaForeign => {
-                let vpk = if value.viewing_public_key_len == 1184 {
-                    let slice = unsafe {
-                        slice::from_raw_parts(
-                            value.viewing_public_key,
-                            value.viewing_public_key_len,
-                        )
-                    };
-                    Ok(MlKem768EncapsulationKey::from_bytes(slice.to_vec())
-                        .map_err(|_| WalletFfiError::InvalidKeyValue)?)
+                let npk = NullifierPublicKey(value.nullifier_public_key.data);
+                let identifier = value.identifier.into();
+                let kind = if matches!(value.kind, FfiAccountIdentityKind::PrivatePdaForeign) {
+                    PrivateAccountKind::Pda {
+                        account_id: value.authority.into(),
+                        seed: value.seed.into(),
+                        identifier,
+                    }
                 } else {
-                    Err(WalletFfiError::InvalidKeyValue)
-                }?;
+                    PrivateAccountKind::Regular(identifier)
+                };
 
-                Ok(Self::PrivatePdaForeign {
-                    account_id: value.account_id.into(),
-                    npk: NullifierPublicKey(value.nullifier_public_key.data),
-                    vpk,
-                    identifier: value.identifier.into(),
-                })
+                if matches!(kind, PrivateAccountKind::Pda { .. })
+                    && AccountId::from(value.account_id)
+                        != AccountId::for_private_account(&npk, &vpk, &kind)
+                {
+                    return Err(WalletFfiError::InvalidAccountId);
+                }
+
+                Ok(Self::PrivateForeign { npk, vpk, kind })
             }
             FfiAccountIdentityKind::PrivateShared => {
                 let vpk = if value.viewing_public_key_len == 1184 {
@@ -628,30 +682,28 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 }?;
 
                 let nsk = value.nullifier_secret_key.data;
-                if value.nullifier_public_key.data != NullifierPublicKey::from(&nsk).0 {
+                let npk = NullifierPublicKey::from(&nsk);
+                if value.nullifier_public_key.data != npk.0 {
                     return Err(WalletFfiError::InvalidKeyValue);
                 }
 
+                let authority: AccountId = value.authority.into();
+                let seed: PdaSeed = value.seed.into();
+                let identifier = value.identifier.into();
+                let derived = AccountId::for_private_pda(&authority, &seed, &npk, &vpk, identifier);
+                if AccountId::from(value.account_id) != derived {
+                    return Err(WalletFfiError::InvalidAccountId);
+                }
+
                 Ok(Self::PrivatePdaShared {
-                    account_id: value.account_id.into(),
+                    authority,
+                    seed,
                     nsk,
                     vpk,
-                    identifier: value.identifier.into(),
+                    identifier,
                 })
             }
         }
-    }
-}
-
-impl From<ProgramId> for FfiProgramId {
-    fn from(value: ProgramId) -> Self {
-        Self { data: value }
-    }
-}
-
-impl From<FfiProgramId> for ProgramId {
-    fn from(value: FfiProgramId) -> Self {
-        value.data
     }
 }
 
@@ -691,8 +743,8 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierSecretKey,
-        PrivateAccountKind,
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierPublicKey,
+        NullifierSecretKey, PrivateAccountKind,
     };
     use wallet::AccountIdentity;
 
@@ -712,12 +764,14 @@ mod tests {
 
         let private_reg_acc_id =
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
+        let pda_authority = AccountId::new([46; 32]);
+        let pda_seed = PdaSeed::new([47; 32]);
         let private_pda_acc_id = AccountId::for_private_account(
             &npk,
             &vpk,
             &PrivateAccountKind::Pda {
-                account_id: AccountId::new([46; 32]),
-                seed: PdaSeed::new([47; 32]),
+                account_id: pda_authority,
+                seed: pda_seed,
                 identifier,
             },
         );
@@ -734,14 +788,17 @@ mod tests {
         let acc_identity_4 = AccountIdentity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
-            identifier,
+            kind: PrivateAccountKind::Regular(identifier),
         };
-        let acc_identity_5 = AccountIdentity::PrivatePdaOwned(private_pda_acc_id);
-        let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
-            account_id: private_pda_acc_id,
+        let acc_identity_5 = AccountIdentity::PrivateOwned(private_pda_acc_id);
+        let acc_identity_6 = AccountIdentity::PrivateForeign {
             npk,
             vpk: vpk.clone(),
-            identifier,
+            kind: PrivateAccountKind::Pda {
+                account_id: pda_authority,
+                seed: pda_seed,
+                identifier,
+            },
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
             ask,
@@ -749,7 +806,8 @@ mod tests {
             identifier,
         };
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
-            account_id: private_pda_acc_id,
+            authority: pda_authority,
+            seed: pda_seed,
             nsk,
             vpk,
             identifier,
@@ -760,7 +818,7 @@ mod tests {
         let ffi_acc_identity_2_5: FfiAccountIdentity = acc_identity_2_5.clone().into();
         let ffi_acc_identity_3: FfiAccountIdentity = acc_identity_3.clone().into();
         let ffi_acc_identity_4: FfiAccountIdentity = acc_identity_4.clone().into();
-        let ffi_acc_identity_5: FfiAccountIdentity = acc_identity_5.clone().into();
+        let mut ffi_acc_identity_5: FfiAccountIdentity = acc_identity_5.clone().into();
         let ffi_acc_identity_6: FfiAccountIdentity = acc_identity_6.clone().into();
         let ffi_acc_identity_7: FfiAccountIdentity = acc_identity_7.clone().into();
         let ffi_acc_identity_8: FfiAccountIdentity = acc_identity_8.clone().into();
@@ -784,8 +842,9 @@ mod tests {
         );
         assert_eq!(
             ffi_acc_identity_5.kind,
-            FfiAccountIdentityKind::PrivatePdaOwned
+            FfiAccountIdentityKind::PrivateOwned
         );
+        ffi_acc_identity_5.kind = FfiAccountIdentityKind::PrivatePdaOwned;
         assert_eq!(
             ffi_acc_identity_6.kind,
             FfiAccountIdentityKind::PrivatePdaForeign
@@ -802,6 +861,10 @@ mod tests {
         assert_eq!(ffi_acc_identity_7.nullifier_secret_key.data, nsk);
         assert_eq!(ffi_acc_identity_7.nullifier_public_key.data, npk.0);
         assert_eq!(ffi_acc_identity_8.nullifier_public_key.data, npk.0);
+        assert_eq!(
+            AccountId::from(ffi_acc_identity_8.account_id),
+            private_pda_acc_id
+        );
 
         let acc_identity_res_1: AccountIdentity = (&ffi_acc_identity_1).try_into().unwrap();
         let acc_identity_res_2: AccountIdentity = (&ffi_acc_identity_2).try_into().unwrap();
@@ -825,6 +888,38 @@ mod tests {
     }
 
     #[test]
+    fn a_foreign_pda_address_is_filled_on_export_and_checked_on_import() {
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([43; 32]));
+        let npk: NullifierPublicKey = (&nsk).into();
+        let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
+        let kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([46; 32]),
+            seed: PdaSeed::new([47; 32]),
+            identifier: 5,
+        };
+        let derived = AccountId::for_private_account(&npk, &vpk, &kind);
+
+        let exported: FfiAccountIdentity = AccountIdentity::PrivateForeign {
+            npk,
+            vpk: vpk.clone(),
+            kind: kind.clone(),
+        }
+        .into();
+
+        assert_eq!(exported.kind, FfiAccountIdentityKind::PrivatePdaForeign);
+        assert_eq!(AccountId::from(exported.account_id), derived);
+
+        let mut contradictory: FfiAccountIdentity =
+            AccountIdentity::PrivateForeign { npk, vpk, kind }.into();
+        contradictory.account_id.data[0] ^= 1;
+
+        assert_eq!(
+            AccountIdentity::try_from(&contradictory).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
+    }
+
+    #[test]
     fn inconsistent_derived_keys_are_rejected() {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
@@ -837,7 +932,8 @@ mod tests {
             identifier,
         };
         let pda_shared = AccountIdentity::PrivatePdaShared {
-            account_id: AccountId::new([46; 32]),
+            authority: AccountId::new([48; 32]),
+            seed: PdaSeed::new([49; 32]),
             nsk,
             vpk,
             identifier,
@@ -852,7 +948,7 @@ mod tests {
         zeroed.nullifier_public_key = FfiBytes32::default();
         let mut tampered_pda_npk: FfiAccountIdentity = pda_shared.clone().into();
         tampered_pda_npk.nullifier_public_key.data[0] ^= 1;
-        let mut zeroed_pda: FfiAccountIdentity = pda_shared.into();
+        let mut zeroed_pda: FfiAccountIdentity = pda_shared.clone().into();
         zeroed_pda.nullifier_public_key = FfiBytes32::default();
 
         for inconsistent in [
@@ -867,5 +963,12 @@ mod tests {
                 WalletFfiError::InvalidKeyValue
             );
         }
+
+        let mut wrong_address: FfiAccountIdentity = pda_shared.into();
+        wrong_address.account_id.data[0] ^= 1;
+        assert_eq!(
+            AccountIdentity::try_from(&wrong_address).unwrap_err(),
+            WalletFfiError::InvalidAccountId
+        );
     }
 }

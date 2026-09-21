@@ -9,8 +9,9 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, ProgramId, Selector, Transaction, resolve_event_block_range,
+    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Selector, ShardSummary,
+    Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -78,7 +79,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
     ) -> SubscriptionResult {
         if let Err(err) = check_event_coverage(
             self.indexer.store.live_filter(),
-            filter.program_id,
+            filter.program_account_id,
             filter.selector,
         ) {
             subscription_sink.reject(err).await;
@@ -140,6 +141,57 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .indexer
             .store
             .account_state_at_block(&account_id.into(), block_id)
+            .map_err(db_error)?
+            .into())
+    }
+
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned> {
+        let account = self
+            .indexer
+            .store
+            .account_current_state(&account_id.into())
+            .await
+            .map_err(db_error)?;
+        Ok(AccountSummary {
+            nonce: account.nonce.into(),
+            balance: account.data.balance,
+            shards: account
+                .data
+                .shards
+                .iter()
+                .map(|(program, data)| ShardSummary {
+                    program_account_id: (*program).into(),
+                    len: u64::try_from(data.len()).expect("a shard is capped well under u64"),
+                })
+                .collect(),
+        })
+    }
+
+    async fn get_account_view(
+        &self,
+        selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .account_current_view(selector.into())
+            .await
+            .map_err(db_error)?
+            .into())
+    }
+
+    async fn get_account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .account_view_at_block(selector.into(), block_id)
             .map_err(db_error)?
             .into())
     }
@@ -223,7 +275,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
                     self.indexer.store.filter_segments(),
                     block_id,
                     block_id,
-                    filter.program_id,
+                    filter.program_account_id,
                     filter.selector,
                 )?;
                 let records = self
@@ -248,7 +300,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
                     self.indexer.store.filter_segments(),
                     from_block,
                     to_block,
-                    filter.program_id,
+                    filter.program_account_id,
                     filter.selector,
                 )?;
                 let groups = self
@@ -663,7 +715,7 @@ pub(crate) fn matches_subscription_filter(
     record: &EventRecord,
     filter: &EventSubscriptionFilter,
 ) -> bool {
-    record.matches_fields(filter.program_id, filter.selector)
+    record.matches_fields(filter.program_account_id, filter.selector)
         && filter
             .tx_hash
             .is_none_or(|tx_hash| tx_hash == record.tx_hash)
@@ -677,7 +729,7 @@ const fn record_charge(record: &EventRecord) -> usize {
         block_id: _,
         tx_index: _,
         tx_hash: _,
-        program_id: _,
+        program_account_id: _,
         selector: _,
         data,
     } = record;
@@ -692,7 +744,7 @@ pub(crate) fn collect_within_budget(
     let mut spent = 0_usize;
     let mut kept = Vec::new();
     for record in records {
-        if !record.matches_fields(filter.program_id, filter.selector) {
+        if !record.matches_fields(filter.program_account_id, filter.selector) {
             continue;
         }
         spent = spent.saturating_add(record_charge(&record));
@@ -719,10 +771,10 @@ fn response_too_large_error(budget: usize) -> ErrorObjectOwned {
 // Subscriptions are forward-only, so they check the live filter.
 pub(crate) fn check_event_coverage(
     stored: &EventFilter,
-    program_id: Option<ProgramId>,
+    program_account_id: Option<AccountId>,
     selector: Option<Selector>,
 ) -> Result<(), ErrorObjectOwned> {
-    if stored.covers(program_id.map(|id| id.0.into()), selector.map(|s| s.0)) {
+    if stored.covers(program_account_id.map(Into::into), selector.map(|s| s.0)) {
         Ok(())
     } else {
         Err(uncovered_query_error())
@@ -733,14 +785,14 @@ pub(crate) fn check_range_coverage(
     segments: &[(EventFilter, BlockId)],
     from: BlockId,
     to: BlockId,
-    program_id: Option<ProgramId>,
+    program_account_id: Option<AccountId>,
     selector: Option<Selector>,
 ) -> Result<(), ErrorObjectOwned> {
     if indexer_core::event_filter::covered_over_range(
         segments,
         from,
         to,
-        program_id.map(|id| id.0.into()),
+        program_account_id.map(Into::into),
         selector.map(|s| s.0),
     ) {
         Ok(())
@@ -796,16 +848,20 @@ mod tests {
     use std::collections::HashMap;
 
     use indexer_core::event_filter::SelectorFilter;
-    use indexer_service_protocol::{MAX_EVENT_QUERY_BLOCK_SPAN, ProgramId, Selector};
+    use indexer_service_protocol::{MAX_EVENT_QUERY_BLOCK_SPAN, Selector};
 
     use super::*;
+
+    fn test_program_account_id(word: u32) -> AccountId {
+        lee_core::account::AccountId::from_builtin_program([word; 8]).into()
+    }
 
     fn record(block_id: BlockId, program: u32, selector: u8) -> EventRecord {
         EventRecord {
             block_id,
             tx_index: 0,
             tx_hash: HashType([0_u8; 32]),
-            program_id: ProgramId([program; 8]),
+            program_account_id: test_program_account_id(program),
             selector: Selector([selector; 8]),
             data: vec![],
         }
@@ -853,7 +909,7 @@ mod tests {
         tx_hash: Option<u8>,
     ) -> EventSubscriptionFilter {
         EventSubscriptionFilter {
-            program_id: program.map(|p| ProgramId([p; 8])),
+            program_account_id: program.map(test_program_account_id),
             selector: selector.map(|s| Selector([s; 8])),
             tx_hash: tx_hash.map(|h| HashType([h; 32])),
         }
@@ -913,13 +969,13 @@ mod tests {
 
         for (program, selector) in [(7_u32, 2_u8), (7, 3), (8, 2), (8, 3)] {
             let query = GetEventsFilter {
-                program_id: Some(ProgramId([program; 8])),
+                program_account_id: Some(test_program_account_id(program)),
                 selector: Some(Selector([selector; 8])),
                 ..GetEventsFilter::default()
             };
             let subscription = subscription_filter(Some(program), Some(selector), None);
             assert_eq!(
-                target.matches_fields(query.program_id, query.selector),
+                target.matches_fields(query.program_account_id, query.selector),
                 matches_subscription_filter(&target, &subscription)
             );
         }
@@ -928,7 +984,7 @@ mod tests {
     #[test]
     fn filters_are_exact_and_conjunctive() {
         let target = record(1, 7, 2);
-        let program = Some(ProgramId([7; 8]));
+        let program = Some(test_program_account_id(7));
         let selector = Some(Selector([2; 8]));
 
         assert!(target.matches_fields(None, None));
@@ -949,30 +1005,45 @@ mod tests {
     fn coverage_check_accepts_archival_and_declared_sources() {
         assert!(check_event_coverage(&EventFilter::Archival, None, None).is_ok());
 
-        let declared =
-            EventFilter::Sources(HashMap::from([([7_u32; 8].into(), SelectorFilter::All)]));
+        let declared = EventFilter::Sources(HashMap::from([(
+            lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
+            SelectorFilter::All,
+        )]));
         assert!(
-            check_event_coverage(&declared, Some(ProgramId([7; 8])), Some(Selector([1; 8])))
-                .is_ok()
+            check_event_coverage(
+                &declared,
+                Some(test_program_account_id(7)),
+                Some(Selector([1; 8]))
+            )
+            .is_ok()
         );
     }
 
     #[test]
     fn range_coverage_follows_segment_history() {
-        let declared =
-            EventFilter::Sources(HashMap::from([([7_u32; 8].into(), SelectorFilter::All)]));
+        let declared = EventFilter::Sources(HashMap::from([(
+            lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
+            SelectorFilter::All,
+        )]));
         let segments = [(declared, 0), (EventFilter::Archival, 100)];
 
         assert!(check_range_coverage(&segments, 100, 200, None, None).is_ok());
-        assert!(check_range_coverage(&segments, 50, 150, Some(ProgramId([7; 8])), None).is_ok());
+        assert!(
+            check_range_coverage(&segments, 50, 150, Some(test_program_account_id(7)), None)
+                .is_ok()
+        );
         let err = check_range_coverage(&segments, 50, 150, None, None).unwrap_err();
         assert_eq!(err.message(), "UncoveredEventQuery");
     }
 
     #[test]
     fn uncovered_query_is_rejected() {
-        let err = check_event_coverage(&EventFilter::default(), Some(ProgramId([7; 8])), None)
-            .unwrap_err();
+        let err = check_event_coverage(
+            &EventFilter::default(),
+            Some(test_program_account_id(7)),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(err.message(), "UncoveredEventQuery");
     }
 
@@ -1013,7 +1084,7 @@ mod tests {
             ..record(1, 8, 1)
         };
         let filter = GetEventsFilter {
-            program_id: Some(ProgramId([7; 8])),
+            program_account_id: Some(test_program_account_id(7)),
             ..GetEventsFilter::default()
         };
 
@@ -1033,7 +1104,7 @@ mod tests {
                 block_id: u64::MAX,
                 tx_index: u32::MAX,
                 tx_hash: HashType([0xFF; 32]),
-                program_id: ProgramId([u32::MAX; 8]),
+                program_account_id: test_program_account_id(u32::MAX),
                 selector: Selector([0xFF; 8]),
                 data: vec![0xFF; data_len],
             };

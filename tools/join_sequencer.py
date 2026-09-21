@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from committee_watch import decode_stake_config, pda, program_id  # noqa: E402
+from committee_watch import stake_config  # noqa: E402
 
 DEFAULT_CONFIG = "lez/sequencer/service/configs/debug/sequencer_config.json"
 # The debug genesis funds this account, and the debug wallet holds its key.
@@ -37,7 +37,6 @@ DEFAULT_FUNDING = "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r"
 # One pair of env vars points every tool at a network.
 DEFAULT_NODE = os.environ.get("LEZ_NODE")
 DEFAULT_SEQUENCER = os.environ.get("LEZ_SEQUENCER", "http://127.0.0.1:3040")
-CONFIG_SEED = b"/LEZ/v0.3/MinSequencerStake/0000"
 # Written once staked: names the account holding the stake, and its presence
 # is what stops a later run from staking again.
 OWNERSHIP_ACCOUNT_FILE = "stake-ownership-account"
@@ -83,12 +82,6 @@ def free_port(preferred: int) -> int:
             except OSError:
                 continue
     raise SystemExit(f"no free port in {preferred}..{preferred + 49}")
-
-
-def stake_config(repo: str, sequencer: str) -> dict:
-    """The live minimum and per-key entries, straight from LEZ state."""
-    account = pda(program_id(repo), CONFIG_SEED)
-    return decode_stake_config(bytes(rpc(sequencer, "getAccount", [account])["data"]))
 
 
 def main() -> None:
@@ -187,7 +180,7 @@ def main() -> None:
 
             # The stake fails inside the guest if the funds are short, so say
             # so here, where the fix is obvious.
-            balance = rpc(args.sequencer, "getAccount", [funding])["balance"]
+            balance = rpc(args.sequencer, "getAccountBalance", [funding])
             if balance < amount:
                 raise SystemExit(
                     f"{funding} holds {balance}, short of the {amount} to stake. Fund it "

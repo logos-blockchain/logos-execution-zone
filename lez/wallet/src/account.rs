@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
 use derive_more::Display;
 use lee::AccountId;
@@ -80,8 +80,7 @@ impl FromStr for AccountIdWithPrivacy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanReadableAccount {
     balance: u128,
-    program_owner: String,
-    data: String,
+    shards: BTreeMap<String, String>,
     nonce: u128,
 }
 
@@ -102,12 +101,14 @@ impl std::fmt::Display for HumanReadableAccount {
 
 impl From<lee::Account> for HumanReadableAccount {
     fn from(account: lee::Account) -> Self {
-        let program_owner = account.program_owner.to_string();
-        let data = hex::encode(account.data);
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
+            balance: account.data.balance,
+            shards: account
+                .data
+                .shards
+                .into_iter()
+                .map(|(program, data)| (program.to_string(), hex::encode(data)))
+                .collect(),
             nonce: account.nonce.0,
         }
     }
@@ -115,21 +116,27 @@ impl From<lee::Account> for HumanReadableAccount {
 
 impl From<HumanReadableAccount> for lee::Account {
     fn from(account: HumanReadableAccount) -> Self {
-        let program_owner: lee::AccountId = account
-            .program_owner
-            .parse()
-            .expect("Invalid base58 in HumanReadableAccount.program_owner");
-
-        let data = hex::decode(&account.data).expect("Invalid hex in HumanReadableAccount.data");
-        let data = data
-            .try_into()
-            .expect("Invalid account data: exceeds maximum allowed size");
+        let shards = account
+            .shards
+            .into_iter()
+            .map(|(program, data)| {
+                let program: AccountId = program
+                    .parse()
+                    .expect("Invalid base58 in HumanReadableAccount.shards key");
+                let data = hex::decode(&data).expect("Invalid hex in HumanReadableAccount.shards");
+                let data = data
+                    .try_into()
+                    .expect("Invalid account data: exceeds maximum allowed size");
+                (program, data)
+            })
+            .collect();
 
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
             nonce: lee_core::account::Nonce(account.nonce),
+            data: lee_core::account::AccountData {
+                balance: account.balance,
+                shards,
+            },
         }
     }
 }

@@ -7,20 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountId, AccountWithMetadata, BalanceDiff, BalanceDiffError, Data,
-        apply_balance_diff,
+        Account, AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError,
+        ProgramShardSelector, ShardData, apply_balance_diff,
     },
     encryption::ViewingPublicKey,
 };
-
-pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
-
-/// TODO: Placeholder `program_owner` for uninitialized `Account`.
-pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
-
-/// TODO: Temporary placeholder for program deployment program id; this serves as
-/// `program_owner` for program `Account`s.
-pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
 /// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
@@ -33,14 +24,12 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 
 pub type ProgramId = [u32; 8];
 
-/// Derives the `AccountId` under which a program's data is stored, directly from its
-/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
-///
-/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
-/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
-/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
-impl From<ProgramId> for AccountId {
-    fn from(program_id: ProgramId) -> Self {
+impl AccountId {
+    /// The default `AccountId` a builtin program is deployed at — not a live address once
+    /// redeployed via `program_loader`. A byte reinterpretation, not a hash, since `ProgramId`
+    /// is already content-derived.
+    #[must_use]
+    pub fn from_builtin_program(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
             .iter()
             .flat_map(|word| word.to_le_bytes())
@@ -49,28 +38,93 @@ impl From<ProgramId> for AccountId {
     }
 }
 
-impl From<AccountId> for ProgramId {
-    fn from(account_id: AccountId) -> Self {
-        let mut program_id = [0_u32; 8];
-        for (word, chunk) in program_id
-            .iter_mut()
-            .zip(account_id.value().chunks_exact(4))
-        {
-            *word = u32::from_le_bytes(chunk.try_into().expect("chunk is exactly 4 bytes"));
+/// Borsh-encoded program instruction bytes.
+pub type InstructionData = Vec<u8>;
+
+/// An account seen as an input to an LEE program.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AccountInput {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub balance: Balance,
+    pub shard: Option<(AccountId, ShardData)>,
+}
+
+impl AccountInput {
+    #[must_use]
+    pub const fn with_shard(
+        account_id: AccountId,
+        is_authorized: bool,
+        balance: Balance,
+        program_account_id: AccountId,
+        data: ShardData,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: Some((program_account_id, data)),
         }
-        program_id
+    }
+
+    #[must_use]
+    pub const fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            balance,
+            shard: None,
+        }
+    }
+
+    #[must_use]
+    pub fn at(
+        shard_selector: ProgramShardSelector,
+        is_authorized: bool,
+        data: &AccountData,
+    ) -> Self {
+        Self {
+            account_id: shard_selector.account_id,
+            is_authorized,
+            balance: data.balance,
+            shard: shard_selector
+                .program_account_id
+                .map(|program| (program, data.shard(program).clone())),
+        }
+    }
+
+    #[must_use]
+    pub fn program_account_id(&self) -> Option<AccountId> {
+        self.shard.as_ref().map(|(program, _)| *program)
+    }
+
+    /// Returns the shard data. Panics unless the input selects `program`'s shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &ShardData {
+        let (selected, data) = self.shard.as_ref().expect("AccountInput carries no shard");
+        assert_eq!(
+            *selected, program,
+            "AccountInput carries another program's shard"
+        );
+        data
     }
 }
 
-/// Borsh-encoded program instruction bytes.
-pub type InstructionData = Vec<u8>;
+impl From<&AccountInput> for ProgramShardSelector {
+    fn from(input: &AccountInput) -> Self {
+        Self {
+            account_id: input.account_id,
+            program_account_id: input.program_account_id(),
+        }
+    }
+}
 
 /// Struct encoding the input to an LEE program.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ProgramInput<T> {
     pub self_account_id: AccountId,
     pub caller_account_id: Option<AccountId>,
-    pub pre_states: Vec<AccountWithMetadata>,
+    pub pre_states: Vec<AccountInput>,
     pub instruction: T,
 }
 
@@ -246,10 +300,8 @@ pub struct CallerData {
 pub struct ChainedCall {
     /// The account ID of the program to execute.
     pub program_account_id: AccountId,
-    /// The ids of the accounts the callee should receive as `pre_states`. The protocol
-    /// resolves each account's real value and `is_authorized` from its own tracked state — never
-    /// supplied by the calling program.
-    pub pre_state_ids: Vec<AccountId>,
+    /// Selects the callee's inputs from the current execution state.
+    pub shard_selectors: Vec<ProgramShardSelector>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -262,12 +314,12 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_account_id: AccountId,
-        pre_state_ids: Vec<AccountId>,
+        shard_selectors: Vec<ProgramShardSelector>,
         instruction: &I,
     ) -> Self {
         Self {
             program_account_id,
-            pre_state_ids,
+            shard_selectors,
             instruction_data: borsh::to_vec(instruction)
                 .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
@@ -282,10 +334,6 @@ impl ChainedCall {
 }
 
 /// One deployed program's identity and entry point into its bytecode's segment chain.
-///
-/// Lives at whatever account address the deployer chose — never a fixed bijection of the
-/// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
-/// distinct instance for dispatch, PDA-derivation, and ownership purposes.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     /// The bytecode's real `image_id`, always recomputed from the segment chain at
@@ -331,21 +379,20 @@ impl ProgramSegment {
     }
 }
 
-/// A single account's full pre-state paired with the diff a program's execution applies to it.
+/// An account's pre-state alongside the changes to be applied to it.
 #[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountStateDiff {
-    pub pre_state: AccountWithMetadata,
+    pub pre_state: AccountInput,
     pub post_balance_diff: BalanceDiff,
-    /// `None` means unchanged from `pre_state.account.data` — the common case, kept cheap by not
-    /// carrying a second copy of data that's already available via `pre_state`.
-    pub post_data: Option<Data>,
+    /// The new shard data, or `None` to leave it unchanged.
+    pub post_data: Option<ShardData>,
 }
 
 impl AccountStateDiff {
-    /// A diff that leaves `pre_state`'s balance and data untouched.
+    /// A diff that leaves `pre_state`'s balance and shard untouched.
     #[must_use]
-    pub const fn unchanged(pre_state: AccountWithMetadata) -> Self {
+    pub const fn unchanged(pre_state: AccountInput) -> Self {
         Self {
             pre_state,
             post_balance_diff: BalanceDiff::Add(0),
@@ -354,16 +401,24 @@ impl AccountStateDiff {
     }
 
     #[must_use]
-    pub fn new(
-        pre_state: AccountWithMetadata,
-        post_balance_diff: BalanceDiff,
-        post_data: Data,
-    ) -> Self {
-        let post_data = (post_data != pre_state.account.data).then_some(post_data);
+    pub const fn balance(pre_state: AccountInput, post_balance_diff: BalanceDiff) -> Self {
         Self {
             pre_state,
             post_balance_diff,
-            post_data,
+            post_data: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn new(
+        pre_state: AccountInput,
+        post_balance_diff: BalanceDiff,
+        post_data: ShardData,
+    ) -> Self {
+        Self {
+            pre_state,
+            post_balance_diff,
+            post_data: Some(post_data),
         }
     }
 }
@@ -571,28 +626,6 @@ impl ProgramOutput {
         self.timestamp_validity_window = window.into();
         self
     }
-
-    /// Sets the timestamp validity window from a fallible range conversion.
-    /// Returns `Err` if the range is empty.
-    pub fn try_with_timestamp_validity_window<
-        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
-    >(
-        mut self,
-        window: W,
-    ) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = window.try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
-        Ok(self)
-    }
-
-    pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
-        Ok(self)
-    }
 }
 
 /// A struct holding an event-output of a program.
@@ -657,9 +690,9 @@ pub enum ExecutionValidationError {
     UnauthorizedBalanceDecrease { account_id: AccountId },
 
     #[error(
-        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_account_id}"
+        "Program {executing_account_id} wrote data on a shard selector of {account_id} that does not name it"
     )]
-    UnauthorizedDataModification {
+    ForeignShardWrite {
         account_id: AccountId,
         executing_account_id: AccountId,
     },
@@ -843,40 +876,26 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
     env::exit(0)
 }
 
-/// Whether a callee's journalled `pre_states` name exactly the accounts in the call
-/// in the appropriate order.
+/// Checks that the pre-states match the call's shard selectors in order.
 #[must_use]
-pub fn pre_states_match_accounts(
-    accounts: &[AccountId],
-    pre_states: &[AccountWithMetadata],
+pub fn pre_states_match_shard_selectors(
+    shard_selectors: &[ProgramShardSelector],
+    diffs: &[AccountStateDiff],
 ) -> bool {
-    accounts
+    shard_selectors.iter().copied().eq(diffs
         .iter()
-        .eq(pre_states.iter().map(|pre| &pre.account_id))
+        .map(|diff| ProgramShardSelector::from(&diff.pre_state)))
 }
 
-/// Resolves a deployed program from whatever account it lives at.
-///
-/// Verifies the account is loader-owned, decodes its [`ProgramHeader`], and reconstructs its
-/// bytecode by walking the segment chain from `program_first_segment`.
-///
-/// Returns `None` if `account_id` isn't a deployed program — any owner other than the loader,
-/// malformed header/segment data, or a chain longer than [`MAX_PROGRAM_SEGMENTS`]. By
-/// construction only the loader's own writes can make an account loader-owned, so this can't be
-/// spoofed by writing lookalike data as some other program.
-///
-/// `lookup` resolves an account's current value; callers decide what that means (committed
-/// state, a pending diff, or a combination — see call sites).
+/// Reads a deployed program's image ID and bytecode from loader shards using `lookup`.
+/// Returns `None` if a header or segment is missing or malformed, or the chain is too long.
 #[must_use]
-pub fn get_program_via(
+pub fn get_program_via<'state>(
     account_id: AccountId,
-    lookup: impl Fn(AccountId) -> Account,
+    lookup: impl Fn(AccountId) -> Option<&'state Account>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header_account = lookup(account_id);
-    if header_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-        return None;
-    }
-    let header = ProgramHeader::from_bytes(&header_account.data)?;
+    let loader_shard = |id| lookup(id).map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID));
+    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -886,11 +905,7 @@ pub fn get_program_via(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment_account = lookup(segment_id);
-        if segment_account.program_owner != PROGRAM_LOADER_ACCOUNT_ID {
-            return None;
-        }
-        let segment = ProgramSegment::from_bytes(&segment_account.data)?;
+        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
@@ -898,26 +913,21 @@ pub fn get_program_via(
     Some((header.image_id, elf))
 }
 
-/// Validates well-behaved program execution.
-///
-/// The diff has no `nonce`/`program_owner` field, so a program can't forge either; ownership
-/// follows from the data write, see [`acquire_ownership_on_data_write`].
-///
-/// # Parameters
-/// - `state_diffs`: Each account's pre-state paired with the diff the program applied to it.
-/// - `executing_account_id`: The account ID of the program that was executed.
+/// Checks account uniqueness, balance changes, and shard writes for a program call.
 pub fn validate_execution(
     state_diffs: &[AccountStateDiff],
     executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
-    // 1. Check account ids are all different
-    if !validate_uniqueness_of_account_ids(state_diffs) {
-        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
+    // 1. Each account may appear at most once per call.
+    let mut named = HashSet::new();
+    for diff in state_diffs {
+        if !named.insert(diff.pre_state.account_id) {
+            return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
+        }
     }
 
     for diff in state_diffs {
         let pre = &diff.pre_state;
-        let account_program_owner = pre.account.program_owner;
 
         // 2. Decreasing balance requires the account to be authorized
         if matches!(diff.post_balance_diff, BalanceDiff::Sub(amount) if amount > 0)
@@ -928,22 +938,16 @@ pub fn validate_execution(
             });
         }
 
-        // 3. Data changes only allowed if owned by executing program or if the account is unowned.
-        if diff
-            .post_data
-            .as_ref()
-            .is_some_and(|data| *data != pre.account.data)
-            && account_program_owner != DEFAULT_PROGRAM_OWNER
-            && account_program_owner != executing_account_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedDataModification {
+        // 3. A program may only write to its own shards.
+        if diff.post_data.is_some() && pre.program_account_id() != Some(executing_account_id) {
+            return Err(ExecutionValidationError::ForeignShardWrite {
                 account_id: pre.account_id,
                 executing_account_id,
             });
         }
 
         // 4. Balance diff must be valid against this account's own pre-state balance.
-        if let Err(source) = apply_balance_diff(pre.account.balance, Some(diff.post_balance_diff)) {
+        if let Err(source) = apply_balance_diff(pre.balance, Some(diff.post_balance_diff)) {
             return Err(ExecutionValidationError::InvalidBalanceDiff {
                 account_id: pre.account_id,
                 source,
@@ -982,47 +986,6 @@ pub fn validate_execution(
     }
 
     Ok(())
-}
-
-/// Make any program that has changed the data of a default-owned account its owner.
-pub fn acquire_ownership_on_data_write(pre: &Account, post: &mut Account, account_id: AccountId) {
-    if pre.program_owner == DEFAULT_PROGRAM_OWNER && post.data != pre.data {
-        post.program_owner = account_id;
-    }
-}
-
-/// An account that ends a transaction unowned must carry no data.
-#[must_use]
-pub fn is_ownership_settled(post: &Account) -> bool {
-    post.program_owner != DEFAULT_PROGRAM_OWNER || post.data.is_empty()
-}
-
-/// The account a diff leaves behind: balance and data applied, ownership acquired by the
-/// executing program if it wrote data to an unowned account.
-pub fn post_state(
-    diff: &AccountStateDiff,
-    executing_account_id: AccountId,
-) -> Result<Account, BalanceDiffError> {
-    let pre = &diff.pre_state.account;
-    let mut post = Account {
-        program_owner: pre.program_owner,
-        balance: apply_balance_diff(pre.balance, Some(diff.post_balance_diff))?,
-        data: diff.post_data.clone().unwrap_or_else(|| pre.data.clone()),
-        nonce: pre.nonce,
-    };
-    acquire_ownership_on_data_write(pre, &mut post, executing_account_id);
-    Ok(post)
-}
-
-fn validate_uniqueness_of_account_ids(state_diffs: &[AccountStateDiff]) -> bool {
-    let number_of_accounts = state_diffs.len();
-    let number_of_account_ids = state_diffs
-        .iter()
-        .map(|diff| &diff.pre_state.account_id)
-        .collect::<HashSet<_>>()
-        .len();
-
-    number_of_accounts == number_of_account_ids
 }
 
 #[cfg(test)]

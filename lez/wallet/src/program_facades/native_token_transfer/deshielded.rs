@@ -18,8 +18,9 @@ impl NativeTokenTransfer<'_> {
                 vec![
                     self.0
                         .resolve_private_account(from)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PublicNoSign(to),
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                        .balance(),
+                    AccountIdentity::PublicNoSign(to).balance(),
                 ],
                 instruction_data,
                 &program.into(),

@@ -114,17 +114,28 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
-        use lee::{Account, AccountId, PublicTransaction, V03State, public_transaction};
+        use lee::{
+            Account, AccountId, ProgramShardSelector, PublicTransaction, V03State,
+            public_transaction,
+        };
 
         use super::*;
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id().into(),
+                AccountId::from_builtin_program(bridge().id()),
                 vec![
-                    bridge_core::compute_bridge_account_id(bridge().id().into()),
-                    recipient_id,
-                    bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
+                    ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
+                        AccountId::from_builtin_program(bridge().id()),
+                    )),
+                    ProgramShardSelector::balance(recipient_id),
+                    ProgramShardSelector::new(
+                        bridge_core::deposit_receipt_account_id(
+                            AccountId::from_builtin_program(bridge().id()),
+                            op_id,
+                        ),
+                        AccountId::from_builtin_program(bridge().id()),
+                    ),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {
@@ -148,12 +159,10 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(bridge().id().into()),
-                    Account {
-                        program_owner: authenticated_transfer().id().into(),
-                        balance: u128::from(amount),
-                        ..Account::default()
-                    },
+                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
+                        bridge().id(),
+                    )),
+                    Account::funded(u128::from(amount)),
                 )])
                 .with_programs([bridge(), authenticated_transfer()]);
 
@@ -161,7 +170,10 @@ mod inner {
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
-            assert_eq!(events[0].account_id, AccountId::from(bridge().id()));
+            assert_eq!(
+                events[0].account_id,
+                AccountId::from_builtin_program(bridge().id())
+            );
             assert_eq!(
                 events[0].event.selector,
                 bridge_core::event::Deposit::SELECTOR

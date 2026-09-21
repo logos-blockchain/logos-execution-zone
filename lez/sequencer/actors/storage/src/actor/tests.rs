@@ -7,7 +7,7 @@ use common::{
     transaction::clock_invocation,
 };
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{Account, AccountId, V03State};
+use lee::{Account, AccountData, AccountId, V03State};
 
 use crate::{
     StorageActor,
@@ -111,7 +111,10 @@ fn state_with_balance(balance: u128) -> Arc<V03State> {
     Arc::new(V03State::new().with_public_accounts([(
         marker_id(),
         Account {
-            balance,
+            data: AccountData {
+                balance,
+                ..AccountData::default()
+            },
             ..Account::default()
         },
     )]))
@@ -140,6 +143,7 @@ async fn stored_balance(storage_ref: &ActorRef<StorageActor>) -> u128 {
         .expect("Failed to read the stored state")
         .expect("The store holds a chain")
         .get_account_by_id(marker_id())
+        .data
         .balance
 }
 
@@ -463,7 +467,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
     let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
     let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
 
-    let clock_1_acc = genesis_clock_tx.message.account_ids[0];
+    let clock_1_acc = genesis_clock_tx.message.shard_selectors[0].account_id;
 
     assert_eq!(
         storage_ref
@@ -961,7 +965,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .expect("The final snapshot is stored");
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
-    assert_eq!(final_state.get_account_by_id(marker_id()).balance, 200);
+    assert_eq!(final_state.get_account_by_id(marker_id()).data.balance, 200);
     assert_eq!(stored_balance(&storage_ref).await, 300);
 }
 
@@ -1061,7 +1065,7 @@ async fn the_first_block_written_starts_the_chain() {
     let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
     let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
     assert_eq!(
         storage_ref
@@ -1153,7 +1157,7 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_clock_tx = clock_invocation(3_u64.saturating_mul(100));
     let block_4_clock_tx = clock_invocation(4_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
     // A later block extends the chain rather than restarting it.
     let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);

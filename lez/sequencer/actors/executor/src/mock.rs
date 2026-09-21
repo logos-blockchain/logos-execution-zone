@@ -19,11 +19,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock,
-        GetBlockRange, GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetChannelIdReply,
+        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -86,6 +86,12 @@ mockall::mock! {
         pub fn handle_get_account(
             &mut self,
             msg: GetAccount,
+            ctx: &mut Context<Self, GetAccountReply>
+        ) -> GetAccountReply;
+
+        pub fn handle_get_account_view(
+            &mut self,
+            msg: GetAccountView,
             ctx: &mut Context<Self, GetAccountReply>
         ) -> GetAccountReply;
 
@@ -279,6 +285,18 @@ impl Message<GetAccount> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_account(msg, ctx)
+    }
+}
+
+impl Message<GetAccountView> for MockExecutorActor {
+    type Reply = GetAccountReply;
+
+    async fn handle(
+        &mut self,
+        msg: GetAccountView,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_account_view(msg, ctx)
     }
 }
 

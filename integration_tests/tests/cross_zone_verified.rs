@@ -18,7 +18,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
 };
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
 use ping_core::{
     ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -42,12 +42,12 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_account_id: programs::ping_sender().id().into(),
+                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
@@ -101,7 +101,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
 
-    let delivered = wait_for_indexer_delivery(ind_client_b, record_id).await?;
+    let delivered = wait_for_indexer_delivery(ind_client_b, record_id, receiver_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B's indexer must record the verified cross-zone payload"
@@ -110,7 +110,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
 }
 
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
-    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let ordinal = 0;
 
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
@@ -122,18 +122,21 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            receiver_config_account_id(receiver_id).into_value(),
-            ping_record_pda(receiver_id).into_value(),
+            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
+            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
     };
 
-    let sender_id: AccountId = programs::ping_sender().id().into();
+    let sender_id = AccountId::from_builtin_program(programs::ping_sender().id());
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
         sender_id,
-        vec![sender_config_account_id(sender_id), outbox_account],
+        vec![
+            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
+            ProgramShardSelector::balance(outbox_account),
+        ],
         vec![],
         send,
     )
@@ -148,15 +151,23 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
 async fn wait_for_indexer_delivery(
     indexer: &IndexerClient,
     record_id: AccountId,
+    receiver_id: AccountId,
 ) -> Result<Vec<u8>> {
     let account_id = indexer_service_protocol::AccountId {
         value: record_id.into_value(),
+    };
+    let program_account_id = indexer_service_protocol::AccountId {
+        value: receiver_id.into_value(),
     };
     let wait = async {
         loop {
             let account =
                 indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            let data = account.data.0;
+            let data = account
+                .data
+                .shards
+                .get(&program_account_id)
+                .map_or_else(Vec::new, |data| data.0.clone());
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

@@ -186,7 +186,9 @@ pub fn joining_setup() -> Result<(
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: joining_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::from_builtin_program(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;
@@ -196,17 +198,18 @@ pub fn joining_setup() -> Result<(
         hex::encode(joining_sequencer_key.to_bytes())
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
+    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(funding_id),
-                    AccountIdentity::Public(ownership_id),
-                    AccountIdentity::PublicNoSign(funds_id),
-                    AccountIdentity::PublicNoSign(config_id),
+                    AccountIdentity::Public(funding_id).balance(),
+                    AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                    AccountIdentity::PublicNoSign(funds_id).balance(),
+                    AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
                 ],
                 stake_instruction_data,
-                programs::sequencer_stake().id().into(),
+                stake_id,
             )
             .await
             .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))
@@ -216,8 +219,11 @@ pub fn joining_setup() -> Result<(
 
     ctx.block_on(|ctx| {
         poll_until("stake to take ownership", 30, || async {
-            Ok(get_account(ctx, ownership_id).await?.program_owner
-                == programs::sequencer_stake().id().into())
+            Ok(!get_account(ctx, ownership_id)
+                .await?
+                .data
+                .shard(stake_id)
+                .is_empty())
         })
     })?;
 
@@ -226,18 +232,19 @@ pub fn joining_setup() -> Result<(
             .await
             .context("Failed to read the stake ownership account")
     })?;
-    assert_eq!(
-        ownership_account.program_owner,
-        programs::sequencer_stake().id().into(),
-        "ownership account should now be owned by sequencer_stake"
+    assert!(
+        !ownership_account.data.shard(stake_id).is_empty(),
+        "ownership account should now hold a sequencer_stake record"
     );
     let staked_balance = ctx.block_on(|ctx| account_balance(ctx, funds_id))?;
     assert_eq!(
         staked_balance, FUNDING_BALANCE,
         "the funds PDA should hold the staked balance"
     );
-    let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
-        .context("ownership account data did not decode as a StakeRecord")?;
+    let record = sequencer_stake_core::StakeRecord::from_bytes(
+        ownership_account.data.shard(stake_id).as_ref(),
+    )
+    .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, joining_stake_key);
     log::info!(
         "Ownership account confirmed: {staked_balance} staked for sequencer key {}",

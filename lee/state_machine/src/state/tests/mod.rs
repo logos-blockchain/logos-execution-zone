@@ -8,19 +8,19 @@ use std::collections::HashMap;
 
 use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
-    InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
+    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata, Balance, Nonce, data::Data},
+    account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
     encryption::ViewingPublicKey,
     program::{
-        BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader, ProgramId, ProgramSegment,
-        TimestampValidityWindow, TransactionEvent,
+        AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow,
+        TransactionEvent,
     },
 };
 
 use crate::{
-    PublicKey, PublicTransaction, V03State,
+    ProvingInput, PublicKey, PublicTransaction, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     execute_and_prove,
     privacy_preserving_transaction::{
@@ -39,7 +39,6 @@ mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
-mod implicit_claiming;
 mod privacy_preserving;
 mod public_program_rules;
 mod validity_window;
@@ -51,11 +50,9 @@ impl V03State {
         self.insert_program(&crate::test_methods::simple_balance_transfer());
         self.insert_program(&crate::test_methods::dropped_account());
         self.insert_program(&crate::test_methods::data_changer());
+        self.insert_program(&crate::test_methods::foreign_shard_writer());
         self.insert_program(&crate::test_methods::minter());
         self.insert_program(&crate::test_methods::burner());
-        self.insert_program(&crate::test_methods::squatter());
-        self.insert_program(&crate::test_methods::acquire_and_forward());
-        self.insert_program(&crate::test_methods::acquire_then_fund());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());
@@ -74,35 +71,6 @@ impl V03State {
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self.insert_program(&crate::test_methods::reordering_transfer());
-        self
-    }
-
-    #[must_use]
-    pub fn with_non_default_accounts_but_default_program_owners(mut self) -> Self {
-        let account_with_default_values_except_balance = Account {
-            balance: 100,
-            ..Account::default()
-        };
-        let account_with_default_values_except_nonce = Account {
-            nonce: Nonce(37),
-            ..Account::default()
-        };
-        let account_with_default_values_except_data = Account {
-            data: vec![0xca, 0xfe].try_into().unwrap(),
-            ..Account::default()
-        };
-        self.force_insert_account(
-            AccountId::new([255; 32]),
-            account_with_default_values_except_balance,
-        );
-        self.force_insert_account(
-            AccountId::new([254; 32]),
-            account_with_default_values_except_nonce,
-        );
-        self.force_insert_account(
-            AccountId::new([253; 32]),
-            account_with_default_values_except_data,
-        );
         self
     }
 
@@ -173,23 +141,6 @@ struct EmitterInstruction {
     chain: Vec<(AccountId, InstructionData)>,
 }
 
-fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
-    initial_data
-        .iter()
-        .copied()
-        .map(|(account_id, balance)| {
-            (
-                account_id,
-                Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-                    balance,
-                    ..Account::default()
-                },
-            )
-        })
-        .collect()
-}
-
 fn transfer_transaction(
     from: AccountId,
     from_key: &PrivateKey,
@@ -199,11 +150,15 @@ fn transfer_transaction(
     to_nonce: u128,
     balance: u128,
 ) -> PublicTransaction {
-    let account_ids = vec![from, to];
+    let shard_selectors = vec![
+        ProgramShardSelector::balance(from),
+        ProgramShardSelector::balance(to),
+    ];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-    let program_id: AccountId = crate::test_methods::simple_balance_transfer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
+        public_transaction::Message::try_new(program_id, shard_selectors, nonces, balance).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
     PublicTransaction::new(message, witness_set)
 }
@@ -215,8 +170,11 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
-        vec![vault_id, receiver_id],
+        AccountId::from_builtin_program(initiator.id()),
+        vec![
+            ProgramShardSelector::balance(vault_id),
+            ProgramShardSelector::balance(receiver_id),
+        ],
         vec![], // no signers — vault is PDA-authorised
         instruction,
     )
@@ -257,9 +215,11 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
 pub fn init_pda_witness(
     keys: &TestPrivateKeys,
     identifier: Identifier,
-    binding: Option<(AccountId, PdaSeed)>,
-) -> InputAccountIdentity {
-    InputAccountIdentity::Private(PrivateWitness {
+    binding: (AccountId, PdaSeed),
+    account: Account,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
         vpk: keys.vpk(),
         random_seed: [0; 32],
         identifier,
@@ -268,53 +228,70 @@ pub fn init_pda_witness(
             npk: keys.npk(),
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
-    })
+    }
 }
 
-/// Registers `program` in `state` at its own bijection address, as a single-segment
-/// `program_loader` deploy — the shape `ProgramWithDependencies::from(program)` assumes.
-/// `check_privacy_preserving_circuit_proof_is_valid` claims every top-level/dependency program
-/// against real chain state, so any test that runs a privacy-preserving transaction through
-/// `V03State::transition_from_privacy_preserving_transaction` needs the program registered here
-/// first, not just known to the local prover.
-pub fn register_program(state: &mut V03State, program: &Program) {
-    let self_account_id = AccountId::from(program.id());
-    let segment_account_id = AccountId::new({
-        let mut bytes = self_account_id.into_value();
-        bytes[0] = bytes[0].wrapping_add(1);
-        bytes
-    });
-    state.force_insert_account(
-        segment_account_id,
-        Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
-                ProgramSegment {
-                    bytecode: program.elf().to_vec(),
-                    next_segment: None,
-                }
-                .to_bytes(),
-            )
-            .unwrap(),
-            ..Account::default()
+pub fn update_pda_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    binding: (AccountId, PdaSeed),
+    account: Account,
+    membership_proof: MembershipProof,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Pda { binding },
+        nullifier: NullifierWitness::Update {
+            view_tag: 0,
+            nsk: keys.nsk(),
+            membership_proof,
         },
-    );
-    state.force_insert_account(
-        self_account_id,
-        Account {
-            program_owner: PROGRAM_LOADER_ACCOUNT_ID,
-            data: Data::try_from(
-                ProgramHeader {
-                    image_id: program.id(),
-                    program_first_segment: segment_account_id,
-                    immutable: true,
-                }
-                .to_bytes(),
-            )
-            .unwrap(),
-            ..Account::default()
+    }
+}
+
+pub fn init_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    account: Account,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Regular {
+            ask: Some(keys.ask),
         },
-    );
+        nullifier: NullifierWitness::Init {
+            npk: keys.npk(),
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    }
+}
+
+pub fn update_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    account: Account,
+    membership_proof: MembershipProof,
+) -> PrivateWitness {
+    PrivateWitness {
+        account,
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Regular {
+            ask: Some(keys.ask),
+        },
+        nullifier: NullifierWitness::Update {
+            view_tag: 0,
+            nsk: keys.nsk(),
+            membership_proof,
+        },
+    }
 }
 
 fn shielded_balance_transfer_for_tests(
@@ -323,38 +300,24 @@ fn shielded_balance_transfer_for_tests(
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
-    let sender = AccountWithMetadata::new(
-        state.get_account_by_id(sender_keys.account_id()),
-        true,
-        sender_keys.account_id(),
-    );
+    let sender_id = sender_keys.account_id();
+    let sender_account = state.get_account_by_id(sender_id);
+    let sender_nonce = sender_account.nonce;
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
 
-    let sender_nonce = sender.account.nonce;
-
-    let recipient = AccountWithMetadata::new(
-        Account::default(),
-        true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
-    );
-
-    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
-        vec![sender, recipient],
-        Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: recipient_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }),
-        ],
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
+            ],
+            signers: [sender_id].into(),
+            public_accounts: [(sender_id, sender_account)].into(),
+            private_witnesses: vec![init_witness(recipient_keys, 0, Account::default())],
+            instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
+            ..Default::default()
+        },
         &crate::test_methods::simple_balance_transfer().into(),
     )
     .unwrap();
@@ -373,52 +336,32 @@ fn private_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id =
+    let sender_id =
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
-    let sender_pre = AccountWithMetadata::new(
-        sender_private_account.clone(),
-        true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
-    );
-    let recipient_pre = AccountWithMetadata::new(
-        Account::default(),
-        true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
-    );
+    let sender_commitment = Commitment::new(&sender_id, sender_private_account);
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
 
-    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
-        vec![sender_pre, recipient_pre],
-        Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
+            ],
+            private_witnesses: vec![
+                update_witness(
+                    sender_keys,
+                    0,
+                    sender_private_account.clone(),
+                    state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
-                },
-            }),
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Init {
-                    npk: recipient_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }),
-        ],
+                ),
+                init_witness(recipient_keys, 0, Account::default()),
+            ],
+            instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
+            ..Default::default()
+        },
         &program.into(),
     )
     .unwrap();
@@ -438,41 +381,32 @@ fn deshielded_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id =
+    let sender_id =
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
-    let sender_pre = AccountWithMetadata::new(
-        sender_private_account.clone(),
-        true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
-    );
-    let recipient_pre = AccountWithMetadata::new(
-        state.get_account_by_id(*recipient_account_id),
-        false,
-        *recipient_account_id,
-    );
+    let sender_commitment = Commitment::new(&sender_id, sender_private_account);
 
-    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
-        vec![sender_pre, recipient_pre],
-        Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: WitnessKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    view_tag: 0,
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender's commitment must be in state"),
-                },
-            }),
-            InputAccountIdentity::Public,
-        ],
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(*recipient_account_id),
+            ],
+            public_accounts: [(
+                *recipient_account_id,
+                state.get_account_by_id(*recipient_account_id),
+            )]
+            .into(),
+            private_witnesses: vec![update_witness(
+                sender_keys,
+                0,
+                sender_private_account.clone(),
+                state
+                    .get_proof_for_commitment(&sender_commitment)
+                    .expect("sender's commitment must be in state"),
+            )],
+            instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
+            ..Default::default()
+        },
         &program.into(),
     )
     .unwrap();
@@ -487,14 +421,12 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-        balance: 100,
         nonce: Nonce(0xdead_beef),
-        ..Account::default()
+        ..Account::funded(100)
     };
     let recipient_keys = test_private_account_keys_2();
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer());
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

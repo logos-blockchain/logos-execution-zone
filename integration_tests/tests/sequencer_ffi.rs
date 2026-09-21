@@ -343,11 +343,11 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         FfiTransactionKind::Public => {
             let ffi_acc_ids =
                 // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { owner_id_tx.body.public_body.read().message.account_ids };
+                unsafe { owner_id_tx.body.public_body.read().message.shard_selectors };
 
             let second_ffi_acc =
                 // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { ffi_acc_ids.get(1).data };
+                unsafe { ffi_acc_ids.get(1).account_id.data };
 
             assert_eq!(second_ffi_acc, *owner_id.value());
         }
@@ -364,11 +364,11 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         FfiTransactionKind::Public => {
             let ffi_acc_ids =
                 // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { owner_id_tx.body.public_body.read().message.account_ids };
+                unsafe { owner_id_tx.body.public_body.read().message.shard_selectors };
 
             let forth_ffi_acc =
                 // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { ffi_acc_ids.get(3).data };
+                unsafe { ffi_acc_ids.get(3).account_id.data };
 
             assert_eq!(forth_ffi_acc, *owner_id.value());
         }

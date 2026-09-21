@@ -1,7 +1,7 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, BalanceDiff},
-    program::{CallKind, ProgramInput, UnsupportedCallKind},
+    account::{AccountId, BalanceDiff},
+    program::{AccountInput, CallKind, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
@@ -11,19 +11,12 @@ use crate::{
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program},
 };
 
-fn transfer_fixture() -> (Program, Vec<AccountWithMetadata>, Vec<u8>, u128) {
+fn transfer_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, u128) {
     let program = crate::test_methods::simple_balance_transfer();
     let balance_to_move: u128 = 11_223_344_556_677;
     let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
-    let sender = AccountWithMetadata::new(
-        Account {
-            balance: 77_665_544_332_211,
-            ..Account::default()
-        },
-        true,
-        AccountId::new([0; 32]),
-    );
-    let recipient = AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
+    let sender = AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211);
+    let recipient = AccountInput::balance(AccountId::new([1; 32]), false, 0);
     (
         program,
         vec![sender, recipient],
@@ -38,7 +31,7 @@ fn program_execution() {
 
     let (program_output, _cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -65,21 +58,14 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = [
-        AccountWithMetadata::new(
-            Account {
-                balance: 10,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        ),
-        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+        AccountInput::balance(AccountId::new([0; 32]), true, 10),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ];
 
     let mut env_builder = ExecutorEnv::builder();
     program
         .write_inputs(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -108,7 +94,7 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &[],
             &Vec::new(),
@@ -130,7 +116,7 @@ fn execute_reports_cycles_within_budget() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let (_, cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -147,7 +133,7 @@ fn execute_reports_cycles_within_budget() {
 fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = transfer_fixture();
     let result = program.execute(
-        AccountId::from(program.id()),
+        AccountId::from_builtin_program(program.id()),
         None,
         &pre_states,
         &instruction_data,
@@ -164,22 +150,15 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(7_u128).unwrap();
     let pre_states = vec![
-        AccountWithMetadata::new(
-            Account {
-                balance: 10,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        ),
-        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+        AccountInput::balance(AccountId::new([0; 32]), true, 10),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ];
 
     let mut env_builder = ExecutorEnv::builder();
     // Stands in for a call kind a future protocol upgrade defines.
     env_builder.write_slice(&to_borsh_frame(&CallKind::Unknown(77)));
     let input = ProgramInput {
-        self_account_id: program.id().into(),
+        self_account_id: AccountId::from_builtin_program(program.id()),
         caller_account_id: None,
         pre_states: pre_states.clone(),
         instruction: instruction_data.clone(),
@@ -221,7 +200,7 @@ fn nonzero_exit_is_rejected_with_its_cycles() {
     let program = crate::test_methods::exits_nonzero();
     let err = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &[],
             &Vec::new(),

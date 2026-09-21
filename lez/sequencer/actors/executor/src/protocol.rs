@@ -4,7 +4,7 @@ use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
 use lee_core::{
     BlockId, Commitment,
-    account::{Account, AccountId},
+    account::{Account, AccountId, ProgramShardSelector},
 };
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
@@ -112,6 +112,10 @@ pub struct GetProofsAndRoot {
 
 pub struct GetAccount {
     pub account_id: AccountId,
+}
+
+pub struct GetAccountView {
+    pub shard_selector: ProgramShardSelector,
 }
 
 #[derive(Reply)]
