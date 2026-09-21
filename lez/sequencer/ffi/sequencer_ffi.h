@@ -136,13 +136,21 @@ typedef struct FfiBlockHeader {
 
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
+typedef struct FfiOption_FfiAccountId {
+  FfiAccountId *value;
+  bool is_some;
+} FfiOption_FfiAccountId;
+
+typedef struct FfiProgramShardSelector {
+  FfiAccountId account_id;
+  struct FfiOption_FfiAccountId program_account_id;
+} FfiProgramShardSelector;
+
+typedef struct FfiVec_FfiProgramShardSelector {
+  struct FfiProgramShardSelector *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccountId;
-
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+} FfiVec_FfiProgramShardSelector;
 
 /**
  * U128 - 16 bytes little endian.
@@ -183,7 +191,7 @@ typedef struct FfiFeeDeclaration {
 
 typedef struct FfiPublicMessage {
   FfiAccountId program_account_id;
-  FfiAccountIdList account_ids;
+  struct FfiVec_FfiProgramShardSelector shard_selectors;
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
   bool has_fee;
@@ -209,39 +217,38 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
-/**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  struct FfiBytes32 program_owner;
+typedef struct FfiVec_FfiAccountId {
+  FfiAccountId *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountId;
+
+typedef struct FfiVec_u8 FfiVecU8;
+
+typedef struct FfiVec_FfiVecU8 {
+  FfiVecU8 *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiVecU8;
+
+typedef struct FfiAccountData {
   /**
    * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes.
+   * Account shards keys.
    */
-  uint8_t *data;
+  struct FfiVec_FfiAccountId account_data_keys;
   /**
-   * Length of account data.
+   * Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
    */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
+  struct FfiVec_FfiVecU8 account_data_values;
+} FfiAccountData;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccount post_state;
+  struct FfiAccountData post;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -251,8 +258,6 @@ typedef struct FfiVec_FfiPublicAction {
 } FfiVec_FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;
@@ -347,6 +352,23 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * Account data structure - C-compatible version of lee Account.
+ *
+ * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * byte arrays since C doesn't have native u128 support.
+ */
+typedef struct FfiAccount {
+  /**
+   * Account data struct.
+   */
+  struct FfiAccountData account_data;
+  /**
+   * Nonce as little-endian [u8; 16].
+   */
+  struct FfiU128 nonce;
+} FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.

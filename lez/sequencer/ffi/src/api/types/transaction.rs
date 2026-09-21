@@ -1,7 +1,7 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, EphemeralPublicKey, FeeDeclaration, PrivacyPreservingTransaction, PublicKey,
-    PublicTransaction, Signature,
+    AccountId, EphemeralPublicKey, FeeDeclaration, PrivacyPreservingTransaction,
+    ProgramShardSelector, PublicKey, PublicTransaction, Signature,
     privacy_preserving_transaction::{
         circuit::Proof,
         message::{EncryptedAccountData, PublicActionWithID},
@@ -18,9 +18,9 @@ use crate::{
     api::types::{
         FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
         FfiVec,
-        account::FfiAccount,
+        account::FfiAccountData,
         vectors::{
-            FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
+            FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
             FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
         },
     },
@@ -63,12 +63,9 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Ok(Self {
             message: lee::public_transaction::Message {
                 program_account_id: value.message.program_account_id.into(),
-                account_ids: {
-                    let std_vec: Vec<_> = value.message.account_ids.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| AccountId::new(ffi_val.data))
-                        .collect()
+                shard_selectors: {
+                    let std_vec: Vec<_> = value.message.shard_selectors.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
@@ -142,9 +139,39 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
 }
 
 #[repr(C)]
+pub struct FfiProgramShardSelector {
+    pub account_id: FfiAccountId,
+    pub program_account_id: FfiOption<FfiAccountId>,
+}
+
+impl From<ProgramShardSelector> for FfiProgramShardSelector {
+    fn from(value: ProgramShardSelector) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            program_account_id: value
+                .program_account_id
+                .map_or_else(FfiOption::from_none, |val| {
+                    FfiOption::from_value(val.into())
+                }),
+        }
+    }
+}
+
+impl From<FfiProgramShardSelector> for ProgramShardSelector {
+    fn from(value: FfiProgramShardSelector) -> Self {
+        let std_opt: Option<FfiAccountId> = value.program_account_id.into();
+
+        Self {
+            account_id: value.account_id.into(),
+            program_account_id: std_opt.map(Into::into),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiPublicMessage {
     pub program_account_id: FfiAccountId,
-    pub account_ids: FfiAccountIdList,
+    pub shard_selectors: FfiVec<FfiProgramShardSelector>,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
     pub has_fee: bool,
@@ -155,7 +182,7 @@ impl From<lee::public_transaction::Message> for FfiPublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             fee,
@@ -163,7 +190,7 @@ impl From<lee::public_transaction::Message> for FfiPublicMessage {
 
         Self {
             program_account_id: program_account_id.into(),
-            account_ids: account_ids
+            shard_selectors: shard_selectors
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -252,7 +279,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     for ffi_val in std_vec {
                         cast_vec.push(PublicActionWithID {
                             account_id: AccountId::new(ffi_val.account_id.data),
-                            post_state: ffi_val.post_state.try_into()?,
+                            post: ffi_val.post.try_into()?,
                         });
                     }
 
@@ -319,14 +346,14 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 #[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
-    pub post_state: FfiAccount,
+    pub post: FfiAccountData,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
         Self {
             account_id: value.account_id.into(),
-            post_state: value.post_state.into(),
+            post: value.post.into(),
         }
     }
 }
@@ -662,8 +689,11 @@ mod tests {
     fn public_transaction_fee_roundtrips_over_the_ffi() {
         let tx = |fee| PublicTransaction {
             message: lee::public_transaction::Message {
-                program_account_id: [2; 8].into(),
-                account_ids: vec![AccountId::new([3; 32])],
+                program_account_id: AccountId::new([42; 32]),
+                shard_selectors: vec![ProgramShardSelector {
+                    account_id: AccountId::new([3; 32]),
+                    program_account_id: Some(AccountId::new([42; 32])),
+                }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],
                 fee,
