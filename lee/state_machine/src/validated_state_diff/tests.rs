@@ -121,19 +121,17 @@ fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-    let program = crate::test_methods::reordering_writer();
+    let program = crate::test_methods::data_changer();
     let program_id: AccountId = program.id().into();
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(program));
     let message = Message::try_new(
         program_id,
-        vec![
-            ProgramShardSelector::new(from, program_id),
-            ProgramShardSelector::new(to, program_id),
-        ],
+        // `data_changer` writes the one shard it is handed. `to` still signs, so the fixture
+        // keeps two nonce advances to observe on a charged revert.
+        vec![ProgramShardSelector::new(from, program_id)],
         vec![Nonce(0), Nonce(0)],
         vec![7_u8; 4],
     )

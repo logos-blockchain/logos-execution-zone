@@ -4,14 +4,15 @@ use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey,
     WitnessKind,
-    account::{Account, AccountData, AccountId, AccountInput, Nonce},
+    account::{Account, AccountId, Nonce},
     execution_state::{AccountChange, CallEffects, ExecutionError, PublicFacts},
-    program::{PdaSeed, PrivateAccountKind},
+    native_token::{Instruction as NativeInstruction, encode_balance},
+    program::{AccountInput, PdaSeed, PrivateAccountKind},
 };
 
 use super::*;
 use crate::{
-    error::{InvalidProgramBehaviorError, LeeError},
+    error::LeeError,
     privacy_preserving_transaction::circuit::execute_and_prove,
     program::Program,
     state::{
@@ -995,13 +996,13 @@ fn input_with(
 fn a_balance_only_root_selector_lets_a_chained_call_read_the_shard() {
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
-    let on_chain = Data::try_from(vec![1; 8]).unwrap();
+    let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
     let write = vec![3; 16];
 
     let mut asked: Vec<ProgramShardSelector> = Vec::new();
     let (output, proof) = execute_and_prove_with(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
+            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             public_accounts: [(account_id, Account::funded(5))].into(),
             instruction_data: forward_to(account_id, callee_id, &write),
             ..Default::default()
@@ -1020,7 +1021,7 @@ fn a_balance_only_root_selector_lets_a_chained_call_read_the_shard() {
     );
     assert!(proof.is_valid_for(&output));
     let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
-    assert_eq!(action.pre.balance, 5);
+    assert_eq!(action.pre.balance(), Ok(5));
     assert_eq!(
         action.pre.shards.keys().copied().collect::<Vec<_>>(),
         vec![callee_id],
@@ -1029,7 +1030,7 @@ fn a_balance_only_root_selector_lets_a_chained_call_read_the_shard() {
     assert_eq!(action.pre.shards[&callee_id], on_chain);
     assert_eq!(
         action.post.shards[&callee_id],
-        Data::try_from(write).unwrap()
+        ShardData::try_from(write).unwrap()
     );
     assert!(!action.post.shards.contains_key(&forwarder_id));
 }
@@ -1113,16 +1114,13 @@ fn an_empty_resolution_is_asked_once_and_matches_not_resolving_at_all() {
     let second = vec![0xC2; 12];
     let sparse =
         Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[
-                (callee_id, data_changer_instruction(&first)),
-                (callee_id, data_changer_instruction(&second)),
-            ],
-        ),
-    );
+    let instruction = forwarder_instruction(&calls_at(
+        account_id,
+        &[
+            (callee_id, data_changer_instruction(&first)),
+            (callee_id, data_changer_instruction(&second)),
+        ],
+    ));
 
     let (unresolved_output, _) = execute_and_prove(
         input_with(
@@ -1258,7 +1256,7 @@ fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
         &program,
         &mut |shard_selector| {
             asked.push(shard_selector);
-            Ok(Some(Data::empty()))
+            Ok(Some(ShardData::empty()))
         },
     )
     .unwrap();
@@ -1271,7 +1269,7 @@ fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
     let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
     assert_eq!(
         action.post.shards[&callee_id],
-        Data::try_from(second).unwrap()
+        ShardData::try_from(second).unwrap()
     );
 }
 
@@ -1287,7 +1285,7 @@ fn a_chained_call_on_an_account_the_root_never_named_is_rejected() {
     let fresh_id = AccountId::new([8; 32]);
     let instruction = forwarder_instruction(&[(
         echo_id,
-        ProgramShardSelector::balance_only(fresh_id),
+        ProgramShardSelector::balance(fresh_id),
         Program::serialize_instruction(()).unwrap(),
     )]);
 
@@ -1363,7 +1361,6 @@ fn program_receipt(
             .state_diffs
             .into_iter()
             .map(|diff| AccountChange {
-                balance_diff: diff.post_balance_diff,
                 data: diff.post_data,
             })
             .collect(),
@@ -1419,7 +1416,7 @@ fn alice_input(program: &Program, balance: u128) -> ProgramInput<InstructionData
     ProgramInput {
         self_account_id: program.id().into(),
         caller_account_id: None,
-        pre_states: vec![AccountInput::balance_only(ALICE, true, balance)],
+        pre_states: vec![AccountInput::balance(ALICE, true, balance)],
         instruction: Program::serialize_instruction(()).unwrap(),
     }
 }
@@ -1430,7 +1427,7 @@ fn a_hand_built_input_with_a_matching_receipt_proves() {
     let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 100));
     let input = direct_input(
         &noop,
-        vec![ProgramShardSelector::balance_only(ALICE)],
+        vec![ProgramShardSelector::balance(ALICE)],
         Program::serialize_instruction(()).unwrap(),
         [(ALICE, (true, Account::funded(100).data))].into(),
         &[&noop],
@@ -1439,7 +1436,7 @@ fn a_hand_built_input_with_a_matching_receipt_proves() {
 
     let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
 
-    assert_eq!(output.public_actions[0].post.balance, 100);
+    assert_eq!(output.public_actions[0].post.balance(), Ok(100));
 }
 
 #[test]
@@ -1448,7 +1445,7 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 999));
     let input = direct_input(
         &noop,
-        vec![ProgramShardSelector::balance_only(ALICE)],
+        vec![ProgramShardSelector::balance(ALICE)],
         Program::serialize_instruction(()).unwrap(),
         [(ALICE, (true, Account::funded(100).data))].into(),
         &[&noop],
@@ -1462,39 +1459,39 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
 
 #[test]
 fn forbidden_effects_are_rejected_by_the_circuit() {
-    let transfer = crate::test_methods::simple_balance_transfer();
-    let instruction = Program::serialize_instruction(10_u128).unwrap();
+    let writer = crate::test_methods::foreign_shard_writer();
+    let instruction = encode_balance(500).to_vec();
     let (receipt, effects) = program_receipt(
-        &transfer,
+        &writer,
         &ProgramInput {
-            self_account_id: transfer.id().into(),
+            self_account_id: writer.id().into(),
             caller_account_id: None,
             pre_states: vec![
-                AccountInput::balance_only(ALICE, false, 100),
-                AccountInput::balance_only(BOB, false, 0),
+                AccountInput::balance(ALICE, false, 100),
+                AccountInput::balance(BOB, false, 5),
             ],
             instruction: instruction.clone(),
         },
     );
     let input = direct_input(
-        &transfer,
+        &writer,
         vec![
-            ProgramShardSelector::balance_only(ALICE),
-            ProgramShardSelector::balance_only(BOB),
+            ProgramShardSelector::balance(ALICE),
+            ProgramShardSelector::balance(BOB),
         ],
         instruction,
         [
             (ALICE, (false, Account::funded(100).data)),
-            (BOB, (false, AccountData::default())),
+            (BOB, (false, Account::funded(5).data)),
         ]
         .into(),
-        &[&transfer],
+        &[&writer],
         vec![effects],
     );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
-    assert_circuit_rejects(&result, "decrease balance of unauthorized account");
+    assert_circuit_rejects(&result, "wrote data on a shard selector of");
 }
 
 #[test]
@@ -1512,7 +1509,7 @@ fn an_undeclared_child_account_is_rejected_by_the_circuit() {
         &ProgramInput {
             self_account_id: forwarder.id().into(),
             caller_account_id: None,
-            pre_states: vec![AccountInput::balance_only(ALICE, true, 100)],
+            pre_states: vec![AccountInput::balance(ALICE, true, 100)],
             instruction: instruction.clone(),
         },
     );
@@ -1521,13 +1518,13 @@ fn an_undeclared_child_account_is_rejected_by_the_circuit() {
         &ProgramInput {
             self_account_id: noop.id().into(),
             caller_account_id: Some(forwarder.id().into()),
-            pre_states: vec![AccountInput::balance_only(BOB, false, 5)],
+            pre_states: vec![AccountInput::balance(BOB, false, 5)],
             instruction: Program::serialize_instruction(()).unwrap(),
         },
     );
     let input = direct_input(
         &forwarder,
-        vec![ProgramShardSelector::balance_only(ALICE)],
+        vec![ProgramShardSelector::balance(ALICE)],
         instruction,
         [
             (ALICE, (true, Account::funded(100).data)),
@@ -1559,13 +1556,13 @@ fn missing_effects_are_rejected_by_the_circuit() {
         &ProgramInput {
             self_account_id: forwarder.id().into(),
             caller_account_id: None,
-            pre_states: vec![AccountInput::balance_only(ALICE, true, 100)],
+            pre_states: vec![AccountInput::balance(ALICE, true, 100)],
             instruction: instruction.clone(),
         },
     );
     let input = direct_input(
         &forwarder,
-        vec![ProgramShardSelector::balance_only(ALICE)],
+        vec![ProgramShardSelector::balance(ALICE)],
         instruction,
         [(ALICE, (true, Account::funded(100).data))].into(),
         &[&forwarder, &noop],
@@ -1583,7 +1580,7 @@ fn surplus_effects_are_rejected_by_the_circuit() {
     let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 100));
     let input = direct_input(
         &noop,
-        vec![ProgramShardSelector::balance_only(ALICE)],
+        vec![ProgramShardSelector::balance(ALICE)],
         Program::serialize_instruction(()).unwrap(),
         [(ALICE, (true, Account::funded(100).data))].into(),
         &[&noop],

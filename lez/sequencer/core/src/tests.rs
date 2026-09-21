@@ -1572,11 +1572,8 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
     let is_failed_at_balance_mismatch = matches!(
         result.err().unwrap(),
         lee::error::LeeError::InvalidProgramBehavior(
-            lee::error::InvalidProgramBehaviorError::Execution(
-                lee_core::execution_state::ExecutionError::ExecutionValidation {
-                    source: lee_core::program::ExecutionValidationError::InvalidBalanceDiff { .. },
-                    ..
-                }
+            lee::error::InvalidProgramBehaviorError::NativeTransferFailed(
+                lee_core::native_token::TransferError::InsufficientBalance { .. }
             )
         )
     );

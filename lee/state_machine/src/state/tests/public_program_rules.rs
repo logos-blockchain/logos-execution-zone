@@ -66,10 +66,13 @@ fn program_should_fail_if_it_debits_an_unauthorized_account() {
 
     assert!(matches!(
         result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id },
-            ..
-        }))) if err_account_id == sender_account_id
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender {
+                    account_id: err_account_id
+                }
+            )
+        )) if err_account_id == sender_account_id
     ));
 }
 
@@ -168,33 +171,6 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     assert_eq!(state.get_account_by_id(other_id), Account::default());
 }
 
-#[test]
-fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
-    let mut state = V03State::new().with_test_programs();
-    let account_id = AccountId::new([1; 32]);
-    let program_id: AccountId = crate::test_methods::minter().id().into();
-
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
-        vec![],
-        (),
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let result = state.transition_from_public_transaction(&tx, 2, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed },
-            ..
-        }))) if total_added == 1.into() && total_subbed == 0.into()
-    ));
-}
-
 /// A chained call may only name an account the transaction declared or an earlier call already
 /// touched — never an arbitrary id that merely exists (or not) in global state.
 #[test]
@@ -275,37 +251,6 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
     );
 }
 
-#[test]
-fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
-    let program_id: AccountId = crate::test_methods::burner().id().into();
-    let key = PrivateKey::try_new([7; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let mut state = V03State::new()
-        .with_public_account_balances([(account_id, 100)])
-        .with_test_programs();
-    let balance_to_burn: u128 = 1;
-    assert!(state.get_account_by_id(account_id).data.balance > balance_to_burn);
-
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::balance_only(account_id)],
-        vec![Nonce(0)],
-        balance_to_burn,
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
-    let tx = PublicTransaction::new(message, witness_set);
-    let result = state.transition_from_public_transaction(&tx, 2, 0);
-
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed },
-            ..
-        }))) if total_added == 0.into() && total_subbed == 1.into()
-    ));
-}
-
 /// Rejects a chained call that omits a requested shard selector from its output.
 #[test]
 fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
@@ -380,10 +325,9 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::InvalidBalanceDiff { account_id, .. },
-            ..
-        })
+            InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::InsufficientBalance { account_id }
+            )
         )) if account_id == from
     ));
 
@@ -393,17 +337,11 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 
 #[test]
 fn reordered_state_diffs_are_rejected() {
-    let program = crate::test_methods::reordering_transfer();
-    let from_key = PrivateKey::try_new([23; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let initial_balance = 10;
-    let mut state = V03State::new()
-        .with_public_account_balances([(from, initial_balance)])
-        .with_test_programs();
-
-    let to_key = PrivateKey::try_new([24; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
-    let amount: u128 = 4;
+    let program = crate::test_methods::reordering_writer();
+    let program_id: AccountId = program.id().into();
+    let first = AccountId::new([23; 32]);
+    let second = AccountId::new([24; 32]);
+    let mut state = V03State::new().with_test_programs();
 
     let message = public_transaction::Message::try_new(
         program_id,
@@ -412,7 +350,7 @@ fn reordered_state_diffs_are_rejected() {
             ProgramShardSelector::new(second, program_id),
         ],
         vec![],
-        written.clone(),
+        vec![7_u8; 4],
     )
     .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -427,12 +365,12 @@ fn reordered_state_diffs_are_rejected() {
                 ExecutionError::PreStateMismatch {
                     program_account_id, expected, ..
                 }
-            ))) if *program_account_id == AccountId::from(program.id()) && expected.account_id == from
+            ))) if *program_account_id == program_id && expected.account_id == first
         ),
         "expected PreStateMismatch for the reordered rows, got {result:?}"
     );
-    assert_eq!(state.get_account_by_id(from).data.balance, initial_balance);
-    assert_eq!(state.get_account_by_id(to).data.balance, 0);
+    assert_eq!(state.get_account_by_id(first), Account::default());
+    assert_eq!(state.get_account_by_id(second), Account::default());
 }
 
 fn forwarding_transaction(
@@ -463,8 +401,8 @@ fn a_chained_call_reads_another_shard_of_a_root_account_from_chain_state() {
     let forwarder_id: AccountId = crate::test_methods::shard_forwarder().id().into();
     let callee_id: AccountId = crate::test_methods::data_changer().id().into();
     let stranger = AccountId::new([9; 32]);
-    let on_chain: Data = b"on-chain".to_vec().try_into().unwrap();
-    let stranger_data: Data = b"stranger".to_vec().try_into().unwrap();
+    let on_chain: ShardData = b"on-chain".to_vec().try_into().unwrap();
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let mut state = V03State::new()
         .with_public_accounts([(
@@ -480,7 +418,7 @@ fn a_chained_call_reads_another_shard_of_a_root_account_from_chain_state() {
 
     for root in [
         ProgramShardSelector::new(account_id, forwarder_id),
-        ProgramShardSelector::balance_only(account_id),
+        ProgramShardSelector::balance(account_id),
     ] {
         let tx = forwarding_transaction(
             root,

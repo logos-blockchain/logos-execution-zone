@@ -4,16 +4,17 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateWitness,
     ProgramImageClaim,
-    account::{Account, AccountId, Balance, Data, ProgramShardSelector},
+    account::{Account, AccountId, ProgramShardSelector, ShardData},
     execution_state::{ExecutionState, InstructionEcho, PublicSource, RootCall},
     from_frame,
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{CallKind, InstructionData, ProgramInput, ProgramOutput},
     to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
 };
@@ -107,26 +108,21 @@ struct LocalSource<'accounts> {
     signers: &'accounts HashSet<AccountId>,
     public_accounts: &'accounts HashMap<AccountId, Account>,
     root_shard_selectors: HashSet<ProgramShardSelector>,
-    resolve: &'accounts mut dyn FnMut(ProgramShardSelector) -> Result<Option<Data>, LeeError>,
+    resolve: &'accounts mut dyn FnMut(ProgramShardSelector) -> Result<Option<ShardData>, LeeError>,
 }
 
 impl PublicSource for LocalSource<'_> {
     type Error = LeeError;
 
-    fn account(&mut self, account_id: AccountId) -> Result<(bool, Balance), LeeError> {
-        Ok((
-            self.signers.contains(&account_id),
-            self.public_accounts
-                .get(&account_id)
-                .map_or(0, |account| account.data.balance),
-        ))
+    fn account(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
+        Ok(self.signers.contains(&account_id))
     }
 
     fn shard(
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Result<Data, LeeError> {
+    ) -> Result<ShardData, LeeError> {
         let shard_selector = ProgramShardSelector::new(account_id, program_account_id);
         let resolved = if self.root_shard_selectors.contains(&shard_selector) {
             None
@@ -136,7 +132,7 @@ impl PublicSource for LocalSource<'_> {
         Ok(resolved.unwrap_or_else(|| {
             self.public_accounts
                 .get(&account_id)
-                .map_or_else(Data::empty, |account| {
+                .map_or_else(ShardData::empty, |account| {
                     account.data.shard(program_account_id).clone()
                 })
         }))
@@ -193,28 +189,34 @@ pub fn execute_and_prove_with(
     let mut env_builder = ExecutorEnv::builder();
     let mut effects = Vec::new();
     while let Some(call) = state.prepare_next_call(&mut source)? {
-        let program = if call.caller_account_id.is_none() {
-            initial_program
+        let (output, receipt) = if call.self_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            let output =
+                native_token::execute(call.caller_account_id, &call.pre_states, &call.instruction)
+                    .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
+            (output, None)
         } else {
-            dependencies.get(&call.self_account_id).ok_or(
+            let program = programs.get(&call.self_account_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
                     program_account_id: call.self_account_id,
                 },
-            )?
+            )?;
+            let receipt = execute_and_prove_program(program, call)?;
+            let output: ProgramOutput =
+                borsh::from_slice(from_frame(&receipt.journal.bytes).ok_or_else(|| {
+                    LeeError::ProgramOutputDeserializationError(
+                        "malformed inner-receipt journal frame".to_owned(),
+                    )
+                })?)
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            (output, Some(receipt))
         };
-        let receipt = execute_and_prove_program(program, call)?;
-        let output: ProgramOutput =
-            borsh::from_slice(from_frame(&receipt.journal.bytes).ok_or_else(|| {
-                LeeError::ProgramOutputDeserializationError(
-                    "malformed inner-receipt journal frame".to_owned(),
-                )
-            })?)
-            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
         let call_effects = state.bind_output(output, InstructionEcho::Checked)?;
         effects.push(call_effects.clone());
         state.complete_call(call_effects, |_| {})?;
-        env_builder.add_assumption(receipt);
+        if let Some(receipt) = receipt {
+            env_builder.add_assumption(receipt);
+        }
     }
     let root_call_kind = state.root_call_kind();
     let public_facts = state

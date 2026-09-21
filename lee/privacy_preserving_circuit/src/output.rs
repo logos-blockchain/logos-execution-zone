@@ -204,7 +204,7 @@ mod tests {
     use lee_core::{
         AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, NullifierPublicKey,
         PublicAction,
-        account::{AccountData, Data},
+        account::{AccountData, ShardData},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
@@ -215,6 +215,67 @@ mod tests {
 
     fn data(bytes: &[u8]) -> ShardData {
         bytes.to_vec().try_into().expect("test data is small")
+    }
+
+    struct Owner {
+        ask: AuthorizationSecretKey,
+        d: [u8; 32],
+        z: [u8; 32],
+    }
+
+    impl Owner {
+        fn new(tag: u8) -> Self {
+            Self {
+                ask: AuthorizationSecretKey([tag; 32]),
+                d: [tag; 32],
+                z: [tag.wrapping_add(1); 32],
+            }
+        }
+
+        fn nsk(&self) -> NullifierSecretKey {
+            NullifierSecretKey::from(&self.ask)
+        }
+
+        fn vpk(&self) -> ViewingPublicKey {
+            ViewingPublicKey::from_seed(&self.d, &self.z)
+        }
+
+        fn account_id(&self) -> AccountId {
+            AccountId::for_regular_private_account(
+                &NullifierPublicKey::from(&self.nsk()),
+                &self.vpk(),
+                0,
+            )
+        }
+
+        fn update_witness(&self, account: Account) -> PrivateWitness {
+            PrivateWitness {
+                account,
+                vpk: self.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(self.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: self.nsk(),
+                    membership_proof: (0, Vec::new()),
+                },
+            }
+        }
+
+        fn decrypt(&self, action: &PrivateAction) -> (PrivateAccountKind, Account) {
+            let shared =
+                SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &self.d, &self.z)
+                    .expect("the note's ephemeral key decapsulates");
+            EncryptionScheme::decrypt(
+                &action.encrypted_post_state.ciphertext,
+                &shared,
+                &action.nullifier,
+            )
+            .expect("the note decrypts")
+        }
     }
 
     fn emit(
@@ -244,11 +305,10 @@ mod tests {
                 .with_shard(SHARD_A, data(b"a"))
                 .with_shard(SHARD_B, data(b"b"))
         };
-        let rewritten = AccountData {
-            balance: 60,
-            ..account.data.clone()
-        }
-        .with_shard(SHARD_B, data(b"b-rewritten"));
+        let rewritten = Account::funded(60)
+            .data
+            .with_shard(SHARD_A, data(b"a"))
+            .with_shard(SHARD_B, data(b"b-rewritten"));
 
         let output = emit(
             Vec::new(),

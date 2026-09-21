@@ -1,8 +1,8 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
     program::{
-        AccountInput, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
+        ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
+        read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -27,7 +27,7 @@ fn main() {
         return;
     };
 
-    let state_diffs = vec![AccountStateDiff::unchanged(own)];
+    let state_diffs = vec![ShardStateDiff::unchanged(own)];
 
     let chained_calls = callees
         .into_iter()

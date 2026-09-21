@@ -281,8 +281,8 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: Data = header.to_bytes().try_into().unwrap();
-    let segment_shard: Data = segment.to_bytes().try_into().unwrap();
+    let program_shard: ShardData = header.to_bytes().try_into().unwrap();
+    let segment_shard: ShardData = segment.to_bytes().try_into().unwrap();
     let lookup = |id| {
         if id == program_account {
             Some(&program_shard)
@@ -297,7 +297,7 @@ fn get_program_via_reads_the_loader_shard() {
         Some(([7; 8], vec![1, 2, 3]))
     );
 
-    let deleted = Data::empty();
+    let deleted = ShardData::empty();
     let deleted_header = |id| (id == program_account).then_some(&deleted);
     assert_eq!(get_program_via(program_account, deleted_header), None);
 }

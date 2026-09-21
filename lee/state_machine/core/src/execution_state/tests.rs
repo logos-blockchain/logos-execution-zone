@@ -3,11 +3,12 @@
 use super::*;
 use crate::{
     AuthorizationSecretKey,
-    account::{Account, Nonce},
+    account::{Account, Balance, Nonce},
     encryption::ViewingPublicKey,
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
 };
 
-const PROGRAM: AccountId = AccountId::new([0; 32]);
+const PROGRAM: AccountId = AccountId::new([4; 32]);
 const OTHER_PROGRAM: AccountId = AccountId::new([1; 32]);
 const SEED: PdaSeed = PdaSeed::new([2; 32]);
 const OTHER_SEED: PdaSeed = PdaSeed::new([3; 32]);
@@ -85,7 +86,7 @@ struct Recording {
 impl PublicSource for Recording {
     type Error = ExecutionError;
 
-    fn account(&mut self, account_id: AccountId) -> Result<(bool, Balance), ExecutionError> {
+    fn account(&mut self, account_id: AccountId) -> Result<bool, ExecutionError> {
         self.facts.account(account_id)
     }
 
@@ -93,21 +94,20 @@ impl PublicSource for Recording {
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Result<Data, ExecutionError> {
+    ) -> Result<ShardData, ExecutionError> {
         self.asked
             .push(ProgramShardSelector::new(account_id, program_account_id));
         self.facts.shard(account_id, program_account_id)
     }
 }
 
-fn data(bytes: &[u8]) -> Data {
+fn data(bytes: &[u8]) -> ShardData {
     bytes.to_vec().try_into().unwrap()
 }
 
 fn funded(balance: Balance) -> AccountData {
     AccountData {
-        balance,
-        ..AccountData::default()
+        shards: [(NATIVE_TOKEN_PROGRAM_ID, encode_balance(balance))].into(),
     }
 }
 
@@ -134,13 +134,7 @@ fn chained(
 }
 
 fn unchanged(count: usize) -> Vec<AccountChange> {
-    vec![
-        AccountChange {
-            balance_diff: BalanceDiff::Add(0),
-            data: None,
-        };
-        count
-    ]
+    vec![AccountChange { data: None }; count]
 }
 
 fn effects(account_changes: Vec<AccountChange>, chained_calls: Vec<ChainedCall>) -> CallEffects {
@@ -168,9 +162,8 @@ fn output_of(call: &ProgramInput<InstructionData>, effects: &CallEffects) -> Pro
             .iter()
             .cloned()
             .zip(&effects.account_changes)
-            .map(|(pre_state, change)| AccountStateDiff {
+            .map(|(pre_state, change)| ShardStateDiff {
                 pre_state,
-                post_balance_diff: change.balance_diff,
                 post_data: change.data.clone(),
             })
             .collect(),
@@ -267,7 +260,7 @@ fn root_inputs_come_from_the_facts_in_selector_order() {
     let mut state = start(
         root(vec![
             ProgramShardSelector::new(BOB, PROGRAM),
-            ProgramShardSelector::balance_only(ALICE),
+            ProgramShardSelector::balance(ALICE),
         ]),
         &[],
         &mut facts,
@@ -281,8 +274,8 @@ fn root_inputs_come_from_the_facts_in_selector_order() {
     assert_eq!(
         call.pre_states,
         vec![
-            AccountInput::with_shard(BOB, false, 7, PROGRAM, data(b"bob")),
-            AccountInput::balance_only(ALICE, true, 5),
+            AccountInput::with_shard(BOB, false, PROGRAM, data(b"bob")),
+            AccountInput::balance(ALICE, true, 5),
         ]
     );
 }
@@ -292,7 +285,7 @@ fn a_missing_fact_for_a_root_account_is_rejected() {
     let mut facts = facts([]);
 
     let result = ExecutionState::initialize(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         CallKind::Execute,
         &[],
         &mut facts,
@@ -301,7 +294,7 @@ fn a_missing_fact_for_a_root_account_is_rejected() {
     assert!(matches!(
         result.err(),
         Some(ExecutionError::MissingPublicFact { shard_selector })
-            if shard_selector == ProgramShardSelector::balance_only(ALICE)
+            if shard_selector == ProgramShardSelector::balance(ALICE)
     ));
 }
 
@@ -325,7 +318,7 @@ fn a_selected_shard_without_an_explicit_fact_is_rejected_while_an_empty_one_is_r
         .unwrap()
         .1
         .shards
-        .insert(PROGRAM, Data::empty());
+        .insert(PROGRAM, ShardData::empty());
     let mut state = start(
         root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
         &[],
@@ -337,9 +330,8 @@ fn a_selected_shard_without_an_explicit_fact_is_rejected_while_an_empty_one_is_r
         vec![AccountInput::with_shard(
             ALICE,
             false,
-            1,
             PROGRAM,
-            Data::empty()
+            ShardData::empty()
         )]
     );
 }
@@ -349,8 +341,8 @@ fn fewer_effect_rows_than_inputs_are_rejected() {
     let mut facts = facts([(ALICE, false, funded(1)), (BOB, false, funded(1))]);
     let mut state = start(
         root(vec![
-            ProgramShardSelector::balance_only(ALICE),
-            ProgramShardSelector::balance_only(BOB),
+            ProgramShardSelector::balance(ALICE),
+            ProgramShardSelector::balance(BOB),
         ]),
         &[],
         &mut facts,
@@ -378,7 +370,7 @@ fn a_journal_must_repeat_the_prepared_inputs_exactly() {
     let mut state = start(
         root(vec![
             ProgramShardSelector::new(ALICE, PROGRAM),
-            ProgramShardSelector::balance_only(BOB),
+            ProgramShardSelector::balance(BOB),
         ]),
         &[],
         &mut facts,
@@ -406,21 +398,14 @@ fn a_journal_must_repeat_the_prepared_inputs_exactly() {
     ));
 
     let mut other_shard = reference.clone();
-    other_shard.state_diffs[0].pre_state.shard = Some((OTHER_PROGRAM, data(b"a")));
+    other_shard.state_diffs[0].pre_state.shard = (OTHER_PROGRAM, data(b"a"));
     assert!(matches!(
         state.bind_output(other_shard, InstructionEcho::Checked),
         Err(ExecutionError::PreStateMismatch { .. })
     ));
 
-    let mut balance_only = reference.clone();
-    balance_only.state_diffs[0].pre_state.shard = None;
-    assert!(matches!(
-        state.bind_output(balance_only, InstructionEcho::Checked),
-        Err(ExecutionError::PreStateMismatch { .. })
-    ));
-
     let mut stale = reference.clone();
-    stale.state_diffs[1].pre_state.balance = 3;
+    stale.state_diffs[1].pre_state.shard.1 = encode_balance(3);
     assert!(matches!(
         state.bind_output(stale, InstructionEcho::Checked),
         Err(ExecutionError::PreStateMismatch { .. })
@@ -465,7 +450,7 @@ fn a_journal_must_repeat_the_prepared_inputs_exactly() {
 fn a_chained_call_must_execute_while_the_root_may_not() {
     let mut facts = facts([(ALICE, false, funded(1))]);
     let mut state = start(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         &[],
         &mut facts,
     );
@@ -474,7 +459,7 @@ fn a_chained_call_must_execute_while_the_root_may_not() {
         call,
         vec![chained(
             OTHER_PROGRAM,
-            vec![ProgramShardSelector::balance_only(ALICE)],
+            vec![ProgramShardSelector::balance(ALICE)],
         )],
     );
     let mut unknown = output_of(call, &effects);
@@ -519,16 +504,12 @@ fn the_reconstructed_journal_preserves_every_distinct_encoding() {
         },
     ];
     let calls = vec![
-        chained(
-            OTHER_PROGRAM,
-            vec![ProgramShardSelector::balance_only(ALICE)],
-        ),
-        chained(PROGRAM, vec![ProgramShardSelector::balance_only(ALICE)]),
+        chained(OTHER_PROGRAM, vec![ProgramShardSelector::balance(ALICE)]),
+        chained(PROGRAM, vec![ProgramShardSelector::balance(ALICE)]),
     ];
     let effects = CallEffects {
         account_changes: vec![AccountChange {
-            balance_diff: BalanceDiff::Sub(0),
-            data: Some(Data::empty()),
+            data: Some(ShardData::empty()),
         }],
         chained_calls: calls.clone(),
         block_validity_window: (1..).into(),
@@ -548,8 +529,7 @@ fn the_reconstructed_journal_preserves_every_distinct_encoding() {
     assert_eq!(output.instruction_data, vec![1, 2, 3]);
     assert_eq!(output.state_diffs.len(), 1);
     assert_eq!(output.state_diffs[0].pre_state, inputs[0]);
-    assert_eq!(output.state_diffs[0].post_balance_diff, BalanceDiff::Sub(0));
-    assert_eq!(output.state_diffs[0].post_data, Some(Data::empty()));
+    assert_eq!(output.state_diffs[0].post_data, Some(ShardData::empty()));
     assert_eq!(output.chained_calls, calls);
     assert_eq!(output.block_validity_window, (1..).into());
     assert_eq!(output.timestamp_validity_window, (..9).into());
@@ -583,7 +563,7 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
     let mut state = start(
         root(vec![
             ProgramShardSelector::new(ALICE, PROGRAM),
-            ProgramShardSelector::balance_only(BOB),
+            ProgramShardSelector::balance(BOB),
         ]),
         &[],
         &mut source,
@@ -593,21 +573,12 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
         assert_eq!(
             call.pre_states,
             vec![
-                AccountInput::with_shard(ALICE, true, 10, PROGRAM, data(b"p")),
-                AccountInput::balance_only(BOB, false, 0),
+                AccountInput::with_shard(ALICE, true, PROGRAM, data(b"p")),
+                AccountInput::balance(BOB, false, 0),
             ]
         );
         effects(
-            vec![
-                AccountChange {
-                    balance_diff: BalanceDiff::Sub(4),
-                    data: None,
-                },
-                AccountChange {
-                    balance_diff: BalanceDiff::Add(4),
-                    data: None,
-                },
-            ],
+            unchanged(2),
             vec![
                 chained(
                     OTHER_PROGRAM,
@@ -623,11 +594,9 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
     for written in [b"s2", b"s3"] {
         step(&mut state, &mut source, |call| {
             assert_eq!(call.pre_states.len(), 1);
-            assert_eq!(call.pre_states[0].balance, 6);
-            assert_eq!(call.pre_states[0].program_account_id(), Some(OTHER_PROGRAM));
+            assert_eq!(call.pre_states[0].program_account_id(), OTHER_PROGRAM);
             effects(
                 vec![AccountChange {
-                    balance_diff: BalanceDiff::Add(0),
                     data: Some(data(written)),
                 }],
                 Vec::new(),
@@ -639,6 +608,7 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
         source.asked,
         vec![
             ProgramShardSelector::new(ALICE, PROGRAM),
+            ProgramShardSelector::balance(BOB),
             ProgramShardSelector::new(ALICE, OTHER_PROGRAM)
         ]
     );
@@ -648,15 +618,15 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
         PublicAction {
             account_id: ALICE,
             is_authorized: true,
-            pre: funded(10)
+            pre: AccountData::default()
                 .with_shard(PROGRAM, data(b"p"))
                 .with_shard(OTHER_PROGRAM, data(b"s")),
-            post: funded(6)
+            post: AccountData::default()
                 .with_shard(PROGRAM, data(b"p"))
                 .with_shard(OTHER_PROGRAM, data(b"s3")),
         }
     );
-    assert_eq!(public_actions[1].post, funded(4));
+    assert_eq!(public_actions[1].post, funded(0));
 }
 
 #[test]
@@ -670,10 +640,14 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
         (BOB, false, funded(0)),
     ]);
     let mut state = start(
-        root(vec![
-            ProgramShardSelector::balance_only(ALICE),
-            ProgramShardSelector::balance_only(BOB),
-        ]),
+        RootCall {
+            program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            shard_selectors: vec![
+                ProgramShardSelector::balance(ALICE),
+                ProgramShardSelector::balance(BOB),
+            ],
+            instruction_data: vec![1, 2, 3],
+        },
         &[],
         &mut facts,
     );
@@ -682,19 +656,17 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
         assert_eq!(
             call.pre_states,
             vec![
-                AccountInput::balance_only(ALICE, true, 10),
-                AccountInput::balance_only(BOB, false, 0),
+                AccountInput::balance(ALICE, true, 10),
+                AccountInput::balance(BOB, false, 0),
             ]
         );
         effects(
             vec![
                 AccountChange {
-                    balance_diff: BalanceDiff::Sub(3),
-                    data: None,
+                    data: Some(encode_balance(7)),
                 },
                 AccountChange {
-                    balance_diff: BalanceDiff::Add(3),
-                    data: None,
+                    data: Some(encode_balance(3)),
                 },
             ],
             vec![chained(
@@ -709,7 +681,6 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
             vec![AccountInput::with_shard(
                 ALICE,
                 true,
-                7,
                 OTHER_PROGRAM,
                 data(b"s")
             )]
@@ -740,8 +711,7 @@ fn a_cleared_shard_reads_back_empty_and_stays_in_both_projections() {
     step(&mut state, &mut facts, |_| {
         effects(
             vec![AccountChange {
-                balance_diff: BalanceDiff::Add(0),
-                data: Some(Data::empty()),
+                data: Some(ShardData::empty()),
             }],
             vec![chained(
                 PROGRAM,
@@ -755,9 +725,8 @@ fn a_cleared_shard_reads_back_empty_and_stays_in_both_projections() {
             vec![AccountInput::with_shard(
                 ALICE,
                 false,
-                1,
                 PROGRAM,
-                Data::empty()
+                ShardData::empty()
             )]
         );
         echo(call, Vec::new())
@@ -765,24 +734,21 @@ fn a_cleared_shard_reads_back_empty_and_stays_in_both_projections() {
 
     let FinalState { public_actions, .. } = state.finish().unwrap();
     assert_eq!(public_actions[0].pre.shards[&PROGRAM], data(b"a"));
-    assert_eq!(public_actions[0].post.shards[&PROGRAM], Data::empty());
+    assert_eq!(public_actions[0].post.shards[&PROGRAM], ShardData::empty());
 }
 
 #[test]
 fn a_chained_call_cannot_name_an_account_the_root_did_not() {
     let mut facts = facts([(ALICE, false, funded(1)), (BOB, false, funded(1))]);
     let mut state = start(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         &[],
         &mut facts,
     );
     step(&mut state, &mut facts, |call| {
         echo(
             call,
-            vec![chained(
-                PROGRAM,
-                vec![ProgramShardSelector::balance_only(BOB)],
-            )],
+            vec![chained(PROGRAM, vec![ProgramShardSelector::balance(BOB)])],
         )
     });
 
@@ -799,7 +765,7 @@ fn a_witness_outside_the_root_inputs_is_rejected() {
     let mut facts = facts([(ALICE, false, funded(1))]);
 
     let result = ExecutionState::initialize(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         CallKind::Execute,
         &witnesses,
         &mut facts,
@@ -816,7 +782,7 @@ fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
     let keys = Keys::new(4);
     let other = Keys::new(5);
     let mut facts = facts([]);
-    let selectors = vec![ProgramShardSelector::balance_only(keys.regular_id())];
+    let selectors = vec![ProgramShardSelector::balance(keys.regular_id())];
 
     let duplicate = [
         keys.regular(true, Account::default()),
@@ -847,8 +813,8 @@ fn two_private_pdas_under_one_seed_conflict() {
 
     let result = ExecutionState::initialize(
         root(vec![
-            ProgramShardSelector::balance_only(keys.pda_id(PROGRAM, SEED)),
-            ProgramShardSelector::balance_only(other.pda_id(PROGRAM, SEED)),
+            ProgramShardSelector::balance(keys.pda_id(PROGRAM, SEED)),
+            ProgramShardSelector::balance(other.pda_id(PROGRAM, SEED)),
         ]),
         CallKind::Execute,
         &witnesses,
@@ -873,9 +839,9 @@ fn credentials_are_fixed_and_seed_grants_stay_in_their_subtree() {
     ];
     let mut facts = facts([(public_pda, false, funded(1))]);
     let selectors = vec![
-        ProgramShardSelector::balance_only(signer.regular_id()),
-        ProgramShardSelector::balance_only(holder.regular_id()),
-        ProgramShardSelector::balance_only(public_pda),
+        ProgramShardSelector::balance(signer.regular_id()),
+        ProgramShardSelector::balance(holder.regular_id()),
+        ProgramShardSelector::balance(public_pda),
     ];
     let authorization = |call: &ProgramInput<InstructionData>| -> Vec<bool> {
         call.pre_states
@@ -918,7 +884,7 @@ fn a_private_pda_is_granted_only_by_its_own_seed_from_its_own_program() {
     let witnesses = [keys.pda(PROGRAM, SEED)];
     let pda = keys.pda_id(PROGRAM, SEED);
     let mut facts = facts([]);
-    let selectors = vec![ProgramShardSelector::balance_only(pda)];
+    let selectors = vec![ProgramShardSelector::balance(pda)];
     let mut state = start(root(selectors.clone()), &witnesses, &mut facts);
 
     step(&mut state, &mut facts, |call| {
@@ -968,8 +934,8 @@ fn a_public_pda_grant_under_a_privately_bound_seed_conflicts() {
     let public_pda = AccountId::for_public_pda(&PROGRAM, &SEED);
     let mut facts = facts([(public_pda, false, funded(1))]);
     let selectors = vec![
-        ProgramShardSelector::balance_only(keys.pda_id(PROGRAM, SEED)),
-        ProgramShardSelector::balance_only(public_pda),
+        ProgramShardSelector::balance(keys.pda_id(PROGRAM, SEED)),
+        ProgramShardSelector::balance(public_pda),
     ];
     let mut state = start(root(selectors.clone()), &witnesses, &mut facts);
     step(&mut state, &mut facts, |call| {
@@ -988,7 +954,7 @@ fn a_public_pda_grant_under_a_privately_bound_seed_conflicts() {
 #[test]
 fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
     let mut facts = facts([(ALICE, false, funded(1))]);
-    let selectors = vec![ProgramShardSelector::balance_only(ALICE)];
+    let selectors = vec![ProgramShardSelector::balance(ALICE)];
     let mut state = start(root(selectors.clone()), &[], &mut facts);
     step(&mut state, &mut facts, |call| {
         echo(
@@ -1039,7 +1005,7 @@ fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
 #[test]
 fn finishing_with_a_scheduled_call_is_rejected() {
     let mut facts = facts([(ALICE, false, funded(1))]);
-    let selectors = vec![ProgramShardSelector::balance_only(ALICE)];
+    let selectors = vec![ProgramShardSelector::balance(ALICE)];
     let mut state = start(root(selectors.clone()), &[], &mut facts);
     step(&mut state, &mut facts, |call| {
         echo(call, vec![chained(OTHER_PROGRAM, selectors.clone())])
@@ -1054,15 +1020,14 @@ fn finishing_with_a_scheduled_call_is_rejected() {
 #[test]
 fn validation_and_window_failures_name_the_program() {
     let mut facts = facts([(ALICE, false, funded(1))]);
-    let selectors = vec![ProgramShardSelector::balance_only(ALICE)];
+    let selectors = vec![ProgramShardSelector::balance(ALICE)];
     let mut state = start(root(selectors.clone()), &[], &mut facts);
     state.prepare_next_call(&mut facts).unwrap().unwrap();
     assert!(matches!(
         state.complete_call(
             effects(
                 vec![AccountChange {
-                    balance_diff: BalanceDiff::Sub(1),
-                    data: None
+                    data: Some(encode_balance(1))
                 }],
                 Vec::new()
             ),
@@ -1070,7 +1035,10 @@ fn validation_and_window_failures_name_the_program() {
         ),
         Err(ExecutionError::ExecutionValidation {
             program_account_id: PROGRAM,
-            source: ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: ALICE }
+            source: ExecutionValidationError::ForeignShardWrite {
+                account_id: ALICE,
+                executing_account_id: PROGRAM
+            }
         })
     ));
 
@@ -1095,7 +1063,7 @@ fn validation_and_window_failures_name_the_program() {
 #[test]
 fn the_final_windows_are_the_intersection_of_every_call() {
     let mut facts = facts([(ALICE, false, funded(1))]);
-    let selectors = vec![ProgramShardSelector::balance_only(ALICE)];
+    let selectors = vec![ProgramShardSelector::balance(ALICE)];
     let mut state = start(root(selectors.clone()), &[], &mut facts);
     step(&mut state, &mut facts, |call| CallEffects {
         block_validity_window: (1..5).try_into().unwrap(),
@@ -1122,8 +1090,8 @@ fn a_duplicated_root_account_is_rejected_by_the_transition_rules() {
     let mut facts = facts([(ALICE, false, funded(1))]);
     let mut state = start(
         root(vec![
-            ProgramShardSelector::balance_only(ALICE),
-            ProgramShardSelector::balance_only(ALICE),
+            ProgramShardSelector::balance(ALICE),
+            ProgramShardSelector::balance(ALICE),
         ]),
         &[],
         &mut facts,
@@ -1133,7 +1101,7 @@ fn a_duplicated_root_account_is_rejected_by_the_transition_rules() {
     assert!(matches!(
         state.complete_call(effects(unchanged(2), Vec::new()), |_| {}),
         Err(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::PreStateAccountIdsNotUnique,
+            source: ExecutionValidationError::PreStateShardSelectorsNotUnique,
             ..
         })
     ));
@@ -1158,9 +1126,9 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
     ]);
     let mut state = start(
         root(vec![
-            ProgramShardSelector::balance_only(BOB),
+            ProgramShardSelector::balance(BOB),
             ProgramShardSelector::new(keys.regular_id(), PROGRAM),
-            ProgramShardSelector::balance_only(ALICE),
+            ProgramShardSelector::balance(ALICE),
         ]),
         &witnesses,
         &mut facts,
@@ -1168,18 +1136,11 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
     step(&mut state, &mut facts, |_| {
         effects(
             vec![
+                AccountChange { data: None },
                 AccountChange {
-                    balance_diff: BalanceDiff::Add(0),
-                    data: None,
-                },
-                AccountChange {
-                    balance_diff: BalanceDiff::Add(0),
                     data: Some(data(b"written")),
                 },
-                AccountChange {
-                    balance_diff: BalanceDiff::Add(0),
-                    data: None,
-                },
+                AccountChange { data: None },
             ],
             Vec::new(),
         )
@@ -1197,8 +1158,8 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
             .collect::<Vec<_>>(),
         vec![BOB, ALICE]
     );
-    assert!(public_actions[1].pre.shards.is_empty());
-    assert!(public_actions[1].post.shards.is_empty());
+    assert_eq!(public_actions[1].pre, funded(1));
+    assert_eq!(public_actions[1].post, funded(1));
     assert_eq!(
         private_accounts[&keys.regular_id()],
         AccountData::default()
@@ -1211,17 +1172,14 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
 fn a_failed_preparation_aborts_the_execution() {
     let mut facts = facts([(ALICE, false, funded(1))]);
     let mut state = start(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         &[],
         &mut facts,
     );
     step(&mut state, &mut facts, |call| {
         echo(
             call,
-            vec![chained(
-                PROGRAM,
-                vec![ProgramShardSelector::balance_only(BOB)],
-            )],
+            vec![chained(PROGRAM, vec![ProgramShardSelector::balance(BOB)])],
         )
     });
     assert!(matches!(
@@ -1240,7 +1198,7 @@ fn a_failed_preparation_aborts_the_execution() {
 fn a_failed_completion_aborts_the_execution() {
     let mut facts = facts([(ALICE, false, funded(1))]);
     let mut state = start(
-        root(vec![ProgramShardSelector::balance_only(ALICE)]),
+        root(vec![ProgramShardSelector::balance(ALICE)]),
         &[],
         &mut facts,
     );
@@ -1277,13 +1235,15 @@ fn a_pending_shard_is_known_only_once_observed_and_a_cleared_one_stays_known() {
     step(&mut state, &mut facts, |_| {
         effects(
             vec![AccountChange {
-                balance_diff: BalanceDiff::Add(0),
-                data: Some(Data::empty()),
+                data: Some(ShardData::empty()),
             }],
             Vec::new(),
         )
     });
 
-    assert_eq!(state.pending_shard(ALICE, PROGRAM), Some(&Data::empty()));
+    assert_eq!(
+        state.pending_shard(ALICE, PROGRAM),
+        Some(&ShardData::empty())
+    );
     assert_eq!(state.pending_shard(ALICE, OTHER_PROGRAM), None);
 }

@@ -68,7 +68,7 @@ fn main() {
         pre_states
             .iter()
             .cloned()
-            .map(AccountStateDiff::unchanged)
+            .map(ShardStateDiff::unchanged)
             .collect(),
     )
     .with_chained_calls(chained_calls)

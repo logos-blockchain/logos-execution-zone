@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::Cycles,
     from_frame,
-    program::{AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]

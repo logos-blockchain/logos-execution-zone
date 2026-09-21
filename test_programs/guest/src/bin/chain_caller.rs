@@ -49,8 +49,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(recipient_pre),
-            AccountStateDiff::unchanged(sender_pre),
+            ShardStateDiff::unchanged(recipient_pre),
+            ShardStateDiff::unchanged(sender_pre),
         ],
     )
     .with_chained_calls(chained_calls)

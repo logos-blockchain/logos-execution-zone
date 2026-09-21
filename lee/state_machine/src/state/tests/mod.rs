@@ -13,6 +13,9 @@ use lee_core::{
     account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
     encryption::ViewingPublicKey,
     execution_state::ExecutionError,
+    native_token::{
+        Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
+    },
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
         MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
@@ -67,7 +70,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::validity_window_chain_caller());
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
-        self.insert_program(&crate::test_methods::reordering_transfer());
+        self.insert_program(&crate::test_methods::reordering_writer());
         self.insert_program(&crate::test_methods::shard_forwarder());
         self
     }

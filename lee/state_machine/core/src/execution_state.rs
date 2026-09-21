@@ -5,13 +5,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, PublicAction,
     WitnessKind,
-    account::{
-        AccountData, AccountId, AccountInput, Balance, BalanceDiff, Data, ProgramShardSelector,
-    },
+    account::{AccountData, AccountId, ProgramShardSelector, ShardData},
     program::{
-        AccountStateDiff, BlockValidityWindow, CallKind, ChainedCall, ExecutionValidationError,
+        AccountInput, BlockValidityWindow, CallKind, ChainedCall, ExecutionValidationError,
         InstructionData, InvalidWindow, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent,
-        ProgramInput, ProgramOutput, TimestampValidityWindow, validate_execution,
+        ProgramInput, ProgramOutput, ShardStateDiff, TimestampValidityWindow, validate_execution,
     },
 };
 
@@ -26,8 +24,7 @@ pub struct RootCall {
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct AccountChange {
-    pub balance_diff: BalanceDiff,
-    pub data: Option<Data>,
+    pub data: Option<ShardData>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -45,23 +42,23 @@ pub type PublicFacts = BTreeMap<AccountId, (bool, AccountData)>;
 pub trait PublicSource {
     type Error: From<ExecutionError>;
 
-    fn account(&mut self, account_id: AccountId) -> Result<(bool, Balance), Self::Error>;
+    fn account(&mut self, account_id: AccountId) -> Result<bool, Self::Error>;
 
     fn shard(
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Result<Data, Self::Error>;
+    ) -> Result<ShardData, Self::Error>;
 }
 
 impl PublicSource for PublicFacts {
     type Error = ExecutionError;
 
-    fn account(&mut self, account_id: AccountId) -> Result<(bool, Balance), ExecutionError> {
+    fn account(&mut self, account_id: AccountId) -> Result<bool, ExecutionError> {
         self.get(&account_id)
-            .map(|(is_authorized, data)| (*is_authorized, data.balance))
-            .ok_or_else(|| ExecutionError::MissingPublicFact {
-                shard_selector: ProgramShardSelector::balance_only(account_id),
+            .map(|(is_authorized, _)| *is_authorized)
+            .ok_or(ExecutionError::MissingPublicFact {
+                shard_selector: ProgramShardSelector::balance(account_id),
             })
     }
 
@@ -69,7 +66,7 @@ impl PublicSource for PublicFacts {
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Result<Data, ExecutionError> {
+    ) -> Result<ShardData, ExecutionError> {
         self.get(&account_id)
             .and_then(|(_, data)| data.shards.get(&program_account_id))
             .cloned()
@@ -271,11 +268,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     origin: Origin::Private(index),
                 }
             } else {
-                let (is_authorized, balance) = source.account(account_id)?;
-                let initial = AccountData {
-                    balance,
-                    shards: BTreeMap::new(),
-                };
+                let is_authorized = source.account(account_id)?;
+                let initial = AccountData::default();
                 AccountEntry {
                     data: initial.clone(),
                     origin: Origin::Public {
@@ -355,9 +349,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             let account_id = shard_selector.account_id;
             let is_authorized =
                 self.authorize(caller_account_id, &pda_seeds, &mut grants, account_id)?;
-            if let Some(program) = shard_selector.program_account_id {
-                self.observe_shard(account_id, program, source)?;
-            }
+            self.observe_shard(account_id, shard_selector.program_account_id, source)?;
             pre_states.push(AccountInput::at(
                 shard_selector,
                 is_authorized,
@@ -476,9 +468,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
         }
         let mut account_changes = Vec::with_capacity(state_diffs.len());
         for (diff, input) in state_diffs.into_iter().zip(&active.pre_states) {
-            let AccountStateDiff {
+            let ShardStateDiff {
                 pre_state,
-                post_balance_diff,
                 post_data,
             } = diff;
             if pre_state != *input {
@@ -488,10 +479,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     actual: Box::new(pre_state),
                 });
             }
-            account_changes.push(AccountChange {
-                balance_diff: post_balance_diff,
-                data: post_data,
-            });
+            account_changes.push(AccountChange { data: post_data });
         }
         if is_root {
             self.root_call_kind = call_kind;
@@ -546,9 +534,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
             state_diffs: pre_states
                 .into_iter()
                 .zip(effects.account_changes)
-                .map(|(pre_state, change)| AccountStateDiff {
+                .map(|(pre_state, change)| ShardStateDiff {
                     pre_state,
-                    post_balance_diff: change.balance_diff,
                     post_data: change.data,
                 })
                 .collect(),
@@ -587,8 +574,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 .get_mut(&diff.pre_state.account_id)
                 .expect("every input row names an account of the root call")
                 .data
-                .apply_diff(diff)
-                .expect("validate_execution checked the balance diff");
+                .apply_diff(diff);
         }
         for call in chained_calls.into_iter().rev() {
             self.pending.push_front(PendingCall {
@@ -627,7 +613,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         &self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Option<&Data> {
+    ) -> Option<&ShardData> {
         let entry = self.accounts.get(&account_id)?;
         match &entry.origin {
             Origin::Public { initial, .. } if !initial.shards.contains_key(&program_account_id) => {

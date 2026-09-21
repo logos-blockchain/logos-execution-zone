@@ -1,8 +1,8 @@
 use lee_core::{
     account::ProgramShardSelector,
     program::{
-        AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
-        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
+        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -42,8 +42,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(first),
-            AccountStateDiff::unchanged(second),
+            ShardStateDiff::unchanged(first),
+            ShardStateDiff::unchanged(second),
         ],
     )
     .with_chained_calls(vec![chained_call])

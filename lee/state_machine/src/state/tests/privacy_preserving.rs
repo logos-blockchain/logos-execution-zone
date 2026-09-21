@@ -247,43 +247,6 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 }
 
 #[test]
-fn burner_program_is_refused_when_proving() {
-    let program = crate::test_methods::burner();
-    let account_id = AccountId::new([0; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
-            signers: [account_id].into(),
-            public_accounts: [(account_id, Account::funded(100))].into(),
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
-
-    assert_execution_failure(&result, "Total balance across accounts is not preserved");
-}
-
-#[test]
-fn minter_program_is_refused_when_proving() {
-    let program = crate::test_methods::minter();
-    let account_id = AccountId::new([0; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance_only(account_id)],
-            signers: [account_id].into(),
-            instruction_data: Program::serialize_instruction(()).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
-
-    assert_execution_failure(&result, "Total balance across accounts is not preserved");
-}
-
-#[test]
 fn a_data_write_on_a_foreign_shard_is_refused_when_proving() {
     let program = crate::test_methods::foreign_shard_writer();
     let target_id = AccountId::new([0; 32]);
@@ -323,7 +286,7 @@ fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
         &program.into(),
     );
 
-    assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+    assert_execution_failure(&result, "wrote data on a shard selector of");
 }
 
 #[test]
@@ -355,7 +318,6 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 
 #[test]
 fn unauthorized_debit_is_refused_when_proving() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_id = AccountId::new([0; 32]);
     let recipient_id = AccountId::new([1; 32]);
 
@@ -376,5 +338,15 @@ fn unauthorized_debit_is_refused_when_proving() {
         &ProgramWithDependencies::native(),
     );
 
-    assert_execution_failure(&result, "decrease balance of unauthorized account");
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { account_id }
+                )
+            )) if account_id == sender_id
+        ),
+        "expected an unauthorized sender rejection"
+    );
 }

@@ -1415,7 +1415,6 @@ fn two_private_pda_family_members_receive_and_spend() {
 /// Unauthorized balance decrease is refused.
 #[test]
 fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
     let recipient_keys = test_private_account_keys_2();
     let sender_account = Account::funded(100);
@@ -1469,11 +1468,12 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
     );
 
     assert!(matches!(
-        execution_error(result),
-        ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::UnauthorizedBalanceDecrease { account_id },
-            ..
-        } if account_id == sender_id
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender { account_id }
+            )
+        )) if account_id == sender_id
     ));
 }
 

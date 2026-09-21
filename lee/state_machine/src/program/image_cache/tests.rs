@@ -5,7 +5,7 @@
 
 use lee_core::{
     account::{AccountId, Cycles, ShardData},
-    program::ProgramInput,
+    program::{AccountInput, ProgramInput},
     to_borsh_frame, to_frame,
 };
 use risc0_binfmt::ProgramBinary;
@@ -13,7 +13,7 @@ use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
 
 use crate::{
     error::LeeError,
-    program::{AccountInput, DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
 fn data_changer_target() -> AccountInput {

@@ -8,8 +8,9 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
-    account::{Account, AccountId, Balance, Cycles, Data, Nonce, ProgramShardSelector},
+    account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector, ShardData},
     execution_state::{ExecutionState, InstructionEcho, PublicSource, RootCall},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         CallKind, InstructionData, PROGRAM_LOADER_ACCOUNT_ID, ProgramInput, ProgramOutput,
         TransactionEvent, get_program_via,
@@ -20,7 +21,7 @@ use program_loader_core::Instruction as ProgramLoaderInstruction;
 
 use crate::{
     V03State, ensure,
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
@@ -76,24 +77,19 @@ struct ChainSource<'state> {
 impl PublicSource for ChainSource<'_> {
     type Error = LeeError;
 
-    fn account(&mut self, account_id: AccountId) -> Result<(bool, Balance), LeeError> {
-        Ok((
-            self.authorized.contains(&account_id),
-            self.state
-                .get_account_by_id_ref(account_id)
-                .map_or(0, |account| account.data.balance),
-        ))
+    fn account(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
+        Ok(self.authorized.contains(&account_id))
     }
 
     fn shard(
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Result<Data, LeeError> {
+    ) -> Result<ShardData, LeeError> {
         Ok(self
             .state
             .get_account_by_id_ref(account_id)
-            .map_or_else(Data::empty, |account| {
+            .map_or_else(ShardData::empty, |account| {
                 account.data.shard(program_account_id).clone()
             }))
     }
@@ -319,6 +315,9 @@ impl ValidatedStateDiff {
                 // Native dispatch: `program_loader` is a pseudo-program run as Rust rather than a
                 // guest ELF, so there is no zkVM session to charge cycles against.
                 execute_program_loader(call)?
+            } else if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
+                native_token::execute(caller_account_id, &call.pre_states, &call.instruction)
+                    .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
             } else {
                 let Some((program_id, elf)) = get_program_via(self_account_id, |id| {
                     execution

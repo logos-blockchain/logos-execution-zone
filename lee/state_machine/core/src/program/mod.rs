@@ -6,10 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{
-        AccountId, AccountInput, BalanceDiff, BalanceDiffError, Data, ProgramShardSelector,
-        apply_balance_diff,
-    },
+    account::{AccountData, AccountId, Balance, ProgramShardSelector, ShardData},
     encryption::ViewingPublicKey,
     native_token::encode_balance,
 };
@@ -818,7 +815,7 @@ pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state Data>,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
     let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 

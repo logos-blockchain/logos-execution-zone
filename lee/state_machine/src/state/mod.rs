@@ -309,7 +309,7 @@ impl V03State {
         get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
     }
 
-    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&Data> {
+    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ShardData> {
         self.get_account_by_id_ref(account_id)
             .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
     }

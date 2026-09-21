@@ -4,7 +4,6 @@ use lee_core::{
     account::{AccountId, Cycles},
     execution_state::ExecutionError,
     native_token::TransferError,
-    program::AccountInput,
 };
 use thiserror::Error;
 
@@ -119,6 +118,9 @@ impl LeeError {
 pub enum InvalidProgramBehaviorError {
     #[error("Called program {program_account_id} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_account_id: AccountId },
+
+    #[error(transparent)]
+    NativeTransferFailed(#[from] TransferError),
 
     #[error(transparent)]
     Execution(#[from] ExecutionError),

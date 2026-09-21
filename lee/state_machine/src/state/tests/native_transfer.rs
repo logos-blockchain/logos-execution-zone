@@ -178,9 +178,10 @@ fn a_guest_cannot_write_the_native_shard_publicly() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::ExecutionValidationFailed(
-                    ExecutionValidationError::ForeignShardWrite { account_id, .. }
-                )
+                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+                    source: ExecutionValidationError::ForeignShardWrite { account_id, .. },
+                    ..
+                })
             )) if account_id == target_id
         ),
         "a guest wrote the native shard: {result:?}"
