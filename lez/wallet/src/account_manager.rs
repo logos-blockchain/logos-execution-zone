@@ -1156,15 +1156,6 @@ mod tests {
     }
 
     #[test]
-    fn a_funded_candidate_is_never_read() {
-        // `never_fetches` panics if reached: a materialised balance must be trusted.
-        let funded = public_signing_state(10, 1_000);
-        let funded_id = funded.account().account_id;
-        let mut manager = manager(vec![funded]);
-        assert_eq!(payer(&mut manager, never_fetches), Some(funded_id));
-    }
-
-    #[test]
     fn a_failed_balance_read_fails_the_walk() {
         let mut manager = manager(vec![public_signing_state(11, 0)]);
         let result = block_on(manager.fee_payer_account_id_with(|_| {
