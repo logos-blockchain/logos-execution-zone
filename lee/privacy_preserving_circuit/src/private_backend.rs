@@ -1,9 +1,5 @@
-//! The privacy preserving circuit's half of the shared traversal.
-//!
-//! What makes this environment private is concentrated here: it verifies a proof of each call
-//! rather than executing it, its only independent view of an account is the witness supplied for
-//! it, and a PDA seed proves authorization through that witness rather than through a public
-//! derivation alone. The traversal in [`lee_core::validation`] owns everything else.
+//! The privacy preserving circuit's half of the shared traversal: it verifies a proof of
+//! each call, and its only independent view of an account is that account's witness.
 
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
@@ -22,15 +18,8 @@ use lee_core::{
 };
 use risc0_zkvm::guest::env;
 
-/// The circuit's error type, deliberately uninhabited.
-///
-/// SAFETY-CRITICAL: an invalid execution must never become a value a caller can inspect, ignore
-/// or recover from. Because `Fatal` has no variants, no `Err` can be constructed, every `?` in
-/// the traversal is a statically dead branch, and the only way a rejection can be expressed is
-/// the panic in the conversion below, which aborts the guest at the exact failure site and
-/// produces no receipt. Replacing this with an inhabited error type would turn every one of
-/// those dead branches into a live one, and a single `.ok()` or `unwrap_or_default()` downstream
-/// would then prove an invalid execution. Do not.
+/// SAFETY-CRITICAL, deliberately uninhabited: no `Err` can be constructed, so every `?` is a
+/// dead branch and a rejection can only be the panic below. Never make this inhabited.
 pub enum Fatal {}
 
 #[expect(
@@ -45,26 +34,21 @@ impl From<ValidationError> for Fatal {
 
 pub struct PrivateBackend<'input> {
     witnesses: &'input [PrivateWitness],
-    /// Which witness, if any, derives each account. An account without one is public inside the
-    /// circuit: it has no note, so the journal must expose it for the verifier to check.
+    /// An account without a witness is public in-circuit: no note, so the journal exposes it.
     witness_by_account: HashMap<AccountId, usize>,
     remaining_outputs: VecDeque<ProgramOutput>,
-    /// Untrusted, prover-supplied. `env::verify` needs a real image id, not a dispatch address.
-    /// The circuit does not check these against chain state; the sequencer does that
-    /// independently before accepting the proof. See [`ProgramImageClaim`].
+    /// Untrusted, prover-supplied; the sequencer checks these against chain state, not us.
     image_id_by_account_id: HashMap<AccountId, ProgramId>,
-    /// Each `(program, seed)` resolves to at most one account per transaction. Without this a
-    /// single delegated seed could authorize several members of a PDA family at once.
+    /// One `(program, seed)` per account per transaction, else one seed authorizes a family.
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
-    /// Public accounts whose journal authorization was masked to false, so a later sighting
-    /// judges them the way the verifier will.
+    /// Masked journal authorization, so a later sighting is judged as the verifier will.
     public_authorization: HashMap<AccountId, bool>,
     block_bounds: (Option<BlockId>, Option<BlockId>),
     timestamp_bounds: (Option<Timestamp>, Option<Timestamp>),
 }
 
 impl<'input> PrivateBackend<'input> {
-    /// Index the witnesses and check each one binds the account it claims, before any call runs.
+    /// Index the witnesses and check each binds the account it claims, before any call runs.
     pub fn new(
         witnesses: &'input [PrivateWitness],
         program_outputs: Vec<ProgramOutput>,
@@ -120,7 +104,6 @@ impl<'input> PrivateBackend<'input> {
         backend
     }
 
-    /// The accumulated validity windows, once every call has declared its own.
     #[must_use]
     pub fn into_windows(self) -> (BlockValidityWindow, TimestampValidityWindow) {
         let block: BlockValidityWindow = self.block_bounds.try_into().expect(
@@ -158,7 +141,6 @@ impl<'input> PrivateBackend<'input> {
         }
     }
 
-    /// The account's PDA binding, if the caller delegated the seed that derives it.
     fn seed_granted(
         ctx: &CallContext<'_>,
         witness: Option<&PrivateWitness>,
@@ -180,8 +162,7 @@ impl<'input> PrivateBackend<'input> {
         )
     }
 
-    /// Whether the account is authorized by its own credential or a grant inherited from an
-    /// ancestor call.
+    /// Authorized by its own credential or a grant inherited from an ancestor call.
     fn is_already_authorized(
         &self,
         ctx: &CallContext<'_>,
@@ -224,14 +205,17 @@ impl Backend for PrivateBackend<'_> {
         Ok(program_output)
     }
 
-    fn authoritative_value(
+    fn has_independent_view(&mut self, account_id: AccountId) -> bool {
+        // A witness binds its note's content; a public account has none, so its claim is
+        // adopted and the verifier checks it against real state.
+        self.witness_for(account_id).is_some()
+    }
+
+    fn value_at_first_sight(
         &mut self,
         account_id: AccountId,
         _ctx: &CallContext<'_>,
     ) -> Result<Option<AccountData>, Fatal> {
-        // A witnessed account's value comes from its note, which the commitment and nullifier
-        // bind. A public account inside the circuit has no note, so its claim is adopted the
-        // first time each shard is named and the verifier checks it against real state.
         Ok(self
             .witness_for(account_id)
             .map(|witness| witness.account.data.clone()))
@@ -251,7 +235,6 @@ impl Backend for PrivateBackend<'_> {
             self.assert_family_binding(program, seed, account_id);
         }
 
-        // A note carries its own authorization, so the journal states it as-is.
         if let Some(witness) = witness {
             match &witness.kind {
                 WitnessKind::Regular { ask } if first_sight => assert_eq!(
@@ -268,9 +251,8 @@ impl Backend for PrivateBackend<'_> {
             return Ok(pre.is_authorized);
         }
 
-        // A public account inside the circuit has no note. At first sight its claim stands,
-        // because the verifier re-derives authorization from the real signer set; afterwards it
-        // must stay consistent with what this traversal has established.
+        // At first sight a public account's claim stands, the verifier re-derives it from the
+        // signer set; afterwards it must stay consistent with this traversal.
         if !first_sight {
             assert_eq!(
                 pre.is_authorized,
@@ -290,9 +272,7 @@ impl Backend for PrivateBackend<'_> {
                 "Caller-seeded public PDA must be declared authorized at first sight: {account_id}"
             );
         }
-        // Public PDAs cannot sign, so the verifier would re-derive their authorization as false.
-        // Export false rather than the program's claim, and remember it so a later sighting is
-        // judged the way the verifier will judge it.
+        // Public PDAs cannot sign, so export false and remember it for later sightings.
         let exported = granted.is_none() && pre.is_authorized;
         self.public_authorization.insert(account_id, exported);
         Ok(exported)
