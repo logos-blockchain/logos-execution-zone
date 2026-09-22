@@ -315,12 +315,12 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let run = |num_chain_calls: u32| {
         let instruction: (
-            u128,
+            lee_core::program::InstructionData,
             lee_core::program::ProgramId,
             u32,
             Option<lee_core::program::PdaSeed>,
         ) = (
-            0,
+            Vec::new(),
             crate::test_methods::exits_nonzero().id(),
             num_chain_calls,
             None,
