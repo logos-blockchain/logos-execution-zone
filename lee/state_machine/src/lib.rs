@@ -259,6 +259,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn forges_resolution_echo() -> Program {
+        Program::new_unchecked(
+            test_methods::FORGES_RESOLUTION_ECHO_ID,
+            Cow::Borrowed(test_methods::FORGES_RESOLUTION_ECHO_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn reordering_writer() -> Program {
         Program::new_unchecked(
             test_methods::REORDERING_WRITER_ID,

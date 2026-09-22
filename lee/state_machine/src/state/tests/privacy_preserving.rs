@@ -474,3 +474,64 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
         Ok(amount)
     );
 }
+
+/// The binding is what settlement relies on, so it is tested where settlement runs it. The core
+/// case calls the validator directly and would still pass if this path stopped calling it.
+#[test]
+fn a_forged_resolver_echo_is_refused_at_mixed_settlement() {
+    let program = crate::test_methods::forges_resolution_echo();
+    let program_id: AccountId = program.id().into();
+    let sender_keys = test_private_account_keys_1();
+    let sender_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let written_to = AccountId::new([77; 32]);
+
+    let pre_account = Account::funded(100);
+    let mut state = V03State::new()
+        .with_test_programs()
+        .with_private_account(&sender_keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .expect("the account's commitment must be in state");
+
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::new(written_to, program_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(AccountId::new([88; 32])),
+            ],
+            private_witnesses: vec![update_witness(
+                &sender_keys,
+                0,
+                pre_account,
+                membership_proof,
+            )],
+            instruction_data: Program::serialize_instruction((vec![5_u8; 4], 30_u128)).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    )
+    .unwrap();
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            &result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+                    source: ExecutionValidationError::ResolveInputMismatch { .. },
+                    ..
+                })
+            ))
+        ),
+        "expected the echo binding to refuse the forged resolution, got {result:?}"
+    );
+    // Neither the forged balance nor the effect the proof actually recorded lands.
+    assert_eq!(state.get_account_by_id(written_to), Account::default());
+}

@@ -56,6 +56,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::foreign_shard_writer());
         self.insert_program(&crate::test_methods::native_spender());
+        self.insert_program(&crate::test_methods::forges_resolution_echo());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());
@@ -73,7 +74,6 @@ impl V03State {
         self.insert_program(&crate::test_methods::references_undeclared_account());
         self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
         self.insert_program(&crate::test_methods::reordering_writer());
-        self.insert_program(&crate::test_methods::shard_forwarder());
         self
     }
 
