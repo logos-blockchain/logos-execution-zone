@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -7,9 +7,10 @@ use crate::{
     WitnessKind,
     account::{AccountData, AccountId, ProgramShardSelector, ShardData},
     program::{
-        AccountInput, BlockValidityWindow, CallKind, ChainedCall, ExecutionValidationError,
-        InstructionData, InvalidWindow, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent,
-        ProgramInput, ProgramOutput, ShardStateDiff, TimestampValidityWindow, validate_execution,
+        AccountMeta, BlockValidityWindow, ChainedCall, ExecutionValidationError, InstructionData,
+        InvalidWindow, MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramInput,
+        ProgramOutput, ResolveInput, ResolveOutput, ShardEffect, TimestampValidityWindow,
+        validate_execution, validate_resolution,
     },
 };
 
@@ -19,30 +20,26 @@ pub struct RootCall {
     pub program_account_id: AccountId,
     pub shard_selectors: Vec<ProgramShardSelector>,
     pub instruction_data: InstructionData,
+    pub authorized_accounts: Vec<AccountId>,
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct AccountChange {
-    pub data: Option<ShardData>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicEffects {
+    Resolve,
+    Defer,
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct CallEffects {
-    pub account_changes: Vec<AccountChange>,
-    pub chained_calls: Vec<ChainedCall>,
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
-    pub events: Vec<ProgramEvent>,
+#[derive(Debug, Clone, Eq, PartialEq, BorshSerialize, BorshDeserialize)]
+pub enum PublicResolution {
+    Apply {
+        program_account_id: AccountId,
+        shard_program_account_id: AccountId,
+        data: InstructionData,
+    },
 }
-
-pub type PublicFacts = BTreeMap<AccountId, (bool, AccountData)>;
 
 pub trait PublicSource {
     type Error: From<ExecutionError>;
-
-    fn account(&mut self, account_id: AccountId) -> Result<bool, Self::Error>;
 
     fn shard(
         &mut self,
@@ -51,35 +48,25 @@ pub trait PublicSource {
     ) -> Result<ShardData, Self::Error>;
 }
 
-impl PublicSource for PublicFacts {
-    type Error = ExecutionError;
+/// A traversal with no public state to read.
+///
+/// Only an authenticated private account can raise a local obligation under one, and its shard
+/// comes from its own witness, so a request here means the traversal went somewhere it must not.
+/// That is an error, never empty data.
+pub struct NoPublicFacts;
 
-    fn account(&mut self, account_id: AccountId) -> Result<bool, ExecutionError> {
-        self.get(&account_id)
-            .map(|(is_authorized, _)| *is_authorized)
-            .ok_or(ExecutionError::MissingPublicFact {
-                shard_selector: ProgramShardSelector::balance(account_id),
-            })
-    }
+impl PublicSource for NoPublicFacts {
+    type Error = ExecutionError;
 
     fn shard(
         &mut self,
         account_id: AccountId,
         program_account_id: AccountId,
     ) -> Result<ShardData, ExecutionError> {
-        self.get(&account_id)
-            .and_then(|(_, data)| data.shards.get(&program_account_id))
-            .cloned()
-            .ok_or_else(|| ExecutionError::MissingPublicFact {
-                shard_selector: ProgramShardSelector::new(account_id, program_account_id),
-            })
+        Err(ExecutionError::MissingPublicFact {
+            shard_selector: ProgramShardSelector::new(account_id, program_account_id),
+        })
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstructionEcho {
-    Checked,
-    Unchecked,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -120,12 +107,18 @@ pub enum ExecutionError {
     },
 
     #[error(
-        "Program {program_account_id} returned a pre-state it was not handed: expected {expected:?}, actual {actual:?}"
+        "Program {program_account_id} echoed a handle it was not given: expected {expected:?}, actual {actual:?}"
     )]
-    PreStateMismatch {
+    InputEchoMismatch {
         program_account_id: AccountId,
-        expected: Box<AccountInput>,
-        actual: Box<AccountInput>,
+        expected: Box<AccountMeta>,
+        actual: Box<AccountMeta>,
+    },
+
+    #[error("Program {program_account_id} left {remaining} emitted effects unresolved")]
+    UnresolvedEffects {
+        program_account_id: AccountId,
+        remaining: usize,
     },
 
     #[error("Program account ID mismatch: expected {expected}, actual {actual}")]
@@ -142,9 +135,6 @@ pub enum ExecutionError {
 
     #[error("Program {program_account_id} did not echo the instruction it was handed")]
     MismatchedInstruction { program_account_id: AccountId },
-
-    #[error("Chained call to {program_account_id} did not execute")]
-    ChainedCallDidNotExecute { program_account_id: AccountId },
 
     #[error("Invalid program behavior in program {program_account_id}: {source}")]
     ExecutionValidation {
@@ -171,7 +161,8 @@ pub enum ExecutionError {
 enum Origin {
     Public {
         is_authorized: bool,
-        initial: AccountData,
+        observed: BTreeSet<AccountId>,
+        deferred: Vec<PublicResolution>,
     },
     Private(usize),
 }
@@ -187,21 +178,40 @@ struct PendingCall {
     grants: HashSet<AccountId>,
 }
 
+struct BoundPlan {
+    effects: VecDeque<ShardEffect>,
+    obligation: Option<ResolveInput>,
+    chained_calls: Vec<ChainedCall>,
+    events: Vec<ProgramEvent>,
+}
+
 struct ActiveCall {
     input: ProgramInput<InstructionData>,
     grants: HashSet<AccountId>,
+    plan: Option<BoundPlan>,
+}
+
+/// What the traversal made of the transaction's public accounts, fixed by the
+/// [`PublicEffects`] mode chosen at [`ExecutionState::initialize`].
+pub enum PublicOutcome {
+    /// [`PublicEffects::Resolve`]: each public account's touched shards after resolution, in
+    /// first-observation order. A shard observed and then cleared is present and empty.
+    Resolved(Vec<(AccountId, AccountData)>),
+    /// [`PublicEffects::Defer`]: the journal rows settlement must fold, in first-observation
+    /// order, each carrying its effects in traversal order.
+    Deferred(Vec<PublicAction>),
 }
 
 pub struct FinalState {
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
-    pub public_actions: Vec<PublicAction>,
+    pub public: PublicOutcome,
     pub private_accounts: HashMap<AccountId, AccountData>,
 }
 
 pub struct ExecutionState<'witnesses> {
     witnesses: &'witnesses [PrivateWitness],
-    root_call_kind: CallKind,
+    public_effects: PublicEffects,
     root_order: Vec<AccountId>,
     accounts: HashMap<AccountId, AccountEntry>,
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
@@ -214,16 +224,16 @@ pub struct ExecutionState<'witnesses> {
 }
 
 impl<'witnesses> ExecutionState<'witnesses> {
-    pub fn initialize<S: PublicSource>(
+    pub fn initialize(
         root: RootCall,
-        root_call_kind: CallKind,
         witnesses: &'witnesses [PrivateWitness],
-        source: &mut S,
-    ) -> Result<Self, S::Error> {
+        public_effects: PublicEffects,
+    ) -> Result<Self, ExecutionError> {
         let RootCall {
             program_account_id,
             shard_selectors,
             instruction_data,
+            authorized_accounts,
         } = root;
 
         let mut witness_index = HashMap::with_capacity(witnesses.len());
@@ -232,7 +242,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         for (index, witness) in witnesses.iter().enumerate() {
             let account_id = witness.account_id();
             if witness_index.insert(account_id, index).is_some() {
-                return Err(ExecutionError::DuplicateWitness { account_id }.into());
+                return Err(ExecutionError::DuplicateWitness { account_id });
             }
             witness_ids.push(account_id);
             match &witness.kind {
@@ -248,7 +258,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                         }
                     };
                     if !linked {
-                        return Err(ExecutionError::InvalidAuthorizationKey { account_id }.into());
+                        return Err(ExecutionError::InvalidAuthorizationKey { account_id });
                     }
                 }
                 WitnessKind::Regular { ask: None } => {}
@@ -268,13 +278,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     origin: Origin::Private(index),
                 }
             } else {
-                let is_authorized = source.account(account_id)?;
-                let initial = AccountData::default();
                 AccountEntry {
-                    data: initial.clone(),
+                    data: AccountData::default(),
                     origin: Origin::Public {
-                        is_authorized,
-                        initial,
+                        is_authorized: authorized_accounts.contains(&account_id),
+                        observed: BTreeSet::new(),
+                        deferred: Vec::new(),
                     },
                 }
             };
@@ -285,12 +294,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .into_iter()
             .find(|account_id| !accounts.contains_key(account_id))
         {
-            return Err(ExecutionError::WitnessNotInRoot { account_id }.into());
+            return Err(ExecutionError::WitnessNotInRoot { account_id });
         }
 
         Ok(Self {
             witnesses,
-            root_call_kind,
+            public_effects,
             root_order,
             accounts,
             pda_family_binding,
@@ -312,13 +321,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
         })
     }
 
-    pub fn prepare_next_call<S: PublicSource>(
+    pub fn prepare_next_call(
         &mut self,
-        source: &mut S,
-    ) -> Result<Option<&ProgramInput<InstructionData>>, S::Error> {
+    ) -> Result<Option<&ProgramInput<InstructionData>>, ExecutionError> {
         assert!(self.active.is_none(), "the prepared call was not completed");
         if self.failed {
-            return Err(ExecutionError::Aborted.into());
+            return Err(ExecutionError::Aborted);
         }
         self.failed = true;
         let Some(PendingCall {
@@ -331,7 +339,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Ok(None);
         };
         if self.prepared_calls > MAX_NUMBER_CHAINED_CALLS {
-            return Err(ExecutionError::MaxChainedCallsExceeded.into());
+            return Err(ExecutionError::MaxChainedCallsExceeded);
         }
         self.prepared_calls = self
             .prepared_calls
@@ -344,16 +352,15 @@ impl<'witnesses> ExecutionState<'witnesses> {
             instruction_data,
             pda_seeds,
         } = call;
-        let mut pre_states = Vec::with_capacity(shard_selectors.len());
+        let mut accounts = Vec::with_capacity(shard_selectors.len());
         for shard_selector in shard_selectors {
             let account_id = shard_selector.account_id;
             let is_authorized =
                 self.authorize(caller_account_id, &pda_seeds, &mut grants, account_id)?;
-            self.observe_shard(account_id, shard_selector.program_account_id, source)?;
-            pre_states.push(AccountInput::at(
-                shard_selector,
+            accounts.push(AccountMeta::new(
+                account_id,
                 is_authorized,
-                &self.accounts[&account_id].data,
+                shard_selector.program_account_id,
             ));
         }
 
@@ -361,10 +368,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
             input: ProgramInput {
                 self_account_id: program_account_id,
                 caller_account_id,
-                pre_states,
+                accounts,
                 instruction: instruction_data,
             },
             grants,
+            plan: None,
         });
         self.failed = false;
         Ok(Some(&active.input))
@@ -401,40 +409,20 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok(credential || grants.contains(&account_id))
     }
 
-    fn observe_shard<S: PublicSource>(
-        &mut self,
-        account_id: AccountId,
-        program_account_id: AccountId,
-        source: &mut S,
-    ) -> Result<(), S::Error> {
-        let entry = self
-            .accounts
-            .get_mut(&account_id)
-            .expect("authorized against the same table just before");
-        if let Origin::Public { initial, .. } = &mut entry.origin
-            && !initial.shards.contains_key(&program_account_id)
-        {
-            let data = source.shard(account_id, program_account_id)?;
-            entry.data.set_shard(program_account_id, data.clone());
-            initial.shards.insert(program_account_id, data);
+    pub fn bind_plan(&mut self, output: ProgramOutput) -> Result<(), ExecutionError> {
+        if self.failed {
+            return Err(ExecutionError::Aborted);
         }
-        Ok(())
-    }
-
-    pub fn bind_output(
-        &mut self,
-        output: ProgramOutput,
-        instruction_echo: InstructionEcho,
-    ) -> Result<CallEffects, ExecutionError> {
-        let active = &self.active.as_ref().expect("no call is prepared").input;
-        let program_account_id = active.self_account_id;
-        let is_root = active.caller_account_id.is_none();
+        self.failed = true;
+        let active = self.active.as_ref().expect("no call is prepared");
+        assert!(active.plan.is_none(), "the plan was already bound");
+        let program_account_id = active.input.self_account_id;
         let ProgramOutput {
             self_account_id,
             caller_account_id,
-            call_kind,
             instruction_data,
-            state_diffs,
+            accounts,
+            effects,
             chained_calls,
             block_validity_window,
             timestamp_validity_window,
@@ -447,134 +435,178 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 actual: self_account_id,
             });
         }
-        if caller_account_id != active.caller_account_id {
+        if caller_account_id != active.input.caller_account_id {
             return Err(ExecutionError::MismatchedCallerProgramId {
-                expected: active.caller_account_id,
+                expected: active.input.caller_account_id,
                 actual: caller_account_id,
             });
         }
-        if !is_root && call_kind != CallKind::Execute {
-            return Err(ExecutionError::ChainedCallDidNotExecute { program_account_id });
-        }
-        if instruction_echo == InstructionEcho::Checked && instruction_data != active.instruction {
+        if instruction_data != active.input.instruction {
             return Err(ExecutionError::MismatchedInstruction { program_account_id });
         }
-        if state_diffs.len() != active.pre_states.len() {
+        if accounts.len() != active.input.accounts.len() {
             return Err(ExecutionError::RowCountMismatch {
                 program_account_id,
-                expected: active.pre_states.len(),
-                actual: state_diffs.len(),
+                expected: active.input.accounts.len(),
+                actual: accounts.len(),
             });
         }
-        let mut account_changes = Vec::with_capacity(state_diffs.len());
-        for (diff, input) in state_diffs.into_iter().zip(&active.pre_states) {
-            let ShardStateDiff {
-                pre_state,
-                post_data,
-            } = diff;
-            if pre_state != *input {
-                return Err(ExecutionError::PreStateMismatch {
+        for (actual, expected) in accounts.into_iter().zip(&active.input.accounts) {
+            if actual != *expected {
+                return Err(ExecutionError::InputEchoMismatch {
                     program_account_id,
-                    expected: Box::new(input.clone()),
-                    actual: Box::new(pre_state),
+                    expected: Box::new(expected.clone()),
+                    actual: Box::new(actual),
                 });
             }
-            account_changes.push(AccountChange { data: post_data });
-        }
-        if is_root {
-            self.root_call_kind = call_kind;
         }
 
-        Ok(CallEffects {
-            account_changes,
-            chained_calls,
-            block_validity_window,
-            timestamp_validity_window,
-            events,
-        })
-    }
-
-    pub fn complete_call(
-        &mut self,
-        effects: CallEffects,
-        verify: impl FnOnce(&ProgramOutput),
-    ) -> Result<Vec<ProgramEvent>, ExecutionError> {
-        if self.failed {
-            return Err(ExecutionError::Aborted);
-        }
-        self.failed = true;
-        let ActiveCall {
-            input:
-                ProgramInput {
-                    self_account_id: program_account_id,
-                    caller_account_id,
-                    pre_states,
-                    instruction: instruction_data,
-                },
-            grants,
-        } = self.active.take().expect("no call is prepared");
-
-        if effects.account_changes.len() != pre_states.len() {
-            return Err(ExecutionError::RowCountMismatch {
-                program_account_id,
-                expected: pre_states.len(),
-                actual: effects.account_changes.len(),
-            });
-        }
-        let call_kind = if caller_account_id.is_none() {
-            self.root_call_kind
-        } else {
-            CallKind::Execute
-        };
-        let output = ProgramOutput {
-            self_account_id: program_account_id,
-            caller_account_id,
-            call_kind,
-            instruction_data,
-            state_diffs: pre_states
-                .into_iter()
-                .zip(effects.account_changes)
-                .map(|(pre_state, change)| ShardStateDiff {
-                    pre_state,
-                    post_data: change.data,
-                })
-                .collect(),
-            chained_calls: effects.chained_calls,
-            block_validity_window: effects.block_validity_window,
-            timestamp_validity_window: effects.timestamp_validity_window,
-            events: effects.events,
-        };
-        verify(&output);
-        let ProgramOutput {
-            state_diffs,
-            chained_calls,
-            block_validity_window,
-            timestamp_validity_window,
-            events,
-            ..
-        } = output;
-
-        validate_execution(&state_diffs, program_account_id).map_err(|source| {
+        validate_execution(&active.input.accounts, &effects).map_err(|source| {
             ExecutionError::ExecutionValidation {
                 program_account_id,
                 source,
             }
         })?;
-        self.block_validity_window = self
+        let block = self
             .block_validity_window
             .intersect(block_validity_window)
             .map_err(|InvalidWindow| ExecutionError::EmptyBlockWindowIntersection)?;
-        self.timestamp_validity_window = self
+        let timestamp = self
             .timestamp_validity_window
             .intersect(timestamp_validity_window)
             .map_err(|InvalidWindow| ExecutionError::EmptyTimestampWindowIntersection)?;
 
-        for diff in &state_diffs {
-            self.accounts
-                .get_mut(&diff.pre_state.account_id)
-                .expect("every input row names an account of the root call")
-                .data
-                .apply_diff(diff);
+        self.block_validity_window = block;
+        self.timestamp_validity_window = timestamp;
+        self.active.as_mut().expect("no call is prepared").plan = Some(BoundPlan {
+            effects: effects.into(),
+            obligation: None,
+            chained_calls,
+            events,
+        });
+        self.failed = false;
+        Ok(())
+    }
+
+    /// The next effect this call must resolve here. Under [`PublicEffects::Defer`] a public
+    /// target is recorded for settlement and skipped rather than resolved, so what is returned is
+    /// always an obligation of this execution.
+    pub fn next_obligation<S: PublicSource>(
+        &mut self,
+        source: &mut S,
+    ) -> Result<Option<&ResolveInput>, S::Error> {
+        if self.failed {
+            return Err(ExecutionError::Aborted.into());
+        }
+        self.failed = true;
+        let deferring = self.public_effects == PublicEffects::Defer;
+        let active = self.active.as_mut().expect("no call is prepared");
+        let program_account_id = active.input.self_account_id;
+        let plan = active.plan.as_mut().expect("the plan was not bound");
+        assert!(
+            plan.obligation.is_none(),
+            "the previous obligation was not resolved"
+        );
+        let input = loop {
+            let Some(ShardEffect { selector, data }) = plan.effects.pop_front() else {
+                self.failed = false;
+                return Ok(None);
+            };
+
+            let entry = self
+                .accounts
+                .get_mut(&selector.account_id)
+                .expect("every effect selects an input of the call");
+            if deferring && let Origin::Public { deferred, .. } = &mut entry.origin {
+                deferred.push(PublicResolution::Apply {
+                    program_account_id,
+                    shard_program_account_id: selector.program_account_id,
+                    data,
+                });
+                continue;
+            }
+            if let Origin::Public { observed, .. } = &mut entry.origin
+                && !observed.contains(&selector.program_account_id)
+            {
+                let shard = source.shard(selector.account_id, selector.program_account_id)?;
+                observed.insert(selector.program_account_id);
+                entry.data.set_shard(selector.program_account_id, shard);
+            }
+            break ResolveInput {
+                self_account_id: program_account_id,
+                selector,
+                pre_data: entry.data.shard(selector.program_account_id).clone(),
+                effect_data: data,
+            };
+        };
+
+        self.failed = false;
+        let bound = self
+            .active
+            .as_mut()
+            .expect("no call is prepared")
+            .plan
+            .as_mut()
+            .expect("the plan was not bound");
+        Ok(Some(bound.obligation.insert(input)))
+    }
+
+    pub fn accept_resolution(&mut self, output: &ResolveOutput) -> Result<(), ExecutionError> {
+        if self.failed {
+            return Err(ExecutionError::Aborted);
+        }
+        self.failed = true;
+        let active = self.active.as_mut().expect("no call is prepared");
+        let program_account_id = active.input.self_account_id;
+        let expected = active
+            .plan
+            .as_mut()
+            .expect("the plan was not bound")
+            .obligation
+            .take()
+            .expect("no obligation is pending");
+
+        validate_resolution(&expected, output).map_err(|source| {
+            ExecutionError::ExecutionValidation {
+                program_account_id,
+                source,
+            }
+        })?;
+        self.accounts
+            .get_mut(&output.input.selector.account_id)
+            .expect("every effect selects an input of the call")
+            .data
+            .apply_resolution(output);
+
+        self.failed = false;
+        Ok(())
+    }
+
+    pub fn complete_call(&mut self) -> Result<Vec<ProgramEvent>, ExecutionError> {
+        if self.failed {
+            return Err(ExecutionError::Aborted);
+        }
+        self.failed = true;
+        let ActiveCall {
+            input,
+            grants,
+            plan,
+        } = self.active.take().expect("no call is prepared");
+        let program_account_id = input.self_account_id;
+        let BoundPlan {
+            effects,
+            obligation,
+            chained_calls,
+            events,
+        } = plan.expect("the plan was not bound");
+
+        if !effects.is_empty() || obligation.is_some() {
+            return Err(ExecutionError::UnresolvedEffects {
+                program_account_id,
+                remaining: effects
+                    .len()
+                    .saturating_add(usize::from(obligation.is_some())),
+            });
         }
         for call in chained_calls.into_iter().rev() {
             self.pending.push_front(PendingCall {
@@ -591,11 +623,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
     #[must_use]
     pub const fn prepared_call(&self) -> &ProgramInput<InstructionData> {
         &self.active.as_ref().expect("no call is prepared").input
-    }
-
-    #[must_use]
-    pub const fn root_call_kind(&self) -> CallKind {
-        self.root_call_kind
     }
 
     #[must_use]
@@ -616,9 +643,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
     ) -> Option<&ShardData> {
         let entry = self.accounts.get(&account_id)?;
         match &entry.origin {
-            Origin::Public { initial, .. } if !initial.shards.contains_key(&program_account_id) => {
-                None
-            }
+            Origin::Public { observed, .. } if !observed.contains(&program_account_id) => None,
             Origin::Public { .. } | Origin::Private(_) => {
                 Some(entry.data.shard(program_account_id))
             }
@@ -633,6 +658,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::IncompleteExecution);
         }
         let Self {
+            public_effects,
             root_order,
             mut accounts,
             block_validity_window,
@@ -640,7 +666,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
             ..
         } = self;
 
-        let mut public_actions = Vec::new();
+        let mut resolved = Vec::new();
+        let mut deferred_rows = Vec::new();
         let mut private_accounts = HashMap::new();
         for account_id in root_order {
             let AccountEntry { data, origin } = accounts
@@ -649,19 +676,22 @@ impl<'witnesses> ExecutionState<'witnesses> {
             match origin {
                 Origin::Public {
                     is_authorized,
-                    initial,
-                } => {
-                    let mut post = data;
-                    for program in initial.shards.keys() {
-                        post.shards.entry(*program).or_default();
-                    }
-                    public_actions.push(PublicAction {
+                    observed,
+                    deferred,
+                } => match public_effects {
+                    PublicEffects::Defer => deferred_rows.push(PublicAction {
                         account_id,
                         is_authorized,
-                        pre: initial,
-                        post,
-                    });
-                }
+                        resolutions: deferred,
+                    }),
+                    PublicEffects::Resolve => {
+                        let mut post = data;
+                        for program in observed {
+                            post.shards.entry(program).or_default();
+                        }
+                        resolved.push((account_id, post));
+                    }
+                },
                 Origin::Private(_) => {
                     private_accounts.insert(account_id, data);
                 }
@@ -671,7 +701,10 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok(FinalState {
             block_validity_window,
             timestamp_validity_window,
-            public_actions,
+            public: match public_effects {
+                PublicEffects::Defer => PublicOutcome::Deferred(deferred_rows),
+                PublicEffects::Resolve => PublicOutcome::Resolved(resolved),
+            },
             private_accounts,
         })
     }
