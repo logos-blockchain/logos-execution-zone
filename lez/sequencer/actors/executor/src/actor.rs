@@ -601,7 +601,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetBlockHashToBlockIdMapItem>(msg.into())
+            .ask::<sequencer_storage_actor::protocol::GetBlockByHash>(msg.into())
             .await
             .map_err(Into::into)
     }
@@ -618,9 +618,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetAccountIdToAffectingTxMapItemUptoLimit>(
-                msg.into(),
-            )
+            .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
             .await
             .map_err(Into::into)
     }

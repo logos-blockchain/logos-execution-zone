@@ -27,17 +27,16 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
-        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
-        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
+        GetBlockByHash, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
+        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
+        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
+        StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -1467,12 +1466,12 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
     }
 }
 
-impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
+impl Message<GetBlockByHash> for StorageActor {
     type Reply = Result<Option<BlockId>>;
 
     async fn handle(
         &mut self,
-        GetBlockHashToBlockIdMapItem { block_hash }: GetBlockHashToBlockIdMapItem,
+        GetBlockByHash { block_hash }: GetBlockByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self
@@ -1482,16 +1481,16 @@ impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
     }
 }
 
-impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for StorageActor {
+impl Message<GetAccountTransactions> for StorageActor {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
     async fn handle(
         &mut self,
-        GetAccountIdToAffectingTxMapItemUptoLimit {
+        GetAccountTransactions {
             account_id,
             offset,
             limit,
-        }: GetAccountIdToAffectingTxMapItemUptoLimit,
+        }: GetAccountTransactions,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.get_affecting_txs_for_account_id(account_id, offset, limit)

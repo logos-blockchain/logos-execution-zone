@@ -18,14 +18,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock, GetBlockHashToBlockIdMapItem,
-        GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
-        GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetAccountTransactions, GetBlock, GetBlockByHash, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, WithdrawalReconciliationKey,
     },
 };
 
@@ -379,7 +379,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -390,7 +390,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block1a.header.hash
             })
             .await
@@ -401,7 +401,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block2.header.hash
             })
             .await
@@ -417,7 +417,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -428,7 +428,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block1b.header.hash
             })
             .await
@@ -439,7 +439,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block2.header.hash
             })
             .await
@@ -471,7 +471,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 3,
@@ -492,7 +492,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 3,
@@ -1046,7 +1046,7 @@ async fn an_unseeded_store_reports_no_chain() {
     );
     assert!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: [0; 32].into()
             })
             .await
@@ -1083,7 +1083,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -1092,7 +1092,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 100,
@@ -1126,7 +1126,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: second_hash
             })
             .await
@@ -1135,7 +1135,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 100,
@@ -1185,7 +1185,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 2,
@@ -1200,7 +1200,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 1,
                 limit: 2,
@@ -1215,7 +1215,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 1,
                 limit: 3,

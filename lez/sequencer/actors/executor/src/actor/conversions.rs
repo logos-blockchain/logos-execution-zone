@@ -25,9 +25,7 @@ impl From<sequencer_core::fees::FeeStateQuote> for protocol::FeeStateQuote {
     }
 }
 
-impl From<protocol::GetBlockByHash>
-    for sequencer_storage_actor::protocol::GetBlockHashToBlockIdMapItem
-{
+impl From<protocol::GetBlockByHash> for sequencer_storage_actor::protocol::GetBlockByHash {
     fn from(value: protocol::GetBlockByHash) -> Self {
         Self {
             block_hash: value.block_hash,
@@ -36,7 +34,7 @@ impl From<protocol::GetBlockByHash>
 }
 
 impl From<protocol::GetAccountTransactions>
-    for sequencer_storage_actor::protocol::GetAccountIdToAffectingTxMapItemUptoLimit
+    for sequencer_storage_actor::protocol::GetAccountTransactions
 {
     fn from(value: protocol::GetAccountTransactions) -> Self {
         Self {
