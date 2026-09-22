@@ -1,39 +1,20 @@
 use lee_core::{
     account::AccountId,
-    program::{
-        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{GuestOutput, LeeCall, ProgramOutput, read_lee_call},
 };
 
 type Instruction = ();
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id: _, // ignore the correct ID
-            caller_account_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("malicious_self_program_id emits no effect to resolve")
     };
 
-    let state_diffs = pre_states
-        .iter()
-        .map(|a| ShardStateDiff::unchanged(a.clone()))
-        .collect();
-
-    // Deliberately output wrong self_account_id
-    ProgramOutput::new(
-        AccountId::new([0; 32]), // WRONG: should be self_account_id
-        caller_account_id,
+    GuestOutput::Execute(ProgramOutput::new(
+        AccountId::new([0; 32]), // WRONG: should be input.self_account_id
+        input.caller_account_id,
         instruction_data,
-        state_diffs,
-    )
+        input.accounts,
+    ))
     .write();
 }

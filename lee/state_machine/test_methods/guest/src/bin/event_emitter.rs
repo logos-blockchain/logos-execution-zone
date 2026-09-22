@@ -1,9 +1,6 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
-    program::{
-        ChainedCall, InstructionData, ProgramCall, ProgramEvent, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, InstructionData, LeeCall, Plan, ProgramEvent, read_lee_call},
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -13,45 +10,30 @@ pub struct EmitterInstruction {
 }
 
 fn main() {
-    let call = read_lee_call::<EmitterInstruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: EmitterInstruction { events, chain },
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<EmitterInstruction>() else {
+        panic!("event_emitter emits no effect to resolve")
     };
+    let EmitterInstruction { events, chain } = &input.instruction;
 
-    let state_diffs = pre_states
+    let shard_selectors: Vec<_> = input
+        .accounts
         .iter()
-        .map(|account| ShardStateDiff::unchanged(account.clone()))
-        .collect();
-
-    let shard_selectors: Vec<_> = pre_states.iter().map(ProgramShardSelector::from).collect();
-    let chained_calls = chain
-        .into_iter()
-        .map(|(program_account_id, call_instruction_data)| ChainedCall {
-            program_account_id,
-            shard_selectors: shard_selectors.clone(),
-            instruction_data: call_instruction_data,
-            pda_seeds: vec![],
-        })
+        .map(ProgramShardSelector::from)
         .collect();
 
     // Emit both the chained calls and a list of events.
     // This is used to test the end-positioning of events in a transaction.
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .with_chained_calls(chained_calls)
-    .with_events(events)
-    .write();
+    let mut plan = Plan::new(&input, instruction_data);
+    for (program_account_id, call_instruction_data) in chain {
+        plan.call(ChainedCall {
+            program_account_id: *program_account_id,
+            shard_selectors: shard_selectors.clone(),
+            instruction_data: call_instruction_data.clone(),
+            pda_seeds: vec![],
+        });
+    }
+    for event in events {
+        plan.event(event.clone());
+    }
+    plan.write()
 }

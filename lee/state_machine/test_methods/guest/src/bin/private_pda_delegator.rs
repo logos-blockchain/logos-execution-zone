@@ -1,48 +1,29 @@
 use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, LeeCall, PdaSeed, Plan, ProgramId, read_lee_call},
 };
 
-/// Echoes the sole `pre_state` and chains to `callee_program_id`, delegating authorization with
+/// Chains to `callee_program_id`, delegating authorization over its sole handle with
 /// `delegated_seed` in `pda_seeds`.
 type Instruction = (PdaSeed, ProgramId);
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (delegated_seed, callee_program_id),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("private_pda_delegator emits no effect to resolve")
     };
+    let (delegated_seed, callee_program_id) = input.instruction;
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let Ok([account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
         return;
     };
 
-    let chained_call = ChainedCall {
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: to_vec(&()).unwrap(),
-        shard_selectors: vec![ProgramShardSelector::from(&pre)],
+        shard_selectors: vec![ProgramShardSelector::from(&account)],
         pda_seeds: vec![delegated_seed],
-    };
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![ShardStateDiff::unchanged(pre)],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    });
+    plan.write()
 }

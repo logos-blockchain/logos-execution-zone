@@ -1,33 +1,22 @@
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, InstructionData, LeeCall, PdaSeed, Plan, ProgramId, read_lee_call},
 };
 
 type Instruction = (ProgramId, InstructionData, Vec<PdaSeed>);
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (callee_program_id, callee_instruction, pda_seeds),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("reorders_and_forwards emits no effect to resolve")
     };
+    let (callee_program_id, callee_instruction, pda_seeds) = input.instruction.clone();
 
-    let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([first, second]) = <[_; 2]>::try_from(input.accounts.clone()) else {
         return;
     };
 
-    let chained_call = ChainedCall {
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         shard_selectors: vec![
@@ -35,17 +24,6 @@ fn main() {
             ProgramShardSelector::from(&first),
         ],
         pda_seeds,
-    };
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![
-            ShardStateDiff::unchanged(first),
-            ShardStateDiff::unchanged(second),
-        ],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    });
+    plan.write()
 }

@@ -1,9 +1,6 @@
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, InstructionData, LeeCall, PdaSeed, Plan, ProgramId, read_lee_call},
 };
 
 type Instruction = (InstructionData, ProgramId, u32, Option<PdaSeed>);
@@ -11,49 +8,29 @@ type Instruction = (InstructionData, ProgramId, u32, Option<PdaSeed>);
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call.
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (call_instruction_data, callee_program_id, num_chain_calls, pda_seed),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("chain_caller emits no effect to resolve")
     };
+    let (call_instruction_data, callee_program_id, num_chain_calls, pda_seed) =
+        input.instruction.clone();
 
-    let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([recipient, sender]) = <[_; 2]>::try_from(input.accounts.clone()) else {
         return;
     };
 
     let permuted = vec![
-        ProgramShardSelector::from(&sender_pre),
-        ProgramShardSelector::from(&recipient_pre),
+        ProgramShardSelector::from(&sender),
+        ProgramShardSelector::from(&recipient),
     ];
 
-    let mut chained_calls = Vec::new();
+    let mut plan = Plan::new(&input, instruction_data);
     for _i in 0..num_chain_calls {
-        let new_chained_call = ChainedCall {
+        plan.call(ChainedCall {
             program_account_id: callee_program_id.into(),
             instruction_data: call_instruction_data.clone(),
             shard_selectors: permuted.clone(),
             pda_seeds: pda_seed.iter().copied().collect(),
-        };
-        chained_calls.push(new_chained_call);
+        });
     }
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![
-            ShardStateDiff::unchanged(recipient_pre),
-            ShardStateDiff::unchanged(sender_pre),
-        ],
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    plan.write()
 }

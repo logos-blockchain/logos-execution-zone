@@ -26,10 +26,7 @@
 
 use lee_core::{
     native_token::custody_transfer,
-    program::{
-        PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{LeeCall, PdaSeed, Plan, read_lee_call},
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -41,52 +38,30 @@ pub struct CallbackInstruction {
 }
 
 fn main() {
-    let call = read_lee_call::<CallbackInstruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id, // not enforced in this callback
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<CallbackInstruction>() else {
+        panic!("flash_swap_callback emits no effect to resolve")
     };
 
-    // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
-    let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
+    // accounts[0] = vault, accounts[1] = receiver
+    let Ok([vault, receiver]) = <[_; 2]>::try_from(input.accounts.clone()) else {
         panic!("Callback requires exactly 2 accounts: vault, receiver");
     };
 
-    let mut chained_calls = Vec::new();
-
-    if instruction.return_funds {
+    // The callback itself makes no direct state changes, so it emits no effect of its own.
+    // All mutations go through the token program via chained calls.
+    let mut plan = Plan::new(&input, instruction_data);
+    if input.instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
         // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        chained_calls.push(custody_transfer(
-            receiver_pre.account_id,
-            PdaSeed::new([1_u8; 32]),
-            vault_pre.account_id,
-            instruction.amount,
+        plan.call(custody_transfer(
+            receiver.account_id,
+            PdaSeed::new([1; 32]),
+            vault.account_id,
+            input.instruction.amount,
         ));
     }
     // Malicious path (return_funds = false): emit no chained calls.
     // The vault balance will not be restored, so the invariant check in the initiator
     // will panic, rolling back the entire transaction including the initial transfer out.
-
-    // The callback itself makes no direct state changes, accounts pass through unchanged.
-    // All mutations go through the token program via chained calls.
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![
-            ShardStateDiff::unchanged(vault_pre),
-            ShardStateDiff::unchanged(receiver_pre),
-        ],
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    plan.write()
 }

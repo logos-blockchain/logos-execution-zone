@@ -6,7 +6,7 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::FinalState,
+    execution_state::{FinalState, PublicOutcome},
 };
 
 pub fn compute_circuit_output(
@@ -18,9 +18,12 @@ pub fn compute_circuit_output(
     let FinalState {
         block_validity_window,
         timestamp_validity_window,
-        public_actions,
+        public,
         mut private_accounts,
     } = final_state;
+    let PublicOutcome::Deferred(public_actions) = public else {
+        panic!("the circuit defers every public effect")
+    };
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions,
         private_actions: Vec::new(),
@@ -213,10 +216,6 @@ mod tests {
     const SHARD_A: AccountId = AccountId::new([10; 32]);
     const SHARD_B: AccountId = AccountId::new([11; 32]);
 
-    fn data(bytes: &[u8]) -> ShardData {
-        bytes.to_vec().try_into().expect("test data is small")
-    }
-
     struct Owner {
         ask: AuthorizationSecretKey,
         d: [u8; 32],
@@ -287,13 +286,17 @@ mod tests {
             FinalState {
                 block_validity_window: BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-                public_actions,
+                public: PublicOutcome::Deferred(public_actions),
                 private_accounts: private.into_iter().collect(),
             },
             witnesses,
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    fn data(bytes: &[u8]) -> ShardData {
+        bytes.to_vec().try_into().expect("test data is small")
     }
 
     #[test]

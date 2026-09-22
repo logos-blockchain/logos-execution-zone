@@ -11,7 +11,7 @@ pub use lee_core::{
     },
     encryption::EphemeralPublicKey,
     native_token,
-    program::{AccountInput, ProgramId},
+    program::{AccountMeta, ProgramId},
 };
 pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,

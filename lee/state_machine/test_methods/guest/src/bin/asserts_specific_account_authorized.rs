@@ -1,49 +1,27 @@
 use lee_core::{
     account::AccountId,
-    program::{
-        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{LeeCall, Plan, read_lee_call},
 };
 
-/// Asserts only the named account is authorized, ignoring every other `pre_state` it receives.
+/// Asserts only the named account is authorized, ignoring every other handle it receives.
 type Instruction = AccountId;
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: account_to_check,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("asserts_specific_account_authorized emits no effect to resolve")
     };
+    let account_to_check = input.instruction;
 
-    if let Some(pre) = pre_states
+    if let Some(account) = input
+        .accounts
         .iter()
-        .find(|pre| pre.account_id == account_to_check)
+        .find(|account| account.account_id == account_to_check)
     {
         assert!(
-            pre.is_authorized,
+            account.is_authorized,
             "asserts_specific_account_authorized: {account_to_check} is not authorized"
         );
     }
 
-    let state_diffs = pre_states
-        .into_iter()
-        .map(ShardStateDiff::unchanged)
-        .collect();
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .write();
+    Plan::new(&input, instruction_data).write();
 }

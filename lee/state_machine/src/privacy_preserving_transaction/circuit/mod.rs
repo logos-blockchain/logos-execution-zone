@@ -3,20 +3,22 @@ use std::collections::{HashMap, HashSet};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateWitness,
-    ProgramImageClaim,
-    account::{Account, AccountId, ProgramShardSelector, ShardData},
-    execution_state::{ExecutionState, InstructionEcho, PublicSource, RootCall},
+    ProgramImageClaim, ProvenCall,
+    account::{AccountId, ProgramShardSelector},
+    execution_state::{ExecutionState, NoPublicFacts, PublicEffects, RootCall},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{CallKind, InstructionData, ProgramInput, ProgramOutput},
+    program::{InstructionData, ResolveOutput},
     to_frame,
 };
-use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+use risc0_zkvm::{
+    ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, ProverOpts, Receipt, default_prover,
+};
 
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::Program,
+    program::{Program, planner_journal, resolver_journal},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -94,49 +96,16 @@ impl From<Program> for ProgramWithDependencies {
 }
 
 /// Inputs for proving an LEE program's execution.
+///
+/// Carries no public account contents: planning is state-free, and a public effect is recorded
+/// for settlement rather than resolved here.
 #[derive(Default)]
 pub struct ProvingInput {
     pub shard_selectors: Vec<ProgramShardSelector>,
     pub signers: HashSet<AccountId>,
-    pub public_accounts: HashMap<AccountId, Account>,
     pub private_witnesses: Vec<PrivateWitness>,
     pub instruction_data: InstructionData,
     pub dummy_inputs: Vec<DummyInput>,
-}
-
-struct LocalSource<'accounts> {
-    signers: &'accounts HashSet<AccountId>,
-    public_accounts: &'accounts HashMap<AccountId, Account>,
-    root_shard_selectors: HashSet<ProgramShardSelector>,
-    resolve: &'accounts mut dyn FnMut(ProgramShardSelector) -> Result<Option<ShardData>, LeeError>,
-}
-
-impl PublicSource for LocalSource<'_> {
-    type Error = LeeError;
-
-    fn account(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
-        Ok(self.signers.contains(&account_id))
-    }
-
-    fn shard(
-        &mut self,
-        account_id: AccountId,
-        program_account_id: AccountId,
-    ) -> Result<ShardData, LeeError> {
-        let shard_selector = ProgramShardSelector::new(account_id, program_account_id);
-        let resolved = if self.root_shard_selectors.contains(&shard_selector) {
-            None
-        } else {
-            (self.resolve)(shard_selector)?
-        };
-        Ok(resolved.unwrap_or_else(|| {
-            self.public_accounts
-                .get(&account_id)
-                .map_or_else(ShardData::empty, |account| {
-                    account.data.shard(program_account_id).clone()
-                })
-        }))
-    }
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
@@ -145,20 +114,9 @@ pub fn execute_and_prove(
     input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    execute_and_prove_with(input, program_with_dependencies, &mut |_| Ok(None))
-}
-
-/// Like [`execute_and_prove`], with `resolve` for additional public shards used by chained calls.
-/// `resolve` is called at most once per selector; `None` keeps the local value.
-pub fn execute_and_prove_with(
-    input: ProvingInput,
-    program_with_dependencies: &ProgramWithDependencies,
-    resolve: &mut dyn FnMut(ProgramShardSelector) -> Result<Option<ShardData>, LeeError>,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProvingInput {
         shard_selectors,
         signers,
-        public_accounts,
         private_witnesses,
         instruction_data,
         dummy_inputs,
@@ -172,59 +130,66 @@ pub fn execute_and_prove_with(
         program_account_id: *initial_account_id,
         shard_selectors,
         instruction_data,
+        authorized_accounts: signers.into_iter().collect(),
     };
-    let mut source = LocalSource {
-        signers: &signers,
-        public_accounts: &public_accounts,
-        root_shard_selectors: root.shard_selectors.iter().copied().collect(),
-        resolve,
-    };
-    let mut state = ExecutionState::initialize(
-        root.clone(),
-        CallKind::Execute,
-        &private_witnesses,
-        &mut source,
-    )?;
+    let mut source = NoPublicFacts;
+    let mut state =
+        ExecutionState::initialize(root.clone(), &private_witnesses, PublicEffects::Defer)?;
 
     let mut env_builder = ExecutorEnv::builder();
-    let mut effects = Vec::new();
-    while let Some(call) = state.prepare_next_call(&mut source)? {
-        let (output, receipt) = if call.self_account_id == NATIVE_TOKEN_PROGRAM_ID {
-            let output =
-                native_token::execute(call.caller_account_id, &call.pre_states, &call.instruction)
+    let mut calls = Vec::new();
+    while let Some(call) = state.prepare_next_call()? {
+        let self_account_id = call.self_account_id;
+        // The native token program is recomputed by the circuit from the protocol's own
+        // implementation, so it has neither an ELF to prove nor a receipt to carry.
+        let (plan, program) = if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            let plan =
+                native_token::execute(call.caller_account_id, &call.accounts, &call.instruction)
                     .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
-            (output, None)
+            (plan, None)
         } else {
-            let program = programs.get(&call.self_account_id).ok_or(
+            let program = programs.get(&self_account_id).ok_or(
                 InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_account_id: call.self_account_id,
+                    program_account_id: self_account_id,
                 },
             )?;
-            let receipt = execute_and_prove_program(program, call)?;
-            let output: ProgramOutput =
-                borsh::from_slice(from_frame(&receipt.journal.bytes).ok_or_else(|| {
-                    LeeError::ProgramOutputDeserializationError(
-                        "malformed inner-receipt journal frame".to_owned(),
-                    )
-                })?)
-                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
-            (output, Some(receipt))
+            let receipt = prove_session(program, |env| Program::write_execute_inputs(call, env))?;
+            let plan = planner_journal(&receipt.journal.bytes)?;
+            env_builder.add_assumption(receipt);
+            (plan, Some(program))
         };
 
-        let call_effects = state.bind_output(output, InstructionEcho::Checked)?;
-        effects.push(call_effects.clone());
-        state.complete_call(call_effects, |_| {})?;
-        if let Some(receipt) = receipt {
-            env_builder.add_assumption(receipt);
+        state.bind_plan(plan.clone())?;
+
+        let mut private_resolutions = Vec::new();
+        while let Some(obligation) = state.next_obligation(&mut source)? {
+            let scheduled = obligation.clone();
+            let resolution = match program {
+                None => ResolveOutput {
+                    post_data: Some(
+                        native_token::resolve(&scheduled)
+                            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?,
+                    ),
+                    input: scheduled,
+                },
+                Some(program) => {
+                    let receipt = prove_session(program, |env| {
+                        Program::write_resolve_inputs(&scheduled, env)
+                    })?;
+                    let resolution = resolver_journal(&receipt.journal.bytes)?;
+                    env_builder.add_assumption(receipt);
+                    private_resolutions.push(resolution.clone());
+                    resolution
+                }
+            };
+            state.accept_resolution(&resolution)?;
         }
+        state.complete_call()?;
+        calls.push(ProvenCall {
+            plan,
+            private_resolutions,
+        });
     }
-    let root_call_kind = state.root_call_kind();
-    let public_facts = state
-        .finish()?
-        .public_actions
-        .into_iter()
-        .map(|action| (action.account_id, (action.is_authorized, action.pre)))
-        .collect();
 
     // Every address-deployed program actually invoked, claimed against its real bytecode
     // identity — the guest circuit uses these for `env::verify`, unchecked; the sequencer
@@ -240,12 +205,10 @@ pub fn execute_and_prove_with(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         root,
-        root_call_kind,
-        public_facts,
         private_witnesses,
         dummy_inputs,
         program_image_claims,
-        effects,
+        calls,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;
@@ -271,18 +234,15 @@ pub fn execute_and_prove_with(
     Ok((circuit_output, proof))
 }
 
-fn execute_and_prove_program(
+fn prove_session(
     program: &Program,
-    input: &ProgramInput<InstructionData>,
+    write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
 ) -> Result<Receipt, LeeError> {
-    // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    Program::write_inputs(input, &mut env_builder)?;
+    write(&mut env_builder)?;
     let env = env_builder.build().unwrap();
 
-    // Prove the program
-    let prover = default_prover();
-    Ok(prover
+    Ok(default_prover()
         .prove(env, program.elf())
         .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
         .receipt)

@@ -9,11 +9,14 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector, ShardData},
-    execution_state::{ExecutionState, InstructionEcho, PublicSource, RootCall},
+    execution_state::{
+        ExecutionError, ExecutionState, PublicEffects, PublicOutcome, PublicResolution,
+        PublicSource, RootCall,
+    },
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        CallKind, InstructionData, PROGRAM_LOADER_ACCOUNT_ID, ProgramInput, ProgramOutput,
-        TransactionEvent, get_program_via,
+        InstructionData, PROGRAM_LOADER_ACCOUNT_ID, ProgramInput, ProgramOutput, ResolveInput,
+        ResolveOutput, TransactionEvent, get_program_via, validate_resolution,
     },
 };
 use log::debug;
@@ -23,7 +26,9 @@ use crate::{
     V03State, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof, message::Message,
+        PrivacyPreservingTransaction,
+        circuit::Proof,
+        message::{Message, PublicActionWithID},
     },
     program::Program,
     public_transaction::PublicTransaction,
@@ -71,15 +76,10 @@ impl ExecutionOutcome {
 
 struct ChainSource<'state> {
     state: &'state V03State,
-    authorized: &'state HashSet<AccountId>,
 }
 
 impl PublicSource for ChainSource<'_> {
     type Error = LeeError;
-
-    fn account(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
-        Ok(self.authorized.contains(&account_id))
-    }
 
     fn shard(
         &mut self,
@@ -290,56 +290,89 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
         );
 
-        let mut source = ChainSource { state, authorized };
+        let mut source = ChainSource { state };
         let mut execution = ExecutionState::initialize(
             RootCall {
                 program_account_id,
                 shard_selectors: shard_selectors.to_vec(),
                 instruction_data: instruction_data.to_vec(),
+                authorized_accounts: authorized.iter().copied().collect(),
             },
-            CallKind::Execute,
             &[],
-            &mut source,
+            PublicEffects::Resolve,
         )?;
         let mut events: Vec<TransactionEvent> = Vec::new();
 
-        while execution.prepare_next_call(&mut source)?.is_some() {
+        while execution.prepare_next_call()?.is_some() {
             let call = execution.prepared_call();
             let self_account_id = call.self_account_id;
             let caller_account_id = call.caller_account_id;
             debug!(
-                "Program {self_account_id:?} pre_states: {:?}, instruction_data: {:?}",
-                call.pre_states, call.instruction
+                "Program {self_account_id:?} accounts: {:?}, instruction_data: {:?}",
+                call.accounts, call.instruction
             );
-            let program_output = if self_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+
+            // The program instance is selected once and held for the whole invocation, so every
+            // effect of this plan is resolved by the code that planned it.
+            let (plan, evaluator) = if self_account_id == PROGRAM_LOADER_ACCOUNT_ID {
                 // Native dispatch: `program_loader` is a pseudo-program run as Rust rather than a
                 // guest ELF, so there is no zkVM session to charge cycles against.
-                execute_program_loader(call)?
+                let plan = execute_program_loader(call, |account_id| {
+                    loader_shard(&execution, state, account_id)
+                })?;
+                (plan, Evaluator::Loader)
             } else if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
-                native_token::execute(caller_account_id, &call.pre_states, &call.instruction)
-                    .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
+                let plan =
+                    native_token::execute(caller_account_id, &call.accounts, &call.instruction)
+                        .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
+                (plan, Evaluator::Native)
             } else {
-                let Some((program_id, elf)) = get_program_via(self_account_id, |id| {
+                let Some((program_id, elf)) = get_program_via(self_account_id, |account_id| {
                     execution
-                        .pending_shard(id, PROGRAM_LOADER_ACCOUNT_ID)
-                        .or_else(|| state.loader_shard(id))
+                        .pending_shard(account_id, PROGRAM_LOADER_ACCOUNT_ID)
+                        .or_else(|| state.loader_shard(account_id))
                 }) else {
                     return Err(LeeError::UnknownProgram {
                         chained: caller_account_id.is_some(),
                     });
                 };
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
-                let (program_output, call_cycles) =
-                    program.execute(call, cycle_budget.saturating_sub(*cycles_used))?;
-                *cycles_used = cycles_used
-                    .checked_add(call_cycles)
-                    .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
-                program_output
+                let (plan, call_cycles) =
+                    program.execute(call, remaining(cycle_budget, *cycles_used))?;
+                charge(cycles_used, call_cycles);
+                (plan, Evaluator::Guest(program))
             };
-            debug!("Program {self_account_id:?} output: {program_output:?}");
+            debug!("Program {self_account_id:?} plan: {plan:?}");
 
-            let effects = execution.bind_output(program_output, InstructionEcho::Unchecked)?;
-            let call_events = execution.complete_call(effects, |_| {})?;
+            execution.bind_plan(plan)?;
+
+            while let Some(obligation) = execution.next_obligation(&mut source)? {
+                let input = obligation.clone();
+                let resolution = match &evaluator {
+                    Evaluator::Loader => ResolveOutput {
+                        post_data: Some(catch_program_loader_panic(|| {
+                            program_loader_core::resolve(&input)
+                        })?),
+                        input,
+                    },
+                    Evaluator::Native => ResolveOutput {
+                        post_data: Some(
+                            native_token::resolve(&input)
+                                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?,
+                        ),
+                        input,
+                    },
+                    Evaluator::Guest(program) => {
+                        let (resolution, call_cycles) =
+                            program.resolve(&input, remaining(cycle_budget, *cycles_used))?;
+                        charge(cycles_used, call_cycles);
+                        resolution
+                    }
+                };
+                execution.accept_resolution(&resolution)?;
+            }
+
+            let call_events = execution.complete_call()?;
 
             ensure!(
                 execution.block_validity_window().is_valid_for(block_id)
@@ -357,14 +390,15 @@ impl ValidatedStateDiff {
             }));
         }
 
-        let public_diff = execution
-            .finish()?
-            .public_actions
+        let PublicOutcome::Resolved(accounts) = execution.finish()?.public else {
+            unreachable!("resolving public effects produces resolved accounts")
+        };
+        let public_diff = accounts
             .into_iter()
-            .map(|action| {
-                let mut account = state.get_account_by_id(action.account_id);
-                account.data.apply(&action.post);
-                (action.account_id, account)
+            .map(|(account_id, data)| {
+                let mut account = state.get_account_by_id(account_id);
+                account.data.apply(&data);
+                (account_id, account)
             })
             .collect();
 
@@ -449,20 +483,16 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build each public pre-state from chain state and the action's shard keys.
-        let absent = Account::default();
+        // The journal carries no public state, only the effects settlement must fold. Its
+        // authorization bits are reconstructed here from the verified signatures, never taken
+        // from the prover's claim.
         let public_actions: Vec<PublicAction> = message
             .public_actions
             .iter()
             .map(|action| PublicAction {
                 account_id: action.account_id,
                 is_authorized: signer_account_ids.contains(&action.account_id),
-                pre: state
-                    .get_account_by_id_ref(action.account_id)
-                    .unwrap_or(&absent)
-                    .data
-                    .project(action.post.shards.keys().copied()),
-                post: action.post.clone(),
+                resolutions: action.resolutions.clone(),
             })
             .collect();
 
@@ -480,15 +510,11 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = message
-            .public_actions
-            .iter()
-            .map(|action| {
-                let mut account = state.get_account_by_id(action.account_id);
-                account.data.apply(&action.post);
-                (action.account_id, account)
-            })
-            .collect();
+        let public_diff = fold_public_resolutions(
+            state,
+            &message.public_actions,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -514,55 +540,160 @@ impl ValidatedStateDiff {
     }
 }
 
-/// Runs `program_loader`'s instruction as native Rust rather than a guest ELF, producing the same
-/// [`ProgramOutput`] shape a guest call would — so the rest of the dispatch loop (chained-call
-/// bookkeeping, `validate_execution`, splicing) treats it identically either way.
-///
+enum Evaluator {
+    Loader,
+    Native,
+    Guest(Program),
+}
+
+const fn remaining(cycle_budget: Cycles, used: Cycles) -> Cycles {
+    cycle_budget.saturating_sub(used)
+}
+
+const fn charge(used: &mut Cycles, call_cycles: Cycles) {
+    *used = used
+        .checked_add(call_cycles)
+        .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+}
+
+/// The same lookup `get_program_via` uses, which is what keeps deploy-then-call working within
+/// one transaction.
+fn loader_shard<'state>(
+    execution: &'state ExecutionState<'_>,
+    state: &'state V03State,
+    account_id: AccountId,
+) -> &'state ShardData {
+    const ABSENT: &ShardData = &ShardData::empty();
+    execution
+        .pending_shard(account_id, PROGRAM_LOADER_ACCOUNT_ID)
+        .or_else(|| state.loader_shard(account_id))
+        .unwrap_or(ABSENT)
+}
+
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
 /// every other `*_core` crate uses under its guest's sandbox. There is no zkVM sandbox here, so
 /// `catch_unwind` stands in for it: a panic becomes a chargeable
 /// [`LeeError::ProgramExecutionFailed`] instead of taking down the caller.
-fn execute_program_loader(
-    input: &ProgramInput<InstructionData>,
-) -> Result<ProgramOutput, LeeError> {
-    let ProgramInput {
-        self_account_id,
-        caller_account_id,
-        pre_states,
-        instruction: instruction_data,
-    } = input;
-    let instruction: ProgramLoaderInstruction = borsh::from_slice(instruction_data)
-        .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
-
-    let state_diffs = catch_unwind(AssertUnwindSafe(|| match instruction {
-        ProgramLoaderInstruction::WriteSegment {
-            bytecode,
-            next_segment,
-        } => program_loader_core::write_segment(pre_states, bytecode, next_segment),
-        ProgramLoaderInstruction::CreateHeader {
-            first_segment,
-            immutable,
-        } => program_loader_core::create_header(pre_states, first_segment, immutable),
-        ProgramLoaderInstruction::UpdateHeader {
-            first_segment,
-            immutable,
-        } => program_loader_core::update_header(pre_states, first_segment, immutable),
-    }))
-    .map_err(|panic| {
+fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError> {
+    catch_unwind(AssertUnwindSafe(run)).map_err(|panic| {
         let message = panic
             .downcast_ref::<&str>()
             .map(|s| (*s).to_owned())
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "program_loader panicked".to_owned());
         LeeError::ProgramExecutionFailed(message)
+    })
+}
+
+/// Produces the same [`ProgramOutput`] shape a guest call would, so the rest of the dispatch loop
+/// treats it identically either way. Its plan reads live loader shards through `shard` because it
+/// is trusted, public-only protocol code, not a guest planning from state-free metadata.
+fn execute_program_loader<'state>(
+    input: &ProgramInput<InstructionData>,
+    shard: impl Fn(AccountId) -> &'state ShardData,
+) -> Result<ProgramOutput, LeeError> {
+    let ProgramInput {
+        self_account_id,
+        caller_account_id,
+        accounts,
+        instruction: instruction_data,
+    } = input;
+    let instruction: ProgramLoaderInstruction = borsh::from_slice(instruction_data)
+        .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+    let effects = catch_program_loader_panic(|| match instruction {
+        ProgramLoaderInstruction::WriteSegment {
+            bytecode,
+            next_segment,
+        } => program_loader_core::write_segment(accounts, shard, bytecode, next_segment),
+        ProgramLoaderInstruction::CreateHeader {
+            first_segment,
+            immutable,
+        } => program_loader_core::create_header(accounts, shard, first_segment, immutable),
+        ProgramLoaderInstruction::UpdateHeader {
+            first_segment,
+            immutable,
+        } => program_loader_core::update_header(accounts, shard, first_segment, immutable),
     })?;
 
     Ok(ProgramOutput::new(
         *self_account_id,
         *caller_account_id,
         instruction_data.clone(),
-        state_diffs,
-    ))
+        accounts.clone(),
+    )
+    .with_effects(effects))
+}
+
+/// Runs each recorded public effect against live state, under one aggregate cycle budget shared
+/// by every resolver in the transaction.
+///
+/// Private transactions are fee-exempt, so this guest work is currently unpaid and a proof whose
+/// resolver always fails can be resubmitted at no cost. That hole is accepted deliberately and
+/// is what the charged-settlement work closes.
+fn fold_public_resolutions(
+    state: &V03State,
+    actions: &[PublicActionWithID],
+    cycle_budget: Cycles,
+) -> Result<HashMap<AccountId, Account>, LeeError> {
+    let mut pending: HashMap<AccountId, Account> = HashMap::new();
+    let mut cycles_used: Cycles = 0;
+    let mut loaded: HashMap<AccountId, Program> = HashMap::new();
+    for action in actions {
+        let account = pending
+            .entry(action.account_id)
+            .or_insert_with(|| state.get_account_by_id(action.account_id));
+        for resolution in &action.resolutions {
+            let PublicResolution::Apply {
+                program_account_id,
+                shard_program_account_id,
+                data,
+            } = resolution;
+            let input = ResolveInput {
+                self_account_id: *program_account_id,
+                selector: ProgramShardSelector::new(action.account_id, *shard_program_account_id),
+                pre_data: account.data.shard(*shard_program_account_id).clone(),
+                effect_data: data.clone(),
+            };
+            // Native balance is protocol-recomputed; every other evaluator is the guest the
+            // proof's image claims already bound to this account.
+            let expected = input.clone();
+            let output = if *program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+                ResolveOutput {
+                    post_data: Some(
+                        native_token::resolve(&input)
+                            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?,
+                    ),
+                    input,
+                }
+            } else {
+                if !loaded.contains_key(program_account_id) {
+                    let Some((program_id, elf)) =
+                        get_program_via(*program_account_id, |id| state.loader_shard(id))
+                    else {
+                        return Err(LeeError::UnknownProgram { chained: false });
+                    };
+                    loaded.insert(
+                        *program_account_id,
+                        Program::new_unchecked(program_id, Cow::Owned(elf)),
+                    );
+                }
+                let program = &loaded[program_account_id];
+                let (output, call_cycles) =
+                    program.resolve(&input, remaining(cycle_budget, cycles_used))?;
+                charge(&mut cycles_used, call_cycles);
+                output
+            };
+            validate_resolution(&expected, &output).map_err(|source| {
+                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+                    program_account_id: *program_account_id,
+                    source,
+                })
+            })?;
+            account.data.apply_resolution(&output);
+        }
+    }
+    Ok(pending)
 }
 
 /// Validates the witness set and replay nonces of a public transaction against

@@ -1,36 +1,24 @@
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-    respond_unsupported_call,
-};
+use lee_core::program::{GuestOutput, LeeCall, ProgramOutput, read_lee_call};
 
 type Instruction = ();
 
-/// Silently drops the second account entirely from its own output: given two `pre_states`, it
-/// returns only one `ShardStateDiff`, echoing the first account back unchanged.
+/// Silently drops the second handle from its own output: given two, it echoes only the first.
+/// Hand-rolls its output because `Plan` copies the complete handle echo out of the input and so
+/// cannot under-report by accident.
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            ..
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("dropped_account emits no effect to resolve")
     };
 
-    let Ok([pre1, _pre2]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([first, _second]) = <[_; 2]>::try_from(input.accounts) else {
         return;
     };
 
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
+    GuestOutput::Execute(ProgramOutput::new(
+        input.self_account_id,
+        input.caller_account_id,
         instruction_data,
-        vec![ShardStateDiff::unchanged(pre1)],
-    )
+        vec![first],
+    ))
     .write();
 }

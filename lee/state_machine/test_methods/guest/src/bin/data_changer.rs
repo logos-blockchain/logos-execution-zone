@@ -1,40 +1,25 @@
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-    respond_unsupported_call,
-};
+use lee_core::program::{LeeCall, Plan, read_lee_call, resolve_write};
 
 type Instruction = Vec<u8>;
 
-/// A program that modifies the account data by setting bytes sent in instruction.
+/// A program that sets its shard's bytes to the ones sent in the instruction.
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: data,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
-
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
-        return;
-    };
-
-    let post_data = data
-        .try_into()
-        .expect("provided data should fit into data limit");
-    let diff_output = ShardStateDiff::new(pre, post_data);
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![diff_output],
-    )
-    .write();
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => {
+            let Ok([account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
+                return;
+            };
+            let mut plan = Plan::new(&input, instruction_data);
+            plan.update(&account, &input.instruction);
+            plan.write()
+        }
+        LeeCall::Resolve(input) => {
+            let written: Vec<u8> =
+                borsh::from_slice(&input.effect_data).expect("data_changer wrote its own effect");
+            let data = written
+                .try_into()
+                .expect("written data fits the data limit");
+            resolve_write(input, data)
+        }
+    }
 }

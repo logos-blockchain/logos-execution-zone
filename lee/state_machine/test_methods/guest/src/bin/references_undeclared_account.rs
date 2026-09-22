@@ -1,46 +1,24 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
-    program::{
-        ChainedCall, InstructionData, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, InstructionData, LeeCall, Plan, ProgramId, read_lee_call},
 };
 
-/// Chains to `callee_program_id` naming `undeclared_account_id`, an account never in this
-/// program's own `pre_states`.
+/// Chains to `callee_program_id` naming `undeclared_account_id`, an account never among this
+/// program's own handles.
 type Instruction = (ProgramId, InstructionData, AccountId);
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (callee_program_id, callee_instruction, undeclared_account_id),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("references_undeclared_account emits no effect to resolve")
     };
+    let (callee_program_id, callee_instruction, undeclared_account_id) = input.instruction.clone();
 
-    let state_diffs = pre_states
-        .into_iter()
-        .map(ShardStateDiff::unchanged)
-        .collect();
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .with_chained_calls(vec![ChainedCall {
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         shard_selectors: vec![ProgramShardSelector::balance(undeclared_account_id)],
         pda_seeds: vec![],
-    }])
-    .write();
+    });
+    plan.write()
 }

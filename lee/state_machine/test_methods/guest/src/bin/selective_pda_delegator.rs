@@ -1,10 +1,7 @@
 use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, InstructionData, LeeCall, PdaSeed, Plan, ProgramId, read_lee_call},
 };
 
 type Instruction = (
@@ -15,39 +12,32 @@ type Instruction = (
 );
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (delegated_seed, callee_program_id, callee_instruction, sibling),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("selective_pda_delegator emits no effect to resolve")
     };
+    let (delegated_seed, callee_program_id, callee_instruction, sibling) =
+        input.instruction.clone();
 
-    let Some((pda, rest)) = pre_states.split_first() else {
+    let Some((pda, rest)) = input.accounts.split_first() else {
         return;
     };
 
+    let mut plan = Plan::new(&input, instruction_data);
     // Delegate the PDA to the callee via `pda_seeds` — the protocol resolves its
     // authorization there from the seed match, not from anything supplied here.
-    let mut chained_calls = vec![ChainedCall {
+    plan.call(ChainedCall {
         program_account_id: callee_program_id.into(),
         instruction_data: callee_instruction,
         shard_selectors: std::iter::once(ProgramShardSelector::from(pda))
             .chain(rest.iter().map(ProgramShardSelector::from))
             .collect(),
         pda_seeds: vec![delegated_seed],
-    }];
+    });
 
     // If sibling is present, send out a call with no seeds so the PDA (when included)
     // stays unauthorized in that parallel branch.
     if let Some((sibling_program_id, include_pda)) = sibling {
-        chained_calls.push(ChainedCall {
+        plan.call(ChainedCall {
             program_account_id: sibling_program_id.into(),
             instruction_data: to_vec(&()).unwrap(),
             shard_selectors: if include_pda {
@@ -60,17 +50,5 @@ fn main() {
             pda_seeds: vec![],
         });
     }
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        pre_states
-            .iter()
-            .cloned()
-            .map(ShardStateDiff::unchanged)
-            .collect(),
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    plan.write()
 }

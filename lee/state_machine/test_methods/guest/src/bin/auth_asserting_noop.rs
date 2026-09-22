@@ -1,46 +1,23 @@
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-    respond_unsupported_call,
-};
+use lee_core::program::{LeeCall, Plan, read_lee_call};
 
-/// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
-/// the `post_diffs`. Any unauthorized `pre_state` panics the guest, failing the whole
-/// circuit proof. Used as a callee in private-PDA delegation tests to actually exercise the
-/// authorization propagated through `ChainedCall.pda_seeds`.
+/// A variant of `noop` that asserts every handle it is given is authorized. Any unauthorized
+/// handle panics the guest, failing the whole circuit proof. Used as a callee in private-PDA
+/// delegation tests to actually exercise the authorization propagated through
+/// `ChainedCall.pda_seeds`.
 type Instruction = ();
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            ..
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("auth_asserting_noop emits no effect to resolve")
     };
 
-    for pre in &pre_states {
+    for account in &input.accounts {
         assert!(
-            pre.is_authorized,
-            "auth_asserting_noop: pre_state {} is not authorized",
-            pre.account_id
+            account.is_authorized,
+            "auth_asserting_noop: {} is not authorized",
+            account.account_id
         );
     }
 
-    let state_diffs = pre_states
-        .iter()
-        .map(|account| ShardStateDiff::unchanged(account.clone()))
-        .collect();
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .write();
+    Plan::new(&input, instruction_data).write();
 }

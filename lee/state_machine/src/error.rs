@@ -139,11 +139,11 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::FamilyBindingConflict { .. }
             | ExecutionError::UnknownAccount { .. }
             | ExecutionError::RowCountMismatch { .. }
-            | ExecutionError::PreStateMismatch { .. }
+            | ExecutionError::InputEchoMismatch { .. }
+            | ExecutionError::UnresolvedEffects { .. }
             | ExecutionError::MismatchedProgramId { .. }
             | ExecutionError::MismatchedCallerProgramId { .. }
             | ExecutionError::MismatchedInstruction { .. }
-            | ExecutionError::ChainedCallDidNotExecute { .. }
             | ExecutionError::ExecutionValidation { .. }
             | ExecutionError::IncompleteExecution
             | ExecutionError::Aborted => Self::InvalidProgramBehavior(error.into()),

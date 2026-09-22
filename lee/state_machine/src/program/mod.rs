@@ -4,7 +4,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::Cycles,
     from_frame,
-    program::{CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{
+        CallKind, GuestOutput, InstructionData, ProgramId, ProgramInput, ProgramOutput,
+        ResolveInput, ResolveOutput,
+    },
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
@@ -77,24 +80,33 @@ impl Program {
         input: &ProgramInput<InstructionData>,
         cycle_budget: Cycles,
     ) -> Result<(ProgramOutput, Cycles), LeeError> {
-        // Write inputs to the program
+        let (journal, cycles) =
+            self.run(|env| Self::write_execute_inputs(input, env), cycle_budget)?;
+        Ok((planner_journal(&journal)?, cycles))
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        input: &ResolveInput,
+        cycle_budget: Cycles,
+    ) -> Result<(ResolveOutput, Cycles), LeeError> {
+        let (journal, cycles) =
+            self.run(|env| Self::write_resolve_inputs(input, env), cycle_budget)?;
+        Ok((resolver_journal(&journal)?, cycles))
+    }
+
+    fn run(
+        &self,
+        write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
+        cycle_budget: Cycles,
+    ) -> Result<(Vec<u8>, Cycles), LeeError> {
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(cycle_budget));
-        Self::write_inputs(input, &mut env_builder)?;
+        write(&mut env_builder)?;
         let env = env_builder.build().unwrap();
 
-        // Execute the program (without proving)
         let session = Self::execute_session(env, self.elf(), cycle_budget)?;
-        let cycles = session.cycles;
-
-        // Get outputs
-        let payload = from_frame(&session.journal).ok_or_else(|| {
-            LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
-        })?;
-        let program_output = borsh::from_slice(payload)
-            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
-
-        Ok((program_output, cycles))
+        Ok((session.journal, session.cycles))
     }
 
     /// Runs the session, translating the executor's session-limit bail into the
@@ -133,17 +145,63 @@ impl Program {
         })
     }
 
-    /// Writes a `CallKind::Execute` frame followed by the guest's `ProgramInput` as a single
-    /// length-prefixed borsh frame, the form `read_lee_call` expects.
-    pub fn write_inputs(
+    pub fn write_execute_inputs(
         input: &ProgramInput<InstructionData>,
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
-        env_builder.write_slice(&to_borsh_frame(&CallKind::Execute));
+        Self::write_call(CallKind::Execute, input, env_builder)
+    }
+
+    pub fn write_resolve_inputs(
+        input: &ResolveInput,
+        env_builder: &mut ExecutorEnvBuilder,
+    ) -> Result<(), LeeError> {
+        Self::write_call(CallKind::Resolve, input, env_builder)
+    }
+
+    /// Writes the call-kind frame followed by the entrypoint's payload as a single
+    /// length-prefixed borsh frame, the form `read_lee_call` expects.
+    fn write_call<T: BorshSerialize>(
+        kind: CallKind,
+        payload: &T,
+        env_builder: &mut ExecutorEnvBuilder,
+    ) -> Result<(), LeeError> {
+        env_builder.write_slice(&to_borsh_frame(&kind));
 
         let payload =
-            borsh::to_vec(input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+            borsh::to_vec(payload).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
+}
+
+/// Program deployment is permissionless, so a malformed frame or payload is an error rather
+/// than a panic.
+pub(crate) fn decode_guest_output(journal: &[u8]) -> Result<GuestOutput, LeeError> {
+    let payload = from_frame(journal).ok_or_else(|| {
+        LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
+    })?;
+    borsh::from_slice(payload).map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))
+}
+
+/// A journal of the other entrypoint's shape is a hard reject, not a decode fallback: it is
+/// what stops a planner receipt standing in for a resolver receipt under one image id.
+pub(crate) fn planner_journal(journal: &[u8]) -> Result<ProgramOutput, LeeError> {
+    match decode_guest_output(journal)? {
+        GuestOutput::Execute(plan) => Ok(plan),
+        GuestOutput::Resolve(_) => Err(wrong_entrypoint("plan", "resolution")),
+    }
+}
+
+pub(crate) fn resolver_journal(journal: &[u8]) -> Result<ResolveOutput, LeeError> {
+    match decode_guest_output(journal)? {
+        GuestOutput::Resolve(resolution) => Ok(resolution),
+        GuestOutput::Execute(_) => Err(wrong_entrypoint("resolution", "plan")),
+    }
+}
+
+fn wrong_entrypoint(scheduled: &str, returned: &str) -> LeeError {
+    LeeError::ProgramExecutionFailed(format!(
+        "a scheduled {scheduled} returned a {returned} journal"
+    ))
 }

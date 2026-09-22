@@ -1,36 +1,21 @@
 use lee_core::program::{
-    BlockValidityWindow, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
-    TimestampValidityWindow, read_lee_call, respond_unsupported_call,
+    BlockValidityWindow, LeeCall, Plan, TimestampValidityWindow, read_lee_call,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (block_validity_window, timestamp_validity_window),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("validity_window emits no effect to resolve")
     };
+    let (block_validity_window, timestamp_validity_window) = input.instruction;
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let Ok([_account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
         return;
     };
 
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![ShardStateDiff::unchanged(pre)],
-    )
-    .with_block_validity_window(block_validity_window)
-    .with_timestamp_validity_window(timestamp_validity_window)
-    .write();
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.block_window(block_validity_window);
+    plan.timestamp_window(timestamp_validity_window);
+    plan.write()
 }
