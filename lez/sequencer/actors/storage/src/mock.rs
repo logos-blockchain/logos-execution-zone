@@ -247,13 +247,13 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<DbDump>>
         ) -> Result<DbDump>;
 
-        pub fn handle_get_block_hash_to_block_id_map_item(
+        pub fn handle_get_block_by_hash(
             &mut self,
             msg: GetBlockHashToBlockIdMapItem,
             ctx: &mut Context<Self, Result<Option<u64>>>
         ) -> Result<Option<u64>>;
 
-        pub fn handle_get_account_id_to_block_id_map_item_uo_to_a_limit(
+        pub fn handle_get_account_transactions(
             &mut self,
             msg: GetAccountIdToAffectingTxMapItemUptoLimit,
             ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
@@ -732,7 +732,7 @@ impl Message<GetBlockHashToBlockIdMapItem> for MockStorageActor {
         msg: GetBlockHashToBlockIdMapItem,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_block_hash_to_block_id_map_item(msg, ctx)
+        self.handle_get_block_by_hash(msg, ctx)
     }
 }
 
@@ -744,6 +744,6 @@ impl Message<GetAccountIdToAffectingTxMapItemUptoLimit> for MockStorageActor {
         msg: GetAccountIdToAffectingTxMapItemUptoLimit,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_account_id_to_block_id_map_item_uo_to_a_limit(msg, ctx)
+        self.handle_get_account_transactions(msg, ctx)
     }
 }

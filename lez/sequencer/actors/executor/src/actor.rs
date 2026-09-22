@@ -34,12 +34,11 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountIdToAffectingTxMapItemUptoLimit,
-        GetAccountNonces, GetAccountReply, GetAccountView, GetBlock, GetBlockHashToBlockIdMapItem,
-        GetBlockRange, GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
+        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
+        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -591,14 +590,14 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetBlockHashToBlockIdMapItem> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockByHash>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<u64>>;
 
     async fn handle(
         &mut self,
-        msg: GetBlockHashToBlockIdMapItem,
+        msg: GetBlockByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref
@@ -609,13 +608,13 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetAccountIdToAffectingTxMapItemUptoLimit> for ExecutorActor<S, BP>
+    Message<GetAccountTransactions> for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
     async fn handle(
         &mut self,
-        msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+        msg: GetAccountTransactions,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref

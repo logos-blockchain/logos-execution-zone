@@ -167,6 +167,60 @@ impl StorageActor {
         })
     }
 
+    /// Produces map from `AccountId` to `AffectedAccountsMetaUpdate` for block.
+    ///
+    /// if `to_write` is true we consider block as finalized, else it is orphaned and will be
+    /// removed.
+    fn update_accounts_affected_txs_for_block(
+        &self,
+        block: &Block,
+        to_write: bool,
+        accounts_affected_transactions: &mut BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
+    ) -> Result<()> {
+        let affected_accounts = block
+            .body
+            .transactions
+            .iter()
+            .flat_map(LeeTransaction::affected_public_account_ids);
+
+        for acc in affected_accounts {
+            let starting_meta_acc_opt = if accounts_affected_transactions.contains_key(&acc) {
+                None
+            } else {
+                self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
+            };
+
+            let block_id = block.header.block_id;
+
+            accounts_affected_transactions
+                .entry(acc)
+                .and_modify(|meta_update| {
+                    if to_write {
+                        meta_update.updated_block_ids.push(block_id);
+                    } else {
+                        meta_update.removed_block_ids.push(block_id);
+                    }
+                })
+                .or_insert_with(|| {
+                    if to_write {
+                        AffectedAccountsMetaUpdate {
+                            old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
+                            updated_block_ids: vec![block_id],
+                            removed_block_ids: vec![],
+                        }
+                    } else {
+                        AffectedAccountsMetaUpdate {
+                            old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
+                            updated_block_ids: vec![],
+                            removed_block_ids: vec![block_id],
+                        }
+                    }
+                });
+        }
+
+        Ok(())
+    }
+
     /// Stages every block this update writes, reporting whether any of them
     /// differs from the payload the store already holds.
     #[expect(
@@ -240,35 +294,16 @@ impl StorageActor {
             self.db().put_batch(
                 batch,
                 &block.block.header.hash,
-                &entities::BlockHashToBlockIdMappingDestination { id: *block_id },
+                &entities::BlockHashToBlockIdMappingDestination {
+                    block_id: *block_id,
+                },
             )?;
 
-            let affected_accounts = block
-                .block
-                .body
-                .transactions
-                .iter()
-                .flat_map(LeeTransaction::affected_public_account_ids);
-
-            // Non-atomic operation, needs cumulation.
-            for acc in affected_accounts {
-                let starting_meta_acc_opt = if accounts_affected_transactions.contains_key(&acc) {
-                    None
-                } else {
-                    self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
-                };
-
-                accounts_affected_transactions
-                    .entry(acc)
-                    .and_modify(|meta_update| {
-                        meta_update.updated_block_ids.push(*block_id);
-                    })
-                    .or_insert_with(|| AffectedAccountsMetaUpdate {
-                        old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
-                        updated_block_ids: vec![*block_id],
-                        removed_block_ids: vec![],
-                    });
-            }
+            self.update_accounts_affected_txs_for_block(
+                &block.block,
+                true,
+                &mut accounts_affected_transactions,
+            )?;
         }
 
         Ok((
@@ -299,30 +334,11 @@ impl StorageActor {
                             &block.block.header.hash,
                         );
 
-                    let affected_accounts = block
-                        .block
-                        .body
-                        .transactions
-                        .iter()
-                        .flat_map(LeeTransaction::affected_public_account_ids);
-
-                    for acc in affected_accounts {
-                        let starting_meta_acc_opt =
-                            if accounts_affected_transactions.contains_key(&acc) {
-                                None
-                            } else {
-                                self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
-                            };
-
-                        accounts_affected_transactions
-                            .entry(acc)
-                            .and_modify(|meta_update| meta_update.removed_block_ids.push(stale_id))
-                            .or_insert_with(|| AffectedAccountsMetaUpdate {
-                                old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
-                                updated_block_ids: vec![],
-                                removed_block_ids: vec![stale_id],
-                            });
-                    }
+                    self.update_accounts_affected_txs_for_block(
+                        &block.block,
+                        false,
+                        accounts_affected_transactions,
+                    )?;
                 }
 
                 self.db()
@@ -341,17 +357,18 @@ impl StorageActor {
         meta_pre_state: u64,
         last_affecting_block_id: BlockId,
     ) -> Result<u64> {
-        let mut cycle_counter = 1;
         let mut curr_meta_state = meta_pre_state;
-        let mut iteration_key = entities::AccountIdToBlockIdKey::from((
-            account_id,
-            meta_pre_state.saturating_sub(cycle_counter),
-        ));
+        let mut iteration_key;
 
-        while let Some(entities::AccountIdToBlockIdDestination { block_id }) =
-            self.db()
+        for i in (0..meta_pre_state).rev() {
+            iteration_key = entities::AccountIdToBlockIdKey::new(account_id, i);
+
+            let block_id = self
+                .db()
                 .get::<entities::AccountIdToBlockIdDestination>(&iteration_key)?
-        {
+                .expect("Destination must be present, othervise map is invalid")
+                .block_id;
+
             if block_id >= last_affecting_block_id {
                 self.db()
                     .delete_batch::<entities::AccountIdToBlockIdDestination>(batch, &iteration_key);
@@ -359,12 +376,6 @@ impl StorageActor {
             } else {
                 break;
             }
-
-            cycle_counter = cycle_counter.saturating_add(1);
-            iteration_key = entities::AccountIdToBlockIdKey::from((
-                account_id,
-                meta_pre_state.saturating_sub(cycle_counter),
-            ));
         }
 
         Ok(curr_meta_state)
@@ -385,17 +396,22 @@ impl StorageActor {
             },
         ) in accounts_affected_transactions
         {
-            let mut result_meta = self.drop_all_affected_account_entries_up_to_block_id(
-                batch,
-                account_id,
-                meta_pre_state,
-                *affecting_blocks_to_update.first().unwrap_or_else(|| {
-                    affecting_blocks_to_remove.first().expect("Must be present")
-                }),
-            )?;
+            // No need to attempt deletions, if nothing to delete
+            let mut result_meta = if affecting_blocks_to_remove.is_empty() {
+                meta_pre_state
+            } else {
+                self.drop_all_affected_account_entries_up_to_block_id(
+                    batch,
+                    account_id,
+                    meta_pre_state,
+                    *affecting_blocks_to_update.first().unwrap_or_else(|| {
+                        affecting_blocks_to_remove.first().expect("Must be present")
+                    }),
+                )?
+            };
 
             for affecting_block_id in affecting_blocks_to_update {
-                let map_key = entities::AccountIdToBlockIdKey::from((account_id, result_meta));
+                let map_key = entities::AccountIdToBlockIdKey::new(account_id, result_meta);
                 self.db().put_batch(
                     batch,
                     &map_key,
@@ -581,54 +597,54 @@ impl StorageActor {
             self.db()
                 .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
 
-        if let Some(meta_acc_data) = meta_acc_opt {
-            let mut affecting_txs = vec![];
-            let mut local_offset = 0;
-            let mut local_limit = 0;
+        let Some(meta_acc_data) = meta_acc_opt else {
+            return Ok(None);
+        };
 
-            'outer: for i in 0..meta_acc_data.length {
-                let mapping_key = entities::AccountIdToBlockIdKey::from((account_id, i));
+        let mut affecting_txs = vec![];
+        let mut local_offset = 0;
+        let mut local_limit = 0;
 
-                let block_id = self
-                    .db()
-                    .get::<entities::AccountIdToBlockIdDestination>(&mapping_key)?
-                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
-                        "Inconsistent map: account id to block id map points into nowhere"
-                    )))?
-                    .block_id;
+        'outer: for i in 0..meta_acc_data.length {
+            let mapping_key = entities::AccountIdToBlockIdKey::new(account_id, i);
 
-                let affecting_transactions = self
-                    .db()
-                    .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-                    .ok_or(Error::DatabaseError(anyhow::anyhow!(
-                        "Inconsistent map: account id to block id map points into absent block"
-                    )))?
-                    .block
-                    .body
-                    .transactions
-                    .into_iter()
-                    .filter(|tx| tx.affected_public_account_ids().contains(&account_id));
+            let block_id = self
+                .db()
+                .get::<entities::AccountIdToBlockIdDestination>(&mapping_key)?
+                .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                    "Inconsistent map: account id to block id map points into nowhere"
+                )))?
+                .block_id;
 
-                for aff_tx in affecting_transactions {
-                    if local_offset >= offset {
-                        if local_limit < limit {
-                            affecting_txs.push(aff_tx);
-                            local_limit = local_limit.saturating_add(1);
+            let affecting_transactions = self
+                .db()
+                .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+                .ok_or(Error::DatabaseError(anyhow::anyhow!(
+                    "Inconsistent map: account id to block id map points into absent block"
+                )))?
+                .block
+                .body
+                .transactions
+                .into_iter()
+                .filter(|tx| tx.affected_public_account_ids().contains(&account_id));
 
-                            if local_limit >= limit {
-                                break 'outer;
-                            }
+            for aff_tx in affecting_transactions {
+                if local_offset >= offset {
+                    if local_limit < limit {
+                        affecting_txs.push(aff_tx);
+                        local_limit = local_limit.saturating_add(1);
+
+                        if local_limit >= limit {
+                            break 'outer;
                         }
-                    } else {
-                        local_offset = local_offset.saturating_add(1);
                     }
+                } else {
+                    local_offset = local_offset.saturating_add(1);
                 }
             }
-
-            Ok(Some(affecting_txs))
-        } else {
-            Ok(None)
         }
+
+        Ok(Some(affecting_txs))
     }
 }
 
@@ -1452,7 +1468,7 @@ impl Message<SetCrossZonePeerTip> for StorageActor {
 }
 
 impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
-    type Reply = Result<Option<u64>>;
+    type Reply = Result<Option<BlockId>>;
 
     async fn handle(
         &mut self,
@@ -1462,7 +1478,7 @@ impl Message<GetBlockHashToBlockIdMapItem> for StorageActor {
         Ok(self
             .db()
             .get::<entities::BlockHashToBlockIdMappingDestination>(&block_hash)?
-            .map(|dest| dest.id))
+            .map(|dest| dest.block_id))
     }
 }
 

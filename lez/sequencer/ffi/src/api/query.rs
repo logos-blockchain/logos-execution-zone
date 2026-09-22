@@ -1,9 +1,9 @@
 use std::ffi::{CString, c_char};
 
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock,
-    GetBlockHashToBlockIdMapItem, GetBlockRange, GetLastBlockId, GetTransaction,
-    MAX_BLOCK_RANGE_LEN, Transaction, TransactionOrigin,
+    BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
+    GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
+    TransactionOrigin,
 };
 
 use crate::{
@@ -238,7 +238,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
         .block_on(
             sequencer
                 .executor_ref()
-                .ask(GetBlockHashToBlockIdMapItem {
+                .ask(GetBlockByHash {
                     block_hash: hash.into(),
                 })
                 .send(),
@@ -530,7 +530,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     let tx_range_resp = sequencer.runtime().block_on(
         sequencer
             .executor_ref()
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: account_id.into(),
                 offset,
                 limit,

@@ -147,11 +147,11 @@ pub struct RequeueCrossZoneDeadLetterReply {
     pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,
 }
 
-pub struct GetBlockHashToBlockIdMapItem {
+pub struct GetBlockByHash {
     pub block_hash: HashType,
 }
 
-pub struct GetAccountIdToAffectingTxMapItemUptoLimit {
+pub struct GetAccountTransactions {
     pub account_id: AccountId,
     pub offset: u64,
     pub limit: u64,

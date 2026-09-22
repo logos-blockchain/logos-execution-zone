@@ -368,7 +368,7 @@ impl db::Storable<ColumnFamily> for CrossZonePeerTip {
 /// The map entry between block hashes and block ids.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct BlockHashToBlockIdMappingDestination {
-    pub id: u64,
+    pub block_id: BlockId,
 }
 
 impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
@@ -379,18 +379,19 @@ impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
 }
 
 /// The map key between account id and block id, which affect this account.
+#[derive(Debug)]
 pub struct AccountIdToBlockIdKey {
     // There can not be 2 fields here, because we need to implement AsRef<[u8]>.
     pub key_bytes: [u8; 32 + 8],
 }
 
-impl From<(AccountId, u64)> for AccountIdToBlockIdKey {
-    fn from(value: (AccountId, u64)) -> Self {
+impl AccountIdToBlockIdKey {
+    pub fn new(account_id: AccountId, index: u64) -> Self {
         let mut key_bytes = [0; 32 + 8];
 
-        key_bytes[..32].copy_from_slice(value.0.as_ref());
+        key_bytes[..32].copy_from_slice(account_id.as_ref());
         #[expect(clippy::big_endian_bytes, reason = "We use big endian for `u64` in DB")]
-        key_bytes[32..].copy_from_slice(value.1.to_be_bytes().as_ref());
+        key_bytes[32..].copy_from_slice(index.to_be_bytes().as_ref());
 
         Self { key_bytes }
     }
@@ -405,7 +406,7 @@ impl AsRef<[u8]> for AccountIdToBlockIdKey {
 /// The map entry between account id and block id, which affect this account.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct AccountIdToBlockIdDestination {
-    pub block_id: u64,
+    pub block_id: BlockId,
 }
 
 impl db::Storable<ColumnFamily> for AccountIdToBlockIdDestination {
