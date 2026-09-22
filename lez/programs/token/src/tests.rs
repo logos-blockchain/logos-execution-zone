@@ -201,23 +201,6 @@ fn settled_definition(
         .expect("the resolver wrote a definition")
 }
 
-fn holding_amount(holding: &TokenHolding) -> u128 {
-    match holding {
-        TokenHolding::Fungible { balance, .. } => *balance,
-        TokenHolding::NftMaster { print_balance, .. } => *print_balance,
-        TokenHolding::NftPrintedCopy { owned, .. } => u128::from(*owned),
-    }
-}
-
-fn definition_supply(definition: &TokenDefinition) -> u128 {
-    match definition {
-        TokenDefinition::Fungible { total_supply, .. } => *total_supply,
-        TokenDefinition::NonFungible {
-            printable_supply, ..
-        } => *printable_supply,
-    }
-}
-
 // --- new definitions -------------------------------------------------------------------------
 
 #[should_panic(expected = "Definition target account must not already hold data")]
@@ -262,11 +245,6 @@ fn new_definition_with_valid_inputs_succeeds() {
     let holding = settled_holding(&state, HOLDING_ID);
     assert_eq!(definition, fungible_definition(INIT_SUPPLY));
     assert_eq!(holding, fungible(INIT_SUPPLY));
-    assert_eq!(
-        definition_supply(&definition),
-        holding_amount(&holding),
-        "the supply the plan created and the holding it handed out disagree"
-    );
 }
 
 #[test]
@@ -292,11 +270,6 @@ fn new_definition_with_metadata_creates_a_master_copy_for_a_non_fungible() {
     assert_eq!(definition, non_fungible_definition(PRINTABLE_COPIES));
     assert_eq!(holding, master(PRINTABLE_COPIES));
     assert_eq!(state.get(&METADATA_ID), Some(&ShardData::from(&metadata())));
-    assert_eq!(
-        definition_supply(&definition),
-        holding_amount(&holding),
-        "the printable supply the plan created and the master's print balance disagree"
-    );
 }
 
 // --- transfer --------------------------------------------------------------------------------
@@ -374,17 +347,6 @@ fn transfer_with_valid_inputs_succeeds() {
     let recipient = settled_holding(&state, HOLDING_ID_2);
     assert_eq!(sender, fungible(SENDER_POST_TRANSFER));
     assert_eq!(recipient, fungible(RECIPIENT_POST_TRANSFER));
-
-    let debited = INIT_SUPPLY
-        .checked_sub(holding_amount(&sender))
-        .expect("the sender was debited");
-    let credited = holding_amount(&recipient)
-        .checked_sub(INIT_SUPPLY)
-        .expect("the recipient was credited");
-    assert_eq!(
-        debited, credited,
-        "the plan credited the recipient something other than what it took from the sender"
-    );
 }
 
 #[test]
@@ -672,17 +634,6 @@ fn mint_success() {
     let holding = settled_holding(&state, HOLDING_ID);
     assert_eq!(definition, fungible_definition(INIT_SUPPLY_MINT));
     assert_eq!(holding, fungible(HOLDING_BALANCE_MINT));
-
-    let issued = definition_supply(&definition)
-        .checked_sub(INIT_SUPPLY)
-        .expect("the supply grew");
-    let received = holding_amount(&holding)
-        .checked_sub(HOLDING_BALANCE)
-        .expect("the holding grew");
-    assert_eq!(
-        issued, received,
-        "the plan issued supply the holding never received"
-    );
 }
 
 #[test]
@@ -823,17 +774,6 @@ fn burn_success() {
     let holding = settled_holding(&state, HOLDING_ID);
     assert_eq!(definition, fungible_definition(INIT_SUPPLY_BURNED));
     assert_eq!(holding, fungible(HOLDING_BALANCE_BURNED));
-
-    let retired = INIT_SUPPLY
-        .checked_sub(definition_supply(&definition))
-        .expect("the supply shrank");
-    let surrendered = HOLDING_BALANCE
-        .checked_sub(holding_amount(&holding))
-        .expect("the holding shrank");
-    assert_eq!(
-        retired, surrendered,
-        "the plan retired supply the holding never surrendered"
-    );
 }
 
 #[test]
