@@ -9,7 +9,7 @@ use lee_core::{
     PublicAction, Timestamp,
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
     program::{AccountInput, ChainedCall, ProgramOutput, TransactionEvent},
-    validation::{Declarations, validate_state_diff},
+    validation::validate_state_diff,
 };
 use program_loader_core::Instruction as ProgramLoaderInstruction;
 
@@ -276,8 +276,6 @@ impl ValidatedStateDiff {
             shard_selectors: shard_selectors.to_vec(),
             pda_seeds: vec![],
         };
-        let declarations = Declarations { shard_selectors };
-
         let mut backend = PublicBackend::new(
             state,
             block_id,
@@ -286,7 +284,7 @@ impl ValidatedStateDiff {
             authorized,
             cycle_budget.saturating_sub(*cycles_used),
         );
-        let result = validate_state_diff(&mut backend, initial_call, &declarations);
+        let result = validate_state_diff(&mut backend, initial_call, shard_selectors);
 
         // Read back before propagating the failure: a chargeable revert still owes the cycles
         // every call burned before the one that failed.

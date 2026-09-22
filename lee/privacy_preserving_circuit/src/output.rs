@@ -1,24 +1,44 @@
+use std::collections::HashMap;
+
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
-    ProgramImageClaim, SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, Nonce},
+    ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
+    account::{Account, AccountData, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
+    program::{BlockValidityWindow, TimestampValidityWindow},
 };
 
-use crate::execution_state::ExecutionState;
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the output stage threads the traversal's results plus the prover's own padding inputs"
+)]
 pub fn compute_circuit_output(
-    execution_state: ExecutionState,
+    block_validity_window: BlockValidityWindow,
+    timestamp_validity_window: TimestampValidityWindow,
+    public: Vec<(AccountId, bool, AccountData, AccountData)>,
+    mut private_final: HashMap<AccountId, AccountData>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, public_actions, mut private_final) =
-        execution_state.into_parts();
+    // Keep the same shard keys in the pre- and post-states, so the journal never reveals a
+    // shard the transaction did not name.
+    let public_actions = public
+        .into_iter()
+        .map(|(account_id, is_authorized, pre, post)| {
+            let post = post.project(pre.shards.keys().copied());
+            PublicAction {
+                account_id,
+                is_authorized,
+                pre,
+                post,
+            }
+        })
+        .collect();
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions,
         private_actions: Vec::new(),
@@ -235,7 +255,10 @@ mod tests {
         public: Vec<(AccountId, bool, AccountData, AccountData)>,
     ) -> PrivacyPreservingCircuitOutput {
         compute_circuit_output(
-            ExecutionState::from_post_states(public),
+            BlockValidityWindow::new_unbounded(),
+            TimestampValidityWindow::new_unbounded(),
+            public,
+            HashMap::new(),
             &[],
             Vec::new(),
             None,

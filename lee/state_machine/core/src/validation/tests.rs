@@ -1,8 +1,6 @@
 use std::collections::VecDeque;
 
-use super::{
-    Backend, CallContext, Declarations, ThreadedDiff, ValidationError, validate_state_diff,
-};
+use super::{Backend, CallContext, ThreadedDiff, ValidationError, validate_state_diff};
 use crate::{
     account::{AccountData, AccountId, BalanceDiff, ProgramShardSelector},
     error::InvalidProgramBehaviorError,
@@ -68,24 +66,23 @@ impl Backend for Recorder {
             .expect("the test supplies one output per call"))
     }
 
-    fn expected_first_sight(
+    fn authoritative_value(
         &mut self,
         _account_id: AccountId,
         _ctx: &CallContext<'_>,
     ) -> Result<Option<AccountData>, ValidationError> {
-        // No independently known value: the journalled claim stands, as in the circuit.
+        // No independent view: the journalled claim stands, as in the circuit.
         Ok(None)
     }
 
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        position: usize,
         first_sight: bool,
         _ctx: &CallContext<'_>,
     ) -> Result<bool, ValidationError> {
         self.judged.push(format!(
-            "judge({}, pos={position}, first={first_sight})",
+            "judge({}, first={first_sight})",
             pre.account_id.value()[0]
         ));
         Ok(pre.is_authorized && !(first_sight && self.mask_first_sight))
@@ -126,16 +123,12 @@ fn root_call(accounts: &[u8]) -> ChainedCall {
     }
 }
 
-fn declarations(shard_selectors: &[ProgramShardSelector]) -> Declarations<'_> {
-    Declarations { shard_selectors }
-}
-
 fn run(
     backend: &mut Recorder,
     call: ChainedCall,
-    declarations: &Declarations<'_>,
+    declared: &[ProgramShardSelector],
 ) -> Result<ThreadedDiff, ValidationError> {
-    validate_state_diff(backend, call, declarations)
+    validate_state_diff(backend, call, declared)
 }
 
 #[test]
@@ -164,25 +157,17 @@ fn first_sight_order_survives_an_account_introduced_by_a_callee() {
 
     let mut backend = Recorder::new(vec![root, callee]);
     let declared = [selector(ACCOUNT_A), selector(ACCOUNT_B)];
-    let diff = run(
-        &mut backend,
-        root_call(&[ACCOUNT_A]),
-        &declarations(&declared),
-    )
-    .expect("a callee may be the first to touch an account the transaction declared");
+    let diff = run(&mut backend, root_call(&[ACCOUNT_A]), &declared)
+        .expect("a callee may be the first to touch an account the transaction declared");
 
     assert_eq!(
         diff.first_sight
             .iter()
-            .map(|(account_id, _, _)| account_id.value()[0])
+            .map(|(account_id, _)| account_id.value()[0])
             .collect::<Vec<_>>(),
         vec![ACCOUNT_A, ACCOUNT_B]
     );
-    assert!(
-        backend
-            .judged
-            .contains(&"judge(11, pos=1, first=true)".to_owned())
-    );
+    assert!(backend.judged.contains(&"judge(11, first=true)".to_owned()));
 }
 
 #[test]
@@ -216,7 +201,7 @@ fn a_masked_export_does_not_weaken_what_the_program_was_judged_on() {
     let diff = run(
         &mut Recorder::new(vec![output]).masking_first_sight(),
         root_call(&[ACCOUNT_A, ACCOUNT_B]),
-        &declarations(&declared),
+        &declared,
     )
     .expect("masking the exported flag must not retract the authorization the program relied on");
 
@@ -224,7 +209,7 @@ fn a_masked_export_does_not_weaken_what_the_program_was_judged_on() {
     assert!(
         diff.first_sight
             .iter()
-            .all(|(_, is_authorized, _)| !is_authorized)
+            .all(|(_, is_authorized)| !is_authorized)
     );
 }
 
@@ -274,12 +259,8 @@ fn authorization_propagates_down_a_branch_but_not_across_siblings() {
     let mut backend =
         Recorder::new(vec![root, first_callee, grandchild, sibling]).masking_first_sight();
     let declared = [selector(ACCOUNT_A)];
-    run(
-        &mut backend,
-        root_call(&[ACCOUNT_A]),
-        &declarations(&declared),
-    )
-    .expect("the scripted tree is well behaved");
+    run(&mut backend, root_call(&[ACCOUNT_A]), &declared)
+        .expect("the scripted tree is well behaved");
 
     // Depth-first: root, first callee, its grandchild, then the sibling. The root inherits
     // nothing; everything below it inherits A.
@@ -320,7 +301,7 @@ fn a_callee_must_run_the_instruction_its_caller_sent() {
     let result = run(
         &mut Recorder::new(vec![root, callee]),
         root_call(&[ACCOUNT_A]),
-        &declarations(&declared),
+        &declared,
     );
     assert!(matches!(
         result,

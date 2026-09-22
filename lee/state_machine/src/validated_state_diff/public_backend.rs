@@ -191,23 +191,19 @@ impl Backend for PublicBackend<'_> {
         Ok(program_output)
     }
 
-    fn expected_first_sight(
+    fn authoritative_value(
         &mut self,
         account_id: AccountId,
-        _ctx: &CallContext<'_>,
+        ctx: &CallContext<'_>,
     ) -> Result<Option<AccountData>, LeeError> {
-        Ok(Some(
-            self.state
-                .get_account_by_id_ref(account_id)
-                .map(|account| account.data.clone())
-                .unwrap_or_default(),
-        ))
+        // The public environment always has a view: an earlier call's result, else chain state,
+        // else the absent account. A program is checked against it on every sighting.
+        Ok(Some(self.tracked(ctx, account_id).unwrap_or_default()))
     }
 
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        _position: usize,
         _first_sight: bool,
         ctx: &CallContext<'_>,
     ) -> Result<bool, LeeError> {

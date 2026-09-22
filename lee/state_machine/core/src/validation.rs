@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
 use crate::{
-    account::{AccountData, AccountId, ProgramShardSelector},
+    account::{AccountData, AccountId, ProgramShardSelector, ShardData},
     error::InvalidProgramBehaviorError,
     program::{
         AccountInput, BlockValidityWindow, CallKind, ChainedCall, MAX_NUMBER_CHAINED_CALLS,
@@ -54,74 +54,64 @@ pub struct CallContext<'call> {
     pub touched: &'call HashMap<AccountId, AccountData>,
 }
 
-/// The shard selectors the transaction declared up front.
-pub struct Declarations<'tx> {
-    /// Every one must be reported by some call, or a program silently dropped a shard the
-    /// transaction was invoked with.
-    pub shard_selectors: &'tx [ProgramShardSelector],
-}
-
 /// The transaction's effect.
 pub struct ThreadedDiff {
     /// Final state of every account the transaction touched.
     pub touched: HashMap<AccountId, AccountData>,
-    /// Each account's first sight, in order, carrying the authorization flag the environment
-    /// chose to export. First-sight order is load-bearing for environments that index
-    /// per-account witness data positionally, so it must not be reordered downstream.
-    pub first_sight: Vec<(AccountId, bool, AccountData)>,
+    /// Accounts in the order the transaction first saw them, each with the authorization flag
+    /// this environment chose to export, which may differ from the journalled one.
+    pub first_sight: Vec<(AccountId, bool)>,
+    /// Each account's state as first observed, accumulated shard by shard and never overwritten
+    /// by a later post-state. This is what an environment journals for accounts it must expose.
+    pub at_first_sight: HashMap<AccountId, AccountData>,
 }
 
 /// The environment a traversal runs in.
 pub trait Backend {
     type Error: From<ValidationError>;
 
-    /// Produce the output for `call`.
-    ///
-    /// Called exactly once per call and before every other hook, so an implementation may use it
-    /// for per-call scratch. An environment that executes programs runs the program here; one
-    /// that verifies proofs checks the prover's supplied output against its receipt here.
+    /// Produce the output for `call`. Runs once per call, before every other hook, so an
+    /// implementation may use it for per-call scratch.
     fn output_for_call(
         &mut self,
         call: &ChainedCall,
         ctx: &CallContext<'_>,
     ) -> Result<ProgramOutput, Self::Error>;
 
-    /// The value `account_id` is independently known to hold, the first time this transaction
-    /// sees it.
+    /// The environment's own view of `account_id`, independent of anything the program claims.
     ///
-    /// `None` means there is no independently known value and the journalled claim stands,
-    /// because it is bound by something outside this traversal.
-    fn expected_first_sight(
+    /// `None` means this environment has no independent view at all, so a journalled claim is
+    /// adopted the first time each shard is seen and only cross-checked afterwards. That is the
+    /// circuit, where a note's content is bound by its commitment and nullifier rather than by
+    /// this traversal. An environment that answers `Some` is checked against it every time.
+    fn authoritative_value(
         &mut self,
         account_id: AccountId,
         ctx: &CallContext<'_>,
     ) -> Result<Option<AccountData>, Self::Error>;
 
-    /// Judge one journalled pre-state's `is_authorized` claim, and return the value to export
-    /// for it.
+    /// Judge one journalled pre-state's `is_authorized` claim, and return the value to export.
     ///
-    /// `position` is the account's index in first-sight order and `first_sight` is true on its
-    /// first appearance anywhere in the call tree. Returning anything other than
-    /// `pre.is_authorized` means this environment exports a different view of authorization than
-    /// the one the callee ran under; that value reaches only [`ThreadedDiff`]. The journalled
-    /// flag is what extends the subtree's authorized set and what `validate_execution` judges,
-    /// so a divergent export can never widen what a program was allowed to do.
+    /// Returning anything other than `pre.is_authorized` means this environment exports a
+    /// different view than the one the callee ran under; that value reaches only
+    /// [`ThreadedDiff`]. The journalled flag is what extends the subtree's authorized set and
+    /// what `validate_execution` judges, so a divergent export can never widen what a program
+    /// was allowed to do.
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        position: usize,
         first_sight: bool,
         ctx: &CallContext<'_>,
     ) -> Result<bool, Self::Error>;
 
-    /// One call's declared validity windows, in traversal order.
+    /// One call's declared validity windows.
     fn observe_windows(
         &mut self,
         block: BlockValidityWindow,
         timestamp: TimestampValidityWindow,
     ) -> Result<(), Self::Error>;
 
-    /// One call's emitted events. Dropped by default.
+    /// One call's emitted events.
     fn observe_events(&mut self, _emitter: AccountId, _events: Vec<ProgramEvent>) {}
 
     /// Last word, after the traversal's own end-of-transaction rules.
@@ -138,11 +128,10 @@ pub trait Backend {
 pub fn validate_state_diff<B: Backend>(
     backend: &mut B,
     initial_call: ChainedCall,
-    declarations: &Declarations<'_>,
+    declared: &[ProgramShardSelector],
 ) -> Result<ThreadedDiff, B::Error> {
     let mut touched: HashMap<AccountId, AccountData> = HashMap::new();
-    let mut first_sight: Vec<(AccountId, bool, AccountData)> = Vec::new();
-    let mut position_of: HashMap<AccountId, usize> = HashMap::new();
+    let mut first_sight: Vec<(AccountId, bool)> = Vec::new();
     // An account's full state at first sight, so shards this transaction never names survive.
     let mut at_first_sight: HashMap<AccountId, AccountData> = HashMap::new();
     let mut selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
@@ -204,13 +193,18 @@ pub fn validate_state_diff<B: Backend>(
         // Journalled authorization, captured before any backend rewrite, is what extends the
         // subtree's authorized set below.
         let mut journalled_authorized: Vec<AccountId> = Vec::new();
+        // Shards adopted this call, applied to the running state once its borrow ends.
+        let mut adopted: Vec<(AccountId, AccountId, ShardData)> = Vec::new();
 
         for diff in &program_output.state_diffs {
             let pre = &diff.pre_state;
             let account_id = pre.account_id;
             let shard_selector = ProgramShardSelector::from(pre);
 
-            if !named_accounts.contains(&account_id) {
+            // A call that names no selectors constrains nothing: that is the circuit's top-level
+            // call, reached through a proof rather than through a caller that named its shards.
+            // The public root always names its accounts, so this never loosens it.
+            if !named_accounts.is_empty() && !named_accounts.contains(&account_id) {
                 return Err(ValidationError::ProgramBehavior(
                     InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
                         program_account_id: chained_call.program_account_id,
@@ -220,61 +214,74 @@ pub fn validate_state_diff<B: Backend>(
                 .into());
             }
 
-            // The journalled pre-state must match whatever the environment independently tracks:
-            // an earlier call's post-state if there is one, otherwise the backend's own view.
-            //
-            // First sight is keyed on the position map rather than on `touched`, which this call
-            // does not update until its whole pre loop has run: an output naming one account
-            // twice must not claim two positions.
-            let seen_before = position_of.contains_key(&account_id);
-            let expected = match touched.get(&account_id) {
-                Some(data) => Some(data.clone()),
-                None if !seen_before => backend.expected_first_sight(account_id, &ctx)?,
-                None => None,
-            };
-            let base = expected.clone();
-            if let Some(expected) = expected {
-                let consistent = expected.balance == pre.balance
-                    && pre
-                        .shard
-                        .as_ref()
-                        .is_none_or(|(program, data)| expected.shard(*program) == data);
-                if !consistent {
-                    return Err(ValidationError::ProgramBehavior(
-                        InvalidProgramBehaviorError::InconsistentAccountPreState {
-                            account_id,
-                            expected: Box::new(AccountInput::at(
-                                shard_selector,
-                                pre.is_authorized,
-                                &expected,
-                            )),
-                            actual: Box::new(pre.clone()),
-                        },
-                    )
-                    .into());
-                }
+            // Keyed on the pre view rather than on `touched`, which this call does not update
+            // until its whole pre loop has run.
+            let seen_before = at_first_sight.contains_key(&account_id);
+
+            // What the environment independently knows about this account. `None` means it has
+            // no independent view, so each shard's claim is adopted the first time it is named
+            // and cross-checked on every sighting after that.
+            let authoritative = backend.authoritative_value(account_id, &ctx)?;
+            let adopts_claims = authoritative.is_none();
+            let new_selector = !selectors_seen.contains(&shard_selector);
+
+            // The pre view, accumulated shard by shard and never overwritten by a post-state:
+            // this is what an environment journals for the accounts it must expose.
+            let pre_view = at_first_sight.entry(account_id).or_insert_with(|| {
+                authoritative.clone().unwrap_or_else(|| AccountData {
+                    balance: pre.balance,
+                    ..AccountData::default()
+                })
+            });
+            // Compare against the current tracked value: an earlier call's result if there is
+            // one, otherwise the pre view just established.
+            let mut base = touched
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_else(|| pre_view.clone());
+
+            // A shard this environment has no view of is adopted the first time it is named,
+            // into the pre view the journal exposes and into the running state alike, since
+            // nothing held here could contradict the claim yet.
+            if adopts_claims
+                && new_selector
+                && let Some((program, data)) = &pre.shard
+            {
+                // Insert rather than `set_shard`: a resolver may legitimately answer with an
+                // empty shard, and the pre view must still record that this transaction named
+                // it, or the journal would drop it and the post would not line up.
+                pre_view.shards.insert(*program, data.clone());
+                base.set_shard(*program, data.clone());
+                adopted.push((account_id, *program, data.clone()));
+            }
+            let base = &base;
+            let consistent = base.balance == pre.balance
+                && pre
+                    .shard
+                    .as_ref()
+                    .is_none_or(|(program, data)| base.shard(*program) == data);
+            if !consistent {
+                return Err(ValidationError::ProgramBehavior(
+                    InvalidProgramBehaviorError::InconsistentAccountPreState {
+                        account_id,
+                        expected: Box::new(AccountInput::at(
+                            shard_selector,
+                            pre.is_authorized,
+                            base,
+                        )),
+                        actual: Box::new(pre.clone()),
+                    },
+                )
+                .into());
             }
 
             if pre.is_authorized {
                 journalled_authorized.push(account_id);
             }
 
-            let position = if seen_before {
-                *position_of
-                    .get(&account_id)
-                    .expect("seen_before is read from this very map")
-            } else {
-                first_sight.len()
-            };
-            let exported = backend.judge_authorization(pre, position, !seen_before, &ctx)?;
-
+            let exported = backend.judge_authorization(pre, !seen_before, &ctx)?;
             if !seen_before {
-                position_of.insert(account_id, position);
-                // Seed from the environment's authoritative value where there is one, so shards
-                // the transaction never names are carried through rather than dropped.
-                let known = base.unwrap_or_else(|| data_of(pre));
-                at_first_sight.insert(account_id, known.clone());
-                first_sight.push((account_id, exported, known));
+                first_sight.push((account_id, exported));
             }
 
             selectors_seen.insert(shard_selector);
@@ -325,6 +332,12 @@ pub fn validate_state_diff<B: Backend>(
             program_output.timestamp_validity_window,
         )?;
 
+        for (account_id, program, data) in adopted {
+            if let Some(tracked) = touched.get_mut(&account_id) {
+                tracked.set_shard(program, data);
+            }
+        }
+
         // Apply balance and shard changes, preserving every other shard. Deferred until the whole
         // pre loop has run so `CallContext` can borrow `touched`; unobservable, because
         // `validate_execution` already rejects an output naming the same account twice.
@@ -367,7 +380,7 @@ pub fn validate_state_diff<B: Backend>(
 
     // Nothing the transaction declared may vanish: a program cannot silently drop a shard it
     // was invoked with.
-    for shard_selector in declarations.shard_selectors {
+    for shard_selector in declared {
         if !selectors_seen.contains(shard_selector) {
             return Err(ValidationError::ProgramBehavior(
                 InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
@@ -383,6 +396,7 @@ pub fn validate_state_diff<B: Backend>(
     Ok(ThreadedDiff {
         touched,
         first_sight,
+        at_first_sight,
     })
 }
 
