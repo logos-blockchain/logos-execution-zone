@@ -227,13 +227,22 @@ mod tests {
             140, 52, 45, 186, 134, 255, 10, 138, 132, 237, 79, 72, 133, 108, 147, 85, 247, 55, 61,
             252, 187, 135, 75, 170, 63, 63, 239, 196, 99, 147, 72, 117, 111, 126,
         ];
-        assert!(expected_ssk == keys.value.0.secret_spending_key);
-        assert!(expected_ccc == keys.ccc);
-        assert!(expected_ask == keys.value.0.private_key_holder.authorization_secret_key);
-        assert!(expected_nsk == keys.value.0.private_key_holder.nullifier_secret_key());
-        assert!(expected_npk == keys.value.0.nullifier_public_key);
-        assert!(expected_vsk == keys.value.0.private_key_holder.viewing_secret_key);
-        assert!(expected_vpk == keys.value.0.viewing_public_key.to_bytes());
+        assert_eq!(expected_ssk, keys.value.0.secret_spending_key);
+        assert_eq!(expected_ccc, keys.ccc);
+        assert_eq!(
+            expected_ask,
+            keys.value.0.private_key_holder.authorization_secret_key
+        );
+        assert_eq!(
+            expected_nsk,
+            keys.value.0.private_key_holder.nullifier_secret_key()
+        );
+        assert_eq!(expected_npk, keys.value.0.nullifier_public_key);
+        assert_eq!(
+            expected_vsk,
+            keys.value.0.private_key_holder.viewing_secret_key
+        );
+        assert_eq!(expected_vpk, keys.value.0.viewing_public_key.to_bytes());
     }
 
     #[test]
@@ -344,19 +353,28 @@ mod tests {
             76, 193, 226, 21, 183, 54, 157, 96, 84, 1, 235, 248, 25, 18, 152, 102, 177, 171, 246,
         ];
 
-        assert!(expected_ssk == child_node.value.0.secret_spending_key);
-        assert!(expected_ccc == child_node.ccc);
-        assert!(
-            expected_ask
-                == child_node
-                    .value
-                    .0
-                    .private_key_holder
-                    .authorization_secret_key
+        assert_eq!(expected_ssk, child_node.value.0.secret_spending_key);
+        assert_eq!(expected_ccc, child_node.ccc);
+        assert_eq!(
+            expected_ask,
+            child_node
+                .value
+                .0
+                .private_key_holder
+                .authorization_secret_key
         );
-        assert!(expected_nsk == child_node.value.0.private_key_holder.nullifier_secret_key());
-        assert!(expected_npk == child_node.value.0.nullifier_public_key);
-        assert!(expected_vsk == child_node.value.0.private_key_holder.viewing_secret_key);
-        assert!(expected_vpk == child_node.value.0.viewing_public_key.to_bytes());
+        assert_eq!(
+            expected_nsk,
+            child_node.value.0.private_key_holder.nullifier_secret_key()
+        );
+        assert_eq!(expected_npk, child_node.value.0.nullifier_public_key);
+        assert_eq!(
+            expected_vsk,
+            child_node.value.0.private_key_holder.viewing_secret_key
+        );
+        assert_eq!(
+            expected_vpk,
+            child_node.value.0.viewing_public_key.to_bytes()
+        );
     }
 }

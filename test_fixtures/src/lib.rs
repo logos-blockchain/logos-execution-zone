@@ -115,7 +115,7 @@ impl TestContext {
     /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn default_zone(&self) -> &TestContextZone {
-        assert!(self.zones.len() == 1);
+        assert_eq!(self.zones.len(), 1);
 
         self.zones
             .values()
@@ -165,7 +165,7 @@ impl TestContext {
     ///
     /// Panics in case if there is more than one zone.
     pub fn default_zone_mut(&mut self) -> &mut TestContextZone {
-        assert!(self.zones.len() == 1);
+        assert_eq!(self.zones.len(), 1);
 
         self.zones
             .values_mut()
@@ -180,8 +180,7 @@ impl TestContext {
     pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponents {
         self.default_zone_mut()
             .sequencers
-            .iter_mut()
-            .next()
+            .first_mut()
             .expect("Must be at least one integration component")
     }
 

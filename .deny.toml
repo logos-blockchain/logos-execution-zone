@@ -18,7 +18,6 @@ ignore = [
   { id = "RUSTSEC-2026-0194", reason = "`quick-xml` v0.31 is pulled transitively by Cucumber's JUnit report writer; this path only serializes XML with `quick_xml::Writer` and does not exercise the vulnerable XML parsing APIs" },
   { id = "RUSTSEC-2026-0195", reason = "`quick-xml` v0.31 is pulled transitively by Cucumber's JUnit report writer; this path only serializes XML and does not use the vulnerable `NsReader` namespace parsing path" },
 
-  { id = "RUSTSEC-2024-0370", reason = "transitive dependency of `logos-blockchain-http-api-common`, can't do anything than wait for upstream fix" },
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained; pulled in transitively via `leptos_macro` and `overwatch-derive`, waiting on upstream fix" },
 ]
 yanked = "deny"
