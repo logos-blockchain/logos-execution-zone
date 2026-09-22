@@ -3,6 +3,7 @@ use lee_core::{
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::InstructionData,
 };
+use test_guest_core::ChainCall;
 
 use crate::{
     PrivateKey, PublicKey, V03State,
@@ -314,17 +315,11 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
         .with_test_programs();
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let run = |num_chain_calls: u32| {
-        let instruction: (
-            lee_core::program::InstructionData,
-            lee_core::program::ProgramId,
-            u32,
-            Option<lee_core::program::PdaSeed>,
-        ) = (
+        let instruction = ChainCall::new(
+            AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
             Vec::new(),
-            crate::test_methods::exits_nonzero().id(),
-            num_chain_calls,
-            None,
-        );
+        )
+        .repeated(num_chain_calls);
         let message = Message::try_new(
             AccountId::from_builtin_program(chain_caller.id()),
             vec![

@@ -21,6 +21,7 @@ token_core.workspace = true
 amm_core.workspace = true
 associated_token_account_core.workspace = true
 programs.workspace = true
+test_guest_core.workspace = true
 test_programs.workspace = true
 
 risc0-zkvm.workspace = true

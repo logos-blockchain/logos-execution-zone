@@ -1,23 +1,28 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::ProgramShardSelector,
     program::{
-        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+        respond_unsupported_call,
     },
 };
+use test_guest_core::ChainCall;
 
-type Instruction = (InstructionData, ProgramId, u32, Option<PdaSeed>);
-
-/// A program that calls another program `num_chain_calls` times.
+/// A program that calls another program `calls` times.
 /// It permutes the order of the input accounts on the subsequent call.
 fn main() {
-    let call = read_lee_call::<Instruction>();
+    let call = read_lee_call::<ChainCall>();
     let ProgramCall::Execute(
         ProgramInput {
             self_account_id,
             caller_account_id,
             pre_states,
-            instruction: (call_instruction_data, callee_program_id, num_chain_calls, pda_seed),
+            instruction:
+                ChainCall {
+                    callee_account_id,
+                    instruction_data: call_instruction_data,
+                    calls,
+                    pda_seed,
+                },
         },
         instruction_data,
     ) = call
@@ -35,9 +40,9 @@ fn main() {
     ];
 
     let mut chained_calls = Vec::new();
-    for _i in 0..num_chain_calls {
+    for _i in 0..calls {
         let new_chained_call = ChainedCall {
-            program_account_id: AccountId::from_builtin_program(callee_program_id),
+            program_account_id: callee_account_id,
             instruction_data: call_instruction_data.clone(),
             shard_selectors: permuted.clone(),
             pda_seeds: pda_seed.iter().copied().collect(),

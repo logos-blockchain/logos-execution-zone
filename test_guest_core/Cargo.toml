@@ -1,5 +1,5 @@
 [package]
-name = "test_methods_guests"
+name = "test_guest_core"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -10,6 +10,3 @@ workspace = true
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
-test_guest_core.workspace = true
-
-risc0-zkvm.workspace = true

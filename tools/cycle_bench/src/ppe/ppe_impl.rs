@@ -13,8 +13,8 @@ use lee::{
 use lee_core::{
     PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, ProgramShardSelector, data::ShardData},
-    program::PdaSeed,
 };
+use test_guest_core::ChainCall;
 use token_core::TokenHolding;
 
 use super::PpeBenchResult;
@@ -161,13 +161,8 @@ fn prove_chain_caller(
         ProgramShardSelector::new(SENDER_ID, token_id),
     ];
 
-    let pda_seed: Option<PdaSeed> = None;
-    let instruction = (
-        token_transfer_instruction()?,
-        programs::token().id(),
-        num_chain_calls,
-        pda_seed,
-    );
+    let instruction =
+        ChainCall::new(token_id, token_transfer_instruction()?).repeated(num_chain_calls);
     let instruction_data = to_vec(&instruction)?;
 
     Ok(execute_and_prove(

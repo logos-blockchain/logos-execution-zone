@@ -1,8 +1,6 @@
-use super::*;
+use test_guest_core::ChainCall;
 
-// The native token program dispatches natively and so has no image id; the zero words are the
-// `ProgramId` that `AccountId::from_builtin_program` maps onto `NATIVE_TOKEN_PROGRAM_ID`.
-const NATIVE_TOKEN_PROGRAM: ProgramId = [0; 8];
+use super::*;
 
 #[test]
 fn public_chained_call() {
@@ -16,12 +14,11 @@ fn public_chained_call() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 37;
-    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction = ChainCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
         Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
-        NATIVE_TOKEN_PROGRAM,
-        2,
-        None,
-    );
+    )
+    .repeated(2);
 
     // The `chain_caller` chains the program twice
     let expected_to_post = Account::funded(amount * 2);
@@ -61,11 +58,12 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         .with_test_programs();
     let from_key = key;
     let amount: u128 = 0;
-    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction = ChainCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
         Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
-        NATIVE_TOKEN_PROGRAM,
+    )
+    .repeated(
         u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32") + 1,
-        None,
     );
 
     let message = public_transaction::Message::try_new(
@@ -103,12 +101,11 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         .with_public_account_balances([(from, initial_balance), (to, 0)])
         .with_test_programs();
     let amount: u128 = 58;
-    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction = ChainCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
         Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
-        NATIVE_TOKEN_PROGRAM,
-        1,
-        Some(pda_seed),
-    );
+    )
+    .delegating(pda_seed);
 
     let expected_to_post = Account::funded(amount);
     let message = public_transaction::Message::try_new(
@@ -156,11 +153,9 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
 
     // The transaction executes the chain_caller program, which internally calls the
     // native token program
-    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction = ChainCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
         Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
-        NATIVE_TOKEN_PROGRAM,
-        1,
-        None,
     );
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(chain_caller.id()),
@@ -216,12 +211,11 @@ fn private_chained_call(number_of_calls: u32) {
         ])
         .with_test_programs();
     let amount: u128 = 37;
-    let instruction: (InstructionData, ProgramId, u32, Option<PdaSeed>) = (
+    let instruction = ChainCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
         Program::serialize_instruction(NativeInstruction::Transfer { amount }).unwrap(),
-        NATIVE_TOKEN_PROGRAM,
-        number_of_calls,
-        None,
-    );
+    )
+    .repeated(number_of_calls);
 
     let program_with_deps = ProgramWithDependencies::new(
         chain_caller.clone(),

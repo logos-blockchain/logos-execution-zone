@@ -60,6 +60,7 @@ members = [
   "lez/programs/program_loader/core",
   "lez/cross_zone",
 
+  "test_guest_core",
   "test_programs",
   "test_programs/guest",
 
@@ -130,6 +131,7 @@ sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
+test_guest_core = { path = "test_guest_core" }
 test_methods = { path = "lee/state_machine/test_methods" }
 test_programs = { path = "test_programs" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
