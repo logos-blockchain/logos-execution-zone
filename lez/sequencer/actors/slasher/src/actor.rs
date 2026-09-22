@@ -14,7 +14,7 @@ use sequencer_stake_core::{
     SequencerKey, SequencerStakeConfig, SlashApproval, slash_approval_threshold,
 };
 use sequencer_storage_actor::{
-    StorageActor, StorageActorTrait,
+    StorageActorTrait,
     protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
 };
 use tokio::sync::mpsc;
@@ -44,7 +44,7 @@ enum PersistedRecord {
 /// Peers' signatures, by offence and then by signer.
 type Approvals = BTreeMap<Offence, BTreeMap<SequencerKey, [u8; 64]>>;
 
-pub struct SlasherActor<S: StorageActorTrait = StorageActor> {
+pub struct SlasherActor<S: StorageActorTrait> {
     storage_ref: ActorRef<S>,
     /// Signs this node's approval of a slash.
     approver: Ed25519Key,

@@ -49,7 +49,7 @@ pub struct SequencerHandle {
     /// `None` when gossip is unconfigured.
     gossip: Option<Gossip>,
     executor: ActorHandle<ExecutorActor<StorageActor, BedrockActor>>,
-    slasher: ActorHandle<SlasherActor>,
+    slasher: ActorHandle<SlasherActor<StorageActor>>,
     bedrock_pool: ActorHandle<ShardingPoolActor<BedrockActor, ChannelId>>,
     storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
@@ -260,17 +260,18 @@ pub fn run(
             .context("Failed to initialize Bedrock channel publisher")?;
         info!("Bedrock Sharding Pool Actor spawned");
 
+        let slasher_prepared = SlasherActor::prepare();
+        let slasher_ref = slasher_prepared.actor_ref().clone();
+
         let executor = ExecutorActor::new(
             config,
             bedrock_signing_key,
             storage_ref.clone(),
             bedrock_pool_ref.clone(),
+            slasher_prepared,
         )
         .await
         .context("Failed to set up Executor Actor")?;
-        let slasher_ref = executor
-            .slasher_ref()
-            .context("Failed to get slasher ref")?;
         let accredited_keys_rx = executor
             .accredited_keys_watch()
             .context("Failed to get accredited keys watch")?;
@@ -352,7 +353,7 @@ async fn setup_gossip(
     max_block_size: u64,
     accredited_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor<StorageActor, BedrockActor>>,
-    slasher_ref: &ActorRef<SlasherActor>,
+    slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     scheduler_ref: &ActorRef<Scheduler>,
 ) -> Result<(Gossip, Recipient<PublishTransaction>)> {
     // The node's L1 bedrock signing key is deliberately reused as the

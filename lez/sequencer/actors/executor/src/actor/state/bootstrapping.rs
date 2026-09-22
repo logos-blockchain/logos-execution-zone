@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
 use common::block::{Block, BlockMeta};
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, PreparedActor};
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{BlockData, ChannelId, Ed25519Key, FinalizedBlock, MsgId, Slot},
 };
 use sequencer_core::config::SequencerConfig;
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::ShardingPoolActor;
 
@@ -32,6 +33,7 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) bootstrap_to: Tip,
     pub(super) storage_ref: ActorRef<S>,
     pub(super) bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    pub(super) slasher_prepared: PreparedActor<SlasherActor<S>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
@@ -43,6 +45,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         bootstrap_to: Tip,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Self {
         Self {
             config,
@@ -52,6 +55,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             bootstrap_to,
             storage_ref,
             bedrock_pool_ref,
+            slasher_prepared,
         }
     }
 
@@ -207,7 +211,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ///
     /// A persist failure is only logged: the deliveries are already irreversible, so
     /// the worst case is a record the next drain drops instead.
-    async fn settle_reconstructed_deliveries(&self, block: &Block) -> Result<()> {
+    async fn settle_reconstructed_deliveries(&mut self, block: &Block) -> Result<()> {
         let keys = sequencer_core::settled_dispatch_keys(&self.storage_ref, block).await;
         if keys.is_empty() {
             return Ok(());

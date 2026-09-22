@@ -6,7 +6,7 @@ use futures::{
 };
 use kameo::{
     Actor,
-    actor::{ActorRef, WeakActorRef},
+    actor::{ActorRef, PreparedActor, WeakActorRef},
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
@@ -23,9 +23,7 @@ use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
 };
-use sequencer_core::{
-    MsgId, PinBehindTip, config::SequencerConfig, gossip::AccreditedKeysReceiver,
-};
+use sequencer_core::{MsgId, PinBehindTip, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::ShardingPoolActor;
@@ -102,6 +100,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
 
@@ -112,6 +111,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 bedrock_signing_key,
                 storage_ref.clone(),
                 bedrock_pool_ref,
+                slasher_prepared,
             )
             .await?;
 
@@ -122,27 +122,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 blocked_attempts: BlockedAttempts::default(),
                 failed_attempts: 0,
             })
-        }
-    }
-
-    /// Handle to the slasher, for the service to supervise.
-    // TODO: Remove that and spawn slasher outside of the executor actor
-    #[must_use]
-    pub fn slasher_ref(&self) -> ActorRef<SlasherActor<S>> {
-        self.sequencer.slasher_ref().clone()
-    }
-
-    /// The committee the gossip mesh screens slash approvals against.
-    // TODO: Remove that and use proper subscription
-    #[must_use]
-    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.sequencer.accredited_keys_watch()
-    }
-
-    /// Ends a blocked run, reporting the drop to zero only if there was one.
-    fn clear_blocked_attempts(&mut self) {
-        if self.blocked_attempts.clear() {
-            sequencer_executor_actor_metrics::record_publish_blocked_attempts(0);
         }
     }
 }

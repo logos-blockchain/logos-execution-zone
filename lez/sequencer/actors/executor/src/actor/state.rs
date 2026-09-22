@@ -1,5 +1,5 @@
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, PreparedActor};
 use log::info;
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
@@ -7,6 +7,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, Checkpoint, DeserializeOp as _, Ed25519Key, MsgId, Slot},
 };
 use sequencer_core::config::SequencerConfig;
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::ShardingPoolActor;
 
@@ -29,6 +30,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
         sequencer_core_metrics::init();
@@ -65,6 +67,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 bootstrap_to,
                 storage_ref,
                 bedrock_pool_ref,
+                slasher_prepared,
             )))
         } else {
             info!("Channel does not exist yet; starting it as channel creator");
@@ -76,6 +79,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                     bedrock_signing_key,
                     storage_ref,
                     bedrock_pool_ref,
+                    slasher_prepared,
                 )
                 .await?,
             ))

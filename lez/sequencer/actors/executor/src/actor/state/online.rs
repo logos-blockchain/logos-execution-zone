@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use chain_state::ChainState;
 use common::transaction::LeeTransaction;
-use kameo::actor::ActorRef;
+use kameo::actor::{ActorRef, PreparedActor};
 use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
@@ -11,6 +11,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, Ed25519Key, SerializeOp as _},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 
@@ -40,6 +41,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bootstrapping_state.bedrock_signing_key,
             bootstrapping_state.storage_ref,
             bootstrapping_state.bedrock_pool_ref,
+            bootstrapping_state.slasher_prepared,
         )
         .await
     }
@@ -50,6 +52,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         Self::start(
             false,
@@ -58,6 +61,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_signing_key,
             storage_ref,
             bedrock_pool_ref,
+            slasher_prepared,
         )
         .await
     }
@@ -93,6 +97,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         let initial_checkpoint = zone_checkpoint(&storage_ref).await?;
 
@@ -177,6 +182,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_signing_key,
             storage_ref,
             bedrock_pool_ref,
+            slasher_prepared,
         )
         .await
         .map_err(Error::SequencerStartFailed)?;

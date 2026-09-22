@@ -17,7 +17,7 @@ use common::{
 };
 use config::SequencerConfig;
 use cross_zone_inbox_core::CrossZoneMessage;
-use kameo::actor::{ActorRef, Spawn as _};
+use kameo::actor::{ActorRef, PreparedActor};
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -164,21 +164,22 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
-    storage_ref: ActorRef<S>,
-    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
-    /// Records offending inscriptions and proposes the slashes for them.
-    slasher: ActorRef<SlasherActor<S>>,
     /// The committee the gossip mesh screens inbound slash approvals against.
     accredited_keys_tx: AccreditedKeysSender,
     block_signing_key: lee::PrivateKey,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: Ed25519Key,
+
+    storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    /// Records offending inscriptions and proposes the slashes for them.
+    slasher_ref: ActorRef<SlasherActor<S>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
@@ -195,6 +196,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         let channel_id = config.bedrock_config.channel_id;
 
@@ -214,15 +216,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let state = storage_ref
             .ask(GetLeeState)
             .await
-            .expect("Failed to read state from store")
-            .expect("Store holds a chain but no state");
+            .context("Failed to read state from store")?
+            .context("Store holds a chain but no state")?;
 
-        let stake_config = committee_discovery::read_config(&state).expect(
+        let stake_config = committee_discovery::read_config(&state).context(
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
              one this sequencer can operate on",
-        );
-        // TODO: Spawn outside of SequencerCore
-        let slasher = SlasherActor::spawn(
+        )?;
+        let slasher_ref = slasher_prepared.actor_ref().clone();
+        slasher_prepared.spawn(
             SlasherActor::load(
                 storage_ref.clone(),
                 bedrock_signing_key.clone(),
@@ -240,9 +242,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             mempool,
             storage_ref,
             bedrock_pool_ref,
+            slasher_ref,
             watchers,
             last_committee_submission_slot: None,
-            slasher,
             accredited_keys_tx,
             block_signing_key: config
                 .block_signing_key()
@@ -518,7 +520,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         if moved_head {
-            refresh_committee(&self.slasher, &self.chain, &self.accredited_keys_tx).await;
+            self.refresh_committee().await;
         }
     }
 
@@ -977,7 +979,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // A Slash executes against the head config, so it is proposed from it.
         let slash_txs = match committee_discovery::read_config(&working_state) {
             Some(config) => self
-                .slasher
+                .slasher_ref
                 .ask(Propose { config })
                 .await
                 .unwrap_or_else(|err| {
@@ -1327,11 +1329,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         &self.sequencer_config
     }
 
-    #[must_use]
-    pub const fn slasher_ref(&self) -> &ActorRef<SlasherActor<S>> {
-        &self.slasher
-    }
-
     /// The gossip mesh's view of the committee, as of the last head move.
     #[must_use]
     pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
@@ -1574,10 +1571,36 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 inscription: (*msg_id).into(),
             })
             .collect();
-        self.slasher
+        self.slasher_ref
             .ask(Report { offences })
             .await
             .unwrap_or_else(|err| panic!("Failed to persist the slash record: {err}"));
+    }
+
+    /// Hands the slasher and the gossip mesh the committee the head now holds. The
+    /// produce path also refreshes it, but only a producing node takes turns.
+    async fn refresh_committee(&self) {
+        let config = committee_discovery::read_config(self.chain.lock().await.head_state());
+        let Some(config) = config else {
+            return;
+        };
+        // The mesh screens against the same committee the slasher gates on.
+        let keys: AccreditedKeys = config
+            .accredited_committee_members()
+            .copied()
+            .map(sequencer_stake_core::SequencerKey::to_bytes)
+            .collect();
+        // Every head move lands here, but the committee changes on almost none.
+        self.accredited_keys_tx.send_if_modified(|current| {
+            let changed = current.as_ref() != Some(&keys);
+            if changed {
+                *current = Some(keys);
+            }
+            changed
+        });
+        if let Err(err) = self.slasher_ref.tell(SetCommittee(config)).await {
+            warn!("Failed to refresh the slasher committee: {err}");
+        }
     }
 }
 
@@ -1685,36 +1708,6 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
         Err(err) => {
             warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
         }
-    }
-}
-
-/// Hands the slasher and the gossip mesh the committee the head now holds. The
-/// produce path also refreshes it, but only a producing node takes turns.
-async fn refresh_committee<S: StorageActorTrait>(
-    slasher: &ActorRef<SlasherActor<S>>,
-    chain: &Mutex<ChainState>,
-    accredited_keys_tx: &AccreditedKeysSender,
-) {
-    let config = committee_discovery::read_config(chain.lock().await.head_state());
-    let Some(config) = config else {
-        return;
-    };
-    // The mesh screens against the same committee the slasher gates on.
-    let keys: AccreditedKeys = config
-        .accredited_committee_members()
-        .copied()
-        .map(sequencer_stake_core::SequencerKey::to_bytes)
-        .collect();
-    // Every head move lands here, but the committee changes on almost none.
-    accredited_keys_tx.send_if_modified(|current| {
-        let changed = current.as_ref() != Some(&keys);
-        if changed {
-            *current = Some(keys);
-        }
-        changed
-    });
-    if let Err(err) = slasher.tell(SetCommittee(config)).await {
-        warn!("Failed to refresh the slasher committee: {err}");
     }
 }
 
