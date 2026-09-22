@@ -5,16 +5,20 @@ use sequencer_executor_actor::protocol::{
     GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
     TransactionOrigin,
 };
-use sequencer_storage_actor::protocol::GetTxHashToBlockIdMapItem;
+use sequencer_storage_actor::{
+    actor::event_filter::{EventRecord, Selector},
+    protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
+};
 
 use crate::{
     SequencerServiceFFI,
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
             transaction::FfiTransaction,
         },
     },
@@ -562,7 +566,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     }
 }
 
-/// Query the block by transaction hash from sequencer.
+/// Query the block id by transaction hash from sequencer.
 ///
 /// # Arguments
 ///
@@ -571,7 +575,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
 ///
 /// # Returns
 ///
-/// A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+/// A `PointerResult<u64, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -581,7 +585,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
 pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
     sequencer: *const SequencerServiceFFI,
     tx_hash: FfiHashType,
-) -> PointerResult<FfiBlockOpt, OperationStatus> {
+) -> PointerResult<u64, OperationStatus> {
     if sequencer.is_null() {
         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
@@ -603,143 +607,183 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
             log::error!("Failed to query block by id: {e:#}");
         });
 
-    let block_id = if let Ok(map_opt) = map_resp {
+    if let Ok(map_opt) = map_resp {
         if let Some(block_id) = map_opt {
-            block_id
+            PointerResult::from_value(block_id)
         } else {
-            return PointerResult::from_value(FfiBlockOpt::from_none());
+            log::error!("query_block_by_tx_hash: block for this block id does not exist");
+            PointerResult::from_error(OperationStatus::ClientError)
         }
     } else {
+        log::error!("query_block_by_tx_hash: db failure");
+        PointerResult::from_error(OperationStatus::ClientError)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sequencer_ffi_query_events(
+    sequencer: *const SequencerServiceFFI,
+    from_block: u64,
+    to_block: FfiOption<u64>,
+    tx_hash: *const FfiHashType,
+    program_account_id: *const FfiAccountId,
+    selector: *const FfiSelector,
+) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus> {
+    if sequencer.is_null() {
+        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
+    }
+
+    let sequencer = unsafe { &*sequencer };
+    let program_account_id = unsafe { program_account_id.as_ref() }.map(|id| id.data);
+    let selector = unsafe { selector.as_ref() }.map(|s| Selector(s.data));
+
+    let event_filter_res = sequencer
+        .runtime()
+        .block_on(sequencer.storage_ref().ask(GetEventFilter).send())
+        .inspect_err(|e| {
+            log::error!("Failed to query block by id: {e:#}");
+        });
+
+    let event_filter = if let Ok(event_filter) = event_filter_res {
+        event_filter
+    } else {
+        log::error!("GetEventFilter: query failed");
         return PointerResult::from_error(OperationStatus::ClientError);
     };
 
-    unsafe { sequencer_ffi_query_block(sequencer, block_id) }
+    let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
+        // Coverage is judged at the transaction's height, resolved BEFORE the events
+        // read: a filtered-out tx has no events row, and gating on the row's presence
+        // would serve an empty result for exactly the dropped domains.
+        let block_id_res = unsafe { sequencer_ffi_query_block_by_tx_hash(sequencer, *tx_hash) };
+        if block_id_res.error.is_error() {
+            log::error!("query_events: no indexed transaction has the requested hash");
+            return PointerResult::from_error(OperationStatus::ClientError);
+        }
+        let block_id = unsafe { block_id_res.value.read() };
+
+        if !sequencer_storage_actor::actor::event_filter::covered_over_range(
+            &[(event_filter, block_id)],
+            block_id,
+            block_id,
+            program_account_id.map(lee::AccountId::new),
+            selector.map(|s| s.0),
+        ) {
+            log::error!(
+                "query_events: the requested events over blocks {block_id} are outside this \
+                 sequencer's event-filter history"
+            );
+            return PointerResult::from_error(OperationStatus::InvalidArgument);
+        }
+
+        if let Ok(block_events) = sequencer
+            .runtime()
+            .block_on(
+                sequencer
+                    .storage_ref()
+                    .ask(GetBlockEvents { block_id })
+                    .send(),
+            )
+            .inspect_err(|e| {
+                log::error!("Failed to query block by id: {e:#}");
+            })
+            .map(|row| {
+                row.and_then(|groups| {
+                    groups
+                        .into_iter()
+                        .find(|group| group.tx_hash.0 == tx_hash.data)
+                })
+                .map(|group| EventRecord::from_tx_events(block_id, group))
+                .unwrap_or_default()
+            })
+        {
+            block_events
+        } else {
+            return PointerResult::from_error(OperationStatus::ClientError);
+        }
+    } else {
+        let tip_res = unsafe { sequencer_ffi_query_last_block(sequencer) };
+
+        let tip = if tip_res.is_some && tip_res.error.is_ok() {
+            tip_res.block_id
+        } else {
+            log::error!("Failed to read the indexed tip for query_events");
+            return PointerResult::from_error(OperationStatus::ClientError);
+        };
+
+        if to_block.is_some && to_block.value.is_null() {
+            log::error!("query_events to_block is flagged present but its value pointer isnull");
+            return PointerResult::from_error(OperationStatus::InvalidArgument);
+        }
+        let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
+        let (from_block, to_block) =
+            match sequencer_storage_actor::actor::event_filter::resolve_event_block_range(
+                from_block, to_block, tip,
+            ) {
+                Ok(range) => range,
+                Err(err) => {
+                    log::error!("query_events: {err:?}");
+                    return PointerResult::from_error(OperationStatus::InvalidArgument);
+                }
+            };
+        if !sequencer_storage_actor::actor::event_filter::covered_over_range(
+            (from_block..=to_block)
+                .map(|block_id| (event_filter.clone(), block_id))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            from_block,
+            to_block,
+            program_account_id.map(lee::AccountId::new),
+            selector.map(|s| s.0),
+        ) {
+            log::error!(
+                "query_events: the requested events over blocks {from_block}..={to_block} are \
+                 outside this sequencer's event-filter history"
+            );
+            return PointerResult::from_error(OperationStatus::InvalidArgument);
+        }
+
+        let mut events_range = vec![];
+
+        for block_id in from_block..=to_block {
+            let block_events = if let Ok(block_events) = sequencer
+                .runtime()
+                .block_on(
+                    sequencer
+                        .storage_ref()
+                        .ask(GetBlockEvents { block_id })
+                        .send(),
+                )
+                .inspect_err(|e| {
+                    log::error!("Failed to query events by block id: {e:#}");
+                })
+                .map(|row| {
+                    row.unwrap_or_default()
+                        .into_iter()
+                        .flat_map(|group_events| {
+                            EventRecord::from_tx_events(block_id, group_events)
+                        })
+                        .collect::<Vec<_>>()
+                }) {
+                block_events
+            } else {
+                return PointerResult::from_error(OperationStatus::ClientError);
+            };
+            events_range.extend(block_events.into_iter());
+        }
+
+        events_range
+    };
+
+    PointerResult::from_value(
+        records
+            .into_iter()
+            .filter(|record| {
+                record.matches_fields(program_account_id.map(lee::AccountId::new), selector)
+            })
+            .map(Into::into)
+            .collect::<Vec<FfiEventRecord>>()
+            .into(),
+    )
 }
-
-// #[unsafe(no_mangle)]
-// pub unsafe extern "C" fn sequencer_ffi_query_events(
-//     sequencer: *const SequencerServiceFFI,
-//     from_block: u64,
-//     to_block: FfiOption<u64>,
-//     tx_hash: *const FfiHashType,
-//     program_id: *const FfiProgramId,
-//     selector: *const FfiSelector,
-// ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus> {
-//     if sequencer.is_null() {
-//         log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
-//         return PointerResult::from_error(OperationStatus::NullPointer);
-//     }
-
-//     let sequencer = unsafe { &*sequencer };
-//     let program_id =
-//         unsafe { program_id.as_ref() }.into();
-//     let selector =
-//         unsafe { selector.as_ref() }.into();
-
-//     let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
-//         // Coverage is judged at the transaction's height, resolved BEFORE the events
-//         // read: a filtered-out tx has no events row, and gating on the row's presence
-//         // would serve an empty result for exactly the dropped domains.
-//         match unsafe{sequencer_ffi_query_block_by_tx_hash(sequencer, *tx_hash)} {
-//             Err(e) => Err(e),
-//             Ok(None) => {
-//                 log::error!("query_events: no indexed transaction has the requested hash");
-//                 return PointerResult::from_error(OperationStatus::InvalidArgument);
-//             }
-//             Ok(Some(block_id)) => {
-//                 if !sequencer_core::event_filter::covered_over_range(
-//                     sequencer.core().store.filter_segments(),
-//                     block_id,
-//                     block_id,
-//                     program_id.map(|id| id.0),
-//                     selector.map(|s| s.0),
-//                 ) {
-//                     log::error!(
-//                 "query_events: the requested events over blocks {block_id} are outside this \
-//                  sequencer's event-filter history"
-//             );
-//                     return PointerResult::from_error(OperationStatus::InvalidArgument);
-//                 }
-//                 sequencer
-//                     .core()
-//                     .store
-//                     .get_events_for_block(block_id)
-//                     .map(|row| {
-//                         row.and_then(|groups| {
-//                             groups
-//                                 .into_iter()
-//                                 .find(|group| group.tx_hash.0 == tx_hash.data)
-//                         })
-//                         .map(|group| EventRecord::from_tx_events(block_id, group))
-//                         .unwrap_or_default()
-//                     })
-//             }
-//         }
-//     } else {
-//         let tip = match sequencer.core().store.get_last_block_id() {
-//             Ok(tip) => tip.unwrap_or(0),
-//             Err(e) => {
-//                 log::error!("Failed to read the indexed tip for query_events: {e:#}");
-//                 return PointerResult::from_error(OperationStatus::ClientError);
-//             }
-//         };
-//         if to_block.is_some && to_block.value.is_null() {
-//             log::error!("query_events to_block is flagged present but its value pointer is
-// null");             return PointerResult::from_error(OperationStatus::InvalidArgument);
-//         }
-//         let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
-//         let (from_block, to_block) = match sequencer_service_protocol::resolve_event_block_range(
-//             from_block, to_block, tip,
-//         ) {
-//             Ok(range) => range,
-//             Err(err) => {
-//                 log::error!("query_events: {err}");
-//                 return PointerResult::from_error(OperationStatus::InvalidArgument);
-//             }
-//         };
-//         if !sequencer_core::event_filter::covered_over_range(
-//             sequencer.core().store.filter_segments(),
-//             from_block,
-//             to_block,
-//             program_id.map(|id| id.0),
-//             selector.map(|s| s.0),
-//         ) {
-//             log::error!(
-//                 "query_events: the requested events over blocks {from_block}..={to_block} are \
-//                  outside this sequencer's event-filter history"
-//             );
-//             return PointerResult::from_error(OperationStatus::InvalidArgument);
-//         }
-//         sequencer
-//             .core()
-//             .store
-//             .get_events_range(from_block, to_block)
-//             .map(|groups| {
-//                 groups
-//                     .into_iter()
-//                     .flat_map(|(block_id, groups)| {
-//                         groups
-//                             .into_iter()
-//                             .flat_map(move |group| EventRecord::from_tx_events(block_id, group))
-//                     })
-//                     .collect::<Vec<_>>()
-//             })
-//     };
-
-//     records.map_or_else(
-//         |e| {
-//             log::error!("Failed to query events: {e:#}");
-//             PointerResult::from_error(OperationStatus::ClientError)
-//         },
-//         |records| {
-//             PointerResult::from_value(
-//                 records
-//                     .into_iter()
-//                     .filter(|record| record.matches_fields(program_id, selector))
-//                     .map(Into::into)
-//                     .collect::<Vec<FfiEventRecord>>()
-//                     .into(),
-//             )
-//         },
-//     )
-// }

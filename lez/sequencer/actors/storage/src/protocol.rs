@@ -145,6 +145,8 @@ pub struct GetBlockEvents {
     pub block_id: u64,
 }
 
+pub struct GetEventFilter;
+
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.

@@ -12,6 +12,7 @@ typedef enum OperationStatus {
   ClientError = 3,
   CastError = 4,
   NotSupported = 5,
+  InvalidArgument = 6,
 } OperationStatus;
 
 typedef enum FfiTransactionKind {
@@ -444,6 +445,52 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiTransaction_____OperationStatus;
 
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_u64__OperationStatus {
+  uint64_t *value;
+  enum OperationStatus error;
+} PointerResult_u64__OperationStatus;
+
+/**
+ * 8-byte array type for event selectors.
+ */
+typedef struct FfiBytes8 {
+  uint8_t data[8];
+} FfiBytes8;
+
+typedef struct FfiBytes8 FfiSelector;
+
+typedef struct FfiEventRecord {
+  FfiBlockId block_id;
+  uint32_t tx_index;
+  FfiHashType tx_hash;
+  FfiAccountId program_account_id;
+  FfiSelector selector;
+  FfiVecU8 data;
+} FfiEventRecord;
+
+typedef struct FfiVec_FfiEventRecord {
+  struct FfiEventRecord *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiEventRecord;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
+  struct FfiVec_FfiEventRecord *value;
+  enum OperationStatus error;
+} PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -711,7 +758,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
                                                                                                            uint64_t limit);
 
 /**
- * Query the block by transaction hash from sequencer.
+ * Query the block id by transaction hash from sequencer.
  *
  * # Arguments
  *
@@ -720,15 +767,22 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
  *
  * # Returns
  *
- * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ * A `PointerResult<u64, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
-                                                                                       FfiHashType tx_hash);
+struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
+                                                                               FfiHashType tx_hash);
+
+struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
+                                                                                          uint64_t from_block,
+                                                                                          struct FfiOption_u64 to_block,
+                                                                                          const FfiHashType *tx_hash,
+                                                                                          const FfiAccountId *program_account_id,
+                                                                                          const FfiSelector *selector);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -820,6 +874,28 @@ void sequencer_ffi_free_ffi_block_opt(FfiBlockOpt *val);
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
 void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+
+/**
+ * Frees the resources associated with the given vector of ffi event records.
+ *
+ * Takes ownership of the whole allocation produced by `query_events`: the outer
+ * `Box<FfiVec<FfiEventRecord>>` (the `PointerResult.value` pointer), the vector's
+ * backing buffer, and every record's payload within it.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiVec<FfiEventRecord>` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yetfreed.
+ */
+void free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.

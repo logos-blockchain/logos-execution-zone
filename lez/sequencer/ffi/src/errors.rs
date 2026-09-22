@@ -8,6 +8,7 @@ pub enum OperationStatus {
     ClientError = 0x3,
     CastError = 0x4,
     NotSupported = 0x5,
+    InvalidArgument = 0x6,
 }
 
 impl OperationStatus {

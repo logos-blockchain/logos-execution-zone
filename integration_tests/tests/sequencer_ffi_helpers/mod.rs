@@ -17,16 +17,9 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_core::block_publisher::Ed25519Key;
 use sequencer_ffi::{
-    OperationStatus, Runtime, SequencerServiceFFI,
-    api::{
-        PointerResult,
-        lifecycle::InitializedSequencerServiceFFIResult,
-        query::LastBlockIdResult,
-        types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
-            account::FfiAccount,
-            block::{FfiBlock, FfiBlockOpt},
-            transaction::FfiTransaction,
+    OperationStatus, Runtime, SequencerServiceFFI, api::{
+        PointerResult, lifecycle::InitializedSequencerServiceFFIResult, query::LastBlockIdResult, types::{
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec, account::FfiAccount, block::{FfiBlock, FfiBlockOpt}, event::FfiEventRecord, transaction::FfiTransaction,
         },
     },
 };
@@ -78,6 +71,15 @@ unsafe extern "C" {
         offset: u64,
         limit: u64,
     ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus>;
+
+    pub unsafe fn sequencer_ffi_query_events(
+        sequencer: *const SequencerServiceFFI,
+        from_block: u64,
+        to_block: FfiOption<u64>,
+        tx_hash: *const FfiHashType,
+        program_account_id: *const FfiAccountId,
+        selector: *const FfiSelector,
+    ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus>;
 
     pub unsafe fn sequencer_ffi_free_ffi_block(val: FfiBlock);
     pub unsafe fn sequencer_ffi_free_cstring(block: *mut c_char);

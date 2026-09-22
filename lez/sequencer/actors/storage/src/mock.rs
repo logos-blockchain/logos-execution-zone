@@ -17,20 +17,21 @@ use lee_core::BlockId;
 
 use crate::{
     Result, StorageActorTrait,
+    actor::event_filter::EventFilter,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, ZoneAnchorRecord,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
+        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpointBytes, MsgId,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        ResetAllBlocksToPending, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
@@ -257,6 +258,12 @@ mockall::mock! {
             msg: GetAccountTransactions,
             ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
         ) -> Result<Option<Vec<LeeTransaction>>>;
+
+        pub fn handle_get_event_filter(
+            &mut self,
+            msg: GetEventFilter,
+            ctx: &mut Context<Self, Result<EventFilter>>
+        ) -> Result<EventFilter>;
     }
 }
 
@@ -744,5 +751,17 @@ impl Message<GetAccountTransactions> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_account_transactions(msg, ctx)
+    }
+}
+
+impl Message<GetEventFilter> for MockStorageActor {
+    type Reply = Result<EventFilter>;
+
+    async fn handle(
+        &mut self,
+        msg: GetEventFilter,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_event_filter(msg, ctx)
     }
 }

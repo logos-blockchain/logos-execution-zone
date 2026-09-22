@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use common::transaction::TxEvents;
+use common::{HashType, transaction::TxEvents};
 use lee_core::{BlockId, account::AccountId, program::TransactionEvent};
+
+// Largest block span a single events range query may cover. Lives here so every surface
+// that serves the query (RPC service, FFI) enforces the identical bound.
+pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EventFilter {
@@ -103,6 +107,103 @@ pub fn covered_over_range(
             .map_or(u64::MAX, |(_, next_from)| next_from.saturating_sub(1));
         *seg_from > to || seg_to < from || filter.covers(program_id, selector)
     })
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Selector(pub [u8; 8]);
+
+impl From<[u8; 8]> for Selector {
+    fn from(value: [u8; 8]) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EventRecord {
+    pub block_id: BlockId,
+    pub tx_index: u32,
+    pub tx_hash: HashType,
+    pub program_account_id: AccountId,
+    pub selector: Selector,
+    pub data: Vec<u8>,
+}
+
+impl EventRecord {
+    #[must_use]
+    pub fn matches_fields(
+        &self,
+        program_account_id: Option<AccountId>,
+        selector: Option<Selector>,
+    ) -> bool {
+        program_account_id
+            .is_none_or(|program_account_id| program_account_id == self.program_account_id)
+            && selector.is_none_or(|selector| selector == self.selector)
+    }
+}
+
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for conversions"
+)]
+impl EventRecord {
+    // Not `From`: the orphan rule forbids implementing a foreign trait for `Vec<EventRecord>`.
+    #[must_use]
+    pub fn from_tx_events(block_id: BlockId, group: common::transaction::TxEvents) -> Vec<Self> {
+        let common::transaction::TxEvents {
+            tx_index,
+            tx_hash,
+            events,
+        } = group;
+        events
+            .into_iter()
+            .map(|event| Self {
+                block_id,
+                tx_index,
+                tx_hash: tx_hash.into(),
+                program_account_id: event.account_id.into(),
+                selector: event.event.selector.into(),
+                data: event.event.data,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EventRangeError {
+    FromPastTip { from: BlockId, tip: BlockId },
+    ToPastTip { to: BlockId, tip: BlockId },
+    Inverted { from: BlockId, to: BlockId },
+    SpanExceeded { span: u64 },
+}
+
+pub fn resolve_event_block_range(
+    from_block: BlockId,
+    to_block: Option<BlockId>,
+    tip: BlockId,
+) -> Result<(BlockId, BlockId), EventRangeError> {
+    if from_block > tip {
+        return Err(EventRangeError::FromPastTip {
+            from: from_block,
+            tip,
+        });
+    }
+    let to_block = to_block.unwrap_or(tip);
+    if to_block > tip {
+        return Err(EventRangeError::ToPastTip { to: to_block, tip });
+    }
+    if to_block < from_block {
+        return Err(EventRangeError::Inverted {
+            from: from_block,
+            to: to_block,
+        });
+    }
+
+    let span = to_block.saturating_sub(from_block).saturating_add(1);
+    if span > MAX_EVENT_QUERY_BLOCK_SPAN {
+        return Err(EventRangeError::SpanExceeded { span });
+    }
+
+    Ok((from_block, to_block))
 }
 
 #[cfg(test)]

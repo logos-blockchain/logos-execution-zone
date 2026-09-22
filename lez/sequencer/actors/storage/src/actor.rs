@@ -22,15 +22,15 @@ use log::debug;
 
 use crate::{
     Result, StorageActorTrait,
-    actor::tx_index::TransactionIndex,
+    actor::{event_filter::EventFilter, tx_index::TransactionIndex},
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetBlockEvents, GetChannelCursor, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
+        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
         GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor,
         GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
@@ -45,6 +45,7 @@ mod conversions;
 pub mod db;
 mod encoding;
 mod entities;
+pub mod event_filter;
 #[cfg(test)]
 mod tests;
 mod tx_index;
@@ -1552,5 +1553,19 @@ impl Message<GetBlockEvents> for StorageActor {
             .db()
             .get::<entities::BlockEvents>(&encoding::BigEndian::new(&block_id))?
             .map(|dest| dest.events))
+    }
+}
+
+impl Message<GetEventFilter> for StorageActor {
+    type Reply = Result<EventFilter>;
+
+    async fn handle(
+        &mut self,
+        GetEventFilter: GetEventFilter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // For now, storage is only archival.
+        // TODO: update sequecner configs to support custom archivation.
+        Ok(EventFilter::Archival)
     }
 }

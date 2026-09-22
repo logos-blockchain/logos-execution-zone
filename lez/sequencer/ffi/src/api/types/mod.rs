@@ -1,6 +1,7 @@
 use common::HashType;
 use lee::{AccountId, ProgramId, PublicKey, Signature};
 use lee_core::account::Nonce;
+use sequencer_storage_actor::actor::event_filter::Selector;
 
 pub mod account;
 pub mod block;
@@ -10,14 +11,14 @@ pub mod vectors;
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
 }
 
 /// 8-byte array type for event selectors.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct FfiBytes8 {
     pub data: [u8; 8],
 }
@@ -98,6 +99,18 @@ pub type FfiNonce = FfiU128;
 pub type FfiPublicKey = FfiBytes32;
 pub type FfiSelector = FfiBytes8;
 
+impl From<Selector> for FfiSelector {
+    fn from(value: Selector) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<FfiSelector> for Selector {
+    fn from(value: FfiSelector) -> Self {
+        Self(value.data)
+    }
+}
+
 impl From<AccountId> for FfiBytes32 {
     fn from(value: AccountId) -> Self {
         Self {
@@ -139,6 +152,7 @@ impl From<PublicKey> for FfiPublicKey {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FfiVec<T> {
     pub entries: *mut T,
     pub len: usize,
