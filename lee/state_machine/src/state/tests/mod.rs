@@ -48,32 +48,34 @@ impl V03State {
     /// Include test programs in the builtin programs map.
     #[must_use]
     pub fn with_test_programs(mut self) -> Self {
-        self.insert_program(&crate::test_methods::simple_balance_transfer());
-        self.insert_program(&crate::test_methods::dropped_account());
-        self.insert_program(&crate::test_methods::data_changer());
-        self.insert_program(&crate::test_methods::minter());
-        self.insert_program(&crate::test_methods::burner());
-        self.insert_program(&crate::test_methods::squatter());
-        self.insert_program(&crate::test_methods::acquire_and_forward());
-        self.insert_program(&crate::test_methods::acquire_then_fund());
-        self.insert_program(&crate::test_methods::auth_asserting_noop());
-        self.insert_program(&crate::test_methods::private_pda_delegator());
-        self.insert_program(&crate::test_methods::noop());
-        self.insert_program(&crate::test_methods::chain_caller());
-        self.insert_program(&crate::test_methods::exits_nonzero());
-        self.insert_program(&crate::test_methods::non_delegating_forwarder());
-        self.insert_program(&crate::test_methods::event_emitter());
-        self.insert_program(&crate::test_methods::validity_window());
-        self.insert_program(&crate::test_methods::flash_swap_initiator());
-        self.insert_program(&crate::test_methods::flash_swap_callback());
-        self.insert_program(&crate::test_methods::malicious_self_program_id());
-        self.insert_program(&crate::test_methods::malicious_caller_program_id());
-        self.insert_program(&crate::test_methods::pda_spend_proxy());
-        self.insert_program(&crate::test_methods::validity_window_chain_caller());
-        self.insert_program(&crate::test_methods::simple_transfer_proxy());
-        self.insert_program(&crate::test_methods::references_undeclared_account());
-        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
-        self.insert_program(&crate::test_methods::reordering_transfer());
+        self.insert_program(&crate::test_methods::simple_balance_transfer(), true);
+        self.insert_program(&crate::test_methods::dropped_account(), true);
+        self.insert_program(&crate::test_methods::data_changer(), true);
+        self.insert_program(&crate::test_methods::minter(), true);
+        self.insert_program(&crate::test_methods::burner(), true);
+        // Deliberately mutable (unlike every other program here), so tests can exercise both
+        // sides of insert_program's immutable-mirror-commitment behavior against a shared fixture.
+        self.insert_program(&crate::test_methods::squatter(), false);
+        self.insert_program(&crate::test_methods::acquire_and_forward(), true);
+        self.insert_program(&crate::test_methods::acquire_then_fund(), true);
+        self.insert_program(&crate::test_methods::auth_asserting_noop(), true);
+        self.insert_program(&crate::test_methods::private_pda_delegator(), true);
+        self.insert_program(&crate::test_methods::noop(), true);
+        self.insert_program(&crate::test_methods::chain_caller(), true);
+        self.insert_program(&crate::test_methods::exits_nonzero(), true);
+        self.insert_program(&crate::test_methods::non_delegating_forwarder(), true);
+        self.insert_program(&crate::test_methods::event_emitter(), true);
+        self.insert_program(&crate::test_methods::validity_window(), true);
+        self.insert_program(&crate::test_methods::flash_swap_initiator(), true);
+        self.insert_program(&crate::test_methods::flash_swap_callback(), true);
+        self.insert_program(&crate::test_methods::malicious_self_program_id(), true);
+        self.insert_program(&crate::test_methods::malicious_caller_program_id(), true);
+        self.insert_program(&crate::test_methods::pda_spend_proxy(), true);
+        self.insert_program(&crate::test_methods::validity_window_chain_caller(), true);
+        self.insert_program(&crate::test_methods::simple_transfer_proxy(), true);
+        self.insert_program(&crate::test_methods::references_undeclared_account(), true);
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state(), true);
+        self.insert_program(&crate::test_methods::reordering_transfer(), true);
         self
     }
 
