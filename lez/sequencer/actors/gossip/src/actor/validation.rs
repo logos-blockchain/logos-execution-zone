@@ -4,8 +4,9 @@
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
-use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
-use sequencer_slasher_actor::Approval;
+use sequencer_core::config::BLOCK_OVERHEAD;
+use sequencer_executor_actor::protocol::AccreditedKeys;
+use sequencer_slasher_actor::protocol::Approval;
 
 #[derive(Debug)]
 // `Accept` is intentionally left unboxed: it is the common outcome and the enum
@@ -90,7 +91,7 @@ pub fn evaluate_approval(
 #[cfg(test)]
 mod tests {
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_slasher_actor::Offence;
+    use sequencer_slasher_actor::protocol::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 

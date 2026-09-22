@@ -12,6 +12,7 @@ use kameo::{
     message::{Context, Message},
     reply::DelegatedReply,
 };
+use kameo_actors::pubsub::PubSub;
 use lee::Account;
 use lee_core::{
     BlockId,
@@ -33,10 +34,11 @@ use crate::{
     actor::state::State,
     error::Error,
     protocol::{
-        ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetBlock,
-        GetBlockRange, GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        AccreditedKeys, ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
+        GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
+        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
+        Transaction,
     },
 };
 
@@ -100,6 +102,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> impl Future<Output = Result<Self>> + Send + 'static {
         sequencer_executor_actor_metrics::init();
@@ -111,6 +114,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
                 bedrock_signing_key,
                 storage_ref.clone(),
                 bedrock_pool_ref,
+                accredited_keys_pubsub_ref,
                 slasher_prepared,
             )
             .await?;

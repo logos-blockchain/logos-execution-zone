@@ -18,6 +18,7 @@ use common::{
 use config::SequencerConfig;
 use cross_zone_inbox_core::CrossZoneMessage;
 use kameo::actor::{ActorRef, PreparedActor};
+use kameo_actors::pubsub::PubSub;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
@@ -34,7 +35,10 @@ use logos_blockchain_zone_sdk::{
 use mempool::MemPool;
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{BedrockActorTrait, protocol::ChannelId};
-use sequencer_slasher_actor::{Propose, Report, ReportedOffence, SetCommittee, SlasherActor};
+use sequencer_slasher_actor::{
+    SlasherActor,
+    protocol::{Propose, Report, ReportedOffence, SetCommittee},
+};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -50,9 +54,6 @@ use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
 
 use crate::{
-    gossip::{
-        AccreditedKeys, AccreditedKeysReceiver, AccreditedKeysSender, accredited_keys_channel,
-    },
     logging::{log_high_water_lowered, log_parked, log_rewind, log_update, pin_str},
     task_group::TaskGroup,
 };
@@ -61,7 +62,6 @@ pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
 pub mod fees;
-pub mod gossip;
 pub mod logging;
 pub mod task_group;
 
@@ -93,6 +93,10 @@ pub const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
+
+/// Keys the mesh accepts a slash approval from, fed from the `sequencer_stake`
+/// config by `refresh_committee`.
+pub type AccreditedKeys = HashSet<[u8; 32]>;
 
 /// The block's gas budget: the gas the included transactions were actually
 /// charged (read off the settlement summary).
@@ -170,14 +174,14 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     watchers: TaskGroup,
     /// Channel tip slot as of the last committee-config submission.
     last_committee_submission_slot: Option<Slot>,
-    /// The committee the gossip mesh screens inbound slash approvals against.
-    accredited_keys_tx: AccreditedKeysSender,
     block_signing_key: lee::PrivateKey,
     /// Signs this node's approval of a slash.
     bedrock_signing_key: Ed25519Key,
+    accredited_keys: AccreditedKeys,
 
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
     /// Records offending inscriptions and proposes the slashes for them.
     slasher_ref: ActorRef<SlasherActor<S>>,
 }
@@ -196,6 +200,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         let channel_id = config.bedrock_config.channel_id;
@@ -234,18 +239,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .await,
         );
 
-        let (accredited_keys_tx, _) = accredited_keys_channel();
-
-        let sequencer = Self {
+        let mut sequencer = Self {
             channel_id,
             chain: Arc::new(Mutex::new(chain)),
             mempool,
+            accredited_keys: AccreditedKeys::default(),
             storage_ref,
             bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
             slasher_ref,
             watchers,
             last_committee_submission_slot: None,
-            accredited_keys_tx,
             block_signing_key: config
                 .block_signing_key()
                 .context("Failed to load block signing key")?,
@@ -257,6 +261,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         );
         sequencer_core_metrics::record_chain_height(sequencer.chain_height().await);
         sequencer.record_dead_letter_gauge().await;
+        sequencer
+            .refresh_committee()
+            .await
+            .expect("Failed to refresh committee");
 
         Ok(sequencer)
     }
@@ -271,7 +279,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
     /// follow-up.
     pub async fn on_channel_update(
-        &self,
+        &mut self,
         update: sequencer_bedrock_actor::protocol::ChannelUpdate,
     ) {
         self.report_offences(&update.undecodable).await;
@@ -520,7 +528,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         if moved_head {
-            self.refresh_committee().await;
+            self.refresh_committee()
+                .await
+                .expect("Failed to refresh committee");
         }
     }
 
@@ -1329,12 +1339,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         &self.sequencer_config
     }
 
-    /// The gossip mesh's view of the committee, as of the last head move.
-    #[must_use]
-    pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
-        self.accredited_keys_tx.subscribe()
-    }
-
     /// This node's Bedrock public key, hex — the identity the channel's
     /// accredited keys and round-robin are keyed by.
     #[must_use]
@@ -1579,10 +1583,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// Hands the slasher and the gossip mesh the committee the head now holds. The
     /// produce path also refreshes it, but only a producing node takes turns.
-    async fn refresh_committee(&self) {
+    async fn refresh_committee(&mut self) -> Result<()> {
         let config = committee_discovery::read_config(self.chain.lock().await.head_state());
         let Some(config) = config else {
-            return;
+            return Ok(());
         };
         // The mesh screens against the same committee the slasher gates on.
         let keys: AccreditedKeys = config
@@ -1591,16 +1595,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .map(sequencer_stake_core::SequencerKey::to_bytes)
             .collect();
         // Every head move lands here, but the committee changes on almost none.
-        self.accredited_keys_tx.send_if_modified(|current| {
-            let changed = current.as_ref() != Some(&keys);
-            if changed {
-                *current = Some(keys);
-            }
-            changed
-        });
-        if let Err(err) = self.slasher_ref.tell(SetCommittee(config)).await {
-            warn!("Failed to refresh the slasher committee: {err}");
+        if self.accredited_keys != keys {
+            self.accredited_keys_pubsub_ref
+                .tell(kameo_actors::pubsub::Publish(keys.clone()))
+                .await
+                .context("Failed to publish accredited keys")?;
+
+            self.accredited_keys = keys;
         }
+        self.slasher_ref
+            .tell(SetCommittee(config))
+            .await
+            .context("Failed to refresh the slasher committee")?;
+
+        Ok(())
     }
 }
 

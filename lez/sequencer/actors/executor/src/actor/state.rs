@@ -1,5 +1,6 @@
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
 use kameo::actor::{ActorRef, PreparedActor};
+use kameo_actors::pubsub::PubSub;
 use log::info;
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
@@ -11,7 +12,7 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::ShardingPoolActor;
 
-use crate::{Result, error::Error};
+use crate::{Result, error::Error, protocol::AccreditedKeys};
 
 pub mod bootstrapping;
 mod genesis;
@@ -30,6 +31,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
@@ -67,6 +69,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 bootstrap_to,
                 storage_ref,
                 bedrock_pool_ref,
+                accredited_keys_pubsub_ref,
                 slasher_prepared,
             )))
         } else {
@@ -79,6 +82,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                     bedrock_signing_key,
                     storage_ref,
                     bedrock_pool_ref,
+                    accredited_keys_pubsub_ref,
                     slasher_prepared,
                 )
                 .await?,

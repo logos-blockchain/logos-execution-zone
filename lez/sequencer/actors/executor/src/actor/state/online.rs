@@ -3,6 +3,7 @@ use std::sync::Arc;
 use chain_state::ChainState;
 use common::transaction::LeeTransaction;
 use kameo::actor::{ActorRef, PreparedActor};
+use kameo_actors::pubsub::PubSub;
 use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
@@ -19,6 +20,7 @@ use crate::{
     Result,
     actor::state::{bootstrapping, genesis, zone_checkpoint},
     error::Error,
+    protocol::AccreditedKeys,
 };
 
 pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
@@ -41,6 +43,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bootstrapping_state.bedrock_signing_key,
             bootstrapping_state.storage_ref,
             bootstrapping_state.bedrock_pool_ref,
+            bootstrapping_state.accredited_keys_pubsub_ref,
             bootstrapping_state.slasher_prepared,
         )
         .await
@@ -52,6 +55,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         Self::start(
@@ -61,6 +65,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_signing_key,
             storage_ref,
             bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
             slasher_prepared,
         )
         .await
@@ -97,6 +102,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         bedrock_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Result<Self> {
         let initial_checkpoint = zone_checkpoint(&storage_ref).await?;
@@ -182,6 +188,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_signing_key,
             storage_ref,
             bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
             slasher_prepared,
         )
         .await

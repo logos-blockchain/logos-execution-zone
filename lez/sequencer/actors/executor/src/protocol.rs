@@ -4,6 +4,7 @@ use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
 use lee_core::{BlockId, Commitment, account::AccountId};
 pub use sequencer_bedrock_actor::protocol::ChannelId;
+pub use sequencer_core::AccreditedKeys;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.

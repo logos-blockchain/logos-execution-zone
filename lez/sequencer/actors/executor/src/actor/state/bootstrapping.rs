@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
 use common::block::{Block, BlockMeta};
 use kameo::actor::{ActorRef, PreparedActor};
+use kameo_actors::pubsub::PubSub;
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -17,6 +18,7 @@ use crate::{
     Result,
     actor::state::{State, online},
     error::Error,
+    protocol::AccreditedKeys,
 };
 
 #[derive(Clone, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) bootstrap_to: Tip,
     pub(super) storage_ref: ActorRef<S>,
     pub(super) bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    pub(super) accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
     pub(super) slasher_prepared: PreparedActor<SlasherActor<S>>,
 }
 
@@ -45,6 +48,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         bootstrap_to: Tip,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
         slasher_prepared: PreparedActor<SlasherActor<S>>,
     ) -> Self {
         Self {
@@ -55,6 +59,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             bootstrap_to,
             storage_ref,
             bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
             slasher_prepared,
         }
     }

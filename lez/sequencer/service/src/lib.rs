@@ -3,10 +3,11 @@ use std::{future::Future, net::SocketAddr, path::Path};
 use anyhow::{Context as _, Result};
 use futures::never::Never;
 use glob::Pattern;
-use kameo::actor::{ActorRef, Recipient, Spawn as _};
+use kameo::actor::{ActorRef, PreparedActor, Recipient, Spawn as _};
 use kameo_actors::{
     DeliveryStrategy,
     broker::Broker,
+    pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
 use log::info;
@@ -16,11 +17,11 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, DeserializeOp as _},
 };
 pub use sequencer_core::config::*;
-use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
+use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_gossip_actor::{GossipActor, protocol::PublishTransaction};
 use sequencer_rpc_server_actor::RpcServerActor;
-use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
@@ -248,7 +249,7 @@ pub fn run(
             .ask(
                 sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
                     channel_id: config.bedrock_config.channel_id,
-                    bedrock_signing_key,
+                    bedrock_signing_key: bedrock_signing_key.clone(),
                     initial_checkpoint,
                     funding_pk: config.bedrock_config.funding_key,
                     priority_fee_percent: config.bedrock_config.priority_fee_percent,
@@ -260,6 +261,23 @@ pub fn run(
             .context("Failed to initialize Bedrock channel publisher")?;
         info!("Bedrock Sharding Pool Actor spawned");
 
+        let accredited_keys_pubsub = PubSub::new(DeliveryStrategy::Guaranteed);
+        let accredited_keys_pubsub_ref = PubSub::spawn(accredited_keys_pubsub);
+        let gossip_actor_prepared_opt = if gossip_config.is_some() {
+            let gossip_actor_prepared = GossipActor::prepare_with_mailbox(kameo::mailbox::bounded(
+                sequencer_gossip_actor::MAILBOX_CAPACITY,
+            ));
+            accredited_keys_pubsub_ref
+                .ask(kameo_actors::pubsub::Subscribe(
+                    gossip_actor_prepared.actor_ref().clone(),
+                ))
+                .await?;
+            Some(gossip_actor_prepared)
+        } else {
+            None
+        };
+        info!("Accredited Keys PubSub Actor spawned");
+
         let slasher_prepared = SlasherActor::prepare();
         let slasher_ref = slasher_prepared.actor_ref().clone();
 
@@ -268,28 +286,26 @@ pub fn run(
             bedrock_signing_key,
             storage_ref.clone(),
             bedrock_pool_ref.clone(),
+            accredited_keys_pubsub_ref.clone(),
             slasher_prepared,
         )
         .await
         .context("Failed to set up Executor Actor")?;
-        let accredited_keys_rx = executor
-            .accredited_keys_watch()
-            .context("Failed to get accredited keys watch")?;
         let executor_ref = executor_prepared.actor_ref().clone();
         executor_prepared.spawn(executor);
         info!("Executor Actor spawned");
 
         let scheduler_ref = Scheduler::spawn(Scheduler::new());
 
-        let (gossip, gossip_publisher) = match gossip_config {
+        let (gossip, gossip_publisher) = match gossip_config.zip(gossip_actor_prepared_opt) {
             None => None,
-            Some(gossip_config) => Some(
+            Some((gossip_config, gossip_actor_prepared)) => Some(
                 setup_gossip(
                     gossip_config,
+                    gossip_actor_prepared,
                     *bedrock_config.channel_id.as_ref(),
                     &sequencer_home,
                     max_block_size.as_u64(),
-                    accredited_keys_rx,
                     &executor_ref,
                     &slasher_ref,
                     &scheduler_ref,
@@ -348,10 +364,10 @@ pub fn run(
 )]
 async fn setup_gossip(
     gossip_config: GossipConfig,
+    gossip_actor_prepared: PreparedActor<GossipActor>,
     channel_id: [u8; 32],
     sequencer_home: &Path,
     max_block_size: u64,
-    accredited_keys_rx: AccreditedKeysReceiver,
     executor_ref: &ActorRef<ExecutorActor<StorageActor, BedrockActor>>,
     slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     scheduler_ref: &ActorRef<Scheduler>,
@@ -387,17 +403,14 @@ async fn setup_gossip(
         slasher_ref.clone().recipient(),
         max_block_size,
         submit,
-        accredited_keys_rx,
     ))
     .await
     .context("Failed to start sequencer gossip network")?;
     info!("Gossip network started as {}", gossip_actor.local_peer_id());
     let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
-    let gossip_ref = GossipActor::spawn_with_mailbox(
-        gossip_actor,
-        kameo::mailbox::bounded(sequencer_gossip_actor::MAILBOX_CAPACITY),
-    );
+    let gossip_ref = gossip_actor_prepared.actor_ref().clone();
+    gossip_actor_prepared.spawn(gossip_actor);
     info!("Gossip Actor spawned");
     let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
 
@@ -405,8 +418,13 @@ async fn setup_gossip(
     // mailbox; the channel bridges its `SetApprovalPublisher` API.
     let (approval_tx, mut approval_rx) =
         tokio::sync::mpsc::channel(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
-    slasher_ref.tell(SetApprovalPublisher(approval_tx)).await?;
+    slasher_ref
+        .tell(sequencer_slasher_actor::protocol::SetApprovalPublisher(
+            approval_tx,
+        ))
+        .await?;
     let approval_gossip_ref = gossip_ref.clone();
+    // TODO: wtf
     tokio::spawn(async move {
         while let Some(approval) = approval_rx.recv().await {
             if approval_gossip_ref.tell(approval).send().await.is_err() {
