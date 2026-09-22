@@ -3,10 +3,13 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountData, AccountId},
+    account::{Account, AccountId},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{CallEffects, PublicFacts, RootCall},
-    program::{BlockValidityWindow, CallKind, PdaSeed, ProgramId, TimestampValidityWindow},
+    execution_state::{PublicResolution, RootCall},
+    program::{
+        BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, ResolveOutput,
+        TimestampValidityWindow,
+    },
 };
 
 /// A claim that `account_id`'s program account currently has `image_id`.
@@ -28,15 +31,26 @@ pub struct ProgramImageClaim {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     pub root: RootCall,
-    pub root_call_kind: CallKind,
-    pub public_facts: PublicFacts,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
     pub dummy_inputs: Vec<DummyInput>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id. See [`ProgramImageClaim`].
     pub program_image_claims: Vec<ProgramImageClaim>,
-    pub effects: Vec<CallEffects>,
+    /// One entry per scheduled call, in traversal order.
+    pub calls: Vec<ProvenCall>,
+}
+
+/// One scheduled call's transcript: its planner output, and the resolutions of the private
+/// effects that planner emitted, in effect order.
+///
+/// Native-token plans and resolutions are recomputed from the protocol's own implementation, so
+/// they carry no receipt and occupy no slot in `private_resolutions`.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProvenCall {
+    pub plan: ProgramOutput,
+    pub private_resolutions: Vec<ResolveOutput>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -53,7 +67,7 @@ pub struct PrivateWitness {
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
-    /// `pre_state.account_id`. An honest authorized account's `npk` for Id computation gets
+    /// the handle's `account_id`. An honest authorized account's `npk` for Id computation gets
     /// derived from the supplied `ask`.
     Regular { ask: Option<AuthorizationSecretKey> },
     /// A private PDA with its authority's account ID and seed.
@@ -144,14 +158,14 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-/// A public account's first observed and final states.
-#[derive(BorshSerialize, BorshDeserialize)]
+/// A public account's root-authorization bit and the effects the execution deferred to
+/// settlement, in the order its traversal emitted them.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
     pub account_id: AccountId,
     pub is_authorized: bool,
-    pub pre: AccountData,
-    pub post: AccountData,
+    pub resolutions: Vec<PublicResolution>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -200,7 +214,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountData, AccountId, ShardData},
+        account::{Account, AccountId},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
@@ -213,26 +227,23 @@ mod tests {
                 PublicAction {
                     account_id: AccountId::new([0; 32]),
                     is_authorized: true,
-                    pre: AccountData {
-                        shards: [
-                            (touched, b"test data".to_vec().try_into().unwrap()),
-                            (also_touched, ShardData::empty()),
-                        ]
-                        .into(),
-                    },
-                    post: AccountData {
-                        shards: [
-                            (touched, b"post state data".to_vec().try_into().unwrap()),
-                            (also_touched, b"fresh record".to_vec().try_into().unwrap()),
-                        ]
-                        .into(),
-                    },
+                    resolutions: vec![
+                        PublicResolution::Apply {
+                            program_account_id: touched,
+                            shard_program_account_id: touched,
+                            data: b"post state data".to_vec(),
+                        },
+                        PublicResolution::Apply {
+                            program_account_id: touched,
+                            shard_program_account_id: also_touched,
+                            data: b"fresh record".to_vec(),
+                        },
+                    ],
                 },
                 PublicAction {
                     account_id: AccountId::new([1; 32]),
                     is_authorized: false,
-                    pre: Account::funded(123_123_123_456_456_567_112).data,
-                    post: Account::funded(200).data,
+                    resolutions: Vec::new(),
                 },
             ],
             private_actions: vec![PrivateAction {
