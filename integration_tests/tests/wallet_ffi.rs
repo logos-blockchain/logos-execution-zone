@@ -27,7 +27,7 @@ use integration_tests::{
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID};
 use token_core::{TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
@@ -629,10 +629,11 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     let mut out_balance_only = FfiAccount::default();
     let balance_only: Account = unsafe {
         let ffi_account_id = FfiBytes32::from(account_id);
+        let ffi_native_program = FfiBytes32::from_account_id(NATIVE_TOKEN_PROGRAM_ID);
         wallet_ffi_get_account_view(
             wallet_ffi_handle,
             &raw const ffi_account_id,
-            std::ptr::null::<FfiBytes32>(),
+            &raw const ffi_native_program,
             &raw mut out_balance_only,
         )
         .unwrap();
@@ -663,10 +664,11 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     let mut out_program_view = FfiAccount::default();
     let program_view: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
+        let ffi_native_program = FfiBytes32::from_account_id(NATIVE_TOKEN_PROGRAM_ID);
         wallet_ffi_get_account_view(
             wallet_ffi_handle,
             &raw const ffi_program_account,
-            std::ptr::null::<FfiBytes32>(),
+            &raw const ffi_native_program,
             &raw mut out_program_view,
         )
         .unwrap();
