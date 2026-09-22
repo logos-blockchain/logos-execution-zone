@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -588,7 +588,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let attacker_private_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
     let amount: u128 = 1;
 
-    let faucet_account = get_account(&ctx, faucet_account_id).await?;
     let attacker_account = get_account(&ctx, attacker_private_id).await?;
 
     let program_with_deps = ProgramWithDependencies::new(
@@ -605,7 +604,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 ProgramShardSelector::balance(faucet_account_id),
                 ProgramShardSelector::balance(attacker_private_id),
             ],
-            public_accounts: HashMap::from([(faucet_account_id, faucet_account)]),
             private_witnesses: vec![PrivateWitness {
                 account: attacker_account,
                 vpk,
@@ -628,12 +626,11 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     Ok(())
 }
 
-async fn prove_init_with_commitment_root(
+fn prove_init_with_commitment_root(
     ctx: &TestContext,
     commitment_root: lee_core::CommitmentSetDigest,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let sender_id = ctx.existing_public_accounts()[0];
-    let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
@@ -648,7 +645,6 @@ async fn prove_init_with_commitment_root(
                 ProgramShardSelector::balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: HashMap::from([(sender_id, sender_account)]),
             private_witnesses: vec![PrivateWitness {
                 account: Account::default(),
                 vpk,
@@ -683,7 +679,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
 
-    let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
+    let output = prove_init_with_commitment_root(&ctx, expected_digest)?;
 
     assert_eq!(output.private_actions.len(), 1);
     let action = &output.private_actions[0];
@@ -704,8 +700,8 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
 
     let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
-    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
-    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;
+    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest)?;
+    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH)?;
 
     assert_eq!(output_with_root.private_actions[0].root, expected_digest);
     assert_eq!(

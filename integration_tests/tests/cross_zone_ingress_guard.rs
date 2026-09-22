@@ -63,7 +63,10 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
             ProgramShardSelector::new(seen_id, inbox_id),
         ],
         vec![],
-        Instruction::Dispatch(msg),
+        Instruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

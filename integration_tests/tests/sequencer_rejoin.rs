@@ -95,6 +95,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
         },
@@ -132,6 +133,17 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             amount: STAKE,
         })
         .context("Failed to serialize the mover instruction")?;
+    // Both proposals are read off the chain the re-stake is about to land on, the way
+    // `submit_stake` builds them: each is checked against the account it describes.
+    let balance_before = account_balance(&ctx, funds_b)
+        .await
+        .context("Failed to read B's stake funds balance")?;
+    let has_record = !get_account(&ctx, ownership_b)
+        .await
+        .context("Failed to read B's stake ownership account")?
+        .data
+        .shard(stake_id)
+        .is_empty();
     send_stake_tx(
         &ctx,
         vec![
@@ -145,6 +157,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             amount: STAKE,
             mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
+            balance_before,
+            has_record,
         },
     )
     .await

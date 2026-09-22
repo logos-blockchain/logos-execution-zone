@@ -40,6 +40,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             l1_deposit_op_id: [0_u8; 32],
             recipient_id,
             amount: 1,
+            already_processed: false,
         },
     )
     .context("Failed to build public bridge deposit transaction")?;
@@ -91,6 +92,7 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
             l1_deposit_op_id: [0_u8; 32],
             recipient_id,
             amount: 0,
+            already_processed: false,
         },
     )
     .context("Failed to build zero-amount public bridge deposit transaction")?;
@@ -161,6 +163,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         l1_deposit_op_id: [0_u8; 32],
         recipient_id,
         amount: 1,
+        already_processed: false,
     })
     .context("Failed to serialize bridge deposit instruction")?;
 
@@ -179,11 +182,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let (output, proof) = execute_and_prove(
         lee::ProvingInput {
             shard_selectors,
-            public_accounts: HashMap::from([
-                (bridge_account_id, bridge_account),
-                (recipient_id, recipient_account),
-                (receipt_id, receipt_account),
-            ]),
             instruction_data: instruction,
             ..Default::default()
         },

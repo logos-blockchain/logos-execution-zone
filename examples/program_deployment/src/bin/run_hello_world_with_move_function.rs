@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
-use lee::{ProgramShardSelector, PublicTransaction, program::Program, public_transaction};
+use lee::{
+    AccountId, ProgramShardSelector, PublicTransaction, program::Program, public_transaction,
+};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -55,6 +57,23 @@ enum Command {
         from: String,
         to: String,
     },
+}
+
+/// `move_data` runs where account contents are not readable, so the bytes it moves travel in
+/// the instruction and the source's own effect refuses unless the shard really holds them.
+async fn shard_bytes(
+    wallet_core: &WalletCore,
+    account_id: AccountId,
+    program_id: AccountId,
+) -> Vec<u8> {
+    wallet_core
+        .get_account_view(ProgramShardSelector::new(account_id, program_id))
+        .await
+        .unwrap()
+        .data
+        .shard(program_id)
+        .as_ref()
+        .to_vec()
 }
 
 #[tokio::main]
@@ -113,9 +132,10 @@ async fn main() {
                 .unwrap();
         }
         Command::MoveDataPublicToPublic { from, to } => {
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
+            let moved = shard_bytes(&wallet_core, from, program.id().into()).await;
+            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program.id().into(),
@@ -138,10 +158,11 @@ async fn main() {
                 .unwrap();
         }
         Command::MoveDataPublicToPrivate { from, to } => {
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
             let program_id = program.id().into();
+            let moved = shard_bytes(&wallet_core, from, program_id).await;
+            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
 
             let accounts = vec![
                 AccountIdentity::Public(from).select_program_shard(program_id),

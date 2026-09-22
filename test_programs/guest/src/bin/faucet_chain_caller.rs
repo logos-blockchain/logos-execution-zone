@@ -1,53 +1,29 @@
-use borsh::to_vec;
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, LeeCall, Plan, ProgramId, read_lee_call},
 };
 
 type Instruction = (ProgramId, u128);
 // (faucet_program_id, amount)
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (faucet_program_id, amount),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("faucet_chain_caller emits no effect to resolve")
+    };
+    let (faucet_program_id, amount) = input.instruction;
+
+    let Ok([faucet, recipient]) = <[_; 2]>::try_from(input.accounts.clone()) else {
+        panic!("Expected exactly 2 input accounts: faucet PDA, recipient");
     };
 
-    let state_diffs: Vec<_> = pre_states
-        .iter()
-        .map(|pre| ShardStateDiff::unchanged(pre.clone()))
-        .collect();
-
-    assert_eq!(pre_states.len(), 2);
-
-    let chained_calls = vec![ChainedCall {
-        program_account_id: faucet_program_id.into(),
-        instruction_data: to_vec(&faucet_core::Instruction::GenesisTransfer { amount }).unwrap(),
-        shard_selectors: vec![
-            ProgramShardSelector::from(&pre_states[0]),
-            ProgramShardSelector::from(&pre_states[1]),
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(ChainedCall::new(
+        faucet_program_id.into(),
+        vec![
+            ProgramShardSelector::from(&faucet),
+            ProgramShardSelector::from(&recipient),
         ],
-        pda_seeds: vec![],
-    }];
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+        &faucet_core::Instruction::GenesisTransfer { amount },
+    ));
+    plan.write()
 }

@@ -521,7 +521,7 @@ async fn poll_finality(state: Arc<AppState>) {
 /// Recovers the chat text from an inbox dispatch tx's instruction data.
 fn decode_inbox_text(instruction_data: &[u8]) -> Option<String> {
     let instruction: Instruction = borsh::from_slice::<Instruction>(instruction_data).ok()?;
-    let Instruction::Dispatch(message) = instruction else {
+    let Instruction::Dispatch { message, .. } = instruction else {
         return None;
     };
     decode_payload(&message.payload)

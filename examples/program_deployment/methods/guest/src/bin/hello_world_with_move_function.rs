@@ -1,10 +1,4 @@
-use lee_core::{
-    account::{AccountId, ShardData},
-    program::{
-        AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
-};
+use lee_core::program::{LeeCall, Plan, read_lee_call, resolve_write};
 
 // Hello-world with write + move_data example program.
 //
@@ -12,83 +6,68 @@ use lee_core::{
 // dispatches to either:
 //
 // - `write`: appends `data` to this program's own shard on a single input account.
-// - `move_data`: moves all bytes from one account's shard to another's. The source shard is cleared
+// - `move_data`: moves bytes out of one account's shard into another's. The source shard is cleared
 //   and the destination shard receives the appended bytes.
+//
+// `Execute` never sees account contents, so `move_data` cannot read what it is about to move.
+// The caller states the source's contents in `data`; the source's own effect resolves first and
+// refuses unless the shard really holds exactly those bytes, which is what makes the value the
+// destination appends a pinned one rather than a caller's claim.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(self_account_id: AccountId, pre_state: &AccountInput, greeting: &[u8]) -> ShardStateDiff {
-    // Construct the new data value: the existing data with the greeting appended.
-    let new_data: ShardData = {
-        let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
-        bytes.extend_from_slice(greeting);
-        bytes
-            .try_into()
-            .expect("ShardData should fit within the allowed limits")
-    };
-
-    ShardStateDiff::new(pre_state.clone(), new_data)
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum Effect {
+    Append(Vec<u8>),
+    MoveOut(Vec<u8>),
 }
 
-fn move_data(
-    self_account_id: AccountId,
-    from_pre: &AccountInput,
-    to_pre: &AccountInput,
-) -> Vec<ShardStateDiff> {
-    // Construct the new data values.
-    let from_data: Vec<u8> = from_pre.shard_of(self_account_id).clone().into_inner();
-
-    let from_post = ShardStateDiff::new(from_pre.clone(), ShardData::default());
-
-    let to_post = {
-        let mut bytes = to_pre.shard_of(self_account_id).clone().into_inner();
-        bytes.extend_from_slice(&from_data);
-        let new_data: ShardData = bytes
-            .try_into()
-            .expect("ShardData should fit within the allowed limits");
-        ShardStateDiff::new(to_pre.clone(), new_data)
-    };
-
-    vec![from_post, to_post]
+fn resolve_effect(effect: &Effect, pre_data: &[u8]) -> Vec<u8> {
+    match effect {
+        Effect::Append(data) => {
+            let mut bytes = pre_data.to_vec();
+            bytes.extend_from_slice(data);
+            bytes
+        }
+        Effect::MoveOut(data) => {
+            assert_eq!(
+                pre_data, data,
+                "the source account does not hold the bytes the instruction moves out of it"
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn main() {
-    // Read input accounts.
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (function_id, data),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => {
+            let (function_id, data) = input.instruction.clone();
+            let mut plan = Plan::new(&input, instruction_data);
 
-    let state_diffs = match (pre_states.as_slice(), function_id, data.len()) {
-        ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(self_account_id, account_pre, &data);
-            vec![post]
-        }
-        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(self_account_id, account_from_pre, account_to_pre)
-        }
-        _ => panic!("invalid params"),
-    };
+            match (input.accounts.as_slice(), function_id) {
+                ([account], WRITE_FUNCTION_ID) => plan.update(account, &Effect::Append(data)),
+                ([from, to], MOVE_DATA_FUNCTION_ID) => {
+                    plan.update(from, &Effect::MoveOut(data.clone()));
+                    plan.update(to, &Effect::Append(data));
+                }
+                _ => panic!("invalid params"),
+            }
 
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .write();
+            // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to
+            // commit it.
+            plan.write()
+        }
+        LeeCall::Resolve(input) => {
+            let effect = borsh::from_slice(&input.effect_data)
+                .expect("hello_world_with_move_function wrote its own effect");
+            let data = resolve_effect(&effect, &input.pre_data)
+                .try_into()
+                .expect("ShardData should fit within the allowed limits");
+            resolve_write(input, data)
+        }
+    }
 }

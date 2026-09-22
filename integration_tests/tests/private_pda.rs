@@ -66,7 +66,6 @@ async fn fund_private_pda(
                 ProgramShardSelector::balance(pda_account_id),
             ],
             signers: [sender].into(),
-            public_accounts: HashMap::from([(sender, sender_account.clone())]),
             private_witnesses: vec![PrivateWitness {
                 account: Account::default(),
                 vpk,

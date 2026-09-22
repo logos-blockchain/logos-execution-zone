@@ -1,9 +1,11 @@
 //! Clock-gated cooldown program.
 //!
-//! Refuses to run until a configurable cooldown has elapsed since its last
-//! successful run, then records the current timestamp.
+//! Refuses to run until a configurable cooldown has elapsed since its last successful run, then
+//! records the current timestamp. The instruction carries the caller's proposal for what the
+//! clock reads; the guard on the clock account is what pins it before the cooldown is measured
+//! from it.
 //!
-//! Expected pre-states (in order):
+//! Expected accounts (in order):
 //!   0 - state account (owned by this program)
 //!   1 - clock account `CLOCK_01`.
 //!
@@ -11,16 +13,24 @@
 //!   [`cooldown_ms`: u64 LE | `last_run_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-    respond_unsupported_call,
+use lee_core::{
+    Timestamp,
+    program::{LeeCall, Plan, Proposed, read_lee_call, resolve_keep, resolve_write},
 };
 
-type Instruction = ();
+type Instruction = Timestamp;
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum Effect {
+    /// The run timestamp is instruction-supplied and untrusted. Promoting it to `Checked` emits
+    /// this guard, which is the only way to obtain the value `Run` records.
+    TimestampIs(Timestamp),
+    Run(Timestamp),
+}
 
 struct CooldownState {
     cooldown_ms: u64,
-    last_run_timestamp: u64,
+    last_run_timestamp: Timestamp,
 }
 
 impl CooldownState {
@@ -43,61 +53,54 @@ impl CooldownState {
 }
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => {
+            let Ok([state, clock]) = <[_; 2]>::try_from(input.accounts.clone()) else {
+                panic!("Expected exactly 2 input accounts: state, clock");
+            };
+            assert_eq!(clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let Ok([state, clock_pre]) = <[_; 2]>::try_from(pre_states) else {
-        panic!("Expected exactly 2 input accounts: state, clock");
-    };
-
-    // Check the clock account is the system clock account
-    assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
-
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.shard.1);
-    let current_timestamp = clock_data.timestamp;
-
-    let cooldown_state = CooldownState::from_bytes(state.shard_of(self_account_id));
-
-    // Enforce cooldown: the elapsed time since the last run must exceed the cooldown period.
-    let elapsed = current_timestamp.saturating_sub(cooldown_state.last_run_timestamp);
-    assert!(
-        elapsed >= cooldown_state.cooldown_ms,
-        "Cooldown not elapsed: {elapsed}ms since last run, need {}ms",
-        cooldown_state.cooldown_ms,
-    );
-
-    // Record the run timestamp.
-    let updated_state = CooldownState {
-        last_run_timestamp: current_timestamp,
-        ..cooldown_state
-    };
-    let state_diff = ShardStateDiff::new(
-        state,
-        updated_state
-            .to_bytes()
-            .try_into()
-            .expect("Cooldown state should fit in account data"),
-    );
-
-    // Clock account is read-only.
-    let clock_diff = ShardStateDiff::unchanged(clock_pre);
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![state_diff, clock_diff],
-    )
-    .write();
+            let proposed = input.instruction;
+            let mut plan = Plan::new(&input, instruction_data);
+            let now = plan.require(
+                &clock,
+                &Effect::TimestampIs(proposed),
+                Proposed::new(proposed),
+            );
+            plan.update(&state, &Effect::Run(now.get()));
+            plan.write()
+        }
+        LeeCall::Resolve(input) => {
+            match borsh::from_slice(&input.effect_data).expect("cooldown wrote its own effect") {
+                Effect::TimestampIs(proposed) => {
+                    let clock = ClockAccountData::from_bytes(&input.pre_data);
+                    assert_eq!(
+                        clock.timestamp, proposed,
+                        "Proposed timestamp {proposed} is not the clock's timestamp {}",
+                        clock.timestamp,
+                    );
+                    resolve_keep(input)
+                }
+                Effect::Run(now) => {
+                    let state = CooldownState::from_bytes(&input.pre_data);
+                    let elapsed = now.saturating_sub(state.last_run_timestamp);
+                    assert!(
+                        elapsed >= state.cooldown_ms,
+                        "Cooldown not elapsed: {elapsed}ms since last run, need {}ms",
+                        state.cooldown_ms,
+                    );
+                    resolve_write(
+                        input,
+                        CooldownState {
+                            last_run_timestamp: now,
+                            ..state
+                        }
+                        .to_bytes()
+                        .try_into()
+                        .expect("Cooldown state should fit in account data"),
+                    )
+                }
+            }
+        }
+    }
 }

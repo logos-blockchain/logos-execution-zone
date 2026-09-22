@@ -91,12 +91,27 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             amount: FUNDING_BALANCE,
         })
         .context("Failed to serialize mover instruction")?;
+    let config_id = system_accounts::sequencer_stake_config_account_id();
+    let stake_id: AccountId = programs::sequencer_stake().id().into();
+    // Both proposals are read off the chain the stake is about to land on, the way
+    // `submit_stake` builds them: each is checked against the account it describes.
+    let balance_before = account_balance(&ctx, funds_id)
+        .await
+        .context("Failed to read the stake funds account balance")?;
+    let has_record = !get_account(&ctx, ownership_id)
+        .await
+        .context("Failed to read the stake ownership account")?
+        .data
+        .shard(stake_id)
+        .is_empty();
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
             mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
+            balance_before,
+            has_record,
         })
         .context("Failed to serialize Stake instruction")?;
 
@@ -104,8 +119,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "Submitting Stake transaction for sequencer key {}",
         hex::encode(demo_sequencer_key.to_bytes())
     );
-    let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id: AccountId = programs::sequencer_stake().id().into();
     ctx.wallet()
         .send_pub_tx(
             vec![
@@ -252,6 +265,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let unstake_request_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
             destination: destination_id,
         })

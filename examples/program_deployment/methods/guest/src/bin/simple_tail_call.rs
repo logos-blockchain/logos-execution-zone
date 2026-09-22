@@ -1,15 +1,12 @@
 use lee_core::{
     account::ProgramShardSelector,
-    program::{
-        ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
-    },
+    program::{ChainedCall, LeeCall, Plan, ProgramId, read_lee_call},
 };
 
 // Tail Call example program.
 //
 // This program shows how to chain execution to another program using `ChainedCall`.
-// It reads a single account, emits it unchanged, and then triggers a tail call
+// It reads a single account, leaves it untouched, and then triggers a tail call
 // to the Hello World program with a fixed greeting.
 
 /// This needs to be set to the ID of the Hello world program.
@@ -28,54 +25,27 @@ fn hello_world_program_id() -> ProgramId {
 }
 
 fn main() {
-    // Read inputs
-    let call = read_lee_call::<()>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<()>() else {
+        panic!("simple_tail_call emits no effect to resolve")
     };
 
-    // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
+    // Unpack the single input account handle.
+    let [account] = <[_; 1]>::try_from(input.accounts.clone())
+        .unwrap_or_else(|_| panic!("Input accounts should consist of a single account"));
 
-    let pre_state_account_id = pre_state.account_id;
-
-    // Create the (unchanged) post state
-    let post_state = ShardStateDiff::unchanged(pre_state);
-
-    // Create the chained call
-    let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
-    let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
     let hello_world_id = hello_world_program_id().into();
-    let chained_call = ChainedCall {
-        program_account_id: hello_world_id,
-        instruction_data: chained_call_instruction_data,
-        shard_selectors: vec![ProgramShardSelector::new(
-            pre_state_account_id,
+    let greeting: Vec<u8> = b"Hello from tail call".to_vec();
+
+    // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to commit
+    // it.
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(ChainedCall::new(
+        hello_world_id,
+        vec![ProgramShardSelector::new(
+            account.account_id,
             hello_world_id,
         )],
-        pda_seeds: vec![],
-    };
-
-    // Write the outputs.
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![post_state],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+        &greeting,
+    ));
+    plan.write()
 }

@@ -361,7 +361,10 @@ fn chained_via_inbox(
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
@@ -434,8 +437,9 @@ fn capped_mint_state(
 }
 
 /// The inbox dispatch a watcher would build for a mint of `amount` emitted at
-/// `src_tx_index` on the canonical peer source.
-fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
+/// `src_tx_index` on the canonical peer source. `already_seen` is the claim the seen shard
+/// checks: a first delivery says `false`, a replay says `true`.
+fn mint_dispatch_tx(amount: u128, src_tx_index: u32, already_seen: bool) -> PublicTransaction {
     let inbox_id: AccountId = programs::cross_zone_inbox().id().into();
     let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
     let msg = CrossZoneMessage {
@@ -466,7 +470,10 @@ fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen,
+        },
     )
     .expect("build dispatch message");
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
@@ -480,7 +487,22 @@ fn dispatch_mint_on(
     block: u64,
 ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
     ValidatedStateDiff::from_public_transaction(
-        &mint_dispatch_tx(amount, src_tx_index),
+        &mint_dispatch_tx(amount, src_tx_index, false),
+        state,
+        block,
+        0,
+    )
+}
+
+/// The same delivery a second time, claiming the seen shard already holds it.
+fn replay_mint_on(
+    state: &V03State,
+    amount: u128,
+    src_tx_index: u32,
+    block: u64,
+) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    ValidatedStateDiff::from_public_transaction(
+        &mint_dispatch_tx(amount, src_tx_index, true),
         state,
         block,
         0,
@@ -637,7 +659,7 @@ fn a_replayed_delivery_does_not_advance_the_counter() {
     let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
     drop(state.apply_state_diff(diff));
 
-    let replay = dispatch_mint_on(&state, 60, 0, 2).expect("the inbox no-ops a replay");
+    let replay = replay_mint_on(&state, 60, 0, 2).expect("the inbox no-ops a replay");
     drop(state.apply_state_diff(replay));
     assert_eq!(
         source_minted(&state),
@@ -839,7 +861,10 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -1910,7 +1935,10 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -1973,7 +2001,10 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
             ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
         ],
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2558,7 +2589,10 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2685,7 +2719,10 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2745,7 +2782,10 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2821,7 +2861,10 @@ fn mint_replay_rejected() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: true,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2908,7 +2951,10 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(msg),
+        InboxInstruction::Dispatch {
+            message: msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -2945,7 +2991,10 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
             ],
         ),
         vec![],
-        InboxInstruction::Dispatch(control_msg),
+        InboxInstruction::Dispatch {
+            message: control_msg,
+            already_seen: false,
+        },
     )
     .expect("build dispatch message");
     let control_tx = PublicTransaction::new(control_message, WitnessSet::from_raw_parts(vec![]));

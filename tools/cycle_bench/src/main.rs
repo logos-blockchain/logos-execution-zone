@@ -4,6 +4,10 @@
 //! drawn from the existing per-program unit tests, then prints a table and writes a
 //! JSON dump for regression comparison.
 //!
+//! A program instruction is two kinds of guest invocation, not one: a planner run that sees
+//! only account handles and emits shard effects, and one resolver run per effect that sees a
+//! single shard's data. Both are measured, one row each, because a caller pays for all of them.
+//!
 //! Run with `cargo run --release -p cycle_bench`. `RISC0_DEV_MODE` has no effect on
 //! executor cycle counts.
 
@@ -12,6 +16,8 @@
     clippy::as_conversions,
     clippy::cast_precision_loss,
     clippy::float_arithmetic,
+    clippy::integer_division,
+    clippy::integer_division_remainder_used,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
     clippy::print_stderr,
@@ -20,11 +26,13 @@
     reason = "Bench tool: matches test-style fixture code"
 )]
 
-use std::{path::PathBuf, time::Instant};
+use std::{collections::HashMap, path::PathBuf, time::Instant};
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
-use anyhow::Result;
-use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
+use anyhow::{Result, bail};
+use associated_token_account_core::{
+    AtaContents, compute_ata_seed, get_associated_token_account_id,
+};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
@@ -33,13 +41,21 @@ use clock_core::{
 use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
-    Timestamp,
-    account::{AccountId, ShardData},
-    program::{AccountInput, InstructionData, ProgramInput},
+    BlockId, Timestamp,
+    account::{AccountId, ProgramShardSelector, ShardData},
+    from_frame,
+    native_token::encode_balance,
+    program::{
+        AccountMeta, GuestOutput, InstructionData, ProgramInput, ProgramOutput, ResolveInput,
+    },
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
+
+/// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
+const AMM_RESERVE_A: u128 = 1_000;
+const AMM_RESERVE_B: u128 = 500;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -60,10 +76,29 @@ struct Cli {
     exec_iters: usize,
 }
 
+/// Which guest entrypoint a row measures. A planner row is one per instruction; a resolver row
+/// is one per effect that instruction's plan emitted.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Phase {
+    Plan,
+    Resolve,
+}
+
+impl Phase {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Resolve => "resolve",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct BenchResult {
     program_name: &'static str,
-    instruction: &'static str,
+    instruction: String,
+    phase: Phase,
     user_cycles: u64,
     segments: usize,
     exec_stats: Stats,
@@ -97,6 +132,9 @@ struct BenchResult {
 /// fee model denominates public execution in, and is the public-side counterpart to the flat
 /// `G_verify` verify cost. The intercept is an ELF-size-averaged constant, so `net_compute_ms`
 /// is a first-order decomposition, not a mechanistic per-program overhead.
+///
+/// Every row is one executor call, planner and resolver alike, which is what keeps the
+/// intercept a per-call constant rather than a per-instruction one.
 #[derive(Debug, Serialize, Clone, Copy)]
 struct Calibration {
     /// Cases the fit was computed over.
@@ -170,11 +208,39 @@ impl Calibration {
     }
 }
 
+/// One input account: the handle the planner is given, paired with the shard contents its
+/// resolver will be run against.
+struct Fixture {
+    account: AccountMeta,
+    data: ShardData,
+}
+
+impl Fixture {
+    fn new(
+        account_id: AccountId,
+        is_authorized: bool,
+        program_account_id: AccountId,
+        data: ShardData,
+    ) -> Self {
+        Self {
+            account: AccountMeta::new(account_id, is_authorized, program_account_id),
+            data,
+        }
+    }
+
+    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
+        Self {
+            account: AccountMeta::balance(account_id, is_authorized),
+            data: encode_balance(balance),
+        }
+    }
+}
+
 struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
-    pre_states: Vec<AccountInput>,
+    fixtures: Vec<Fixture>,
     instruction_data: InstructionData,
 }
 
@@ -183,99 +249,181 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
-        pre_states: Vec<AccountInput>,
+        fixtures: Vec<Fixture>,
         instruction: &I,
     ) -> Result<Self> {
         Ok(Self {
             program_name,
             instruction_label,
             program,
-            pre_states,
+            fixtures,
             instruction_data: borsh::to_vec(instruction)?,
         })
     }
 
-    fn run(self, prove: bool, exec_iters: usize) -> Result<BenchResult> {
+    /// Plans once, then resolves each emitted effect in the order the engine would, threading
+    /// each resolver's write into the shard the next one reads. Returns one row per guest call.
+    fn run(self, prove: bool, exec_iters: usize) -> Result<Vec<BenchResult>> {
         let Self {
             program_name,
             instruction_label,
             program,
-            pre_states,
+            fixtures,
             instruction_data,
         } = self;
+        let self_account_id: AccountId = program.id().into();
+
+        let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
+            .iter()
+            .map(|f| (ProgramShardSelector::from(&f.account), f.data.clone()))
+            .collect();
         let input = ProgramInput {
-            self_account_id: program.id().into(),
+            self_account_id,
             caller_account_id: None,
-            pre_states,
+            accounts: fixtures.into_iter().map(|f| f.account).collect(),
             instruction: instruction_data,
         };
 
-        // One warmup pass discarded, then `exec_iters` samples. The executor has
-        // large per-call setup overhead (ELF parsing, env init); reporting both
-        // best-of-N and mean ± stdev shows whether jitter is significant.
-        let mut samples: Vec<f64> = Vec::with_capacity(exec_iters);
-        let mut last_info = None;
-        let total = exec_iters.saturating_add(1).max(2);
-        for iter in 0..total {
-            let mut env_builder = ExecutorEnv::builder();
-            Program::write_inputs(&input, &mut env_builder)?;
-            let env = env_builder.build()?;
-
-            let started = Instant::now();
-            let info = default_executor().execute(env, program.elf())?;
-            let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
-
-            if iter > 0 {
-                samples.push(elapsed_ms);
-            }
-            last_info = Some(info);
-        }
-        let info = last_info.expect("at least one iteration");
-        let exec_stats = Stats::from_samples(&samples);
-
-        let mut prove_stats = None;
-        let mut prove_total_cycles = None;
-        let mut prove_user_cycles = None;
-        let mut prove_paging_cycles = None;
-        let mut prove_segments = None;
-        if prove {
-            let mut env_builder = ExecutorEnv::builder();
-            Program::write_inputs(&input, &mut env_builder)?;
-            let env = env_builder.build()?;
-
-            let started = Instant::now();
-            let prove_info = default_prover()
-                .prove(env, program.elf())
-                .map_err(|e| anyhow::anyhow!("prove failed: {e}"))?;
-            let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
-            prove_stats = Some(Stats::from_samples(&[prove_ms]));
-            prove_total_cycles = Some(prove_info.stats.total_cycles);
-            prove_user_cycles = Some(prove_info.stats.user_cycles);
-            prove_paging_cycles = Some(prove_info.stats.paging_cycles);
-            prove_segments = Some(prove_info.stats.segments);
-            eprintln!(
-                "  prove({program_name}/{instruction_label}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
-                prove_ms / 1_000.0,
-                prove_info.stats.total_cycles,
-                prove_info.stats.segments,
-            );
-        }
-
-        Ok(BenchResult {
+        let mut rows = Vec::new();
+        let (journal, row) = sample(
             program_name,
-            instruction: instruction_label,
-            user_cycles: info.cycles(),
-            segments: info.segments.len(),
-            exec_stats,
-            net_compute_ms: None,
-            calibrated_ms: None,
-            prove_stats,
-            prove_total_cycles,
-            prove_user_cycles,
-            prove_paging_cycles,
-            prove_segments,
-        })
+            instruction_label,
+            Phase::Plan,
+            &program,
+            prove,
+            exec_iters,
+            |env| Ok(Program::write_execute_inputs(&input, env)?),
+        )?;
+        rows.push(row);
+
+        let plan = planner_journal(&journal)?;
+        for effect in plan.effects {
+            let resolve_input = ResolveInput {
+                self_account_id,
+                selector: effect.selector,
+                pre_data: shards.get(&effect.selector).cloned().unwrap_or_default(),
+                effect_data: effect.data,
+            };
+            let (resolution, resolve_row) = sample(
+                program_name,
+                instruction_label,
+                Phase::Resolve,
+                &program,
+                prove,
+                exec_iters,
+                |env| Ok(Program::write_resolve_inputs(&resolve_input, env)?),
+            )?;
+            rows.push(resolve_row);
+
+            if let Some(post_data) = resolver_journal(&resolution)?.post_data {
+                shards.insert(effect.selector, post_data);
+            }
+        }
+
+        Ok(rows)
     }
+}
+
+/// One warmup pass discarded, then `exec_iters` samples. The executor has
+/// large per-call setup overhead (ELF parsing, env init); reporting both
+/// best-of-N and mean ± stdev shows whether jitter is significant.
+fn sample(
+    program_name: &'static str,
+    instruction_label: &'static str,
+    phase: Phase,
+    program: &Program,
+    prove: bool,
+    exec_iters: usize,
+    write: impl Fn(&mut risc0_zkvm::ExecutorEnvBuilder) -> Result<()>,
+) -> Result<(Vec<u8>, BenchResult)> {
+    let mut samples: Vec<f64> = Vec::with_capacity(exec_iters);
+    let mut last_info = None;
+    let total = exec_iters.saturating_add(1).max(2);
+    for iter in 0..total {
+        let mut env_builder = ExecutorEnv::builder();
+        write(&mut env_builder)?;
+        let env = env_builder.build()?;
+
+        let started = Instant::now();
+        let info = default_executor().execute(env, program.elf())?;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+
+        if iter > 0 {
+            samples.push(elapsed_ms);
+        }
+        last_info = Some(info);
+    }
+    let info = last_info.expect("at least one iteration");
+    let exec_stats = Stats::from_samples(&samples);
+
+    let mut prove_stats = None;
+    let mut prove_total_cycles = None;
+    let mut prove_user_cycles = None;
+    let mut prove_paging_cycles = None;
+    let mut prove_segments = None;
+    if prove {
+        let mut env_builder = ExecutorEnv::builder();
+        write(&mut env_builder)?;
+        let env = env_builder.build()?;
+
+        let started = Instant::now();
+        let prove_info = default_prover()
+            .prove(env, program.elf())
+            .map_err(|e| anyhow::anyhow!("prove failed: {e}"))?;
+        let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        prove_stats = Some(Stats::from_samples(&[prove_ms]));
+        prove_total_cycles = Some(prove_info.stats.total_cycles);
+        prove_user_cycles = Some(prove_info.stats.user_cycles);
+        prove_paging_cycles = Some(prove_info.stats.paging_cycles);
+        prove_segments = Some(prove_info.stats.segments);
+        eprintln!(
+            "  prove({program_name}/{instruction_label}/{}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
+            phase.label(),
+            prove_ms / 1_000.0,
+            prove_info.stats.total_cycles,
+            prove_info.stats.segments,
+        );
+    }
+
+    let result = BenchResult {
+        program_name,
+        instruction: instruction_label.to_owned(),
+        phase,
+        user_cycles: info.cycles(),
+        segments: info.segments.len(),
+        exec_stats,
+        net_compute_ms: None,
+        calibrated_ms: None,
+        prove_stats,
+        prove_total_cycles,
+        prove_user_cycles,
+        prove_paging_cycles,
+        prove_segments,
+    };
+    Ok((info.journal.bytes, result))
+}
+
+fn guest_output(journal: &[u8]) -> Result<GuestOutput> {
+    let payload = from_frame(journal).ok_or_else(|| anyhow::anyhow!("malformed journal frame"))?;
+    Ok(borsh::from_slice(payload)?)
+}
+
+fn planner_journal(journal: &[u8]) -> Result<ProgramOutput> {
+    match guest_output(journal)? {
+        GuestOutput::Execute(plan) => Ok(plan),
+        GuestOutput::Resolve(_) => bail!("a scheduled plan returned a resolution journal"),
+    }
+}
+
+fn resolver_journal(journal: &[u8]) -> Result<lee_core::program::ResolveOutput> {
+    match guest_output(journal)? {
+        GuestOutput::Resolve(resolution) => Ok(resolution),
+        GuestOutput::Execute(_) => bail!("a scheduled resolution returned a plan journal"),
+    }
+}
+
+fn token_program_id() -> AccountId {
+    programs::token().id().into()
 }
 
 fn token_holding(
@@ -283,11 +431,11 @@ fn token_holding(
     account_id: AccountId,
     balance: u128,
     is_authorized: bool,
-) -> AccountInput {
-    AccountInput::with_shard(
+) -> Fixture {
+    Fixture::new(
         account_id,
         is_authorized,
-        programs::token().id().into(),
+        token_program_id(),
         ShardData::from(&TokenHolding::Fungible {
             definition_id,
             balance,
@@ -295,15 +443,11 @@ fn token_holding(
     )
 }
 
-fn token_definition(
-    account_id: AccountId,
-    total_supply: u128,
-    is_authorized: bool,
-) -> AccountInput {
-    AccountInput::with_shard(
+fn token_definition(account_id: AccountId, total_supply: u128, is_authorized: bool) -> Fixture {
+    Fixture::new(
         account_id,
         is_authorized,
-        programs::token().id().into(),
+        token_program_id(),
         ShardData::from(&TokenDefinition::Fungible {
             name: String::from("test"),
             total_supply,
@@ -312,22 +456,33 @@ fn token_definition(
     )
 }
 
-fn token_transfer_pre_states() -> Vec<AccountInput> {
-    let def = AccountId::new([15; 32]);
+fn token_definition_id() -> AccountId {
+    AccountId::new([15; 32])
+}
+
+fn fungible(definition_id: AccountId) -> TokenDescriptor {
+    TokenDescriptor {
+        definition_id,
+        kind: TokenKind::Fungible,
+    }
+}
+
+fn token_transfer_accounts() -> Vec<Fixture> {
+    let def = token_definition_id();
     let sender = token_holding(def, AccountId::new([17; 32]), 100_000, true);
     let recipient = token_holding(def, AccountId::new([42; 32]), 50_000, true);
     vec![sender, recipient]
 }
 
-fn token_definition_and_holding_pre_states() -> Vec<AccountInput> {
-    let def_id = AccountId::new([15; 32]);
+fn token_definition_and_holding_accounts() -> Vec<Fixture> {
+    let def_id = token_definition_id();
     let def = token_definition(def_id, 100_000, true);
     let holding = token_holding(def_id, AccountId::new([17; 32]), 1_000, true);
     vec![def, holding]
 }
 
-fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
-    AccountInput::with_shard(
+fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
+    Fixture::new(
         account_id,
         false,
         programs::clock().id().into(),
@@ -341,12 +496,16 @@ fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
     )
 }
 
-fn clock_pre_states_tick_at(block_id: u64) -> Vec<AccountInput> {
+fn clock_accounts_tick_at(block_id: BlockId) -> Vec<Fixture> {
     vec![
         clock_account(CLOCK_01_PROGRAM_ACCOUNT_ID, block_id),
         clock_account(CLOCK_10_PROGRAM_ACCOUNT_ID, block_id),
         clock_account(CLOCK_50_PROGRAM_ACCOUNT_ID, block_id),
     ]
+}
+
+fn amm_lp_supply() -> u128 {
+    (AMM_RESERVE_A * AMM_RESERVE_B).isqrt()
 }
 
 fn amm_token_a_def_id() -> AccountId {
@@ -360,7 +519,7 @@ fn amm_pool_id() -> AccountId {
         programs::amm().id().into(),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
-        programs::token().id().into(),
+        token_program_id(),
     )
 }
 fn amm_vault_a_id() -> AccountId {
@@ -381,67 +540,63 @@ fn amm_lp_def_id() -> AccountId {
     compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
 }
 
-/// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
-fn amm_pool_account() -> AccountInput {
-    let reserve_a: u128 = 1_000;
-    let reserve_b: u128 = 500;
-    let lp_supply = (reserve_a * reserve_b).isqrt();
-    AccountInput::with_shard(
+fn amm_pool_account() -> Fixture {
+    Fixture::new(
         amm_pool_id(),
         true,
         programs::amm().id().into(),
         ShardData::from(&PoolDefinition {
-            token_program_id: programs::token().id().into(),
+            token_program_id: token_program_id(),
             definition_token_a_id: amm_token_a_def_id(),
             definition_token_b_id: amm_token_b_def_id(),
             vault_a_id: amm_vault_a_id(),
             vault_b_id: amm_vault_b_id(),
             liquidity_pool_id: amm_lp_def_id(),
-            liquidity_pool_supply: lp_supply,
-            reserve_a,
-            reserve_b,
+            liquidity_pool_supply: amm_lp_supply(),
+            reserve_a: AMM_RESERVE_A,
+            reserve_b: AMM_RESERVE_B,
             fees: 0,
             active: true,
         }),
     )
 }
 
-fn amm_swap_pre_states() -> Vec<AccountInput> {
-    let pool = amm_pool_account();
-    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
-    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
-    let user_a = token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true);
-    let user_b = token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false);
-    vec![pool, vault_a, vault_b, user_a, user_b]
+fn amm_swap_accounts() -> Vec<Fixture> {
+    vec![
+        amm_pool_account(),
+        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
+        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
+        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
+        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false),
+    ]
 }
 
-fn amm_add_liquidity_pre_states() -> Vec<AccountInput> {
-    let pool = amm_pool_account();
-    let vault_a = token_holding(amm_token_a_def_id(), amm_vault_a_id(), 1_000, true);
-    let vault_b = token_holding(amm_token_b_def_id(), amm_vault_b_id(), 500, true);
-    let lp_supply = (1_000_u128 * 500_u128).isqrt();
-    let lp_def = token_definition(amm_lp_def_id(), lp_supply, true);
-    let user_a = token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true);
-    let user_b = token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true);
-    let user_lp = token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true);
-    vec![pool, vault_a, vault_b, lp_def, user_a, user_b, user_lp]
+fn amm_add_liquidity_accounts() -> Vec<Fixture> {
+    vec![
+        amm_pool_account(),
+        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
+        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
+        token_definition(amm_lp_def_id(), amm_lp_supply(), true),
+        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
+        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true),
+        token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true),
+    ]
 }
 
-fn ata_create_pre_states() -> Vec<AccountInput> {
+fn ata_create_accounts() -> Vec<Fixture> {
     let owner_id = AccountId::new([91; 32]);
-    let definition_id = AccountId::new([15; 32]);
-    let token_program_id: AccountId = programs::token().id().into();
-    let owner = AccountInput::balance(owner_id, true, 0);
-    let token_def = token_definition(definition_id, 100_000, false);
-    let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
+    let definition_id = token_definition_id();
+    let seed = compute_ata_seed(owner_id, definition_id, token_program_id());
     let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
-    let ata_account = AccountInput::with_shard(
-        ata_id,
-        false,
-        programs::token().id().into(),
-        ShardData::empty(),
-    );
-    vec![owner, token_def, ata_account]
+    vec![
+        Fixture::balance(owner_id, true, 0),
+        token_definition(definition_id, 100_000, false),
+        Fixture::new(ata_id, false, token_program_id(), ShardData::empty()),
+    ]
+}
+
+fn mul_div(factor: u128, multiplier: u128, divisor: u128) -> u128 {
+    factor * multiplier / divisor
 }
 
 fn main() -> Result<()> {
@@ -452,21 +607,42 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
+    // Priced off the pool fixture exactly as `wallet::program_facades::amm` prices a real
+    // swap off the pool it observed, because the pool's resolver recomputes both and refuses
+    // anything else.
+    let swap_amount_in: u128 = 200;
+    let swap_amount_out = mul_div(
+        AMM_RESERVE_B,
+        swap_amount_in,
+        AMM_RESERVE_A + swap_amount_in,
+    );
+
+    let max_amount_to_add_token_a: u128 = 400;
+    let max_amount_to_add_token_b: u128 = 200;
+    let amount_to_add_token_a = mul_div(AMM_RESERVE_A, max_amount_to_add_token_b, AMM_RESERVE_B)
+        .min(max_amount_to_add_token_a);
+    let amount_to_add_token_b = mul_div(AMM_RESERVE_B, max_amount_to_add_token_a, AMM_RESERVE_A)
+        .min(max_amount_to_add_token_b);
+    let amount_liquidity = mul_div(amm_lp_supply(), amount_to_add_token_a, AMM_RESERVE_A).min(
+        mul_div(amm_lp_supply(), amount_to_add_token_b, AMM_RESERVE_B),
+    );
+
     let cases = [
         Case::new(
             "token",
             "Transfer",
             programs::token(),
-            token_transfer_pre_states(),
+            token_transfer_accounts(),
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 5_000,
+                descriptor: fungible(token_definition_id()),
             },
         )?,
         Case::new(
             "token",
             "Mint",
             programs::token(),
-            token_definition_and_holding_pre_states(),
+            token_definition_and_holding_accounts(),
             &token_core::Instruction::Mint {
                 amount_to_mint: 5_000,
             },
@@ -475,47 +651,67 @@ fn main() -> Result<()> {
             "token",
             "Burn",
             programs::token(),
-            token_definition_and_holding_pre_states(),
+            token_definition_and_holding_accounts(),
             &token_core::Instruction::Burn {
                 amount_to_burn: 500,
+                kind: TokenKind::Fungible,
             },
         )?,
         Case::new(
             "clock",
             "Tick (block_id+1, no multiples)",
             programs::clock(),
-            clock_pre_states_tick_at(0),
-            &Timestamp::from(1_700_000_000_u64),
+            clock_accounts_tick_at(0),
+            &clock_core::Instruction {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 1,
+            },
         )?,
         Case::new(
             "amm",
             "SwapExactInput",
             programs::amm(),
-            amm_swap_pre_states(),
+            amm_swap_accounts(),
             &amm_core::Instruction::SwapExactInput {
-                swap_amount_in: 200,
+                swap_amount_in,
                 min_amount_out: 1,
                 token_definition_id_in: amm_token_a_def_id(),
+                token_program_id: token_program_id(),
+                token_definition_id_out: amm_token_b_def_id(),
+                input_is_token_a: true,
+                amount_out: swap_amount_out,
+                reserve_bound_a: AMM_RESERVE_A,
+                reserve_bound_b: AMM_RESERVE_B,
             },
         )?,
         Case::new(
             "amm",
             "AddLiquidity",
             programs::amm(),
-            amm_add_liquidity_pre_states(),
+            amm_add_liquidity_accounts(),
             &amm_core::Instruction::AddLiquidity {
                 min_amount_liquidity: 1,
-                max_amount_to_add_token_a: 400,
-                max_amount_to_add_token_b: 200,
+                max_amount_to_add_token_a,
+                max_amount_to_add_token_b,
+                token_program_id: token_program_id(),
+                definition_token_a_id: amm_token_a_def_id(),
+                definition_token_b_id: amm_token_b_def_id(),
+                amount_to_add_token_a,
+                amount_to_add_token_b,
+                amount_liquidity,
+                reserve_bound_a: AMM_RESERVE_A,
+                reserve_bound_b: AMM_RESERVE_B,
             },
         )?,
         Case::new(
             "ata",
             "Create",
             programs::ata(),
-            ata_create_pre_states(),
+            ata_create_accounts(),
             &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token().id().into(),
+                token_program_id: token_program_id(),
+                kind: TokenKind::Fungible,
+                contents: AtaContents::Empty,
             },
         )?,
     ];
@@ -523,7 +719,10 @@ fn main() -> Result<()> {
     let mut results: Vec<BenchResult> = cases
         .into_iter()
         .map(|c| c.run(prove, exec_iters))
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let calibration = Calibration::fit(&results);
     if let Some(cal) = calibration {
@@ -601,6 +800,7 @@ fn print_table(results: &[BenchResult], prove: bool) {
         .max()
         .unwrap_or(0)
         .max("instruction".len());
+    let fw = "phase".len();
     let cw = 12_usize;
     let sw = 8_usize;
     let exec_w = results
@@ -612,16 +812,20 @@ fn print_table(results: &[BenchResult], prove: bool) {
 
     let dw = 10_usize;
     println!(
-        "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
+        "{:<pw$}  {:<iw$}  {:<fw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
         "program",
         "instruction",
+        "phase",
         "user_cycles",
         "segments",
         "exec_ms (best / mean ± stdev)",
         "calib_ms",
         "net_ms",
     );
-    println!("{}", "-".repeat(pw + iw + cw + sw + exec_w + 2 * dw + 12));
+    println!(
+        "{}",
+        "-".repeat(pw + iw + fw + cw + sw + exec_w + 2 * dw + 14)
+    );
     for r in results {
         let calib = r
             .calibrated_ms
@@ -630,8 +834,15 @@ fn print_table(results: &[BenchResult], prove: bool) {
             .net_compute_ms
             .map_or_else(|| "-".to_owned(), |v| format!("{v:.2}"));
         println!(
-            "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
-            r.program_name, r.instruction, r.user_cycles, r.segments, r.exec_stats, calib, net,
+            "{:<pw$}  {:<iw$}  {:<fw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
+            r.program_name,
+            r.instruction,
+            r.phase.label(),
+            r.user_cycles,
+            r.segments,
+            r.exec_stats,
+            calib,
+            net,
         );
     }
 
@@ -641,10 +852,10 @@ fn print_table(results: &[BenchResult], prove: bool) {
         let pwallw = 24_usize;
         let psw = 10_usize;
         println!(
-            "{:<pw$}  {:<iw$}  {:>pcw$}  {:>pwallw$}  {:>psw$}",
-            "program", "instruction", "prove_total_c", "prove_ms (s)", "prove_segs",
+            "{:<pw$}  {:<iw$}  {:<fw$}  {:>pcw$}  {:>pwallw$}  {:>psw$}",
+            "program", "instruction", "phase", "prove_total_c", "prove_ms (s)", "prove_segs",
         );
-        println!("{}", "-".repeat(pw + iw + pcw + pwallw + psw + 8));
+        println!("{}", "-".repeat(pw + iw + fw + pcw + pwallw + psw + 10));
         for r in results {
             let total = r
                 .prove_total_cycles
@@ -657,8 +868,13 @@ fn print_table(results: &[BenchResult], prove: bool) {
                 .prove_segments
                 .map_or_else(|| "-".to_owned(), |s| s.to_string());
             println!(
-                "{:<pw$}  {:<iw$}  {:>pcw$}  {:>pwallw$}  {:>psw$}",
-                r.program_name, r.instruction, total, pms, psegs,
+                "{:<pw$}  {:<iw$}  {:<fw$}  {:>pcw$}  {:>pwallw$}  {:>psw$}",
+                r.program_name,
+                r.instruction,
+                r.phase.label(),
+                total,
+                pms,
+                psegs,
             );
         }
     }
@@ -668,14 +884,15 @@ fn print_table(results: &[BenchResult], prove: bool) {
 mod tests {
     use cycle_bench::stats::Stats;
 
-    use super::{BenchResult, Calibration};
+    use super::{BenchResult, Calibration, Phase};
 
     /// Minimal `BenchResult` carrying only the fields the calibration fit reads:
     /// `user_cycles` (x) and `exec_stats.best_ms` (y).
     fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
         BenchResult {
             program_name: "test",
-            instruction: "test",
+            instruction: "test".to_owned(),
+            phase: Phase::Plan,
             user_cycles,
             segments: 1,
             exec_stats: Stats::from_samples(&[best_ms]),
