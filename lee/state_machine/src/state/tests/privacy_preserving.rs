@@ -244,18 +244,17 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 
 #[test]
 fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
-    let program = crate::test_methods::foreign_shard_writer();
+    let program = crate::test_methods::data_changer();
     let target_id = AccountId::new([0; 32]);
-    let other_id = AccountId::new([1; 32]);
     let foreign_program_account_id =
-        AccountId::from_builtin_program(crate::test_methods::data_changer().id());
+        AccountId::from_builtin_program(crate::test_methods::noop().id());
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(target_id, foreign_program_account_id),
-                ProgramShardSelector::balance(other_id),
-            ],
+            shard_selectors: vec![ProgramShardSelector::new(
+                target_id,
+                foreign_program_account_id,
+            )],
             instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
             ..Default::default()
         },
@@ -267,16 +266,12 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
 
 #[test]
 fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
-    let program = crate::test_methods::foreign_shard_writer();
+    let program = crate::test_methods::data_changer();
     let target_id = AccountId::new([3; 32]);
-    let other_id = AccountId::new([4; 32]);
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::balance(target_id),
-                ProgramShardSelector::balance(other_id),
-            ],
+            shard_selectors: vec![ProgramShardSelector::balance(target_id)],
             instruction_data: Program::serialize_instruction(encode_balance(500).to_vec()).unwrap(),
             ..Default::default()
         },

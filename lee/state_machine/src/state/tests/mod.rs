@@ -52,7 +52,6 @@ impl V03State {
     pub fn with_test_programs(mut self) -> Self {
         self.insert_program(&crate::test_methods::dropped_account());
         self.insert_program(&crate::test_methods::data_changer());
-        self.insert_program(&crate::test_methods::foreign_shard_writer());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());

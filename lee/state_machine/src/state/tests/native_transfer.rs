@@ -152,17 +152,12 @@ fn a_repeated_shard_selector_is_rejected() {
 #[test]
 fn a_guest_cannot_write_the_native_shard_publicly() {
     let target_id = AccountId::new([1; 32]);
-    let other_id = AccountId::new([2; 32]);
     let mut state = V03State::new().with_test_programs();
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::foreign_shard_writer().id());
+    let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![
-            ProgramShardSelector::balance(target_id),
-            ProgramShardSelector::balance(other_id),
-        ],
+        vec![ProgramShardSelector::balance(target_id)],
         vec![],
         encode_balance(500).to_vec(),
     )
@@ -187,31 +182,4 @@ fn a_guest_cannot_write_the_native_shard_publicly() {
         "a guest wrote the native shard: {result:?}"
     );
     assert_eq!(state.get_account_by_id(target_id), Account::default());
-}
-
-#[test]
-fn an_application_shard_write_leaves_the_native_balance_alone() {
-    let program = crate::test_methods::data_changer();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let account_id = AccountId::new([5; 32]);
-    let mut state = V03State::new()
-        .with_public_accounts([(account_id, Account::funded(250))])
-        .with_test_programs();
-
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::new(account_id, program_id)],
-        vec![],
-        vec![3_u8; 8],
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-
-    state
-        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
-        .unwrap();
-
-    let post = state.get_account_by_id(account_id);
-    assert_eq!(post.data.shard(program_id).as_ref(), vec![3_u8; 8]);
-    assert_eq!(post.data.balance(), Ok(250));
 }

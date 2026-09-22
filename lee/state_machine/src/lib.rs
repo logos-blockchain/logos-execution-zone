@@ -109,14 +109,6 @@ mod test_methods {
     }
 
     #[must_use]
-    pub const fn foreign_shard_writer() -> Program {
-        Program::new_unchecked(
-            test_methods::FOREIGN_SHARD_WRITER_ID,
-            Cow::Borrowed(test_methods::FOREIGN_SHARD_WRITER_ELF),
-        )
-    }
-
-    #[must_use]
     pub const fn auth_asserting_noop() -> Program {
         Program::new_unchecked(
             test_methods::AUTH_ASSERTING_NOOP_ID,

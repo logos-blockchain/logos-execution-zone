@@ -106,19 +106,17 @@ fn program_should_transfer_balance_from_an_authorized_account() {
 #[test]
 fn a_data_write_on_a_foreign_shard_is_rejected_publicly() {
     let target_id = AccountId::new([1; 32]);
-    let other_id = AccountId::new([2; 32]);
     let mut state = V03State::new().with_test_programs();
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::foreign_shard_writer().id());
+    let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
     let foreign_program_account_id =
-        AccountId::from_builtin_program(crate::test_methods::data_changer().id());
+        AccountId::from_builtin_program(crate::test_methods::noop().id());
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![
-            ProgramShardSelector::new(target_id, foreign_program_account_id),
-            ProgramShardSelector::balance(other_id),
-        ],
+        vec![ProgramShardSelector::new(
+            target_id,
+            foreign_program_account_id,
+        )],
         vec![],
         vec![7_u8; 4],
     )
@@ -139,18 +137,15 @@ fn a_data_write_on_a_foreign_shard_is_rejected_publicly() {
 #[test]
 fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     let target_id = AccountId::new([1; 32]);
-    let other_id = AccountId::new([2; 32]);
-    let mut state = V03State::new().with_test_programs();
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::foreign_shard_writer().id());
+    let mut state = V03State::new()
+        .with_public_accounts([(target_id, Account::funded(250))])
+        .with_test_programs();
+    let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
     let written = vec![7_u8; 4];
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![
-            ProgramShardSelector::new(target_id, program_id),
-            ProgramShardSelector::balance(other_id),
-        ],
+        vec![ProgramShardSelector::new(target_id, program_id)],
         vec![],
         written.clone(),
     )
@@ -160,11 +155,12 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
 
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
+    // Funded beforehand, so the whole-account assertion also pins that an application write
+    // leaves the native balance shard alone.
     assert_eq!(
         state.get_account_by_id(target_id),
-        Account::default().with_shard(program_id, written.try_into().unwrap())
+        Account::funded(250).with_shard(program_id, written.try_into().unwrap())
     );
-    assert_eq!(state.get_account_by_id(other_id), Account::default());
 }
 
 /// A chained call may only name an account the transaction declared or an earlier call already

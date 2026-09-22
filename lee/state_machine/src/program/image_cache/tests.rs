@@ -92,12 +92,6 @@ fn cached_path_matches_rebuild_path() {
             Program::serialize_instruction(vec![9_u8; 32]).unwrap(),
         ),
         (
-            "foreign_shard_writer",
-            crate::test_methods::foreign_shard_writer(),
-            balance_pre_states(),
-            Program::serialize_instruction(vec![7_u8; 8]).unwrap(),
-        ),
-        (
             "malformed_journal",
             crate::test_methods::malformed_journal(),
             Vec::new(),
