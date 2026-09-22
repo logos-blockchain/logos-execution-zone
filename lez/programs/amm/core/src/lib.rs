@@ -6,6 +6,8 @@ use lee_core::{
     program::PdaSeed,
 };
 
+pub const AMM_NAME: [u8; 3] = *b"amm";
+
 /// AMM Program Instruction.
 ///
 /// The pool uses this program's shard. Vaults, holdings, and the liquidity token definition
@@ -131,6 +133,11 @@ impl From<&PoolDefinition> for ShardData {
 
         Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
     }
+}
+
+#[must_use]
+pub fn amm_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&AMM_NAME)
 }
 
 #[must_use]

@@ -15,6 +15,8 @@ const FEE_STATE_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/State/0000000/";
 const FEE_ESCROW_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Escrow/000000/";
 const FEE_INBOX_SEED: [u8; 32] = *b"/LEZ/v0.3/FeeSeed/Inbox/0000000/";
 
+pub const FEE_NAME: [u8; 3] = *b"fee";
+
 /// Per-block fee summary carried as the fee invocation's instruction and
 /// validated byte-for-byte by the transition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -39,6 +41,11 @@ pub enum Instruction {
     ///
     /// Accounts: `[inbox, payer]`, both balance-only.
     Refund { amount: Balance },
+}
+
+#[must_use]
+pub fn fee_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&FEE_NAME)
 }
 
 #[must_use]

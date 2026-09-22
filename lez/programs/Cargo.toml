@@ -75,7 +75,22 @@ required-features = ["programs"]
 
 # This feature is only usable for library target.
 # Activating this will cause library to include built binary artifacts and pack them into `Program` structs.
-artifacts = ["dep:build_utils", "dep:lee", "dep:clock_core"]
+artifacts = [
+  "dep:build_utils",
+  "dep:lee",
+  "dep:clock_core",
+  "dep:amm_core",
+  "dep:associated_token_account_core",
+  "dep:bridge_core",
+  "dep:fee_core",
+  "dep:token_core",
+  "dep:cross_zone_inbox_core",
+  "dep:cross_zone_outbox_core",
+  "dep:bridge_lock_core",
+  "dep:wrapped_token_core",
+  "dep:ping_core",
+  "dep:sequencer_stake_core",
+]
 
 # Import dependencies required for program binaries.
 # You don't need this if you only want to use the library target.

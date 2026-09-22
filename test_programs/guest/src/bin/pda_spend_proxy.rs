@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::ProgramShardSelector,
     program::{
         AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
         read_lee_call, respond_unsupported_call,
@@ -36,9 +36,7 @@ fn main() {
     let second_post = AccountStateDiff::unchanged(second.clone());
 
     let chained_call = ChainedCall {
-        program_account_id: AccountId::from_builtin_program_name(
-            &authenticated_transfer_core::AUTHENTICATED_TRANSFER_NAME,
-        ),
+        program_account_id: authenticated_transfer_core::authenticated_transfer_account_id(),
         instruction_data: to_vec(&authenticated_transfer_core::Instruction::Transfer { amount })
             .unwrap(),
         shard_selectors: vec![

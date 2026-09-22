@@ -22,20 +22,24 @@ mod inner {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
 
+    // `authenticated_transfer_core` is duplicated here rather than re-exported: unlike the
+    // other builtins' `*_core` crates, it isn't a dependency of this `artifacts` build (only
+    // of `programs`, which builds its guest binary), so it can't be depended on here.
+    // `authenticated_transfer_name_matches_core` below guards the two copies against drift.
     pub const AUTHENTICATED_TRANSFER_NAME: [u8; 22] = *b"authenticated_transfer";
-    pub const TOKEN_NAME: [u8; 5] = *b"token";
-    pub const AMM_NAME: [u8; 3] = *b"amm";
+
+    pub use amm_core::AMM_NAME;
+    pub use associated_token_account_core::ASSOCIATED_TOKEN_ACCOUNT_NAME;
+    pub use bridge_core::BRIDGE_NAME;
+    pub use bridge_lock_core::BRIDGE_LOCK_NAME;
     pub use clock_core::CLOCK_NAME;
-    pub const FEE_NAME: [u8; 3] = *b"fee";
-    pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 24] = *b"associated_token_account";
-    pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
-    pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
-    pub const CROSS_ZONE_INBOX_NAME: [u8; 16] = *b"cross_zone_inbox";
-    pub const PING_SENDER_NAME: [u8; 11] = *b"ping_sender";
-    pub const PING_RECEIVER_NAME: [u8; 13] = *b"ping_receiver";
-    pub const BRIDGE_LOCK_NAME: [u8; 11] = *b"bridge_lock";
-    pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
-    pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
+    pub use cross_zone_inbox_core::CROSS_ZONE_INBOX_NAME;
+    pub use cross_zone_outbox_core::CROSS_ZONE_OUTBOX_NAME;
+    pub use fee_core::FEE_NAME;
+    pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
+    pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
+    pub use token_core::TOKEN_NAME;
+    pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
 
     #[must_use]
     #[inline]
@@ -58,11 +62,7 @@ mod inner {
         Program::new_unchecked(TOKEN_ID, Cow::Borrowed(TOKEN_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn token_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&TOKEN_NAME)
-    }
+    pub use token_core::token_account_id;
 
     #[must_use]
     #[inline]
@@ -70,11 +70,7 @@ mod inner {
         Program::new_unchecked(AMM_ID, Cow::Borrowed(AMM_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn amm_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&AMM_NAME)
-    }
+    pub use amm_core::amm_account_id;
 
     #[must_use]
     #[inline]
@@ -82,11 +78,7 @@ mod inner {
         Program::new_unchecked(CLOCK_ID, Cow::Borrowed(CLOCK_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn clock_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&CLOCK_NAME)
-    }
+    pub use clock_core::clock_account_id;
 
     #[must_use]
     #[inline]
@@ -94,11 +86,7 @@ mod inner {
         Program::new_unchecked(FEE_ID, Cow::Borrowed(FEE_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn fee_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&FEE_NAME)
-    }
+    pub use fee_core::fee_account_id;
 
     #[must_use]
     #[inline]
@@ -109,11 +97,7 @@ mod inner {
         )
     }
 
-    #[must_use]
-    #[inline]
-    pub fn ata_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&ASSOCIATED_TOKEN_ACCOUNT_NAME)
-    }
+    pub use associated_token_account_core::ata_account_id;
 
     #[must_use]
     #[inline]
@@ -121,11 +105,7 @@ mod inner {
         Program::new_unchecked(BRIDGE_ID, Cow::Borrowed(BRIDGE_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn bridge_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&BRIDGE_NAME)
-    }
+    pub use bridge_core::bridge_account_id;
 
     #[must_use]
     #[inline]
@@ -133,11 +113,7 @@ mod inner {
         Program::new_unchecked(CROSS_ZONE_OUTBOX_ID, Cow::Borrowed(CROSS_ZONE_OUTBOX_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn cross_zone_outbox_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&CROSS_ZONE_OUTBOX_NAME)
-    }
+    pub use cross_zone_outbox_core::cross_zone_outbox_account_id;
 
     #[must_use]
     #[inline]
@@ -145,11 +121,7 @@ mod inner {
         Program::new_unchecked(CROSS_ZONE_INBOX_ID, Cow::Borrowed(CROSS_ZONE_INBOX_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn cross_zone_inbox_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&CROSS_ZONE_INBOX_NAME)
-    }
+    pub use cross_zone_inbox_core::cross_zone_inbox_account_id;
 
     #[must_use]
     #[inline]
@@ -157,11 +129,7 @@ mod inner {
         Program::new_unchecked(PING_SENDER_ID, Cow::Borrowed(PING_SENDER_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn ping_sender_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&PING_SENDER_NAME)
-    }
+    pub use ping_core::ping_sender_account_id;
 
     #[must_use]
     #[inline]
@@ -169,11 +137,7 @@ mod inner {
         Program::new_unchecked(PING_RECEIVER_ID, Cow::Borrowed(PING_RECEIVER_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn ping_receiver_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&PING_RECEIVER_NAME)
-    }
+    pub use ping_core::ping_receiver_account_id;
 
     #[must_use]
     #[inline]
@@ -181,11 +145,7 @@ mod inner {
         Program::new_unchecked(BRIDGE_LOCK_ID, Cow::Borrowed(BRIDGE_LOCK_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn bridge_lock_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&BRIDGE_LOCK_NAME)
-    }
+    pub use bridge_lock_core::bridge_lock_account_id;
 
     #[must_use]
     #[inline]
@@ -193,11 +153,7 @@ mod inner {
         Program::new_unchecked(WRAPPED_TOKEN_ID, Cow::Borrowed(WRAPPED_TOKEN_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn wrapped_token_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&WRAPPED_TOKEN_NAME)
-    }
+    pub use wrapped_token_core::wrapped_token_account_id;
 
     #[must_use]
     #[inline]
@@ -205,11 +161,7 @@ mod inner {
         Program::new_unchecked(SEQUENCER_STAKE_ID, Cow::Borrowed(SEQUENCER_STAKE_ELF))
     }
 
-    #[must_use]
-    #[inline]
-    pub fn sequencer_stake_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&SEQUENCER_STAKE_NAME)
-    }
+    pub use sequencer_stake_core::sequencer_stake_account_id;
 
     #[cfg(test)]
     mod tests {

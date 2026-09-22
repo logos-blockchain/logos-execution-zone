@@ -10,6 +10,8 @@ use lee_core::{
 /// but the two version different things.
 const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00001/";
 
+pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
+
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
 
@@ -62,6 +64,11 @@ impl OutboxRecord {
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
         borsh::from_slice(bytes)
     }
+}
+
+#[must_use]
+pub fn cross_zone_outbox_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&CROSS_ZONE_OUTBOX_NAME)
 }
 
 /// PDA holding one emitted message, keyed by the emitting program, the
