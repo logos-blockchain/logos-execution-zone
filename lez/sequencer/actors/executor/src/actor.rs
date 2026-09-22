@@ -19,7 +19,7 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    PinBehindTip, SequencerCore, TransactionOrigin,
+    PinBehindTip, SequencerCore, SubmitConfig, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     gossip::AccreditedKeysReceiver,
@@ -140,6 +140,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
     pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
         self.sequencer.accredited_keys_watch()
     }
+
+    /// The staked keys the gossip mesh admits channel-config messages from.
+    #[must_use]
+    pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.sequencer.staked_keys_watch()
+    }
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> ExecutorActorTrait
@@ -197,11 +203,31 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Acto
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
+    /// Handle to the channel-config actor, for the service to wire gossip to.
+    #[must_use]
+    pub fn config_manager_ref(&self) -> ActorRef<sequencer_core::ChannelConfigActor> {
+        self.sequencer.config_manager_ref().clone()
+    }
+
     /// Ends a blocked run, reporting the drop to zero only if there was one.
     fn clear_blocked_attempts(&mut self) {
         if self.blocked_attempts.clear() {
             sequencer_executor_actor_metrics::record_publish_blocked_attempts(0);
         }
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<SubmitConfig>
+    for ExecutorActor<S, BP>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SubmitConfig(submission): SubmitConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.sequencer.submit_signed_config(*submission).await;
     }
 }
 

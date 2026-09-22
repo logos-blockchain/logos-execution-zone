@@ -73,7 +73,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 .map_err(|err| {
                     ErrorObjectOwned::owned(
                         ErrorCode::InvalidParams.code(),
-                        format!("{err:?}"),
+                        err.to_string(),
                         None::<()>,
                     )
                 })?;
