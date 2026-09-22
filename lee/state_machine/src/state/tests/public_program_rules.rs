@@ -2,10 +2,10 @@ use lee_core::program::InstructionData;
 
 use super::*;
 
-/// A program can drop an entire account from its own output by simply omitting its
-/// `ShardStateDiff` — `validate_execution` has no way to catch this on its own, since a
-/// shorter `state_diffs` list is perfectly well-formed. This must still be rejected: every
-/// account the caller declared in the transaction must appear somewhere in the final diff.
+/// A program can drop an entire account from its own output by simply omitting it from the
+/// handles it echoes — `validate_execution` has no way to catch this on its own, since a
+/// shorter `accounts` list is perfectly well-formed. This must still be rejected: every
+/// account the caller declared in the transaction must appear in the program's echo.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
     let mut state = V03State::new()
@@ -336,7 +336,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 }
 
 #[test]
-fn reordered_state_diffs_are_rejected() {
+fn effects_may_be_emitted_in_any_order_relative_to_the_handles() {
     let program = crate::test_methods::reordering_writer();
     let program_id: AccountId = program.id().into();
     let first = AccountId::new([23; 32]);
@@ -356,20 +356,19 @@ fn reordered_state_diffs_are_rejected() {
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("effects carry their own selector, so their order is free");
 
-    assert!(
-        matches!(
-            &result,
-            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
-                ExecutionError::PreStateMismatch {
-                    program_account_id, expected, ..
-                }
-            ))) if *program_account_id == program_id && expected.account_id == first
-        ),
-        "expected PreStateMismatch for the reordered rows, got {result:?}"
+    // The guest emitted the second handle's effect first; each still landed on its own shard.
+    assert_eq!(
+        state
+            .get_account_by_id(first)
+            .data
+            .shard(program_id)
+            .as_ref(),
+        &[7_u8; 4]
     );
-    assert_eq!(state.get_account_by_id(first), Account::default());
     assert_eq!(state.get_account_by_id(second), Account::default());
 }
 

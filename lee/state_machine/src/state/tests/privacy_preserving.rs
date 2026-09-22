@@ -246,10 +246,16 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
     );
 }
 
+/// The target is private: the circuit defers every *public* effect, so an in-circuit
+/// resolution — and the foreign-write check `validate_resolution` carries — is only reached on a
+/// private shard. Settlement re-runs the same check for deferred public effects
+/// (`fold_public_resolutions`).
 #[test]
 fn a_data_write_on_a_foreign_shard_is_refused_when_proving() {
     let program = crate::test_methods::foreign_shard_writer();
-    let target_id = AccountId::new([0; 32]);
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, 0, Account::default());
+    let target_id = witness.account_id();
     let other_id = AccountId::new([1; 32]);
     let foreign_program_account_id: AccountId = crate::test_methods::data_changer().id().into();
 
@@ -259,6 +265,7 @@ fn a_data_write_on_a_foreign_shard_is_refused_when_proving() {
                 ProgramShardSelector::new(target_id, foreign_program_account_id),
                 ProgramShardSelector::balance(other_id),
             ],
+            private_witnesses: vec![witness],
             instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
             ..Default::default()
         },
@@ -271,7 +278,9 @@ fn a_data_write_on_a_foreign_shard_is_refused_when_proving() {
 #[test]
 fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
     let program = crate::test_methods::foreign_shard_writer();
-    let target_id = AccountId::new([3; 32]);
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, 0, Account::default());
+    let target_id = witness.account_id();
     let other_id = AccountId::new([4; 32]);
 
     let result = execute_and_prove(
@@ -280,6 +289,7 @@ fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
                 ProgramShardSelector::balance(target_id),
                 ProgramShardSelector::balance(other_id),
             ],
+            private_witnesses: vec![witness],
             instruction_data: Program::serialize_instruction(encode_balance(500).to_vec()).unwrap(),
             ..Default::default()
         },
@@ -293,7 +303,9 @@ fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
 fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
     let program = crate::test_methods::data_changer();
     let program_id: AccountId = program.id().into();
-    let account_id = AccountId::new([0; 32]);
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, 0, Account::default());
+    let account_id = witness.account_id();
 
     let large_data: Vec<u8> =
         vec![
@@ -306,14 +318,14 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::new(account_id, program_id)],
-            signers: [account_id].into(),
+            private_witnesses: vec![witness],
             instruction_data: Program::serialize_instruction(large_data).unwrap(),
             ..Default::default()
         },
         &program.into(),
     );
 
-    assert_program_prove_failure(&result, "provided data should fit into data limit");
+    assert_program_prove_failure(&result, "written data fits the data limit");
 }
 
 #[test]
@@ -328,7 +340,6 @@ fn unauthorized_debit_is_refused_when_proving() {
                 ProgramShardSelector::balance(recipient_id),
             ],
             signers: [recipient_id].into(),
-            public_accounts: [(sender_id, Account::funded(100))].into(),
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: 10,
             })
@@ -348,5 +359,118 @@ fn unauthorized_debit_is_refused_when_proving() {
             )) if account_id == sender_id
         ),
         "expected an unauthorized sender rejection"
+    );
+}
+
+/// Mixed settlement folds each journal's effects against live state. Both transactions are
+/// built against the *same* snapshot, in which the recipient still holds 400, so a journal that
+/// pinned a post-state would have the second overwrite the first instead of adding to it.
+#[test]
+fn two_deshielded_transfers_to_one_recipient_compose_at_settlement() {
+    let recipient_id = test_public_account_keys_1().account_id();
+    let senders = [
+        (test_private_account_keys_1(), 37_u128),
+        (test_private_account_keys_2(), 11),
+    ];
+    let sender_account = Account {
+        nonce: Nonce(0xdead_beef),
+        ..Account::funded(100)
+    };
+
+    let mut state = V03State::new().with_public_account_balances([(recipient_id, 400)]);
+    for (keys, _) in &senders {
+        state = state.with_private_account(keys, &sender_account);
+    }
+
+    let transactions: Vec<_> = senders
+        .iter()
+        .map(|(keys, amount)| {
+            deshielded_balance_transfer_for_tests(
+                keys,
+                &sender_account,
+                &recipient_id,
+                *amount,
+                &state,
+            )
+        })
+        .collect();
+
+    let mut expected = 400;
+    for (tx, (_, amount)) in transactions.iter().zip(&senders) {
+        state
+            .transition_from_privacy_preserving_transaction(tx, 1, 0)
+            .unwrap();
+        expected += amount;
+        assert_eq!(
+            state.get_account_by_id(recipient_id).data.balance(),
+            Ok(expected)
+        );
+    }
+}
+
+/// A private transaction may move value through a guest program's public account: the effect is
+/// recorded while proving, and the guest's own resolver runs against live state at settlement.
+#[test]
+fn a_guest_evaluated_public_effect_settles_against_live_state() {
+    let program = crate::test_methods::native_spender();
+    let program_id: AccountId = program.id().into();
+    let sender_keys = test_private_account_keys_1();
+    let sender_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let written_to = AccountId::new([77; 32]);
+    let recipient_id = AccountId::new([88; 32]);
+    let amount: u128 = 30;
+
+    let pre_account = Account::funded(100);
+    let mut state = V03State::new()
+        .with_test_programs()
+        .with_private_account(&sender_keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .expect("the account's commitment must be in state");
+
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                // A public account whose shard belongs to the guest, so the guest evaluates the
+                // effect on it.
+                ProgramShardSelector::new(written_to, program_id),
+                ProgramShardSelector::balance(sender_id),
+                ProgramShardSelector::balance(recipient_id),
+            ],
+            private_witnesses: vec![update_witness(
+                &sender_keys,
+                0,
+                pre_account,
+                membership_proof,
+            )],
+            instruction_data: Program::serialize_instruction((vec![5_u8; 4], amount)).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    )
+    .unwrap();
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .expect("a guest-evaluated public effect settles");
+
+    // The guest's own shard was written by its resolver, not by a pinned post-state.
+    assert_eq!(
+        state
+            .get_account_by_id(written_to)
+            .data
+            .shard(program_id)
+            .as_ref(),
+        &[5_u8; 4]
+    );
+    // The native leg of the same transaction settled alongside it.
+    assert_eq!(
+        state.get_account_by_id(recipient_id).data.balance(),
+        Ok(amount)
     );
 }

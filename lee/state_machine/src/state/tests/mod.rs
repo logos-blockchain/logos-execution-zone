@@ -12,12 +12,13 @@ use lee_core::{
     PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
     encryption::ViewingPublicKey,
-    execution_state::ExecutionError,
+    execution_state::{ExecutionError, PublicResolution},
     native_token::{
-        Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
+        Effect as NativeEffect, Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID,
+        TransferError, encode_balance,
     },
     program::{
-        AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
+        AccountMeta, BlockValidityWindow, ExecutionValidationError, InstructionData,
         MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
         ProgramId, ProgramSegment, TimestampValidityWindow, TransactionEvent,
     },
@@ -54,6 +55,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::dropped_account());
         self.insert_program(&crate::test_methods::data_changer());
         self.insert_program(&crate::test_methods::foreign_shard_writer());
+        self.insert_program(&crate::test_methods::native_spender());
         self.insert_program(&crate::test_methods::auth_asserting_noop());
         self.insert_program(&crate::test_methods::private_pda_delegator());
         self.insert_program(&crate::test_methods::noop());
@@ -127,6 +129,7 @@ enum FlashSwapInstruction {
     Initiate {
         callback_program_id: AccountId,
         amount_out: u128,
+        vault_balance: u128,
         callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
@@ -138,6 +141,22 @@ enum FlashSwapInstruction {
 struct EmitterInstruction {
     events: Vec<ProgramEvent>,
     chain: Vec<(AccountId, InstructionData)>,
+}
+
+pub fn native_debit(amount: Balance) -> PublicResolution {
+    native_effect(&NativeEffect::Debit(amount))
+}
+
+pub fn native_credit(amount: Balance) -> PublicResolution {
+    native_effect(&NativeEffect::Credit(amount))
+}
+
+fn native_effect(effect: &NativeEffect) -> PublicResolution {
+    PublicResolution::Apply {
+        program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+        shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+        data: borsh::to_vec(effect).expect("the effect serializes"),
+    }
 }
 
 pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> ExecutionError {
@@ -324,7 +343,6 @@ fn shielded_balance_transfer_for_tests(
                 ProgramShardSelector::balance(recipient_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
             private_witnesses: vec![init_witness(recipient_keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -406,11 +424,6 @@ fn deshielded_balance_transfer_for_tests(
                 ProgramShardSelector::balance(sender_id),
                 ProgramShardSelector::balance(*recipient_account_id),
             ],
-            public_accounts: [(
-                *recipient_account_id,
-                state.get_account_by_id(*recipient_account_id),
-            )]
-            .into(),
             private_witnesses: vec![update_witness(
                 sender_keys,
                 0,

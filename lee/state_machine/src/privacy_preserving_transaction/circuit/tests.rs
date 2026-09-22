@@ -2,12 +2,12 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey,
-    WitnessKind,
-    account::{Account, AccountId, Nonce},
-    execution_state::{AccountChange, CallEffects, ExecutionError, PublicFacts},
-    native_token::{Instruction as NativeInstruction, encode_balance},
-    program::{AccountInput, PdaSeed, PrivateAccountKind},
+    Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, PublicAction,
+    SharedSecretKey, WitnessKind,
+    account::{Account, AccountId, Nonce, ShardData},
+    execution_state::{ExecutionError, PublicResolution},
+    native_token::Instruction as NativeInstruction,
+    program::{AccountMeta, PdaSeed, PrivateAccountKind, ProgramInput, ResolveInput},
 };
 
 use super::*;
@@ -18,8 +18,9 @@ use crate::{
     state::{
         CommitmentSet,
         tests::{
-            execution_error, init_pda_witness, init_witness, test_private_account_keys_1,
-            test_private_account_keys_2, update_pda_witness, update_witness,
+            execution_error, init_pda_witness, init_witness, native_debit,
+            test_private_account_keys_1, test_private_account_keys_2, update_pda_witness,
+            update_witness,
         },
     },
 };
@@ -53,18 +54,14 @@ fn proof_inner_roundtrip() {
 }
 
 #[test]
-fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
+fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let recipient_keys = test_private_account_keys_1();
     let sender_id = AccountId::new([0; 32]);
-    let sender_account = Account::funded(100);
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
 
     let balance_to_move: u128 = 37;
-
-    let expected_sender_pre = Account::funded(100).data;
-    let expected_sender_post = Account::funded(100 - balance_to_move).data;
 
     let expected_recipient_post = Account {
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
@@ -82,7 +79,6 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
                 ProgramShardSelector::balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
             private_witnesses: vec![init_witness(&recipient_keys, 0, Account::default())],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -99,8 +95,9 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let [action] = output.public_actions.try_into().unwrap();
     assert_eq!(action.account_id, sender_id);
     assert!(action.is_authorized);
-    assert_eq!(action.pre, expected_sender_pre);
-    assert_eq!(action.post, expected_sender_post);
+    // The journal carries the effect to settle, not a claimed balance: the prover never read
+    // the sender's shard, so it has nothing to assert about its contents.
+    assert_eq!(action.resolutions, vec![native_debit(balance_to_move)]);
     assert_eq!(output.private_actions.len(), 1);
 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
@@ -412,7 +409,6 @@ fn private_pda_withdraw() {
 
     // Recipient (public)
     let recipient_id = AccountId::new([88; 32]);
-    let recipient_account = Account::funded(10000);
 
     let program_with_deps =
         ProgramWithDependencies::new(program.clone(), program.id().into(), HashMap::new());
@@ -427,7 +423,6 @@ fn private_pda_withdraw() {
                 ProgramShardSelector::balance(recipient_id),
             ],
             signers: [recipient_id].into(),
-            public_accounts: [(recipient_id, recipient_account)].into(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 0,
@@ -457,7 +452,6 @@ fn shared_account_receives_via_simple_transfer() {
 
     // Sender: public account with balance, owned by auth-transfer
     let sender_id = AccountId::new([99; 32]);
-    let sender_account = Account::funded(1000);
 
     // Recipient: shared private account (new, foreign)
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
@@ -475,7 +469,6 @@ fn shared_account_receives_via_simple_transfer() {
                 ProgramShardSelector::balance(shared_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
             private_witnesses: vec![init_witness(
                 &shared_keys,
                 shared_identifier,
@@ -814,7 +807,6 @@ fn pda_update_attempt(
                 ProgramShardSelector::balance(recipient_id),
             ],
             signers: [recipient_id].into(),
-            public_accounts: [(recipient_id, Account::default())].into(),
             private_witnesses: vec![update_pda_witness(
                 &keys,
                 witness_identifier,
@@ -978,298 +970,38 @@ fn forward_to(account_id: AccountId, callee_id: AccountId, write: &[u8]) -> Vec<
     ))
 }
 
-fn input_with(
-    account_id: AccountId,
-    forwarder_id: AccountId,
-    account: Account,
-    instruction_data: Vec<u8>,
-) -> ProvingInput {
-    ProvingInput {
-        shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
-        public_accounts: [(account_id, account)].into(),
-        instruction_data,
-        ..Default::default()
-    }
-}
-
+/// Proving a transaction that writes a **public** shard needs no public account contents
+/// anywhere in its input, and consults no source for them. `ProvingInput` has no field to supply
+/// them through, and the prover's `PublicSource` errors on any request, so a successful proof
+/// here is the property.
 #[test]
-fn a_balance_only_root_selector_lets_a_chained_call_read_the_shard() {
+fn the_prover_never_reads_a_public_shard() {
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
-    let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
     let write = vec![3; 16];
 
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
+    let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            public_accounts: [(account_id, Account::funded(5))].into(),
+            shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
             instruction_data: forward_to(account_id, callee_id, &write),
             ..Default::default()
         },
         &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(on_chain.clone()))
-        },
     )
     .unwrap();
 
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
     assert!(proof.is_valid_for(&output));
     let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
-    assert_eq!(action.pre.balance(), Ok(5));
-    assert_eq!(
-        action.pre.shards.keys().copied().collect::<Vec<_>>(),
-        vec![callee_id],
-        "the forwarder's own shard was never selected, so it is not an observation"
-    );
-    assert_eq!(action.pre.shards[&callee_id], on_chain);
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(write).unwrap()
-    );
-    assert!(!action.post.shards.contains_key(&forwarder_id));
-}
-
-fn forwarding_input(
-    account_id: AccountId,
-    forwarder_id: AccountId,
-    callee_id: AccountId,
-    account: Account,
-    write: &[u8],
-) -> ProvingInput {
-    input_with(
-        account_id,
-        forwarder_id,
-        account,
-        forward_to(account_id, callee_id, write),
-    )
-}
-
-#[test]
-fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_account() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-    let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
-    let own_shard = ShardData::try_from(vec![2; 8]).unwrap();
-    let write = vec![3; 16];
-
-    let sparse = Account::funded(500).with_shard(forwarder_id, own_shard.clone());
-    let complete = sparse.clone().with_shard(callee_id, on_chain.clone());
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse.clone(), &write),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(on_chain.clone()))
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
-    assert!(proof.is_valid_for(&output));
-
-    let [action] = &*output.public_actions else {
-        panic!("one account, one action: {:?}", output.public_actions)
-    };
     assert_eq!(action.account_id, account_id);
-    assert_eq!(action.pre.shards[&forwarder_id], own_shard);
-    assert_eq!(action.pre.shards[&callee_id], on_chain);
-    assert!(!action.pre.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
-    assert!(!action.post.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
+    // The write is recorded verbatim as an obligation for settlement, evaluated by the program
+    // that emitted it against the shard it selected.
     assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(write.clone()).unwrap()
-    );
-
-    let (complete_output, _) = execute_and_prove(
-        forwarding_input(account_id, forwarder_id, callee_id, complete, &write),
-        &program,
-    )
-    .unwrap();
-    assert_eq!(output, complete_output);
-
-    let (unresolved_output, _) = execute_and_prove(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse, &write),
-        &program,
-    )
-    .unwrap();
-    assert_ne!(unresolved_output, complete_output);
-}
-
-#[test]
-fn an_empty_resolution_is_asked_once_and_matches_not_resolving_at_all() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-    let first = vec![0xC1; 12];
-    let second = vec![0xC2; 12];
-    let sparse =
-        Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
-    let instruction = forwarder_instruction(&calls_at(
-        account_id,
-        &[
-            (callee_id, data_changer_instruction(&first)),
-            (callee_id, data_changer_instruction(&second)),
-        ],
-    ));
-
-    let (unresolved_output, _) = execute_and_prove(
-        input_with(
-            account_id,
-            forwarder_id,
-            sparse.clone(),
-            instruction.clone(),
-        ),
-        &program,
-    )
-    .unwrap();
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (resolved_output, _) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, sparse, instruction),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::empty()))
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
-    assert_eq!(resolved_output, unresolved_output);
-
-    let [action] = <[_; 1]>::try_from(resolved_output.public_actions).unwrap();
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(second).unwrap()
-    );
-}
-
-#[test]
-fn a_resolver_error_aborts_the_traversal() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-
-    let result = execute_and_prove_with(
-        forwarding_input(
-            account_id,
-            forwarder_id,
-            callee_id,
-            Account::default(),
-            &[3; 16],
-        ),
-        &program,
-        &mut |_| {
-            Err(LeeError::AccountResolution(
-                "sequencer unreachable".to_owned(),
-            ))
-        },
-    );
-
-    assert!(matches!(result, Err(LeeError::AccountResolution(_))));
-}
-
-fn forwarder_over_itself() -> (ProgramWithDependencies, AccountId) {
-    let forwarder = crate::test_methods::shard_forwarder();
-    let forwarder_id: AccountId = forwarder.id().into();
-
-    (
-        ProgramWithDependencies::new(
-            forwarder.clone(),
-            forwarder_id,
-            [(forwarder_id, forwarder)].into(),
-        ),
-        forwarder_id,
-    )
-}
-
-#[test]
-fn a_top_level_shard_selector_is_never_resolved_for() {
-    let (program, forwarder_id) = forwarder_over_itself();
-    let account_id = AccountId::new([7; 32]);
-    let supplied = ShardData::try_from(vec![0xA1; 12]).unwrap();
-
-    let instruction = forwarder_instruction(&calls_at(
-        account_id,
-        &[(forwarder_id, forwarder_instruction(&[]))],
-    ));
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        input_with(
-            account_id,
-            forwarder_id,
-            Account::default().with_shard(forwarder_id, supplied.clone()),
-            instruction,
-        ),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
-        },
-    )
-    .unwrap();
-
-    assert!(
-        asked.is_empty(),
-        "the only shard selector this transaction touches came from the caller: {asked:?}"
-    );
-    assert!(proof.is_valid_for(&output));
-
-    let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
-    assert_eq!(
-        action.post.shards[&forwarder_id], supplied,
-        "the chained call must have run against the supplied value, not the resolver's"
-    );
-}
-
-#[test]
-fn a_shard_selector_is_resolved_at_most_once_across_chained_calls() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-    let first = vec![0xC1; 12];
-    let second = vec![0xC2; 12];
-
-    let instruction = forwarder_instruction(&calls_at(
-        account_id,
-        &[
-            (callee_id, data_changer_instruction(&first)),
-            (callee_id, data_changer_instruction(&second)),
-        ],
-    ));
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, _proof) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, Account::default(), instruction),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::empty()))
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
-
-    let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(second).unwrap()
+        action.resolutions,
+        vec![PublicResolution::Apply {
+            program_account_id: callee_id,
+            shard_program_account_id: callee_id,
+            data: borsh::to_vec(&write).unwrap(),
+        }]
     );
 }
 
@@ -1289,35 +1021,23 @@ fn a_chained_call_on_an_account_the_root_never_named_is_rejected() {
         Program::serialize_instruction(()).unwrap(),
     )]);
 
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let result = execute_and_prove_with(
+    let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
-            public_accounts: [
-                (account_id, Account::default()),
-                (fresh_id, Account::funded(9)),
-            ]
-            .into(),
             instruction_data: instruction.clone(),
             ..Default::default()
         },
         &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(None)
-        },
     );
     assert!(matches!(
         execution_error(result),
         ExecutionError::UnknownAccount { account_id } if account_id == fresh_id
     ));
-    assert!(asked.is_empty());
 
     let keys = test_private_account_keys_1();
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
-            public_accounts: [(account_id, Account::default())].into(),
             private_witnesses: vec![init_witness(&keys, 0, Account::default())],
             instruction_data: instruction,
             ..Default::default()
@@ -1349,27 +1069,22 @@ fn prove_circuit_directly(
     Ok(borsh::from_slice(from_frame(&prove_info.receipt.journal.bytes).unwrap()).unwrap())
 }
 
-fn program_receipt(
-    program: &Program,
-    input: &ProgramInput<InstructionData>,
-) -> (Receipt, CallEffects) {
-    let receipt = execute_and_prove_program(program, input).unwrap();
-    let output: ProgramOutput =
-        borsh::from_slice(from_frame(&receipt.journal.bytes).unwrap()).unwrap();
-    let effects = CallEffects {
-        account_changes: output
-            .state_diffs
-            .into_iter()
-            .map(|diff| AccountChange {
-                data: diff.post_data,
-            })
-            .collect(),
-        chained_calls: output.chained_calls,
-        block_validity_window: output.block_validity_window,
-        timestamp_validity_window: output.timestamp_validity_window,
-        events: output.events,
-    };
-    (receipt, effects)
+fn plan_receipt(program: &Program, input: &ProgramInput<InstructionData>) -> (Receipt, ProvenCall) {
+    let receipt = prove_session(program, |env| Program::write_execute_inputs(input, env)).unwrap();
+    let plan = planner_journal(&receipt.journal.bytes).unwrap();
+    (
+        receipt,
+        ProvenCall {
+            plan,
+            private_resolutions: Vec::new(),
+        },
+    )
+}
+
+fn resolution_receipt(program: &Program, input: &ResolveInput) -> (Receipt, ResolveOutput) {
+    let receipt = prove_session(program, |env| Program::write_resolve_inputs(input, env)).unwrap();
+    let resolution = resolver_journal(&receipt.journal.bytes).unwrap();
+    (receipt, resolution)
 }
 
 fn claims_for(programs: &[&Program]) -> Vec<ProgramImageClaim> {
@@ -1385,23 +1100,23 @@ fn claims_for(programs: &[&Program]) -> Vec<ProgramImageClaim> {
 fn direct_input(
     program: &Program,
     shard_selectors: Vec<ProgramShardSelector>,
+    authorized_accounts: Vec<AccountId>,
     instruction: InstructionData,
-    public_facts: PublicFacts,
+    witnesses: Vec<PrivateWitness>,
     claims: &[&Program],
-    effects: Vec<CallEffects>,
+    calls: Vec<ProvenCall>,
 ) -> PrivacyPreservingCircuitInput {
     PrivacyPreservingCircuitInput {
         root: RootCall {
             program_account_id: program.id().into(),
             shard_selectors,
             instruction_data: instruction,
+            authorized_accounts,
         },
-        root_call_kind: CallKind::Execute,
-        public_facts,
-        private_witnesses: Vec::new(),
+        private_witnesses: witnesses,
         dummy_inputs: Vec::new(),
         program_image_claims: claims_for(claims),
-        effects,
+        calls,
     }
 }
 
@@ -1412,11 +1127,11 @@ fn assert_circuit_rejects<T: std::fmt::Debug>(result: &Result<T, LeeError>, expe
     );
 }
 
-fn alice_input(program: &Program, balance: u128) -> ProgramInput<InstructionData> {
+fn alice_input(program: &Program, is_authorized: bool) -> ProgramInput<InstructionData> {
     ProgramInput {
         self_account_id: program.id().into(),
         caller_account_id: None,
-        pre_states: vec![AccountInput::balance(ALICE, true, balance)],
+        accounts: vec![AccountMeta::balance(ALICE, is_authorized)],
         instruction: Program::serialize_instruction(()).unwrap(),
     }
 }
@@ -1424,72 +1139,95 @@ fn alice_input(program: &Program, balance: u128) -> ProgramInput<InstructionData
 #[test]
 fn a_hand_built_input_with_a_matching_receipt_proves() {
     let noop = crate::test_methods::noop();
-    let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 100));
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, true));
     let input = direct_input(
         &noop,
         vec![ProgramShardSelector::balance(ALICE)],
+        vec![ALICE],
         Program::serialize_instruction(()).unwrap(),
-        [(ALICE, (true, Account::funded(100).data))].into(),
+        Vec::new(),
         &[&noop],
-        vec![effects],
+        vec![call],
     );
 
     let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
 
-    assert_eq!(output.public_actions[0].post.balance(), Ok(100));
+    // A handle an accepted plan used contributes its row even though it produced no effect:
+    // that is what binds the claimed authorization to something settlement re-checks.
+    assert_eq!(
+        output.public_actions,
+        vec![PublicAction {
+            account_id: ALICE,
+            is_authorized: true,
+            resolutions: Vec::new(),
+        }]
+    );
 }
 
 #[test]
 fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     let noop = crate::test_methods::noop();
-    let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 999));
+    // Proven against an unauthorized handle, offered where the root claims ALICE signed.
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, false));
     let input = direct_input(
         &noop,
         vec![ProgramShardSelector::balance(ALICE)],
+        vec![ALICE],
         Program::serialize_instruction(()).unwrap(),
-        [(ALICE, (true, Account::funded(100).data))].into(),
+        Vec::new(),
         &[&noop],
-        vec![effects],
+        vec![call],
     );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_circuit_rejects(&result, "echoed a handle it was not given");
 }
 
 #[test]
 fn forbidden_effects_are_rejected_by_the_circuit() {
     let writer = crate::test_methods::foreign_shard_writer();
-    let instruction = encode_balance(500).to_vec();
-    let (receipt, effects) = program_receipt(
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, 0, Account::default());
+    let target = witness.account_id();
+    let instruction = Program::serialize_instruction(vec![9_u8; 4]).unwrap();
+
+    // The writer names the target's *native* shard, which it does not own.
+    let plan_input = ProgramInput {
+        self_account_id: writer.id().into(),
+        caller_account_id: None,
+        accounts: vec![
+            AccountMeta::balance(target, true),
+            AccountMeta::balance(BOB, false),
+        ],
+        instruction: instruction.clone(),
+    };
+    let (plan_proof, mut call) = plan_receipt(&writer, &plan_input);
+    let (resolution_proof, resolution) = resolution_receipt(
         &writer,
-        &ProgramInput {
+        &ResolveInput {
             self_account_id: writer.id().into(),
-            caller_account_id: None,
-            pre_states: vec![
-                AccountInput::balance(ALICE, false, 100),
-                AccountInput::balance(BOB, false, 5),
-            ],
-            instruction: instruction.clone(),
+            selector: ProgramShardSelector::balance(target),
+            pre_data: ShardData::empty(),
+            effect_data: call.plan.effects[0].data.clone(),
         },
     );
+    call.private_resolutions = vec![resolution];
+
     let input = direct_input(
         &writer,
         vec![
-            ProgramShardSelector::balance(ALICE),
+            ProgramShardSelector::balance(target),
             ProgramShardSelector::balance(BOB),
         ],
+        Vec::new(),
         instruction,
-        [
-            (ALICE, (false, Account::funded(100).data)),
-            (BOB, (false, Account::funded(5).data)),
-        ]
-        .into(),
+        vec![witness],
         &[&writer],
-        vec![effects],
+        vec![call],
     );
 
-    let result = prove_circuit_directly(&input, vec![receipt]);
+    let result = prove_circuit_directly(&input, vec![plan_proof, resolution_proof]);
 
     assert_circuit_rejects(&result, "wrote data on a shard selector of");
 }
@@ -1504,35 +1242,32 @@ fn an_undeclared_child_account_is_rejected_by_the_circuit() {
         BOB,
     ))
     .unwrap();
-    let (root_receipt, root_effects) = program_receipt(
+    let (root_receipt, root_call) = plan_receipt(
         &forwarder,
         &ProgramInput {
             self_account_id: forwarder.id().into(),
             caller_account_id: None,
-            pre_states: vec![AccountInput::balance(ALICE, true, 100)],
+            accounts: vec![AccountMeta::balance(ALICE, true)],
             instruction: instruction.clone(),
         },
     );
-    let (child_receipt, child_effects) = program_receipt(
+    let (child_receipt, child_call) = plan_receipt(
         &noop,
         &ProgramInput {
             self_account_id: noop.id().into(),
             caller_account_id: Some(forwarder.id().into()),
-            pre_states: vec![AccountInput::balance(BOB, false, 5)],
+            accounts: vec![AccountMeta::balance(BOB, false)],
             instruction: Program::serialize_instruction(()).unwrap(),
         },
     );
     let input = direct_input(
         &forwarder,
         vec![ProgramShardSelector::balance(ALICE)],
+        vec![ALICE],
         instruction,
-        [
-            (ALICE, (true, Account::funded(100).data)),
-            (BOB, (false, Account::funded(5).data)),
-        ]
-        .into(),
+        Vec::new(),
         &[&forwarder, &noop],
-        vec![root_effects, child_effects],
+        vec![root_call, child_call],
     );
 
     let result = prove_circuit_directly(&input, vec![root_receipt, child_receipt]);
@@ -1541,7 +1276,7 @@ fn an_undeclared_child_account_is_rejected_by_the_circuit() {
 }
 
 #[test]
-fn missing_effects_are_rejected_by_the_circuit() {
+fn missing_call_wrappers_are_rejected_by_the_circuit() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let noop = crate::test_methods::noop();
     let instruction = Program::serialize_instruction((
@@ -1551,22 +1286,23 @@ fn missing_effects_are_rejected_by_the_circuit() {
         Vec::<PdaSeed>::new(),
     ))
     .unwrap();
-    let (receipt, effects) = program_receipt(
+    let (receipt, call) = plan_receipt(
         &forwarder,
         &ProgramInput {
             self_account_id: forwarder.id().into(),
             caller_account_id: None,
-            pre_states: vec![AccountInput::balance(ALICE, true, 100)],
+            accounts: vec![AccountMeta::balance(ALICE, true)],
             instruction: instruction.clone(),
         },
     );
     let input = direct_input(
         &forwarder,
         vec![ProgramShardSelector::balance(ALICE)],
+        vec![ALICE],
         instruction,
-        [(ALICE, (true, Account::funded(100).data))].into(),
+        Vec::new(),
         &[&forwarder, &noop],
-        vec![effects],
+        vec![call],
     );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
@@ -1575,19 +1311,84 @@ fn missing_effects_are_rejected_by_the_circuit() {
 }
 
 #[test]
-fn surplus_effects_are_rejected_by_the_circuit() {
+fn surplus_call_wrappers_are_rejected_by_the_circuit() {
     let noop = crate::test_methods::noop();
-    let (receipt, effects) = program_receipt(&noop, &alice_input(&noop, 100));
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, true));
     let input = direct_input(
         &noop,
         vec![ProgramShardSelector::balance(ALICE)],
+        vec![ALICE],
         Program::serialize_instruction(()).unwrap(),
-        [(ALICE, (true, Account::funded(100).data))].into(),
+        Vec::new(),
         &[&noop],
-        vec![effects.clone(), effects],
+        vec![call.clone(), call],
     );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
     assert_circuit_rejects(&result, "a call nothing scheduled");
+}
+
+/// A private effect without its resolution, and a resolution with no effect to answer: the
+/// transcript's resolutions are consumed one per effect, in effect order, and nothing is left
+/// over.
+#[test]
+fn a_private_effect_must_carry_exactly_its_own_resolution() {
+    let writer = crate::test_methods::data_changer();
+    let writer_id: AccountId = writer.id().into();
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, 0, Account::default());
+    let target = witness.account_id();
+    let written = vec![4_u8; 6];
+    let instruction = Program::serialize_instruction(written).unwrap();
+
+    let (plan_proof, call) = plan_receipt(
+        &writer,
+        &ProgramInput {
+            self_account_id: writer_id,
+            caller_account_id: None,
+            accounts: vec![AccountMeta::new(target, true, writer_id)],
+            instruction: instruction.clone(),
+        },
+    );
+    let (resolution_proof, resolution) = resolution_receipt(
+        &writer,
+        &ResolveInput {
+            self_account_id: writer_id,
+            selector: ProgramShardSelector::new(target, writer_id),
+            pre_data: ShardData::empty(),
+            effect_data: call.plan.effects[0].data.clone(),
+        },
+    );
+
+    let build = |private_resolutions: Vec<ResolveOutput>| {
+        direct_input(
+            &writer,
+            vec![ProgramShardSelector::new(target, writer_id)],
+            Vec::new(),
+            instruction.clone(),
+            vec![init_witness(&keys, 0, Account::default())],
+            &[&writer],
+            vec![ProvenCall {
+                plan: call.plan.clone(),
+                private_resolutions,
+            }],
+        )
+    };
+
+    let missing = prove_circuit_directly(&build(Vec::new()), vec![plan_proof.clone()]);
+    assert_circuit_rejects(&missing, "must carry its resolution");
+
+    let surplus = prove_circuit_directly(
+        &build(vec![resolution.clone(), resolution.clone()]),
+        vec![plan_proof.clone(), resolution_proof.clone()],
+    );
+    assert_circuit_rejects(&surplus, "more resolutions than it emitted");
+
+    let matched =
+        prove_circuit_directly(&build(vec![resolution]), vec![plan_proof, resolution_proof]);
+    assert!(
+        matched.is_ok(),
+        "the matching transcript must prove: {matched:?}"
+    );
 }

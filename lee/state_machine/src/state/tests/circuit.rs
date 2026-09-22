@@ -120,7 +120,6 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
                 ProgramShardSelector::balance(sender_id),
                 ProgramShardSelector::balance(recipient_id),
             ],
-            public_accounts: [(recipient_id, Account::default())].into(),
             private_witnesses: vec![update_witness(
                 &keys,
                 0,
@@ -160,7 +159,7 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
 
     let [recipient_action] = <[_; 1]>::try_from(output.public_actions).unwrap();
     assert_eq!(recipient_action.account_id, recipient_id);
-    assert_eq!(recipient_action.post.balance(), Ok(amount));
+    assert_eq!(recipient_action.resolutions, vec![native_credit(amount)]);
 }
 
 #[test]
@@ -392,9 +391,9 @@ fn private_pda_npk_mismatch_fails() {
 
 /// Happy path for the caller-seeds authorization of a private PDA. The delegator echoes the
 /// private PDA, then chains to a callee delegating the account's own seed via
-/// `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization is
+/// `ChainedCall.pda_seeds`. In the callee's step, the handle's authorization is
 /// established via the private derivation
-/// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+/// `AccountId::for_private_pda(delegator, seed, npk) == handle.account_id`.
 #[test]
 fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let delegator = crate::test_methods::private_pda_delegator();
@@ -1208,7 +1207,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     ProgramShardSelector::balance(alice_pda_0_id),
                 ],
                 signers: [funder_id].into(),
-                public_accounts: [(funder_id, funder_account)].into(),
                 private_witnesses: vec![init_pda_witness(
                     &alice_keys,
                     0,
@@ -1246,7 +1244,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     ProgramShardSelector::balance(alice_pda_1_id),
                 ],
                 signers: [funder_id].into(),
-                public_accounts: [(funder_id, funder_account)].into(),
                 private_witnesses: vec![init_pda_witness(
                     &alice_keys,
                     1,
@@ -1281,7 +1278,6 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     // Alice spends alice_pda_0 into the public recipient.
     {
-        let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
@@ -1289,7 +1285,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     ProgramShardSelector::balance(recipient_id),
                 ],
                 signers: [recipient_id].into(),
-                public_accounts: [(recipient_id, recipient_account)].into(),
                 private_witnesses: vec![update_pda_witness(
                     &alice_keys,
                     0,
@@ -1318,14 +1313,12 @@ fn two_private_pda_family_members_receive_and_spend() {
 
     // Alice spends alice_pda_1 into the same public recipient.
     {
-        let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
                     ProgramShardSelector::balance(alice_pda_1_id),
                     ProgramShardSelector::balance(recipient_id),
                 ],
-                public_accounts: [(recipient_id, recipient_account)].into(),
                 private_witnesses: vec![update_pda_witness(
                     &alice_keys,
                     1,
@@ -1376,7 +1369,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     ProgramShardSelector::balance(alice_pda_1_id),
                 ],
                 signers: [recipient_id].into(),
-                public_accounts: [(recipient_id, recipient_account)].into(),
                 private_witnesses: vec![update_pda_witness(
                     &alice_keys,
                     1,

@@ -94,7 +94,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     let input = ProgramInput {
         self_account_id: header_account_id,
         caller_account_id: None,
-        pre_states: vec![AccountInput::balance(AccountId::new([21; 32]), true, 0)],
+        accounts: vec![AccountMeta::balance(AccountId::new([21; 32]), true)],
         instruction: Program::serialize_instruction(()).unwrap(),
     };
 

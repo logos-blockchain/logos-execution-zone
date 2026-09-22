@@ -13,10 +13,7 @@ use crate::{
 
 const CHAINED_CALLS: usize = 3;
 
-type ForwarderInstruction = (
-    Option<(AccountId, Vec<u8>)>,
-    Vec<(AccountId, ProgramShardSelector, InstructionData)>,
-);
+type ForwarderInstruction = Vec<(AccountId, ProgramShardSelector, InstructionData)>;
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -184,7 +181,7 @@ fn chained_calls_share_one_budget() {
         InstructionData::new(),
     );
     let forwarding = |callees: Vec<_>| {
-        let instruction: ForwarderInstruction = (None, callees);
+        let instruction: ForwarderInstruction = callees;
         let message = Message::try_new(
             forwarder_id,
             vec![ProgramShardSelector::new(from, forwarder_id)],
@@ -230,7 +227,7 @@ fn free_outcome_is_zero_cycles() {
 
 #[test]
 fn metered_guest_panic_is_charged_the_full_budget() {
-    // An unauthorized pre_state panics the guest mid-execution — a chargeable
+    // An unauthorized handle panics the guest mid-execution — a chargeable
     // failure that is not OutOfGas. It still pays the whole declared budget:
     // metering written back on an error path must never undercharge.
     let program_id: AccountId = crate::test_methods::auth_asserting_noop().id().into();

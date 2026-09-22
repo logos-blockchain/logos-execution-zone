@@ -30,6 +30,7 @@ fn flash_swap_successful() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: callback.id().into(),
         amount_out,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
@@ -75,6 +76,7 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: callback.id().into(),
         amount_out,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
@@ -125,6 +127,7 @@ fn flash_swap_self_call_targets_correct_program() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: callback.id().into(),
         amount_out: 0,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
