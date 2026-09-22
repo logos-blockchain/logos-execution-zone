@@ -260,11 +260,20 @@ pub fn run(
             .context("Failed to initialize Bedrock channel publisher")?;
         info!("Bedrock Sharding Pool Actor spawned");
 
-        let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_pool_ref.clone())
-            .await
-            .context("Failed to set up Executor Actor")?;
-        let slasher_ref = executor.slasher_ref();
-        let accredited_keys_rx = executor.accredited_keys_watch();
+        let executor = ExecutorActor::new(
+            config,
+            bedrock_signing_key,
+            storage_ref.clone(),
+            bedrock_pool_ref.clone(),
+        )
+        .await
+        .context("Failed to set up Executor Actor")?;
+        let slasher_ref = executor
+            .slasher_ref()
+            .context("Failed to get slasher ref")?;
+        let accredited_keys_rx = executor
+            .accredited_keys_watch()
+            .context("Failed to get accredited keys watch")?;
         let executor_ref = executor_prepared.actor_ref().clone();
         executor_prepared.spawn(executor);
         info!("Executor Actor spawned");

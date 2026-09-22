@@ -133,7 +133,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .ask(sequencer_executor_actor::protocol::GetFeeQuote)
             .await
             .map(map_fee_state_quote)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
@@ -177,7 +177,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountBalance { account_id })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_transaction(
@@ -197,7 +197,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountNonces { account_ids })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_proofs_and_root(
@@ -207,15 +207,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot { commitments })
             .await
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccount { account_id })
             .await
-            .map(|reply| reply.account)
-            .map_err(map_infallible_error)
+            .map_err(map_executor_error)
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
@@ -238,8 +237,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetChannelId)
             .await
-            .map(|channel_id| ChannelId(*channel_id.as_ref()))
-            .map_err(map_executor_error)
+            .map(|reply| ChannelId(*reply.0.as_ref()))
+            .map_err(map_infallible_error)
     }
 
     async fn get_cross_zone_dead_letters(
@@ -316,6 +315,7 @@ fn map_executor_error<M>(
     err: SendError<M, sequencer_executor_actor::error::Error>,
 ) -> ErrorObjectOwned {
     const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
+    const SEQUENCER_IS_NOT_ONLINE: i32 = -31901;
 
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
@@ -327,8 +327,13 @@ fn map_executor_error<M>(
                 )
             }
             sequencer_executor_actor::error::Error::MempoolIsFull => ErrorObjectOwned::owned(
-                MEMPOOL_IS_FULL_ERROR_CODE,
+                ErrorCode::ServerError(MEMPOOL_IS_FULL_ERROR_CODE).code(),
                 "Mempool is full".to_owned(),
+                None::<()>,
+            ),
+            sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
+                ErrorCode::ServerError(SEQUENCER_IS_NOT_ONLINE).code(),
+                "Sequencer is not online yet, try again later".to_owned(),
                 None::<()>,
             ),
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
@@ -337,7 +342,15 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
-            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)) => {
+            | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
+            | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
+            | sequencer_executor_actor::error::Error::StorageInconsistency(_)
+            | sequencer_executor_actor::error::Error::InvalidSequencerKey
+            | sequencer_executor_actor::error::Error::InvalidSigningKey(_)
+            | sequencer_executor_actor::error::Error::CheckpointEncodingFailed(_)
+            | sequencer_executor_actor::error::Error::FoundingCommitteeContainsNoKeys
+            | sequencer_executor_actor::error::Error::BlockReconstructionFailed { .. }
+            | sequencer_executor_actor::error::Error::SequencerStakeConfigNotFound) => {
                 internal_error(handle_err)
             }
         },

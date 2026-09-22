@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use common::block::Block;
 use kameo::Reply;
-pub use logos_blockchain_core::{codec::DeserializeOp, mantle::NoteId};
+pub use logos_blockchain_core::{
+    codec::{DeserializeOp, SerializeOp},
+    mantle::NoteId,
+};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 pub use logos_blockchain_zone_sdk::{
     Ed25519PublicKey, Slot, ZoneMessage,
@@ -39,6 +42,7 @@ pub enum ChannelEventKind {
 pub struct FinalizedBlock {
     pub block: BlockData,
     pub msg_id: MsgId,
+    pub slot: Slot,
 }
 
 #[derive(Debug, Clone)]

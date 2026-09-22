@@ -1,8 +1,44 @@
+use chain_state::ChainMismatch;
 use kameo::error::SendError;
+use lee_core::BlockId;
 use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(
+        "Sequencer store diverges from the Bedrock channel ({0}). \
+         Delete the sequencer storage directory or point at the correct channel."
+    )]
+    StoreAndChannelDivergence(ChainMismatch),
+
+    #[error("Invalid sequencer key")]
+    InvalidSequencerKey,
+
+    #[error("Signing key is not provided")]
+    InvalidSigningKey(#[source] anyhow::Error),
+
+    #[error("Failed to (de-)encode checkpoint")]
+    CheckpointEncodingFailed(#[source] anyhow::Error),
+
+    #[error("Founding committee contains no keys")]
+    FoundingCommitteeContainsNoKeys,
+
+    #[error("Failed to reconstruct block {block_id} while bootstrapping")]
+    BlockReconstructionFailed {
+        block_id: BlockId,
+        #[source]
+        source: chain_state::ingest_error::BlockIngestError,
+    },
+
+    #[error(
+        "sequencer_stake config account is absent or undecodable; \
+         this chain's state is not one this sequencer can operate on"
+    )]
+    SequencerStakeConfigNotFound,
+
+    #[error("The sequencer is not online, wait until bootstrap completes")]
+    NotOnline,
+
     #[error("One of the sequencer's background tasks has finished unexpectedly")]
     BackgroundTaskFinishedUnexpectedly,
 
@@ -14,6 +50,9 @@ pub enum Error {
 
     #[error("Failed to start the sequencer")]
     SequencerStartFailed(#[source] anyhow::Error),
+
+    #[error("Storage inconsistency detected: {0}")]
+    StorageInconsistency(String),
 
     #[error("Storage request failed")]
     StorageRequestFailed(#[source] SendError<ErasedMessage, sequencer_storage_actor::error::Error>),

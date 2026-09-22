@@ -79,7 +79,10 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Maximum block size (includes header, user transactions, and the mandatory clock
     /// transaction).
-    #[serde(default = "default_max_block_size")]
+    #[serde(
+        default = "default_max_block_size",
+        deserialize_with = "deserialize_max_block_size"
+    )]
     pub max_block_size: ByteSize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
@@ -172,6 +175,22 @@ impl SequencerConfig {
         self.home
             .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
     }
+}
+
+fn deserialize_max_block_size<'de, D>(deserializer: D) -> Result<ByteSize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let size = s.parse::<ByteSize>().map_err(serde::de::Error::custom)?;
+
+    if size.as_u64() > MAX_PUBLISHABLE_BLOCK_SIZE {
+        return Err(serde::de::Error::custom(format!(
+            "max_block_size {size} exceeds Bedrock's inscription limit of {} bytes",
+            MAX_PUBLISHABLE_BLOCK_SIZE,
+        )));
+    }
+    Ok(size)
 }
 
 const fn default_max_block_size() -> ByteSize {

@@ -59,7 +59,7 @@ mod tests;
 pub struct BedrockActor {
     channel_id: ChannelId,
     node: NodeHttpClient,
-    node_stream: BoxStream<Result<ZoneMessage>>,
+    node_stream: BoxStream<Result<(ZoneMessage, Slot)>>,
     /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
@@ -89,7 +89,7 @@ impl BedrockActor {
         node: NodeHttpClient,
         stream_from: Option<Slot>,
         channel_id: ChannelId,
-    ) -> Result<impl Stream<Item = Result<ZoneMessage>>> {
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>>> {
         const BATCH_SIZE: Slot = Slot::new(100);
         const STREAM_ATTEMPT_LIMIT: usize = 5;
         const STREAM_RETRY_TIMEOUT: Duration = Duration::from_millis(100);
@@ -164,7 +164,7 @@ impl BedrockActor {
                     .zone_messages_in_blocks(start_slot, end_slot, channel_id)
                     .await
                     .map_err(|err| Error::NodeRequestFailed(err.into()))?
-                    .map(|(block, _slot)| Ok(block));
+                    .map(|tuple| Ok(tuple));
 
                 stream_state.last_processed_slot = Some(end_slot);
                 Ok(Some((backfill_stream.boxed(), stream_state)))
@@ -175,7 +175,7 @@ impl BedrockActor {
         Ok(stream)
     }
 
-    async fn on_node_stream_message(&mut self, msg: ZoneMessage) -> Result<()> {
+    async fn on_node_stream_message(&mut self, msg: ZoneMessage, slot: Slot) -> Result<()> {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let block = match borsh::from_slice::<Block>(&zone_block.data) {
@@ -191,6 +191,7 @@ impl BedrockActor {
                             event: ChannelEventKind::FinalizedBlock(FinalizedBlock {
                                 block,
                                 msg_id: zone_block.id,
+                                slot,
                             }),
                         },
                     })
@@ -237,7 +238,8 @@ impl Actor for BedrockActor {
         loop {
             select! {
                 Some(res) = self.node_stream.next() => {
-                    self.on_node_stream_message(res?).await?;
+                    let (msg, slot) = res?;
+                    self.on_node_stream_message(msg, slot).await?;
                 }
                 Some(res) = OptionFuture::from(self.publisher.as_mut().map(|writer| writer.step(
                     self.channel_id,

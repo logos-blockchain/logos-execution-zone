@@ -65,3 +65,7 @@ impl<M, E> SendErrorExt for SendError<M, E> {
 /// A dummy struct replacing message type in [`kameo::error::SendError`]
 /// to not to expose the message type in the public API.
 pub struct ErasedMessage;
+
+/// A simple wrapper for types not implementing [`kameo::Reply`] directly.
+#[derive(kameo::Reply)]
+pub struct Reply<T: Send + 'static>(pub T);

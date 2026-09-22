@@ -2,10 +2,7 @@ use std::ops::RangeInclusive;
 
 use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
-use lee_core::{
-    BlockId, Commitment,
-    account::{Account, AccountId},
-};
+use lee_core::{BlockId, Commitment, account::AccountId};
 pub use sequencer_bedrock_actor::protocol::ChannelId;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
@@ -113,11 +110,6 @@ pub struct GetProofsAndRoot {
 
 pub struct GetAccount {
     pub account_id: AccountId,
-}
-
-#[derive(Reply)]
-pub struct GetAccountReply {
-    pub account: Account,
 }
 
 pub struct GetChannelId;
