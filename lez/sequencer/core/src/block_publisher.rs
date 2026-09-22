@@ -571,6 +571,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         parent: MsgId,
     ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
+        let data_byte_size = data.len();
         let inscription: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
@@ -603,8 +604,15 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         }
 
         let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
-        self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
-            .await
+        let published = self
+            .dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
+            .await;
+        // Every block produced after bootstrap takes this path, so without this the
+        // only sizes ever logged are the republished ones.
+        if published.is_ok() {
+            info!("Published block with the size of {data_byte_size} bytes");
+        }
+        published
     }
 
     async fn publish_genesis_creating_channel(
