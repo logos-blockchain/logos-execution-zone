@@ -128,12 +128,6 @@ pub enum InvalidProgramBehaviorError {
         actual: Box<AccountInput>,
     },
 
-    #[error("Unauthorized account marked as authorized")]
-    InvalidAccountAuthorization { account_id: AccountId },
-
-    #[error("Authorized account marked as not authorized")]
-    AuthorizedAccountMarkedAsNotAuthorized { account_id: AccountId },
-
     #[error("Program account ID mismatch: expected {expected}, actual {actual}")]
     MismatchedProgramId {
         expected: AccountId,
@@ -156,30 +150,13 @@ pub enum InvalidProgramBehaviorError {
     UndeclaredProgramDependency { program_account_id: AccountId },
 
     #[error(
-        "Account {account_id} was declared in the transaction but is missing from the program output"
-    )]
-    DeclaredAccountMissingFromOutput { account_id: AccountId },
-
-    #[error(
         "Chained call named account {account_id}, but it isn't resolvable from the top-level \
          pre_states or any earlier call's materialized diff in this transaction"
     )]
     UnknownChainedCallAccount { account_id: AccountId },
 
-    #[error(
-        "Program {program_account_id} ran on accounts its caller either did not name or did not \
-         name in appropriate order."
-    )]
-    ChainedCallAccountsMismatch { program_account_id: AccountId },
-
-    #[error(
-        "Program {program_account_id}'s own output reports account {account_id}, which the \
-         chained call that invoked it never named"
-    )]
-    UndeclaredAccountInProgramOutput {
-        program_account_id: AccountId,
-        account_id: AccountId,
-    },
+    #[error("Program {program_account_id} did not return exactly one row per input")]
+    InputRowsMismatch { program_account_id: AccountId },
 
     #[error(transparent)]
     BalanceDiffFailed(#[from] BalanceDiffError),
