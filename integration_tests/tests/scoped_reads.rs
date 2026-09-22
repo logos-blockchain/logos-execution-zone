@@ -264,7 +264,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
 /// The indexer's view of a bloated account: scoped reads and the summary keep working.
 #[test]
-#[ignore = "the indexer cannot keep up with 2.8 MB blocks, #901"]
+#[ignore = "L1 finalization stops part way on CI, so the indexer runs out of blocks to read while the sequencer keeps producing, #901"]
 async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     let mut ctx = TestContext::new().await?;
     let victim = ctx.existing_public_accounts()[0];
@@ -320,16 +320,12 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     assert_eq!(after_population.data.balance, balance_only.data.balance);
     assert_eq!(after_population.nonce, balance_only.nonce.0);
 
-    // The explorer renders shard counts and sizes, so it needs to enumerate shards on
-    // an account a scoped read cannot enumerate and a whole-account read can no longer
-    // return. The summary answers that without carrying the bytes.
+    // The explorer renders shard counts and sizes, so it needs to enumerate shards a
+    // scoped read cannot. The summary answers that without carrying the bytes, which is
+    // what these assertions pin. Note the whole-account read still succeeds here: the
+    // indexer base64-encodes shards, so tripping its 10 MiB cap would take 80 of them,
+    // where the sequencer's decimal-array encoding trips at 30.
     let victim_key: indexer_service_protocol::AccountId = victim.into();
-    assert!(
-        indexer_service_rpc::RpcClient::get_account(indexer, victim_key)
-            .await
-            .is_err(),
-        "the whole-account indexer read must fail on the bloated account"
-    );
     let expected_shard_len =
         u64::try_from(BLOAT_SHARD_BYTES).expect("the bloat shard size fits in u64");
     let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
