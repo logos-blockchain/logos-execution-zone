@@ -963,6 +963,10 @@ fn random_dummy_note() -> EncryptedAccountData {
 #[cfg(test)]
 mod tests {
 
+    use std::future::{Ready, ready};
+
+    use futures::executor::block_on;
+
     use super::*;
 
     #[test]
@@ -1008,16 +1012,43 @@ mod tests {
     }
 
     fn public_signing_state(seed: u8, balance: u128) -> State {
+        public_signing_state_with(seed, Account::funded(balance))
+    }
+
+    fn public_signing_state_with(seed: u8, account: Account) -> State {
         let sk = lee::PrivateKey::try_new([seed; 32]).expect("valid key");
         let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sk));
-        let account = PreparedAccount {
-            account_id,
-            account: Account::funded(balance),
-        };
         State::Public {
-            account,
+            account: PreparedAccount {
+                account_id,
+                account,
+            },
             sk: Some(sk),
         }
+    }
+
+    /// A balance read that fails the test if the walk reaches it.
+    fn never_fetches(
+        selector: ProgramShardSelector,
+    ) -> Ready<Result<Account, ExecutionFailureKind>> {
+        panic!(
+            "the payer walk must not read a balance it already holds, got {}",
+            selector.account_id
+        )
+    }
+
+    fn answers(
+        account: &Account,
+    ) -> impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>> {
+        let account = account.clone();
+        move |_| ready(Ok(account.clone()))
+    }
+
+    fn payer(
+        manager: &mut AccountManager,
+        fetch: impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>>,
+    ) -> Option<AccountId> {
+        block_on(manager.fee_payer_account_id_with(fetch)).expect("the walk succeeds")
     }
 
     fn manager(states: Vec<State>) -> AccountManager {
@@ -1033,6 +1064,132 @@ mod tests {
             pin: None,
             dummy_commitment_root: [0; 32],
         }
+    }
+
+    #[test]
+    fn fee_payer_is_the_first_funded_public_signing_account() {
+        let first_signing = public_signing_state(1, 1_000);
+        let expected = first_signing.account().account_id;
+        let mut manager = manager(vec![
+            private_state(),
+            first_signing,
+            public_signing_state(2, 1_000),
+        ]);
+        assert_eq!(payer(&mut manager, never_fetches), Some(expected));
+    }
+
+    #[test]
+    fn fee_payer_skips_a_non_signing_public_account() {
+        // A tracked but unsignable public account (sk: None, e.g. an AMM pool
+        // or definition PDA passed as a non-signing input) must not be
+        // designated payer -- the first funded signing account is chosen instead.
+        let signing = public_signing_state(3, 1_000);
+        let signing_id = signing.account().account_id;
+        let mut manager = manager(vec![public_state(), signing]);
+        assert_eq!(payer(&mut manager, never_fetches), Some(signing_id));
+    }
+
+    #[test]
+    fn fee_payer_skips_an_unfunded_signing_account_for_a_funded_one() {
+        let funded = public_signing_state(5, 1_000);
+        let funded_id = funded.account().account_id;
+        let mut manager = manager(vec![public_signing_state(4, 0), funded]);
+        // The unfunded candidate carries no native shard, so it is read; the read
+        // confirms it is empty and the walk moves on.
+        assert_eq!(
+            payer(&mut manager, answers(&Account::default())),
+            Some(funded_id)
+        );
+    }
+
+    #[test]
+    fn no_public_account_means_no_fee_payer() {
+        let mut manager = manager(vec![private_state()]);
+        assert_eq!(payer(&mut manager, never_fetches), None);
+    }
+
+    #[test]
+    fn an_all_unfunded_wallet_falls_back_to_the_first_signing_account() {
+        // No signing account is funded, but a fee-exempt transaction still needs a
+        // payer id to fill: fall back to the first signing account rather than
+        // refuse to build.
+        let first = public_signing_state(7, 0);
+        let first_id = first.account().account_id;
+        let mut manager = manager(vec![first, public_signing_state(8, 0)]);
+        assert_eq!(
+            payer(&mut manager, answers(&Account::default())),
+            Some(first_id)
+        );
+    }
+
+    #[test]
+    fn a_non_signing_public_account_alone_has_no_fee_payer() {
+        let mut manager = manager(vec![public_state()]);
+        assert_eq!(payer(&mut manager, never_fetches), None);
+    }
+
+    #[test]
+    fn an_application_scoped_candidate_is_funded_by_the_balance_read() {
+        // Prepared for an application shard alone, so its balance is absent until read.
+        let program_id = AccountId::new([9; 32]);
+        let scoped =
+            Account::default().with_shard(program_id, vec![1_u8; 4].try_into().expect("data fits"));
+        let candidate = public_signing_state_with(6, scoped);
+        let candidate_id = candidate.account().account_id;
+        let mut manager = manager(vec![candidate]);
+
+        assert_eq!(
+            payer(&mut manager, answers(&Account::funded(500))),
+            Some(candidate_id)
+        );
+        let merged = &manager.states[0].account().account;
+        assert_eq!(
+            merged.data.balance(),
+            Ok(500),
+            "the read balance is merged in"
+        );
+        assert_eq!(
+            merged.data.shard(program_id).as_ref(),
+            vec![1_u8; 4],
+            "merging a balance read must not drop the application shard"
+        );
+    }
+
+    #[test]
+    fn a_funded_candidate_is_never_read() {
+        // `never_fetches` panics if reached: a materialised balance must be trusted.
+        let funded = public_signing_state(10, 1_000);
+        let funded_id = funded.account().account_id;
+        let mut manager = manager(vec![funded]);
+        assert_eq!(payer(&mut manager, never_fetches), Some(funded_id));
+    }
+
+    #[test]
+    fn a_failed_balance_read_fails_the_walk() {
+        let mut manager = manager(vec![public_signing_state(11, 0)]);
+        let result = block_on(manager.fee_payer_account_id_with(|_| {
+            ready(Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                "sequencer unreachable"
+            ))))
+        }));
+        assert!(
+            matches!(result, Err(ExecutionFailureKind::SequencerError(_))),
+            "a failed balance read must not be silently treated as unfunded, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_balance_read_at_a_different_nonce_fails_the_walk() {
+        let mut manager = manager(vec![public_signing_state(12, 0)]);
+        let stale = Account {
+            nonce: Nonce(7),
+            ..Account::funded(1_000)
+        };
+        let result = block_on(manager.fee_payer_account_id_with(answers(&stale)));
+        assert!(
+            result.is_err_and(|error| error.to_string().contains("Failed to get data")),
+            "a view from a different nonce must not be merged in"
+        );
     }
 
     #[test]
