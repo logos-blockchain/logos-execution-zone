@@ -601,7 +601,8 @@ impl WalletCore {
             .await?)
     }
 
-    /// Returns the account's nonce, balance, and optionally one program shard.
+    /// Returns the account's nonce and the selected shard; its balance is the shard at the
+    /// native token program.
     pub async fn get_account_view(&self, shard_selector: ProgramShardSelector) -> Result<Account> {
         let mut account = self
             .multi_sequencer_client
