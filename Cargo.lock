@@ -11112,6 +11112,7 @@ dependencies = [
  "serde_json",
  "system_accounts",
  "tempfile",
+ "test_guest_core",
  "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
