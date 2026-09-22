@@ -1,5 +1,7 @@
 #![allow(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::{
     AuthorizationSecretKey,
@@ -83,12 +85,37 @@ struct Recording {
     asked: Vec<ProgramShardSelector>,
 }
 
-impl PublicSource for Recording {
+impl Recording {
+    fn new(entries: impl IntoIterator<Item = (AccountId, AccountData)>) -> Self {
+        Self {
+            facts: facts(entries),
+            asked: Vec::new(),
+        }
+    }
+}
+
+/// Facts fixed up front, so a shard a test never exposed fails instead of reading back empty.
+type PublicFacts = BTreeMap<AccountId, AccountData>;
+
+impl PublicSource for PublicFacts {
     type Error = ExecutionError;
 
-    fn account(&mut self, account_id: AccountId) -> Result<bool, ExecutionError> {
-        self.facts.account(account_id)
+    fn shard(
+        &mut self,
+        account_id: AccountId,
+        program_account_id: AccountId,
+    ) -> Result<ShardData, ExecutionError> {
+        self.get(&account_id)
+            .and_then(|data| data.shards.get(&program_account_id))
+            .cloned()
+            .ok_or_else(|| ExecutionError::MissingPublicFact {
+                shard_selector: ProgramShardSelector::new(account_id, program_account_id),
+            })
     }
+}
+
+impl PublicSource for Recording {
+    type Error = ExecutionError;
 
     fn shard(
         &mut self,
@@ -111,18 +138,23 @@ fn funded(balance: Balance) -> AccountData {
     }
 }
 
-fn facts(entries: impl IntoIterator<Item = (AccountId, bool, AccountData)>) -> PublicFacts {
-    entries
-        .into_iter()
-        .map(|(account_id, is_authorized, data)| (account_id, (is_authorized, data)))
-        .collect()
+fn facts(entries: impl IntoIterator<Item = (AccountId, AccountData)>) -> PublicFacts {
+    entries.into_iter().collect()
 }
 
 fn root(shard_selectors: Vec<ProgramShardSelector>) -> RootCall {
+    signed_root(shard_selectors, Vec::new())
+}
+
+fn signed_root(
+    shard_selectors: Vec<ProgramShardSelector>,
+    authorized_accounts: Vec<AccountId>,
+) -> RootCall {
     RootCall {
         program_account_id: PROGRAM,
         shard_selectors,
         instruction_data: vec![1, 2, 3],
+        authorized_accounts,
     }
 }
 
@@ -133,81 +165,117 @@ fn chained(
     ChainedCall::new(program_account_id, shard_selectors, &())
 }
 
-fn unchanged(count: usize) -> Vec<AccountChange> {
-    vec![AccountChange { data: None }; count]
-}
-
-fn effects(account_changes: Vec<AccountChange>, chained_calls: Vec<ChainedCall>) -> CallEffects {
-    CallEffects {
-        account_changes,
-        chained_calls,
-        block_validity_window: BlockValidityWindow::new_unbounded(),
-        timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-        events: Vec::new(),
+fn effect(account: &AccountMeta, bytes: &[u8]) -> ShardEffect {
+    ShardEffect {
+        selector: account.into(),
+        data: bytes.to_vec(),
     }
 }
 
-fn echo(call: &ProgramInput<InstructionData>, chained_calls: Vec<ChainedCall>) -> CallEffects {
-    effects(unchanged(call.pre_states.len()), chained_calls)
+fn plan(call: &ProgramInput<InstructionData>) -> ProgramOutput {
+    ProgramOutput::new(
+        call.self_account_id,
+        call.caller_account_id,
+        call.instruction.clone(),
+        call.accounts.clone(),
+    )
 }
 
-fn output_of(call: &ProgramInput<InstructionData>, effects: &CallEffects) -> ProgramOutput {
-    ProgramOutput {
-        self_account_id: call.self_account_id,
-        caller_account_id: call.caller_account_id,
-        call_kind: CallKind::Execute,
-        instruction_data: call.instruction.clone(),
-        state_diffs: call
-            .pre_states
-            .iter()
-            .cloned()
-            .zip(&effects.account_changes)
-            .map(|(pre_state, change)| ShardStateDiff {
-                pre_state,
-                post_data: change.data.clone(),
-            })
-            .collect(),
-        chained_calls: effects.chained_calls.clone(),
-        block_validity_window: effects.block_validity_window,
-        timestamp_validity_window: effects.timestamp_validity_window,
-        events: effects.events.clone(),
-    }
-}
-
-fn start<'witnesses, S: PublicSource>(
-    root: RootCall,
-    witnesses: &'witnesses [PrivateWitness],
-    source: &mut S,
-) -> ExecutionState<'witnesses> {
-    ExecutionState::initialize(root, CallKind::Execute, witnesses, source)
+fn start(root: RootCall, witnesses: &[PrivateWitness]) -> ExecutionState<'_> {
+    ExecutionState::initialize(root, witnesses, PublicEffects::Resolve)
         .unwrap_or_else(|_| panic!("initialization must succeed"))
 }
 
-fn step<S: PublicSource>(
-    state: &mut ExecutionState<'_>,
-    source: &mut S,
-    respond: impl FnOnce(&ProgramInput<InstructionData>) -> CallEffects,
-) -> Vec<ProgramEvent> {
-    let call = state
-        .prepare_next_call(source)
-        .unwrap_or_else(|_| panic!("preparation must succeed"))
-        .expect("a call must be pending");
-    let effects = respond(call);
-    state.complete_call(effects, |_| {}).unwrap()
+fn start_deferring(root: RootCall, witnesses: &[PrivateWitness]) -> ExecutionState<'_> {
+    ExecutionState::initialize(root, witnesses, PublicEffects::Defer)
+        .unwrap_or_else(|_| panic!("initialization must succeed"))
 }
 
-fn run_to_end<S: PublicSource>(state: &mut ExecutionState<'_>, source: &mut S) -> Vec<AccountId> {
+fn resolved(public: PublicOutcome) -> Vec<(AccountId, AccountData)> {
+    match public {
+        PublicOutcome::Resolved(accounts) => accounts,
+        PublicOutcome::Deferred(_) => panic!("the resolving mode must produce resolved accounts"),
+    }
+}
+
+fn journal(public: PublicOutcome) -> Vec<PublicAction> {
+    match public {
+        PublicOutcome::Deferred(rows) => rows,
+        PublicOutcome::Resolved(_) => panic!("the deferring mode must produce journal rows"),
+    }
+}
+
+fn obligation<S: PublicSource<Error = ExecutionError>>(
+    state: &mut ExecutionState<'_>,
+    source: &mut S,
+) -> ResolveInput {
+    state
+        .next_obligation(source)
+        .unwrap()
+        .expect("an obligation must be pending")
+        .clone()
+}
+
+fn drain<S: PublicSource<Error = ExecutionError>>(
+    state: &mut ExecutionState<'_>,
+    source: &mut S,
+    resolve: &mut impl FnMut(&ResolveInput) -> Option<ShardData>,
+) -> Vec<ResolveInput> {
+    let mut local = Vec::new();
+    loop {
+        let Some(input) = state.next_obligation(source).unwrap().cloned() else {
+            return local;
+        };
+        let output = ResolveOutput {
+            post_data: resolve(&input),
+            input,
+        };
+        state.accept_resolution(&output).unwrap();
+        local.push(output.input);
+    }
+}
+
+fn step_resolving<S: PublicSource<Error = ExecutionError>>(
+    state: &mut ExecutionState<'_>,
+    source: &mut S,
+    respond: impl FnOnce(&ProgramInput<InstructionData>) -> ProgramOutput,
+    resolve: &mut impl FnMut(&ResolveInput) -> Option<ShardData>,
+) -> Vec<ProgramEvent> {
+    let call = state
+        .prepare_next_call()
+        .unwrap_or_else(|_| panic!("preparation must succeed"))
+        .expect("a call must be pending");
+    let output = respond(call);
+    state.bind_plan(output).unwrap();
+    drain(state, source, resolve);
+    state.complete_call().unwrap()
+}
+
+fn step<S: PublicSource<Error = ExecutionError>>(
+    state: &mut ExecutionState<'_>,
+    source: &mut S,
+    respond: impl FnOnce(&ProgramInput<InstructionData>) -> ProgramOutput,
+) -> Vec<ProgramEvent> {
+    step_resolving(state, source, respond, &mut |_| None)
+}
+
+fn run_to_end<S: PublicSource<Error = ExecutionError>>(
+    state: &mut ExecutionState<'_>,
+    source: &mut S,
+) -> Vec<AccountId> {
     let mut visited = Vec::new();
     loop {
         let Some(call) = state
-            .prepare_next_call(source)
+            .prepare_next_call()
             .unwrap_or_else(|_| panic!("preparation must succeed"))
         else {
             return visited;
         };
         visited.push(call.self_account_id);
-        let effects = echo(call, Vec::new());
-        state.complete_call(effects, |_| {}).unwrap();
+        let output = plan(call);
+        state.bind_plan(output).unwrap();
+        drain(state, source, &mut |_| None);
+        state.complete_call().unwrap();
     }
 }
 
@@ -252,247 +320,356 @@ fn a_regular_witness_has_no_binding_to_grant() {
 }
 
 #[test]
-fn root_inputs_come_from_the_facts_in_selector_order() {
-    let mut facts = facts([
-        (ALICE, true, funded(5)),
-        (BOB, false, funded(7).with_shard(PROGRAM, data(b"bob"))),
-    ]);
+fn root_handles_follow_the_selector_order() {
     let mut state = start(
-        root(vec![
-            ProgramShardSelector::new(BOB, PROGRAM),
-            ProgramShardSelector::balance(ALICE),
-        ]),
+        signed_root(
+            vec![
+                ProgramShardSelector::new(BOB, PROGRAM),
+                ProgramShardSelector::balance(ALICE),
+            ],
+            vec![ALICE],
+        ),
         &[],
-        &mut facts,
     );
 
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
+    let call = state.prepare_next_call().unwrap().unwrap();
 
     assert_eq!(call.self_account_id, PROGRAM);
     assert_eq!(call.caller_account_id, None);
     assert_eq!(call.instruction, vec![1, 2, 3]);
     assert_eq!(
-        call.pre_states,
+        call.accounts,
         vec![
-            AccountInput::with_shard(BOB, false, PROGRAM, data(b"bob")),
-            AccountInput::balance(ALICE, true, 5),
+            AccountMeta::new(BOB, false, PROGRAM),
+            AccountMeta::balance(ALICE, true),
         ]
     );
 }
 
 #[test]
-fn a_missing_fact_for_a_root_account_is_rejected() {
-    let mut facts = facts([]);
-
-    let result = ExecutionState::initialize(
-        root(vec![ProgramShardSelector::balance(ALICE)]),
-        CallKind::Execute,
-        &[],
-        &mut facts,
-    );
-
-    assert!(matches!(
-        result.err(),
-        Some(ExecutionError::MissingPublicFact { shard_selector })
-            if shard_selector == ProgramShardSelector::balance(ALICE)
-    ));
-}
-
-#[test]
 fn a_selected_shard_without_an_explicit_fact_is_rejected_while_an_empty_one_is_read() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
-        &[],
-        &mut facts,
-    );
+    let selectors = vec![ProgramShardSelector::new(ALICE, PROGRAM)];
+    let mut missing = facts([(ALICE, funded(1))]);
+    let mut state = start(root(selectors.clone()), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]);
+    state.bind_plan(output).unwrap();
     assert!(matches!(
-        state.prepare_next_call(&mut facts).err(),
+        state.next_obligation(&mut missing).err(),
         Some(ExecutionError::MissingPublicFact { shard_selector })
             if shard_selector == ProgramShardSelector::new(ALICE, PROGRAM)
     ));
 
-    let mut explicit = facts.clone();
+    let mut explicit = facts([(ALICE, funded(1))]);
     explicit
         .get_mut(&ALICE)
         .unwrap()
-        .1
         .shards
         .insert(PROGRAM, ShardData::empty());
-    let mut state = start(
-        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
-        &[],
-        &mut explicit,
-    );
-    let call = state.prepare_next_call(&mut explicit).unwrap().unwrap();
+    let mut state = start(root(selectors), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]);
+    state.bind_plan(output).unwrap();
+
     assert_eq!(
-        call.pre_states,
-        vec![AccountInput::with_shard(
-            ALICE,
-            false,
-            PROGRAM,
-            ShardData::empty()
-        )]
+        obligation(&mut state, &mut explicit).pre_data,
+        ShardData::empty()
     );
 }
 
 #[test]
-fn fewer_effect_rows_than_inputs_are_rejected() {
-    let mut facts = facts([(ALICE, false, funded(1)), (BOB, false, funded(1))]);
-    let mut state = start(
-        root(vec![
-            ProgramShardSelector::balance(ALICE),
-            ProgramShardSelector::balance(BOB),
-        ]),
-        &[],
-        &mut facts,
-    );
-    state.prepare_next_call(&mut facts).unwrap().unwrap();
-
-    let result = state.complete_call(effects(unchanged(1), Vec::new()), |_| {});
+fn a_journal_must_repeat_the_prepared_inputs_exactly() {
+    let selectors = vec![
+        ProgramShardSelector::new(ALICE, PROGRAM),
+        ProgramShardSelector::balance(BOB),
+    ];
+    let bind = |mutate: &dyn Fn(&mut ProgramOutput)| {
+        let mut state = start(signed_root(selectors.clone(), vec![ALICE]), &[]);
+        let call = state.prepare_next_call().unwrap().unwrap();
+        let mut output = plan(call);
+        mutate(&mut output);
+        state.bind_plan(output)
+    };
 
     assert!(matches!(
-        result,
+        bind(&|output| {
+            output.accounts.pop();
+        }),
         Err(ExecutionError::RowCountMismatch {
             program_account_id: PROGRAM,
             expected: 2,
             actual: 1
         })
     ));
+    assert!(matches!(
+        bind(&|output| output.accounts.reverse()),
+        Err(ExecutionError::InputEchoMismatch { expected, .. }) if expected.account_id == ALICE
+    ));
+    assert!(matches!(
+        bind(&|output| output.accounts[0].program_account_id = OTHER_PROGRAM),
+        Err(ExecutionError::InputEchoMismatch { .. })
+    ));
+    assert!(matches!(
+        bind(&|output| output.accounts[1].is_authorized = true),
+        Err(ExecutionError::InputEchoMismatch { .. })
+    ));
+    assert!(matches!(
+        bind(&|output| output.self_account_id = OTHER_PROGRAM),
+        Err(ExecutionError::MismatchedProgramId { .. })
+    ));
+    assert!(matches!(
+        bind(&|output| output.caller_account_id = Some(OTHER_PROGRAM)),
+        Err(ExecutionError::MismatchedCallerProgramId { .. })
+    ));
+    assert!(matches!(
+        bind(&|output| output.instruction_data = vec![9]),
+        Err(ExecutionError::MismatchedInstruction { .. })
+    ));
+    assert!(bind(&|_| {}).is_ok());
 }
 
 #[test]
-fn a_journal_must_repeat_the_prepared_inputs_exactly() {
-    let mut facts = facts([
-        (ALICE, false, funded(1).with_shard(PROGRAM, data(b"a"))),
-        (BOB, false, funded(2)),
-    ]);
+fn a_handle_that_produces_no_effect_is_still_bound() {
+    let mut state = start(
+        signed_root(
+            vec![
+                ProgramShardSelector::balance(ALICE),
+                ProgramShardSelector::balance(BOB),
+            ],
+            vec![BOB],
+        ),
+        &[],
+    );
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let mut output = plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]);
+    output.accounts[1].is_authorized = false;
+
+    assert!(matches!(
+        state.bind_plan(output),
+        Err(ExecutionError::InputEchoMismatch { expected, .. }) if expected.account_id == BOB
+    ));
+}
+
+#[test]
+fn an_effect_outside_the_call_inputs_is_rejected() {
     let mut state = start(
         root(vec![
-            ProgramShardSelector::new(ALICE, PROGRAM),
+            ProgramShardSelector::balance(ALICE),
             ProgramShardSelector::balance(BOB),
         ]),
         &[],
-        &mut facts,
     );
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
-    let effects = echo(call, Vec::new());
-    let reference = output_of(call, &effects);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![ShardEffect {
+        selector: ProgramShardSelector::new(BOB, PROGRAM),
+        data: b"go".to_vec(),
+    }]);
 
-    let mut dropped = reference.clone();
-    dropped.state_diffs.pop();
     assert!(matches!(
-        state.bind_output(dropped, InstructionEcho::Checked),
-        Err(ExecutionError::RowCountMismatch {
-            expected: 2,
-            actual: 1,
-            ..
+        state.bind_plan(output),
+        Err(ExecutionError::ExecutionValidation {
+            program_account_id: PROGRAM,
+            source: ExecutionValidationError::EffectOutsideInputs { .. }
         })
     ));
-
-    let mut reordered = reference.clone();
-    reordered.state_diffs.reverse();
-    assert!(matches!(
-        state.bind_output(reordered, InstructionEcho::Checked),
-        Err(ExecutionError::PreStateMismatch { expected, .. }) if expected.account_id == ALICE
-    ));
-
-    let mut other_shard = reference.clone();
-    other_shard.state_diffs[0].pre_state.shard = (OTHER_PROGRAM, data(b"a"));
-    assert!(matches!(
-        state.bind_output(other_shard, InstructionEcho::Checked),
-        Err(ExecutionError::PreStateMismatch { .. })
-    ));
-
-    let mut stale = reference.clone();
-    stale.state_diffs[1].pre_state.shard.1 = encode_balance(3);
-    assert!(matches!(
-        state.bind_output(stale, InstructionEcho::Checked),
-        Err(ExecutionError::PreStateMismatch { .. })
-    ));
-
-    let mut claimed = reference.clone();
-    claimed.state_diffs[1].pre_state.is_authorized = true;
-    assert!(matches!(
-        state.bind_output(claimed, InstructionEcho::Checked),
-        Err(ExecutionError::PreStateMismatch { .. })
-    ));
-
-    let mut wrong_self = reference.clone();
-    wrong_self.self_account_id = OTHER_PROGRAM;
-    assert!(matches!(
-        state.bind_output(wrong_self, InstructionEcho::Checked),
-        Err(ExecutionError::MismatchedProgramId { .. })
-    ));
-
-    let mut wrong_caller = reference.clone();
-    wrong_caller.caller_account_id = Some(OTHER_PROGRAM);
-    assert!(matches!(
-        state.bind_output(wrong_caller, InstructionEcho::Checked),
-        Err(ExecutionError::MismatchedCallerProgramId { .. })
-    ));
-
-    let mut wrong_instruction = reference;
-    wrong_instruction.instruction_data = vec![9];
-    assert!(matches!(
-        state.bind_output(wrong_instruction.clone(), InstructionEcho::Checked),
-        Err(ExecutionError::MismatchedInstruction { .. })
-    ));
-    assert_eq!(
-        state
-            .bind_output(wrong_instruction, InstructionEcho::Unchecked)
-            .unwrap(),
-        effects
-    );
 }
 
 #[test]
-fn a_chained_call_must_execute_while_the_root_may_not() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
+fn the_engine_computes_every_resolver_input() {
+    let mut source = Recording::new([(ALICE, funded(1).with_shard(PROGRAM, data(b"a")))]);
     let mut state = start(
-        root(vec![ProgramShardSelector::balance(ALICE)]),
+        root(vec![
+            ProgramShardSelector::new(ALICE, PROGRAM),
+            ProgramShardSelector::balance(ALICE),
+        ]),
         &[],
-        &mut facts,
     );
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
-    let effects = echo(
-        call,
-        vec![chained(
-            OTHER_PROGRAM,
-            vec![ProgramShardSelector::balance(ALICE)],
-        )],
-    );
-    let mut unknown = output_of(call, &effects);
-    unknown.call_kind = CallKind::Unknown(7);
-    let bound = state
-        .bind_output(unknown, InstructionEcho::Checked)
-        .unwrap();
-    assert_eq!(state.root_call_kind(), CallKind::Unknown(7));
-    state.complete_call(bound, |_| {}).unwrap();
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![
+        effect(&call.accounts[0], b"first"),
+        effect(&call.accounts[1], b"guard"),
+        effect(&call.accounts[0], b"second"),
+    ]);
+    state.bind_plan(output).unwrap();
 
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
-    let mut unknown = output_of(call, &echo(call, Vec::new()));
-    unknown.call_kind = CallKind::Unknown(7);
-    assert!(matches!(
-        state.bind_output(unknown, InstructionEcho::Checked),
-        Err(ExecutionError::ChainedCallDidNotExecute {
-            program_account_id: OTHER_PROGRAM
+    let first = obligation(&mut state, &mut source);
+    assert_eq!(
+        first,
+        ResolveInput {
+            self_account_id: PROGRAM,
+            selector: ProgramShardSelector::new(ALICE, PROGRAM),
+            pre_data: data(b"a"),
+            effect_data: b"first".to_vec(),
+        }
+    );
+    state
+        .accept_resolution(&ResolveOutput {
+            input: first,
+            post_data: Some(data(b"b")),
         })
-    ));
+        .unwrap();
+
+    let guard = obligation(&mut state, &mut source);
+    assert_eq!(
+        guard,
+        ResolveInput {
+            self_account_id: PROGRAM,
+            selector: ProgramShardSelector::balance(ALICE),
+            pre_data: encode_balance(1),
+            effect_data: b"guard".to_vec(),
+        }
+    );
+    state
+        .accept_resolution(&ResolveOutput {
+            input: guard,
+            post_data: None,
+        })
+        .unwrap();
+
+    let second = obligation(&mut state, &mut source);
+    assert_eq!(second.pre_data, data(b"b"));
+    assert_eq!(second.effect_data, b"second".to_vec());
+
+    assert_eq!(
+        source.asked,
+        vec![
+            ProgramShardSelector::new(ALICE, PROGRAM),
+            ProgramShardSelector::balance(ALICE),
+        ]
+    );
 }
 
 #[test]
-fn the_reconstructed_journal_preserves_every_distinct_encoding() {
-    let mut facts = facts([(ALICE, true, funded(1).with_shard(PROGRAM, data(b"a")))]);
-    let mut state = ExecutionState::initialize(
-        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
-        CallKind::Unknown(7),
+fn a_resolution_must_echo_the_input_the_engine_computed() {
+    let tamper = |mutate: &dyn Fn(&mut ResolveInput)| {
+        let mut source = facts([(ALICE, funded(4).with_shard(PROGRAM, data(b"a")))]);
+        let mut state = start(root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]), &[]);
+        let call = state.prepare_next_call().unwrap().unwrap();
+        let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]);
+        state.bind_plan(output).unwrap();
+        let mut input = obligation(&mut state, &mut source);
+        mutate(&mut input);
+        state.accept_resolution(&ResolveOutput {
+            input,
+            post_data: None,
+        })
+    };
+
+    let mutations: Vec<&dyn Fn(&mut ResolveInput)> = vec![
+        &|input| input.self_account_id = OTHER_PROGRAM,
+        &|input| input.selector = ProgramShardSelector::balance(ALICE),
+        &|input| input.pre_data = data(b"z"),
+        &|input| input.effect_data = b"other".to_vec(),
+    ];
+    for mutate in mutations {
+        assert!(matches!(
+            tamper(mutate),
+            Err(ExecutionError::ExecutionValidation {
+                program_account_id: PROGRAM,
+                source: ExecutionValidationError::ResolveInputMismatch { .. },
+            })
+        ));
+    }
+    assert!(tamper(&|_| {}).is_ok());
+}
+
+#[test]
+fn an_accepted_resolution_lands_only_on_its_selected_shard() {
+    let mut source = facts([(ALICE, funded(4).with_shard(PROGRAM, data(b"a")))]);
+    let mut state = start(
+        root(vec![
+            ProgramShardSelector::new(ALICE, PROGRAM),
+            ProgramShardSelector::balance(ALICE),
+        ]),
         &[],
-        &mut facts,
-    )
-    .unwrap();
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
-    let inputs = call.pre_states.clone();
+    );
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![
+        effect(&call.accounts[0], b"write"),
+        effect(&call.accounts[1], b"guard"),
+    ]);
+    state.bind_plan(output).unwrap();
+
+    let input = obligation(&mut state, &mut source);
+    state
+        .accept_resolution(&ResolveOutput {
+            input,
+            post_data: Some(data(b"b")),
+        })
+        .unwrap();
+
+    let guard = obligation(&mut state, &mut source);
+    assert_eq!(guard.pre_data, encode_balance(4));
+    state
+        .accept_resolution(&ResolveOutput {
+            input: guard,
+            post_data: None,
+        })
+        .unwrap();
+    state.complete_call().unwrap();
+
+    let public = resolved(state.finish().unwrap().public);
+    assert_eq!(public[0].1, funded(4).with_shard(PROGRAM, data(b"b")));
+}
+
+#[test]
+fn every_emitted_effect_must_be_resolved() {
+    let mut source = facts([(ALICE, funded(1))]);
+    let selectors = vec![ProgramShardSelector::balance(ALICE)];
+    let emit = |call: &ProgramInput<InstructionData>| {
+        plan(call).with_effects(vec![
+            effect(&call.accounts[0], b"one"),
+            effect(&call.accounts[0], b"two"),
+        ])
+    };
+
+    let mut state = start(root(selectors.clone()), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = emit(call);
+    state.bind_plan(output).unwrap();
+    assert!(matches!(
+        state.complete_call(),
+        Err(ExecutionError::UnresolvedEffects {
+            program_account_id: PROGRAM,
+            remaining: 2
+        })
+    ));
+
+    let mut state = start(root(selectors.clone()), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = emit(call);
+    state.bind_plan(output).unwrap();
+    let first = obligation(&mut state, &mut source);
+    state
+        .accept_resolution(&ResolveOutput {
+            input: first,
+            post_data: None,
+        })
+        .unwrap();
+    obligation(&mut state, &mut source);
+    assert!(matches!(
+        state.complete_call(),
+        Err(ExecutionError::UnresolvedEffects { remaining: 1, .. })
+    ));
+
+    let mut state = start(root(selectors), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = emit(call);
+    state.bind_plan(output).unwrap();
+    drain(&mut state, &mut source, &mut |_| None);
+    assert!(state.complete_call().unwrap().is_empty());
+}
+
+#[test]
+fn a_calls_effects_all_resolve_before_its_children_are_scheduled() {
+    let mut source = Recording::new([(ALICE, funded(1)), (BOB, funded(1))]);
+    let mut state = start(
+        root(vec![
+            ProgramShardSelector::balance(ALICE),
+            ProgramShardSelector::balance(BOB),
+        ]),
+        &[],
+    );
     let events = vec![
         ProgramEvent {
             selector: [1; 8],
@@ -503,83 +680,166 @@ fn the_reconstructed_journal_preserves_every_distinct_encoding() {
             data: vec![],
         },
     ];
-    let calls = vec![
-        chained(OTHER_PROGRAM, vec![ProgramShardSelector::balance(ALICE)]),
-        chained(PROGRAM, vec![ProgramShardSelector::balance(ALICE)]),
-    ];
-    let effects = CallEffects {
-        account_changes: vec![AccountChange {
-            data: Some(ShardData::empty()),
-        }],
-        chained_calls: calls.clone(),
-        block_validity_window: (1..).into(),
-        timestamp_validity_window: (..9).into(),
-        events: events.clone(),
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call)
+        .with_effects(vec![
+            effect(&call.accounts[1], b"first"),
+            effect(&call.accounts[0], b"second"),
+            effect(&call.accounts[1], b"third"),
+        ])
+        .with_chained_calls(vec![chained(
+            OTHER_PROGRAM,
+            vec![ProgramShardSelector::balance(ALICE)],
+        )])
+        .with_events(events.clone());
+    state.bind_plan(output).unwrap();
+
+    let local = drain(&mut state, &mut source, &mut |_| None);
+    assert_eq!(
+        local
+            .iter()
+            .map(|input| (input.selector.account_id, input.effect_data.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (BOB, b"first".to_vec()),
+            (ALICE, b"second".to_vec()),
+            (BOB, b"third".to_vec()),
+        ]
+    );
+    assert_eq!(state.complete_call().unwrap(), events);
+
+    let child = state.prepare_next_call().unwrap().unwrap();
+    assert_eq!(child.self_account_id, OTHER_PROGRAM);
+    assert_eq!(child.caller_account_id, Some(PROGRAM));
+}
+
+#[test]
+fn a_deferred_public_target_is_never_materialized() {
+    let keys = Keys::new(4);
+    let private_id = keys.regular_id();
+    let witnesses = [keys.regular(true, Account::default())];
+    let mut source = Recording::new([(ALICE, funded(10)), (BOB, funded(2))]);
+    let mut state = ExecutionState::initialize(
+        RootCall {
+            program_account_id: PROGRAM,
+            shard_selectors: vec![
+                ProgramShardSelector::balance(ALICE),
+                ProgramShardSelector::new(private_id, PROGRAM),
+                ProgramShardSelector::balance(BOB),
+            ],
+            instruction_data: vec![1, 2, 3],
+            authorized_accounts: vec![ALICE],
+        },
+        &witnesses,
+        PublicEffects::Defer,
+    )
+    .unwrap();
+
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![
+        effect(&call.accounts[2], b"credit"),
+        effect(&call.accounts[1], b"write"),
+        effect(&call.accounts[0], b"debit"),
+        effect(&call.accounts[2], b"note"),
+    ]);
+    state.bind_plan(output).unwrap();
+    let local = drain(&mut state, &mut source, &mut |_| Some(data(b"w")));
+    state.complete_call().unwrap();
+
+    let public_effect = |bytes: &[u8]| PublicResolution::Apply {
+        program_account_id: PROGRAM,
+        shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+        data: bytes.to_vec(),
     };
+    assert!(source.asked.is_empty());
+    assert_eq!(state.pending_shard(ALICE, NATIVE_TOKEN_PROGRAM_ID), None);
+    assert_eq!(state.pending_shard(BOB, NATIVE_TOKEN_PROGRAM_ID), None);
+    assert_eq!(local.len(), 1);
+    assert_eq!(
+        local[0].selector,
+        ProgramShardSelector::new(private_id, PROGRAM)
+    );
 
-    let mut seen = None;
-    let returned = state
-        .complete_call(effects, |output| seen = Some(output.clone()))
-        .unwrap();
+    let FinalState {
+        public,
+        private_accounts,
+        ..
+    } = state.finish().unwrap();
+    assert_eq!(
+        journal(public),
+        vec![
+            PublicAction {
+                account_id: ALICE,
+                is_authorized: true,
+                resolutions: vec![public_effect(b"debit")],
+            },
+            PublicAction {
+                account_id: BOB,
+                is_authorized: false,
+                resolutions: vec![public_effect(b"credit"), public_effect(b"note")],
+            },
+        ]
+    );
+    assert_eq!(
+        private_accounts[&private_id],
+        AccountData::default().with_shard(PROGRAM, data(b"w"))
+    );
+}
 
-    let output = seen.unwrap();
-    assert_eq!(output.self_account_id, PROGRAM);
-    assert_eq!(output.caller_account_id, None);
-    assert_eq!(output.call_kind, CallKind::Unknown(7));
-    assert_eq!(output.instruction_data, vec![1, 2, 3]);
-    assert_eq!(output.state_diffs.len(), 1);
-    assert_eq!(output.state_diffs[0].pre_state, inputs[0]);
-    assert_eq!(output.state_diffs[0].post_data, Some(ShardData::empty()));
-    assert_eq!(output.chained_calls, calls);
-    assert_eq!(output.block_validity_window, (1..).into());
-    assert_eq!(output.timestamp_validity_window, (..9).into());
-    assert_eq!(output.events, events);
-    assert_eq!(returned, events);
+#[test]
+fn resolving_public_effects_yields_no_deferred_obligations() {
+    let mut source = Recording::new([(ALICE, funded(10))]);
+    let mut state = start(root(vec![ProgramShardSelector::balance(ALICE)]), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"guard")]);
+    state.bind_plan(output).unwrap();
 
-    let call = state.prepare_next_call(&mut facts).unwrap().unwrap();
-    let mut child_kind = None;
-    let effects = echo(call, Vec::new());
-    state
-        .complete_call(effects, |output| child_kind = Some(output.call_kind))
-        .unwrap();
-    assert_eq!(child_kind, Some(CallKind::Execute));
+    let local = drain(&mut state, &mut source, &mut |_| None);
+    state.complete_call().unwrap();
+
+    assert_eq!(local.len(), 1);
+    assert_eq!(source.asked, vec![ProgramShardSelector::balance(ALICE)]);
+    let public = resolved(state.finish().unwrap().public);
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].0, ALICE);
 }
 
 #[test]
 fn a_chained_call_may_select_another_shard_of_a_root_account() {
-    let mut source = Recording {
-        facts: facts([
-            (
-                ALICE,
-                true,
-                funded(10)
-                    .with_shard(PROGRAM, data(b"p"))
-                    .with_shard(OTHER_PROGRAM, data(b"s")),
-            ),
-            (BOB, false, funded(0)),
-        ]),
-        asked: Vec::new(),
-    };
+    let mut source = Recording::new([
+        (
+            ALICE,
+            funded(10)
+                .with_shard(PROGRAM, data(b"p"))
+                .with_shard(OTHER_PROGRAM, data(b"s")),
+        ),
+        (BOB, funded(0)),
+    ]);
     let mut state = start(
-        root(vec![
-            ProgramShardSelector::new(ALICE, PROGRAM),
-            ProgramShardSelector::balance(BOB),
-        ]),
+        signed_root(
+            vec![
+                ProgramShardSelector::new(ALICE, PROGRAM),
+                ProgramShardSelector::balance(BOB),
+            ],
+            vec![ALICE],
+        ),
         &[],
-        &mut source,
     );
 
     step(&mut state, &mut source, |call| {
         assert_eq!(
-            call.pre_states,
+            call.accounts,
             vec![
-                AccountInput::with_shard(ALICE, true, PROGRAM, data(b"p")),
-                AccountInput::balance(BOB, false, 0),
+                AccountMeta::new(ALICE, true, PROGRAM),
+                AccountMeta::balance(BOB, false),
             ]
         );
-        effects(
-            unchanged(2),
-            vec![
+        plan(call)
+            .with_effects(vec![
+                effect(&call.accounts[0], b"keep"),
+                effect(&call.accounts[1], b"keep"),
+            ])
+            .with_chained_calls(vec![
                 chained(
                     OTHER_PROGRAM,
                     vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
@@ -588,20 +848,21 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
                     OTHER_PROGRAM,
                     vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
                 ),
-            ],
-        )
+            ])
     });
     for written in [b"s2", b"s3"] {
-        step(&mut state, &mut source, |call| {
-            assert_eq!(call.pre_states.len(), 1);
-            assert_eq!(call.pre_states[0].program_account_id(), OTHER_PROGRAM);
-            effects(
-                vec![AccountChange {
-                    data: Some(data(written)),
-                }],
-                Vec::new(),
-            )
-        });
+        step_resolving(
+            &mut state,
+            &mut source,
+            |call| {
+                assert_eq!(
+                    call.accounts,
+                    vec![AccountMeta::new(ALICE, true, OTHER_PROGRAM)]
+                );
+                plan(call).with_effects(vec![effect(&call.accounts[0], b"write")])
+            },
+            &mut |_| Some(data(written)),
+        );
     }
 
     assert_eq!(
@@ -612,32 +873,24 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
             ProgramShardSelector::new(ALICE, OTHER_PROGRAM)
         ]
     );
-    let FinalState { public_actions, .. } = state.finish().unwrap();
+    let public = resolved(state.finish().unwrap().public);
     assert_eq!(
-        public_actions[0],
-        PublicAction {
-            account_id: ALICE,
-            is_authorized: true,
-            pre: AccountData::default()
-                .with_shard(PROGRAM, data(b"p"))
-                .with_shard(OTHER_PROGRAM, data(b"s")),
-            post: AccountData::default()
+        public[0],
+        (
+            ALICE,
+            AccountData::default()
                 .with_shard(PROGRAM, data(b"p"))
                 .with_shard(OTHER_PROGRAM, data(b"s3")),
-        }
+        )
     );
-    assert_eq!(public_actions[1].post, funded(0));
+    assert_eq!(public[1].1, funded(0));
 }
 
 #[test]
 fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write() {
-    let mut facts = facts([
-        (
-            ALICE,
-            true,
-            funded(10).with_shard(OTHER_PROGRAM, data(b"s")),
-        ),
-        (BOB, false, funded(0)),
+    let mut source = Recording::new([
+        (ALICE, funded(10).with_shard(OTHER_PROGRAM, data(b"s"))),
+        (BOB, funded(0)),
     ]);
     let mut state = start(
         RootCall {
@@ -647,113 +900,98 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
                 ProgramShardSelector::balance(BOB),
             ],
             instruction_data: vec![1, 2, 3],
+            authorized_accounts: vec![ALICE],
         },
         &[],
-        &mut facts,
     );
 
-    step(&mut state, &mut facts, |call| {
-        assert_eq!(
-            call.pre_states,
-            vec![
-                AccountInput::balance(ALICE, true, 10),
-                AccountInput::balance(BOB, false, 0),
-            ]
-        );
-        effects(
-            vec![
-                AccountChange {
-                    data: Some(encode_balance(7)),
-                },
-                AccountChange {
-                    data: Some(encode_balance(3)),
-                },
-            ],
-            vec![chained(
-                OTHER_PROGRAM,
-                vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
-            )],
-        )
-    });
-    step(&mut state, &mut facts, |call| {
-        assert_eq!(
-            call.pre_states,
-            vec![AccountInput::with_shard(
-                ALICE,
-                true,
-                OTHER_PROGRAM,
-                data(b"s")
-            )]
-        );
-        echo(call, Vec::new())
-    });
+    let mut balances = [encode_balance(7), encode_balance(3)].into_iter();
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| {
+            assert_eq!(
+                call.accounts,
+                vec![
+                    AccountMeta::balance(ALICE, true),
+                    AccountMeta::balance(BOB, false),
+                ]
+            );
+            plan(call)
+                .with_effects(vec![
+                    effect(&call.accounts[0], b"debit"),
+                    effect(&call.accounts[1], b"credit"),
+                ])
+                .with_chained_calls(vec![chained(
+                    OTHER_PROGRAM,
+                    vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
+                )])
+        },
+        &mut |_| balances.next(),
+    );
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| plan(call).with_effects(vec![effect(&call.accounts[0], b"read")]),
+        &mut |input| {
+            assert_eq!(input.pre_data, data(b"s"));
+            None
+        },
+    );
 
-    let FinalState { public_actions, .. } = state.finish().unwrap();
-    assert_eq!(
-        public_actions[0].pre,
-        funded(10).with_shard(OTHER_PROGRAM, data(b"s"))
-    );
-    assert_eq!(
-        public_actions[0].post,
-        funded(7).with_shard(OTHER_PROGRAM, data(b"s"))
-    );
+    let public = resolved(state.finish().unwrap().public);
+    assert_eq!(public[0].1, funded(7).with_shard(OTHER_PROGRAM, data(b"s")));
 }
 
 #[test]
-fn a_cleared_shard_reads_back_empty_and_stays_in_both_projections() {
-    let mut facts = facts([(ALICE, false, funded(1).with_shard(PROGRAM, data(b"a")))]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
-        &[],
-        &mut facts,
+fn a_cleared_shard_reads_back_empty_and_stays_in_the_resolved_projection() {
+    let mut source = Recording::new([(ALICE, funded(1).with_shard(PROGRAM, data(b"a")))]);
+    let mut state = start(root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]), &[]);
+
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| {
+            plan(call)
+                .with_effects(vec![effect(&call.accounts[0], b"clear")])
+                .with_chained_calls(vec![chained(
+                    PROGRAM,
+                    vec![ProgramShardSelector::new(ALICE, PROGRAM)],
+                )])
+        },
+        &mut |_| Some(ShardData::empty()),
+    );
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| plan(call).with_effects(vec![effect(&call.accounts[0], b"read")]),
+        &mut |input| {
+            assert_eq!(input.pre_data, ShardData::empty());
+            None
+        },
     );
 
-    step(&mut state, &mut facts, |_| {
-        effects(
-            vec![AccountChange {
-                data: Some(ShardData::empty()),
-            }],
-            vec![chained(
-                PROGRAM,
-                vec![ProgramShardSelector::new(ALICE, PROGRAM)],
-            )],
-        )
-    });
-    step(&mut state, &mut facts, |call| {
-        assert_eq!(
-            call.pre_states,
-            vec![AccountInput::with_shard(
-                ALICE,
-                false,
-                PROGRAM,
-                ShardData::empty()
-            )]
-        );
-        echo(call, Vec::new())
-    });
-
-    let FinalState { public_actions, .. } = state.finish().unwrap();
-    assert_eq!(public_actions[0].pre.shards[&PROGRAM], data(b"a"));
-    assert_eq!(public_actions[0].post.shards[&PROGRAM], ShardData::empty());
+    assert_eq!(
+        source.asked,
+        vec![ProgramShardSelector::new(ALICE, PROGRAM)]
+    );
+    let public = resolved(state.finish().unwrap().public);
+    assert_eq!(public[0].1.shards[&PROGRAM], ShardData::empty());
 }
 
 #[test]
 fn a_chained_call_cannot_name_an_account_the_root_did_not() {
-    let mut facts = facts([(ALICE, false, funded(1)), (BOB, false, funded(1))]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::balance(ALICE)]),
-        &[],
-        &mut facts,
-    );
-    step(&mut state, &mut facts, |call| {
-        echo(
-            call,
-            vec![chained(PROGRAM, vec![ProgramShardSelector::balance(BOB)])],
-        )
+    let mut source = facts([(ALICE, funded(1)), (BOB, funded(1))]);
+    let mut state = start(root(vec![ProgramShardSelector::balance(ALICE)]), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![chained(
+            PROGRAM,
+            vec![ProgramShardSelector::balance(BOB)],
+        )])
     });
 
     assert!(matches!(
-        state.prepare_next_call(&mut facts),
+        state.prepare_next_call(),
         Err(ExecutionError::UnknownAccount { account_id: BOB })
     ));
 }
@@ -762,13 +1000,11 @@ fn a_chained_call_cannot_name_an_account_the_root_did_not() {
 fn a_witness_outside_the_root_inputs_is_rejected() {
     let keys = Keys::new(4);
     let witnesses = [keys.regular(true, Account::default())];
-    let mut facts = facts([(ALICE, false, funded(1))]);
 
     let result = ExecutionState::initialize(
         root(vec![ProgramShardSelector::balance(ALICE)]),
-        CallKind::Execute,
         &witnesses,
-        &mut facts,
+        PublicEffects::Resolve,
     );
 
     assert!(matches!(
@@ -781,7 +1017,6 @@ fn a_witness_outside_the_root_inputs_is_rejected() {
 fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
     let keys = Keys::new(4);
     let other = Keys::new(5);
-    let mut facts = facts([]);
     let selectors = vec![ProgramShardSelector::balance(keys.regular_id())];
 
     let duplicate = [
@@ -789,7 +1024,7 @@ fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
         keys.regular(true, Account::default()),
     ];
     assert!(matches!(
-        ExecutionState::initialize(root(selectors.clone()), CallKind::Execute, &duplicate, &mut facts).err(),
+        ExecutionState::initialize(root(selectors.clone()), &duplicate, PublicEffects::Resolve).err(),
         Some(ExecutionError::DuplicateWitness { account_id }) if account_id == keys.regular_id()
     ));
 
@@ -799,7 +1034,7 @@ fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
     };
     let unlinked = [unlinked];
     assert!(matches!(
-        ExecutionState::initialize(root(selectors), CallKind::Execute, &unlinked, &mut facts).err(),
+        ExecutionState::initialize(root(selectors), &unlinked, PublicEffects::Resolve).err(),
         Some(ExecutionError::InvalidAuthorizationKey { account_id }) if account_id == keys.regular_id()
     ));
 }
@@ -809,16 +1044,14 @@ fn two_private_pdas_under_one_seed_conflict() {
     let keys = Keys::new(4);
     let other = Keys::new(5);
     let witnesses = [keys.pda(PROGRAM, SEED), other.pda(PROGRAM, SEED)];
-    let mut facts = facts([]);
 
     let result = ExecutionState::initialize(
         root(vec![
             ProgramShardSelector::balance(keys.pda_id(PROGRAM, SEED)),
             ProgramShardSelector::balance(other.pda_id(PROGRAM, SEED)),
         ]),
-        CallKind::Execute,
         &witnesses,
-        &mut facts,
+        PublicEffects::Resolve,
     );
 
     assert!(matches!(
@@ -837,45 +1070,42 @@ fn credentials_are_fixed_and_seed_grants_stay_in_their_subtree() {
         signer.regular(true, Account::default()),
         holder.regular(false, Account::default()),
     ];
-    let mut facts = facts([(public_pda, false, funded(1))]);
+    let mut source = facts([(public_pda, funded(1))]);
     let selectors = vec![
         ProgramShardSelector::balance(signer.regular_id()),
         ProgramShardSelector::balance(holder.regular_id()),
         ProgramShardSelector::balance(public_pda),
     ];
     let authorization = |call: &ProgramInput<InstructionData>| -> Vec<bool> {
-        call.pre_states
+        call.accounts
             .iter()
-            .map(|input| input.is_authorized)
+            .map(|account| account.is_authorized)
             .collect()
     };
-    let mut state = start(root(selectors.clone()), &witnesses, &mut facts);
+    let mut state = start_deferring(root(selectors.clone()), &witnesses);
 
-    step(&mut state, &mut facts, |call| {
+    step(&mut state, &mut source, |call| {
         assert_eq!(authorization(call), vec![true, false, false]);
-        echo(
-            call,
-            vec![
-                chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
-                chained(OTHER_PROGRAM, selectors.clone()),
-            ],
-        )
+        plan(call).with_chained_calls(vec![
+            chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
+            chained(OTHER_PROGRAM, selectors.clone()),
+        ])
     });
-    step(&mut state, &mut facts, |call| {
+    step(&mut state, &mut source, |call| {
         assert_eq!(authorization(call), vec![true, false, true]);
-        echo(call, vec![chained(PROGRAM, selectors.clone())])
+        plan(call).with_chained_calls(vec![chained(PROGRAM, selectors.clone())])
     });
-    step(&mut state, &mut facts, |call| {
+    step(&mut state, &mut source, |call| {
         assert_eq!(authorization(call), vec![true, false, true]);
-        echo(call, Vec::new())
+        plan(call)
     });
-    step(&mut state, &mut facts, |call| {
+    step(&mut state, &mut source, |call| {
         assert_eq!(authorization(call), vec![true, false, false]);
-        echo(call, Vec::new())
+        plan(call)
     });
 
-    let FinalState { public_actions, .. } = state.finish().unwrap();
-    assert!(!public_actions[0].is_authorized);
+    let FinalState { public, .. } = state.finish().unwrap();
+    assert!(!journal(public)[0].is_authorized);
 }
 
 #[test]
@@ -883,47 +1113,43 @@ fn a_private_pda_is_granted_only_by_its_own_seed_from_its_own_program() {
     let keys = Keys::new(4);
     let witnesses = [keys.pda(PROGRAM, SEED)];
     let pda = keys.pda_id(PROGRAM, SEED);
-    let mut facts = facts([]);
+    let mut source = facts([]);
     let selectors = vec![ProgramShardSelector::balance(pda)];
-    let mut state = start(root(selectors.clone()), &witnesses, &mut facts);
+    let mut state = start(root(selectors.clone()), &witnesses);
 
-    step(&mut state, &mut facts, |call| {
-        assert!(!call.pre_states[0].is_authorized);
-        echo(
-            call,
-            vec![
-                chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![OTHER_SEED]),
-                chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
-                chained(OTHER_PROGRAM, selectors.clone()),
-            ],
-        )
+    step(&mut state, &mut source, |call| {
+        assert!(!call.accounts[0].is_authorized);
+        plan(call).with_chained_calls(vec![
+            chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![OTHER_SEED]),
+            chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
+            chained(OTHER_PROGRAM, selectors.clone()),
+        ])
     });
-    step(&mut state, &mut facts, |call| {
-        assert!(!call.pre_states[0].is_authorized);
-        echo(
-            call,
-            vec![chained(PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED])],
-        )
+    step(&mut state, &mut source, |call| {
+        assert!(!call.accounts[0].is_authorized);
+        plan(call).with_chained_calls(vec![
+            chained(PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
+        ])
     });
-    step(&mut state, &mut facts, |call| {
-        assert!(!call.pre_states[0].is_authorized);
-        echo(call, Vec::new())
+    step(&mut state, &mut source, |call| {
+        assert!(!call.accounts[0].is_authorized);
+        plan(call)
     });
-    step(&mut state, &mut facts, |call| {
-        assert!(call.pre_states[0].is_authorized);
-        echo(call, Vec::new())
+    step(&mut state, &mut source, |call| {
+        assert!(call.accounts[0].is_authorized);
+        plan(call)
     });
-    step(&mut state, &mut facts, |call| {
-        assert!(!call.pre_states[0].is_authorized);
-        echo(call, Vec::new())
+    step(&mut state, &mut source, |call| {
+        assert!(!call.accounts[0].is_authorized);
+        plan(call)
     });
 
     let FinalState {
-        public_actions,
+        public,
         private_accounts,
         ..
     } = state.finish().unwrap();
-    assert!(public_actions.is_empty());
+    assert!(resolved(public).is_empty());
     assert_eq!(private_accounts.len(), 1);
 }
 
@@ -932,63 +1158,57 @@ fn a_public_pda_grant_under_a_privately_bound_seed_conflicts() {
     let keys = Keys::new(4);
     let witnesses = [keys.pda(PROGRAM, SEED)];
     let public_pda = AccountId::for_public_pda(&PROGRAM, &SEED);
-    let mut facts = facts([(public_pda, false, funded(1))]);
+    let mut source = facts([(public_pda, funded(1))]);
     let selectors = vec![
         ProgramShardSelector::balance(keys.pda_id(PROGRAM, SEED)),
         ProgramShardSelector::balance(public_pda),
     ];
-    let mut state = start(root(selectors.clone()), &witnesses, &mut facts);
-    step(&mut state, &mut facts, |call| {
-        echo(
-            call,
-            vec![chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED])],
-        )
+    let mut state = start(root(selectors.clone()), &witnesses);
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![
+            chained(OTHER_PROGRAM, selectors.clone()).with_pda_seeds(vec![SEED]),
+        ])
     });
 
     assert!(matches!(
-        state.prepare_next_call(&mut facts),
+        state.prepare_next_call(),
         Err(ExecutionError::FamilyBindingConflict { account_id, .. }) if account_id == public_pda
     ));
 }
 
 #[test]
 fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
+    let mut source = facts([(ALICE, funded(1))]);
     let selectors = vec![ProgramShardSelector::balance(ALICE)];
-    let mut state = start(root(selectors.clone()), &[], &mut facts);
-    step(&mut state, &mut facts, |call| {
-        echo(
-            call,
-            vec![
-                chained(AccountId::new([1; 32]), selectors.clone()),
-                chained(AccountId::new([3; 32]), selectors.clone()),
-            ],
-        )
+    let mut state = start(root(selectors.clone()), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![
+            chained(AccountId::new([1; 32]), selectors.clone()),
+            chained(AccountId::new([3; 32]), selectors.clone()),
+        ])
     });
-    step(&mut state, &mut facts, |call| {
-        echo(
-            call,
-            vec![chained(AccountId::new([2; 32]), selectors.clone())],
-        )
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![chained(AccountId::new([2; 32]), selectors.clone())])
     });
     assert_eq!(
-        run_to_end(&mut state, &mut facts),
+        run_to_end(&mut state, &mut source),
         vec![AccountId::new([2; 32]), AccountId::new([3; 32])]
     );
-    assert!(state.prepare_next_call(&mut facts).unwrap().is_none());
+    assert!(state.prepare_next_call().unwrap().is_none());
     state.finish().unwrap();
 
     let chain = |count: usize| {
-        let mut facts = facts.clone();
-        let mut state = start(root(selectors.clone()), &[], &mut facts);
-        step(&mut state, &mut facts, |call| {
-            echo(call, vec![chained(OTHER_PROGRAM, selectors.clone()); count])
+        let mut source = facts([(ALICE, funded(1))]);
+        let mut state = start(root(selectors.clone()), &[]);
+        step(&mut state, &mut source, |call| {
+            plan(call).with_chained_calls(vec![chained(OTHER_PROGRAM, selectors.clone()); count])
         });
         loop {
-            match state.prepare_next_call(&mut facts) {
+            match state.prepare_next_call() {
                 Ok(Some(call)) => {
-                    let effects = echo(call, Vec::new());
-                    state.complete_call(effects, |_| {}).unwrap();
+                    let output = plan(call);
+                    state.bind_plan(output).unwrap();
+                    state.complete_call().unwrap();
                 }
                 Ok(None) => return Ok(()),
                 Err(error) => return Err(error),
@@ -1004,11 +1224,11 @@ fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
 
 #[test]
 fn finishing_with_a_scheduled_call_is_rejected() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
+    let mut source = facts([(ALICE, funded(1))]);
     let selectors = vec![ProgramShardSelector::balance(ALICE)];
-    let mut state = start(root(selectors.clone()), &[], &mut facts);
-    step(&mut state, &mut facts, |call| {
-        echo(call, vec![chained(OTHER_PROGRAM, selectors.clone())])
+    let mut state = start(root(selectors.clone()), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![chained(OTHER_PROGRAM, selectors.clone())])
     });
 
     assert!(matches!(
@@ -1019,20 +1239,18 @@ fn finishing_with_a_scheduled_call_is_rejected() {
 
 #[test]
 fn validation_and_window_failures_name_the_program() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
+    let mut source = facts([(ALICE, funded(1))]);
     let selectors = vec![ProgramShardSelector::balance(ALICE)];
-    let mut state = start(root(selectors.clone()), &[], &mut facts);
-    state.prepare_next_call(&mut facts).unwrap().unwrap();
+    let mut state = start(root(selectors.clone()), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"pay")]);
+    state.bind_plan(output).unwrap();
+    let input = obligation(&mut state, &mut source);
     assert!(matches!(
-        state.complete_call(
-            effects(
-                vec![AccountChange {
-                    data: Some(encode_balance(1))
-                }],
-                Vec::new()
-            ),
-            |_| {}
-        ),
+        state.accept_resolution(&ResolveOutput {
+            input,
+            post_data: Some(encode_balance(1)),
+        }),
         Err(ExecutionError::ExecutionValidation {
             program_account_id: PROGRAM,
             source: ExecutionValidationError::ForeignShardWrite {
@@ -1042,38 +1260,38 @@ fn validation_and_window_failures_name_the_program() {
         })
     ));
 
-    let mut state = start(root(selectors.clone()), &[], &mut facts);
-    step(&mut state, &mut facts, |call| CallEffects {
-        block_validity_window: (1..3).try_into().unwrap(),
-        ..echo(call, vec![chained(OTHER_PROGRAM, selectors.clone())])
+    let mut state = start(root(selectors.clone()), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call)
+            .with_chained_calls(vec![chained(OTHER_PROGRAM, selectors.clone())])
+            .try_with_block_validity_window(1..3)
+            .unwrap()
     });
-    state.prepare_next_call(&mut facts).unwrap().unwrap();
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_block_validity_window(3..);
     assert!(matches!(
-        state.complete_call(
-            CallEffects {
-                block_validity_window: (3..).into(),
-                ..effects(unchanged(1), Vec::new())
-            },
-            |_| {}
-        ),
+        state.bind_plan(output),
         Err(ExecutionError::EmptyBlockWindowIntersection)
     ));
 }
 
 #[test]
 fn the_final_windows_are_the_intersection_of_every_call() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
+    let mut source = facts([(ALICE, funded(1))]);
     let selectors = vec![ProgramShardSelector::balance(ALICE)];
-    let mut state = start(root(selectors.clone()), &[], &mut facts);
-    step(&mut state, &mut facts, |call| CallEffects {
-        block_validity_window: (1..5).try_into().unwrap(),
-        timestamp_validity_window: (..9).into(),
-        ..echo(call, vec![chained(OTHER_PROGRAM, selectors.clone())])
+    let mut state = start(root(selectors.clone()), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call)
+            .with_chained_calls(vec![chained(OTHER_PROGRAM, selectors.clone())])
+            .try_with_block_validity_window(1..5)
+            .unwrap()
+            .with_timestamp_validity_window(..9)
     });
-    step(&mut state, &mut facts, |call| CallEffects {
-        block_validity_window: (2..).into(),
-        timestamp_validity_window: (4..7).try_into().unwrap(),
-        ..echo(call, Vec::new())
+    step(&mut state, &mut source, |call| {
+        plan(call)
+            .with_block_validity_window(2..)
+            .try_with_timestamp_validity_window(4..7)
+            .unwrap()
     });
 
     let FinalState {
@@ -1087,21 +1305,20 @@ fn the_final_windows_are_the_intersection_of_every_call() {
 
 #[test]
 fn a_duplicated_root_account_is_rejected_by_the_transition_rules() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
     let mut state = start(
         root(vec![
             ProgramShardSelector::balance(ALICE),
             ProgramShardSelector::balance(ALICE),
         ]),
         &[],
-        &mut facts,
     );
-    state.prepare_next_call(&mut facts).unwrap().unwrap();
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call);
 
     assert!(matches!(
-        state.complete_call(effects(unchanged(2), Vec::new()), |_| {}),
+        state.bind_plan(output),
         Err(ExecutionError::ExecutionValidation {
-            source: ExecutionValidationError::PreStateShardSelectorsNotUnique,
+            source: ExecutionValidationError::AccountShardSelectorsNotUnique,
             ..
         })
     ));
@@ -1116,50 +1333,45 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
     }
     .with_shard(OTHER_PROGRAM, data(b"kept"));
     let witnesses = [keys.regular(true, private_account)];
-    let mut facts = facts([
-        (
-            ALICE,
-            false,
-            funded(1).with_shard(CAROL, data(b"untouched")),
-        ),
-        (BOB, true, funded(2)),
+    let mut source = Recording::new([
+        (ALICE, funded(1).with_shard(CAROL, data(b"untouched"))),
+        (BOB, funded(2)),
     ]);
     let mut state = start(
-        root(vec![
-            ProgramShardSelector::balance(BOB),
-            ProgramShardSelector::new(keys.regular_id(), PROGRAM),
-            ProgramShardSelector::balance(ALICE),
-        ]),
-        &witnesses,
-        &mut facts,
-    );
-    step(&mut state, &mut facts, |_| {
-        effects(
+        signed_root(
             vec![
-                AccountChange { data: None },
-                AccountChange {
-                    data: Some(data(b"written")),
-                },
-                AccountChange { data: None },
+                ProgramShardSelector::balance(BOB),
+                ProgramShardSelector::new(keys.regular_id(), PROGRAM),
+                ProgramShardSelector::balance(ALICE),
             ],
-            Vec::new(),
-        )
-    });
+            vec![BOB],
+        ),
+        &witnesses,
+    );
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| {
+            plan(call).with_effects(vec![
+                effect(&call.accounts[0], b"keep"),
+                effect(&call.accounts[1], b"write"),
+                effect(&call.accounts[2], b"keep"),
+            ])
+        },
+        &mut |input| (input.selector.account_id == keys.regular_id()).then(|| data(b"written")),
+    );
 
     let FinalState {
-        public_actions,
+        public,
         private_accounts,
         ..
     } = state.finish().unwrap();
+    let public = resolved(public);
     assert_eq!(
-        public_actions
-            .iter()
-            .map(|action| action.account_id)
-            .collect::<Vec<_>>(),
+        public.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
         vec![BOB, ALICE]
     );
-    assert_eq!(public_actions[1].pre, funded(1));
-    assert_eq!(public_actions[1].post, funded(1));
+    assert_eq!(public[1].1, funded(1));
     assert_eq!(
         private_accounts[&keys.regular_id()],
         AccountData::default()
@@ -1170,25 +1382,21 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
 
 #[test]
 fn a_failed_preparation_aborts_the_execution() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::balance(ALICE)]),
-        &[],
-        &mut facts,
-    );
-    step(&mut state, &mut facts, |call| {
-        echo(
-            call,
-            vec![chained(PROGRAM, vec![ProgramShardSelector::balance(BOB)])],
-        )
+    let mut source = facts([(ALICE, funded(1))]);
+    let mut state = start(root(vec![ProgramShardSelector::balance(ALICE)]), &[]);
+    step(&mut state, &mut source, |call| {
+        plan(call).with_chained_calls(vec![chained(
+            PROGRAM,
+            vec![ProgramShardSelector::balance(BOB)],
+        )])
     });
     assert!(matches!(
-        state.prepare_next_call(&mut facts),
+        state.prepare_next_call(),
         Err(ExecutionError::UnknownAccount { account_id: BOB })
     ));
 
     assert!(matches!(
-        state.prepare_next_call(&mut facts),
+        state.prepare_next_call(),
         Err(ExecutionError::Aborted)
     ));
     assert!(matches!(state.finish(), Err(ExecutionError::Aborted)));
@@ -1196,20 +1404,17 @@ fn a_failed_preparation_aborts_the_execution() {
 
 #[test]
 fn a_failed_completion_aborts_the_execution() {
-    let mut facts = facts([(ALICE, false, funded(1))]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::balance(ALICE)]),
-        &[],
-        &mut facts,
-    );
-    state.prepare_next_call(&mut facts).unwrap().unwrap();
+    let mut state = start(root(vec![ProgramShardSelector::balance(ALICE)]), &[]);
+    let call = state.prepare_next_call().unwrap().unwrap();
+    let output = plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]);
+    state.bind_plan(output).unwrap();
     assert!(matches!(
-        state.complete_call(effects(Vec::new(), Vec::new()), |_| {}),
-        Err(ExecutionError::RowCountMismatch { .. })
+        state.complete_call(),
+        Err(ExecutionError::UnresolvedEffects { remaining: 1, .. })
     ));
 
     assert!(matches!(
-        state.prepare_next_call(&mut facts),
+        state.prepare_next_call(),
         Err(ExecutionError::Aborted)
     ));
     assert!(matches!(state.finish(), Err(ExecutionError::Aborted)));
@@ -1217,29 +1422,22 @@ fn a_failed_completion_aborts_the_execution() {
 
 #[test]
 fn a_pending_shard_is_known_only_once_observed_and_a_cleared_one_stays_known() {
-    let mut facts = facts([(
+    let mut source = Recording::new([(
         ALICE,
-        false,
         funded(1)
             .with_shard(PROGRAM, data(b"a"))
             .with_shard(OTHER_PROGRAM, data(b"b")),
     )]);
-    let mut state = start(
-        root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]),
-        &[],
-        &mut facts,
-    );
+    let mut state = start(root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]), &[]);
     assert_eq!(state.pending_shard(ALICE, PROGRAM), None);
     assert_eq!(state.pending_shard(BOB, PROGRAM), None);
 
-    step(&mut state, &mut facts, |_| {
-        effects(
-            vec![AccountChange {
-                data: Some(ShardData::empty()),
-            }],
-            Vec::new(),
-        )
-    });
+    step_resolving(
+        &mut state,
+        &mut source,
+        |call| plan(call).with_effects(vec![effect(&call.accounts[0], b"clear")]),
+        &mut |_| Some(ShardData::empty()),
+    );
 
     assert_eq!(
         state.pending_shard(ALICE, PROGRAM),
