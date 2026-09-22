@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{
-        Account, AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError,
-        ProgramShardSelector, ShardData, apply_balance_diff,
+        AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError, ProgramShardSelector,
+        ShardData, apply_balance_diff,
     },
     encryption::ViewingPublicKey,
 };
@@ -892,9 +892,9 @@ pub fn pre_states_match_shard_selectors(
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    lookup: impl Fn(AccountId) -> Option<&'state Account>,
+    lookup: impl Fn(AccountId) -> Option<&'state AccountData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let loader_shard = |id| lookup(id).map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID));
+    let loader_shard = |id| lookup(id).map(|data| data.shard(PROGRAM_LOADER_ACCOUNT_ID));
     let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();

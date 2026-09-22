@@ -143,6 +143,8 @@ pub fn validate_state_diff<B: Backend>(
     let mut touched: HashMap<AccountId, AccountData> = HashMap::new();
     let mut first_sight: Vec<(AccountId, bool, AccountData)> = Vec::new();
     let mut position_of: HashMap<AccountId, usize> = HashMap::new();
+    // An account's full state at first sight, so shards this transaction never names survive.
+    let mut at_first_sight: HashMap<AccountId, AccountData> = HashMap::new();
     let mut selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
 
     let mut chained_calls = VecDeque::from_iter([(initial_call, None, HashSet::new())]);
@@ -230,6 +232,7 @@ pub fn validate_state_diff<B: Backend>(
                 None if !seen_before => backend.expected_first_sight(account_id, &ctx)?,
                 None => None,
             };
+            let base = expected.clone();
             if let Some(expected) = expected {
                 let consistent = expected.balance == pre.balance
                     && pre
@@ -267,10 +270,10 @@ pub fn validate_state_diff<B: Backend>(
 
             if !seen_before {
                 position_of.insert(account_id, position);
-                let known = touched
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| data_of(pre));
+                // Seed from the environment's authoritative value where there is one, so shards
+                // the transaction never names are carried through rather than dropped.
+                let known = base.unwrap_or_else(|| data_of(pre));
+                at_first_sight.insert(account_id, known.clone());
                 first_sight.push((account_id, exported, known));
             }
 
@@ -329,6 +332,7 @@ pub fn validate_state_diff<B: Backend>(
             let account_id = diff.pre_state.account_id;
             let mut data = touched
                 .remove(&account_id)
+                .or_else(|| at_first_sight.get(&account_id).cloned())
                 .unwrap_or_else(|| data_of(&diff.pre_state));
             data.apply_diff(diff).map_err(|err| {
                 ValidationError::ProgramBehavior(InvalidProgramBehaviorError::BalanceDiffFailed(
