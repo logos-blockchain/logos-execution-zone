@@ -19,7 +19,7 @@ fn main() {
         input.instruction.clone();
 
     let Some((pda, rest)) = input.accounts.split_first() else {
-        return;
+        panic!("selective_pda_delegator requires at least 1 account");
     };
 
     let mut plan = Plan::new(&input, instruction_data);

@@ -7,7 +7,7 @@ fn main() {
     match read_lee_call::<Instruction>() {
         LeeCall::Execute(input, instruction_data) => {
             let Ok([account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
-                return;
+                panic!("data_changer requires exactly 1 account");
             };
             let mut plan = Plan::new(&input, instruction_data);
             plan.update(&account, &input.instruction);

@@ -126,6 +126,51 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
     assert_eq!(to_post, expected_to_post);
 }
 
+/// Mirrors `delegated_pda_is_not_authorized_in_sibling_call` (state/tests/circuit.rs) — same
+/// property, a PDA seed delegated to one sibling call must not leak to another — but through the
+/// plain public-transaction settlement path instead of the privacy-preserving circuit.
+#[test]
+fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
+    let delegator = crate::test_methods::selective_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let sibling = crate::test_methods::auth_asserting_noop();
+
+    let seed = PdaSeed::new([77; 32]);
+    let delegator_id: AccountId = delegator.id().into();
+    let pda_id = AccountId::for_public_pda(&delegator_id, &seed);
+
+    let mut state = V03State::new()
+        .with_public_account_balances([(pda_id, 0)])
+        .with_test_programs();
+
+    // `callee` gets the PDA's account_id *and* the matching `pda_seeds` — real delegation.
+    // `sibling` gets only the account_id (via `include_pda = true`), no `pda_seeds` — it sees
+    // `is_authorized == false` and panics on it (`auth_asserting_noop`).
+    let instruction: (PdaSeed, ProgramId, InstructionData, Option<(ProgramId, bool)>) = (
+        seed,
+        callee.id().into(),
+        Program::serialize_instruction(()).unwrap(),
+        Some((sibling.id().into(), true)),
+    );
+
+    let message = public_transaction::Message::try_new(
+        delegator_id,
+        vec![ProgramShardSelector::balance(pda_id)],
+        vec![],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    assert!(
+        result.is_err(),
+        "a sibling handed the PDA's account_id but no pda_seeds must not see it as authorized, \
+         but got: {result:?}"
+    );
+}
+
 #[test]
 fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
     let chain_caller = crate::test_methods::chain_caller();

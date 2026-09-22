@@ -12,7 +12,7 @@ fn main() {
     let callees = input.instruction.clone();
 
     let Ok([_own]) = <[_; 1]>::try_from(input.accounts.clone()) else {
-        return;
+        panic!("shard_forwarder requires exactly 1 account");
     };
 
     let mut plan = Plan::new(&input, instruction_data);

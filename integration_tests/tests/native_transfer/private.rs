@@ -132,6 +132,81 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     Ok(())
 }
 
+/// End-to-end proof that account-local effects settle against live state through the real
+/// wallet → sequencer → settlement pipeline, not just in-process against a synthetic state.
+///
+/// Two *different* senders each deshield a transfer into the *same* shared receiver, submitted
+/// back-to-back with no wait between them, so both are proven against the same pre-transfer
+/// receiver balance — as if neither knew the other existed. Both credits must land, proving the
+/// receiver's balance resolves against live state at settlement rather than one transfer's stale
+/// view clobbering the other's.
+#[test]
+async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let sender_1: AccountId = ctx.existing_private_accounts()[0];
+    let sender_2: AccountId = ctx.existing_private_accounts()[1];
+    let receiver: AccountId = ctx.existing_public_accounts()[2];
+
+    let sender_1_before = ctx
+        .wallet()
+        .get_account_private(sender_1)
+        .context("Failed to get sender_1's private account")?
+        .data
+        .balance()
+        .unwrap();
+    let sender_2_before = ctx
+        .wallet()
+        .get_account_private(sender_2)
+        .context("Failed to get sender_2's private account")?
+        .data
+        .balance()
+        .unwrap();
+    let receiver_before = account_balance(&ctx, receiver).await?;
+
+    // Submitted with no wait between them — both prove against the receiver's pre-transfer
+    // balance, exactly the concurrent scenario this branch's effect model exists to settle
+    // correctly.
+    send(&mut ctx, private_mention(sender_1), public_mention(receiver), 30).await?;
+    send(&mut ctx, private_mention(sender_2), public_mention(receiver), 20).await?;
+
+    log::info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let sender_1_after = ctx
+        .wallet()
+        .get_account_private(sender_1)
+        .context("Failed to get sender_1's private account")?
+        .data
+        .balance()
+        .unwrap();
+    let sender_2_after = ctx
+        .wallet()
+        .get_account_private(sender_2)
+        .context("Failed to get sender_2's private account")?
+        .data
+        .balance()
+        .unwrap();
+    let receiver_after = account_balance(&ctx, receiver).await?;
+
+    assert_private_commitment_in_state(&ctx, sender_1, "sender_1").await?;
+    assert_private_commitment_in_state(&ctx, sender_2, "sender_2").await?;
+
+    // Deshielded transfers are fee-exempt under the interim policy, so each side moves by
+    // exactly the amount.
+    assert_eq!(sender_1_after, sender_1_before - 30, "sender_1 must reflect its own debit");
+    assert_eq!(sender_2_after, sender_2_before - 20, "sender_2 must reflect its own debit");
+    assert_eq!(
+        receiver_after,
+        receiver_before + 50,
+        "receiver must reflect both credits (30 + 20), not just whichever transfer settled last"
+    );
+
+    log::info!("Successfully settled two concurrent deshielded transfers against live state");
+
+    Ok(())
+}
+
 /// A deshielded transfer's public recipient must not be asked to sign the transaction: the
 /// sender's private-side proof is the only authorization the protocol requires, and signing
 /// with the recipient's key (when the wallet happens to hold it) would leak a link between
