@@ -38,7 +38,7 @@ use tokio::test;
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 // LGO-scale: the holder's balance also pays the lock's fee (reserve ≈ 16M+ at
 // wallet-like gas limits), so the bridgeable seed must dwarf it.
-const INITIAL_BALANCE: u128 = 10_000_000_000;
+const INITIAL_BALANCE: u64 = 10_000_000_000;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
 
@@ -52,12 +52,12 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
 
-    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
             allowed_routes: vec![CrossZoneRoute {
-                src_account_id: programs::bridge_lock().id().into(),
+                src_account_id: AccountId::from_builtin_program(programs::bridge_lock().id()),
                 target_account_id: wrapped_token_id,
                 mint_cap: None,
             }],
@@ -124,7 +124,9 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Conservation: the mint on B must be backed by an equal lock on A. The lock
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
-    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id().into());
+    let escrow_id = bridge_lock_core::escrow_account_id(AccountId::from_builtin_program(
+        programs::bridge_lock().id(),
+    ));
     let escrowed = seq_client_a
         .get_account(escrow_id)
         .await?
@@ -137,7 +139,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     );
     let remaining = seq_client_a
         .get_account(bridge_lock_core::holding_account_id(
-            programs::bridge_lock().id().into(),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
             &holder_id.into_value(),
         ))
         .await?
@@ -146,7 +148,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .unwrap();
     assert_eq!(
         remaining,
-        INITIAL_BALANCE - LOCK_AMOUNT,
+        u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
         "zone A holding must be debited by the locked amount"
     );
 
@@ -157,10 +159,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     wait_for_balance(
         ind_client_a,
         bridge_lock_core::holding_account_id(
-            programs::bridge_lock().id().into(),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
             &holder_id.into_value(),
         ),
-        INITIAL_BALANCE - LOCK_AMOUNT,
+        u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
     )
     .await
     .context("zone A's indexer must reconstruct the holding from the genesis block")?;
@@ -177,9 +179,9 @@ fn build_lock_tx(
     holder_id: AccountId,
     target_zone: [u8; 32],
 ) -> LeeTransaction {
-    let bridge_lock_id: AccountId = programs::bridge_lock().id().into();
-    let wrapped_token_id: AccountId = programs::wrapped_token().id().into();
-    let outbox_id: AccountId = programs::cross_zone_outbox().id().into();
+    let bridge_lock_id = AccountId::from_builtin_program(programs::bridge_lock().id());
+    let wrapped_token_id = AccountId::from_builtin_program(programs::wrapped_token().id());
+    let outbox_id = AccountId::from_builtin_program(programs::cross_zone_outbox().id());
     let ordinal = 0;
 
     let mint = wrapped_token_core::Instruction::Mint {
@@ -214,7 +216,7 @@ fn build_lock_tx(
         ),
         ProgramShardSelector::balance(holder_id),
         ProgramShardSelector::balance(bridge_lock_core::holding_account_id(
-            programs::bridge_lock().id().into(),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
             &holder_id.into_value(),
         )),
         ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
@@ -259,7 +261,7 @@ async fn wait_for_mint(indexer: &IndexerClient, holding_id: AccountId) -> Result
         value: holding_id.into_value(),
     };
     let wrapped_token_id = indexer_service_protocol::AccountId {
-        value: AccountId::from(programs::wrapped_token().id()).into_value(),
+        value: AccountId::from_builtin_program(programs::wrapped_token().id()).into_value(),
     };
     let wait = async {
         loop {

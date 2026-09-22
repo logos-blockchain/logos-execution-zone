@@ -28,7 +28,7 @@ async fn fresh_store_and_chain(
     let storage_ref = StorageActor::spawn(storage);
     // What `start_from_config` does before it opens a store, mirrored here
     // because these cases drive `verify_and_reconstruct` directly.
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let bootstrap_sequencer_key = Some(test_bootstrap_sequencer_key(config));
     SequencerCore::<StorageActor, MockBlockPublisher>::seed_genesis_if_absent(
         &storage_ref,
@@ -571,12 +571,10 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     );
 }
 
-// /// A sequencer config whose genesis funds the bridge account, so replayed bridge
-// /// deposit transactions have a source balance to mint from.
+// /// The escrow is funded at genesis, so this is `setup_sequencer_config()`.
+// /// Kept as a name because the parked tests below call it.
 // fn bridge_funded_config() -> SequencerConfig {
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
-//     config
+//     setup_sequencer_config()
 // }
 
 // /// Builds an unfulfilled pending deposit event for `recipient`, matching the
@@ -990,7 +988,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
     );
 
     // The delivery landed exactly once, and the next turn does not re-emit it.
-    let ping_receiver_program_id: AccountId = programs::ping_receiver().id().into();
+    let ping_receiver_program_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let record_id = ping_record_pda(ping_receiver_program_id);
     assert_eq!(
         seq_b

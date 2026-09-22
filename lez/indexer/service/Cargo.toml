@@ -23,6 +23,11 @@ serde_json.workspace = true
 futures.workspace = true
 arc-swap = "1.8.1"
 
+[dev-dependencies]
+lee_core.workspace = true
+
 [features]
 # Return mock responses with generated data for testing purposes
 mock-responses = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["indexer_core/prove"]

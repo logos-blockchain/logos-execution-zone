@@ -1,7 +1,9 @@
 services:
 
   logos-blockchain-node-0:
-    image: ghcr.io/bacv/nomos-node:da7bd37-lssa
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "${PORT:-18080}:18080/tcp"
     volumes:

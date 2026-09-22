@@ -84,7 +84,7 @@ The relevant part is the account id `BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH
 ## Check the account state
 New accounts are always Uninitialized. Verify:
 ```bash
-wallet account get --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 Expected output:
 ```
@@ -109,7 +109,7 @@ Monitor the sequencer terminal to confirm execution.
 ## Inspect the updated account
 After the transaction is processed, check the new state:
 ```bash
-wallet account get --raw --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --raw --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 Example output:
 ```json
@@ -193,7 +193,7 @@ The relevant part for this tutorial is the account id `7EDHyxejuynBpmbLuiEym9HMU
 You can check it's uninitialized with
 
 ```bash
-wallet account get --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
 ```
 
 ## Privately executing the Hello world program
@@ -215,7 +215,7 @@ cargo run --bin run_hello_world_private \
 The `run_hello_world` script submitted a transaction and it was (hopefully) accepted by the node. On chain there is now a commitment to the new private account values, and the account data is stored encrypted. However, the local client hasn’t updated its private state yet. That’s why, if you try to get the private account values now, it still reads the old values from local storage instead.
 
 ```bash
-wallet account get --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
 ```
 
 This will still show `Account is Uninitialized`. To see the new values locally, you need to run the wallet sync command. Once the client syncs, the local store will reflect the updated account data.
@@ -229,7 +229,7 @@ wallet account sync-private
 
 After this completes, running
 ```bash
-wallet account get --raw --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
+wallet account get --raw --scope all --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
 ```
 should show something similar to
 ```json
@@ -383,13 +383,13 @@ cargo run --bin run_hello_world_with_move_function \
 
 To check the values of the accounts are as expected run:
 ```bash
-wallet account get --account-id Public/95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs
+wallet account get --scope all --account-id Public/95iNQMbmxMRY6jULiHYkCzCkYKPEuysvBh5kEHayDxLs
 ```
 and
 
 ```bash
 wallet account sync-private
-wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
+wallet account get --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
 and check that the shard data decodes to `mundo!` and `Hola` respectively.
@@ -431,7 +431,7 @@ cargo run --bin run_hello_world_through_tail_call \
 Once the transaction is processed, query the account values with:
 
 ```bash
-wallet account get --raw --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
+wallet account get --raw --scope all --account-id Public/BzdBoL4JRa5M873cuWb9rbYgASr1pXyaAZ1YW9ertWH9
 ```
 
 You should se an output similar to
@@ -475,7 +475,7 @@ cargo run --bin run_hello_world_through_tail_call_private \
 Once finished run the following to see the changes
 ```bash
 wallet account sync-private
-wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
+wallet account get --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU
 ```
 
 # 13. Program derived accounts: authorizing accounts through tail calls
@@ -516,7 +516,7 @@ The program derived account ID is: 3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
 Then check the status of that account
 
 ```bash
-wallet account get --raw --account-id Public/3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
+wallet account get --raw --scope all --account-id Public/3tfTPPuxj3eSE1cLVuNBEk8eSHzpnYS1oqEdeH3Nfsks
 ```
 
 Output:

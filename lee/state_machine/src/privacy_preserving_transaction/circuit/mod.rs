@@ -17,7 +17,7 @@ use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover}
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::Program,
+    program::{Program, check_exit_code},
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
@@ -90,7 +90,7 @@ impl From<Program> for ProgramWithDependencies {
     /// builtins, or anything not yet moved by `program_loader`). Use [`Self::new`] directly for a
     /// program deployed elsewhere.
     fn from(program: Program) -> Self {
-        let self_account_id = AccountId::from(program.id());
+        let self_account_id = AccountId::from_builtin_program(program.id());
         Self::new(program, self_account_id, HashMap::new())
     }
 }
@@ -104,6 +104,9 @@ pub struct ProvingInput {
     pub private_witnesses: Vec<PrivateWitness>,
     pub instruction_data: InstructionData,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Minimum length each emitted note is padded to, so notes do not leak their
+    /// account's size. `None` leaves them at their natural length.
+    pub ciphertext_padding: Option<u32>,
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
@@ -129,6 +132,7 @@ pub fn execute_and_prove_with(
         private_witnesses,
         instruction_data,
         dummy_inputs,
+        ciphertext_padding,
     } = input;
     let ProgramWithDependencies {
         self_account_id: initial_account_id,
@@ -370,6 +374,7 @@ pub fn execute_and_prove_with(
         private_witnesses,
         program_account_id: *initial_account_id,
         dummy_inputs,
+        ciphertext_padding,
         initial_shard_selectors: shard_selectors,
         program_image_claims,
     };
@@ -417,10 +422,25 @@ fn execute_and_prove_program(
 
     // Prove the program
     let prover = default_prover();
-    Ok(prover
+    let prove_info = prover
         .prove(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+
+    // The local prover proves any exit code, and the circuit's `env::verify` only resolves a
+    // `Halted(0)` claim, so gate here for a typed error before the expensive circuit proof.
+    let exit_code = prove_info
+        .receipt
+        .claim()
         .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
-        .receipt)
+        .as_value()
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?
+        .exit_code;
+    check_exit_code(
+        exit_code,
+        prove_info.stats.user_cycles,
+        LeeError::ProgramProveFailed,
+    )?;
+    Ok(prove_info.receipt)
 }
 
 #[cfg(test)]

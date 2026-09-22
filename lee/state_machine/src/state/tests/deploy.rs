@@ -12,17 +12,21 @@ use super::*;
 /// Proof that a program's bytecode split across multiple segment accounts reconstructs into
 /// something that executes identically to the original: writes several segments (linked
 /// tail-to-head, at arbitrary addresses) plus a `ProgramHeader` directly via
-/// `force_insert_account`, then confirms `get_program` returns the same bytes and execution
+/// `force_insert_account`, then confirms `get_builtin_program` returns the same bytes and execution
 /// output as a direct run against the untouched original.
 #[test]
 fn manually_segmented_program_reconstructs_and_executes_identically() {
     let program = crate::test_methods::noop();
     let full_binary = program.elf();
+    // Segments only ever hold `user_elf`.
+    let user_elf = risc0_binfmt::ProgramBinary::decode(full_binary)
+        .unwrap()
+        .user_elf;
 
     // However many chunks, as long as it's more than one — this is testing reconstruction
     // across several accounts, not any particular chunk size.
-    let chunk_size = full_binary.len().div_ceil(4).max(1);
-    let chunks: Vec<&[u8]> = full_binary.chunks(chunk_size).collect();
+    let chunk_size = user_elf.len().div_ceil(4).max(1);
+    let chunks: Vec<&[u8]> = user_elf.chunks(chunk_size).collect();
     assert!(
         chunks.len() > 1,
         "test needs a real multi-chunk split, got {} chunk(s)",
@@ -54,7 +58,10 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         );
     }
 
-    let header_account_id = AccountId::new([0xff; 32]);
+    // A header can be looked up by `get_builtin_program` at any chosen `ProgramId` — its own
+    // `image_id` field (asserted below) is what actually carries the program's real identity.
+    let header_program_id: ProgramId = [0xffff_ffff; 8];
+    let header_account_id = AccountId::from_builtin_program(header_program_id);
     state.force_insert_account(
         header_account_id,
         Account::default().with_shard(
@@ -72,16 +79,16 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     );
 
     let (found_image_id, reconstructed_binary) = state
-        .get_program(header_account_id.into())
+        .get_builtin_program(header_program_id)
         .expect("a fully-landed multi-segment program must be found");
     assert_eq!(
         found_image_id,
         program.id(),
-        "get_program must recompute the same image_id as the original"
+        "get_builtin_program must recompute the same image_id as the original"
     );
     assert_eq!(
         reconstructed_binary, full_binary,
-        "get_program must concatenate the segments back in order to reproduce the original exactly"
+        "get_builtin_program must concatenate the segments back in order to reproduce the original exactly"
     );
 
     let reconstructed_program = Program::new(reconstructed_binary.into()).unwrap();
@@ -114,6 +121,25 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         .expect("execution against the manually-reconstructed binary should succeed");
 
     assert_eq!(direct_output, reconstructed_output);
+}
+
+/// Unlike the round-trip above, which builds its program in-tree, this checks a real committed
+/// artifact, so it can catch its embedded kernel drifting from the protocol's current one.
+#[test]
+fn a_committed_artifacts_kernel_has_not_drifted() {
+    let user_elf = risc0_binfmt::ProgramBinary::decode(crate::PRIVACY_PRESERVING_CIRCUIT_ELF)
+        .expect("a committed artifact decodes")
+        .user_elf;
+    let reattached = crate::program::attach_kernel(user_elf);
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&reattached)
+        .expect("re-attaching the current kernel must still decode")
+        .into();
+    assert_eq!(
+        image_id,
+        crate::PRIVACY_PRESERVING_CIRCUIT_ID,
+        "the committed artifact's embedded kernel no longer matches attach_kernel's current one \
+         \u{2014} rebuild artifacts (`just build-artifacts`)"
+    );
 }
 
 /// A segment chain longer than `MAX_PROGRAM_SEGMENTS` is rejected. The cap trips before the walk
@@ -149,14 +175,15 @@ fn program_with_more_than_max_segments_is_rejected() {
         );
     }
 
-    let header_account_id = AccountId::new([0xff; 32]);
+    let header_program_id: ProgramId = [0; 8];
+    let header_account_id = AccountId::from_builtin_program(header_program_id);
     state.force_insert_account(
         header_account_id,
         Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
             ShardData::try_from(
                 ProgramHeader {
-                    image_id: [0; 8],
+                    image_id: header_program_id,
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
@@ -167,7 +194,7 @@ fn program_with_more_than_max_segments_is_rejected() {
     );
 
     assert!(
-        state.get_program(header_account_id.into()).is_none(),
+        state.get_builtin_program(header_program_id).is_none(),
         "a chain of {} segments must be rejected by the {MAX_PROGRAM_SEGMENTS}-segment cap",
         MAX_PROGRAM_SEGMENTS + 1
     );
@@ -240,45 +267,68 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     );
 }
 
-/// Writes a segment and header through the native loader, then executes the program.
+/// Writes a segment chain and header through the native loader, then executes the program.
 #[test]
 fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let mut state = V03State::new();
     let program = crate::test_methods::noop();
 
-    let segment_key = PrivateKey::try_new([1; 32]).unwrap();
-    let segment_account_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let write_segment_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_account_id,
+    let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+        .unwrap()
+        .user_elf
+        .to_vec();
+    let chunks: Vec<&[u8]> = user_elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    // Base 10 keeps these clear of the header key's [2; 32] below.
+    let segment_keys: Vec<PrivateKey> = (0..chunks.len())
+        .map(|i| PrivateKey::try_new([u8::try_from(i).unwrap().saturating_add(10); 32]).unwrap())
+        .collect();
+    let segment_account_ids: Vec<AccountId> = segment_keys
+        .iter()
+        .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+        .collect();
+
+    // Linked tail-to-head: the last chunk's segment has no `next_segment`.
+    for i in (0..chunks.len()).rev() {
+        let mut account_ids = vec![segment_account_ids[i]];
+        account_ids.extend(segment_account_ids.get(i.saturating_add(1)).copied());
+        let write_segment_message = public_transaction::Message::try_new(
             PROGRAM_LOADER_ACCOUNT_ID,
-        )],
-        vec![Nonce(0)],
-        Instruction::WriteSegment {
-            bytecode: program.elf().to_vec(),
-            next_segment: None,
-        },
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let write_segment_witness =
-        public_transaction::WitnessSet::for_message(&write_segment_message, &[&segment_key]);
-    let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
-    state
-        .transition_from_public_transaction(&write_segment_tx, 1, 0)
-        .expect("WriteSegment should succeed against a fresh account");
+            account_ids
+                .into_iter()
+                .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+                .collect(),
+            vec![Nonce(0)],
+            Instruction::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+            },
+        )
+        .expect("WriteSegment instruction data should always be serializable");
+        let write_segment_witness = public_transaction::WitnessSet::for_message(
+            &write_segment_message,
+            &[&segment_keys[i]],
+        );
+        let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
+        state
+            .transition_from_public_transaction(&write_segment_tx, 1, 0)
+            .expect("WriteSegment should succeed against a fresh account");
+    }
 
     let header_key = PrivateKey::try_new([2; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let mut header_account_ids = vec![header_account_id];
+    header_account_ids.extend(&segment_account_ids);
     let create_header_message = public_transaction::Message::try_new(
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![
-            ProgramShardSelector::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID),
-            ProgramShardSelector::new(segment_account_id, PROGRAM_LOADER_ACCOUNT_ID),
-        ],
+        header_account_ids
+            .into_iter()
+            .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+            .collect(),
         vec![Nonce(0)],
         Instruction::CreateHeader {
-            first_segment: segment_account_id,
+            first_segment: segment_account_ids[0],
             immutable: true,
         },
     )
@@ -290,11 +340,16 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .transition_from_public_transaction(&create_header_tx, 2, 0)
         .expect("CreateHeader should succeed once the segment it names already exists");
 
-    let (image_id, elf) = state
-        .get_program(header_account_id.into())
-        .expect("the newly-deployed program must be resolvable by its header address");
+    // Deployed at an arbitrary key-derived address rather than its builtin address, so
+    // resolution goes through `get_program_via` directly.
+    let (image_id, user_elf) =
+        lee_core::program::get_program_via(header_account_id, |id| state.get_account_by_id_ref(id))
+            .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
-    assert_eq!(elf, program.elf().to_vec());
+    assert_eq!(
+        crate::program::attach_kernel(&user_elf),
+        program.elf().to_vec()
+    );
 
     // Dispatch a top-level call to the freshly-deployed address, exactly like calling any
     // builtin — the loader's native handling of the deploy is invisible from here on.

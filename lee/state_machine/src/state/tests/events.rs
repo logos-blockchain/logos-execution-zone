@@ -55,7 +55,7 @@ fn emitted(n: u8) -> ProgramEvent {
 fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id().into();
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let tx = program_transaction(
         emitter_id,
@@ -83,7 +83,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 fn chained_events_follow_depth_first_pre_order() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id().into();
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
         events: vec![emitted(2)],
@@ -125,10 +125,14 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let emitter = crate::test_methods::event_emitter();
 
-    let vault_id =
-        AccountId::for_public_pda(&AccountId::from(initiator.id()), &PdaSeed::new([0; 32]));
-    let receiver_id =
-        AccountId::for_public_pda(&AccountId::from(emitter.id()), &PdaSeed::new([1; 32]));
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(emitter.id()),
+        &PdaSeed::new([1; 32]),
+    );
 
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(vault_id, Account::funded(1000));
@@ -142,7 +146,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     })
     .unwrap();
     let instruction = FlashSwapInstruction::Initiate {
-        callback_program_id: emitter.id().into(),
+        callback_program_id: AccountId::from_builtin_program(emitter.id()),
         amount_out: 0,
         callback_instruction_data,
     };
@@ -151,8 +155,14 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert_eq!(payloads(&events), vec![vec![0; 4]]);
-    assert_eq!(events[0].account_id, emitter.id().into());
-    assert_ne!(events[0].account_id, initiator.id().into());
+    assert_eq!(
+        events[0].account_id,
+        AccountId::from_builtin_program(emitter.id())
+    );
+    assert_ne!(
+        events[0].account_id,
+        AccountId::from_builtin_program(initiator.id())
+    );
     assert_ne!(events[0].account_id, NATIVE_TOKEN_PROGRAM_ID);
 }
 
@@ -161,7 +171,11 @@ fn program_that_emits_nothing_yields_no_events() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
 
-    let tx = program_transaction(crate::test_methods::noop().id().into(), account_id, ());
+    let tx = program_transaction(
+        AccountId::from_builtin_program(crate::test_methods::noop().id()),
+        account_id,
+        (),
+    );
 
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
@@ -171,7 +185,7 @@ fn program_that_emits_nothing_yields_no_events() {
 #[test]
 fn emitted_events_leave_state_untouched() {
     let account_id = AccountId::new([1; 32]);
-    let emitter_id = crate::test_methods::event_emitter().id().into();
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let run = |events: Vec<ProgramEvent>| {
         let mut state = V03State::new().with_test_programs();
@@ -210,7 +224,7 @@ fn example_event_selector_matches_its_derivation() {
 fn events_are_filterable_by_selector_and_decodable() {
     let account_id = AccountId::new([1; 32]);
     let mut state = V03State::new().with_test_programs();
-    let emitter_id = crate::test_methods::event_emitter().id().into();
+    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let example = ExampleEvent {
         account: AccountId::new([7; 32]),

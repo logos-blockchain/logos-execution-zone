@@ -1,14 +1,13 @@
 use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
-    ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector, Proof, PublicActionWithID,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiU128, FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
     account::FfiAccountData,
     vectors::{
         FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramShardSelectorList,
@@ -49,7 +48,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
+                program_account_id: AccountId {
+                    value: value.message.program_account_id.data,
+                },
                 shard_selectors: {
                     let std_vec: Vec<_> = value.message.shard_selectors.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -160,7 +161,7 @@ impl From<FfiProgramShardSelector> for ProgramShardSelector {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_id: FfiProgramId,
+    pub program_account_id: FfiAccountId,
     pub shard_selectors: FfiProgramShardSelectorList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
@@ -171,7 +172,7 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
+            program_account_id,
             shard_selectors,
             nonces,
             instruction_data,
@@ -179,7 +180,7 @@ impl From<PublicMessage> for FfiPublicMessage {
         } = value;
 
         Self {
-            program_id: program_id.into(),
+            program_account_id: program_account_id.into(),
             shard_selectors: shard_selectors
                 .into_iter()
                 .map(Into::into)
@@ -598,7 +599,7 @@ mod tests {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
             message: PublicMessage {
-                program_id: ProgramId([2; 8]),
+                program_account_id: AccountId { value: [2; 32] },
                 shard_selectors: vec![ProgramShardSelector {
                     account_id: AccountId { value: [3; 32] },
                     program_account_id: indexer_service_protocol::AccountId::native_token_program(),

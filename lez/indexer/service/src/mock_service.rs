@@ -13,12 +13,12 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector,
+    Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
+    BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
     PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, Transaction, ValidityWindow, WitnessSet,
+    ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -279,6 +279,26 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned> {
+        let account = self.get_account(account_id).await?;
+        Ok(AccountSummary {
+            nonce: account.nonce,
+            balance: account.data.balance(),
+            shards: account
+                .data
+                .shards
+                .iter()
+                .map(|(program, data)| ShardSummary {
+                    program_account_id: *program,
+                    len: u64::try_from(data.0.len()).expect("a shard is capped well under u64"),
+                })
+                .collect(),
+        })
+    }
+
     async fn get_account_at_block(
         &self,
         account_id: AccountId,
@@ -417,7 +437,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
         Ok(records
             .into_iter()
-            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
+            .filter(|record| record.matches_fields(filter.program_account_id, filter.selector))
             .collect())
     }
 
@@ -478,7 +498,7 @@ fn mock_event_record(block: &Block) -> Option<EventRecord> {
         block_id: block.header.block_id,
         tx_index: 0,
         tx_hash: *tx.hash(),
-        program_id: ProgramId([7_u32; 8]),
+        program_account_id: AccountId { value: [7; 32] },
         selector: Selector([1_u8; 8]),
         data: vec![block.header.block_id as u8; 4],
     })
@@ -493,7 +513,7 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            program_id: ProgramId([1_u32; 8]),
+            program_account_id: AccountId { value: [1; 32] },
             shard_selectors: vec![
                 ProgramShardSelector {
                     account_id: account_ids[tx_idx as usize % account_ids.len()],
@@ -646,7 +666,7 @@ mod tests {
         };
         let matching = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([7_u32; 8])),
+            program_account_id: Some(AccountId { value: [7; 32] }),
             ..GetEventsFilter::default()
         };
         let hit = service.get_events(matching).await.unwrap();
@@ -655,7 +675,7 @@ mod tests {
 
         let mismatched = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([8_u32; 8])),
+            program_account_id: Some(AccountId { value: [8; 32] }),
             ..GetEventsFilter::default()
         };
         let miss = service.get_events(mismatched).await.unwrap();

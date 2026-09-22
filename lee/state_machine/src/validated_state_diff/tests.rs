@@ -124,7 +124,7 @@ fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
     let program = crate::test_methods::reordering_writer();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::from_builtin_program(program.id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
         .with_programs(std::iter::once(program));
@@ -173,8 +173,8 @@ fn exhausted_budget_surfaces_out_of_gas() {
 fn chained_calls_share_one_budget() {
     // A chain-calling tx must exhaust when the budget covers less than the
     // whole chain, even though each individual call would fit.
-    let forwarder_id: AccountId = crate::test_methods::shard_forwarder().id().into();
-    let echo_id: AccountId = crate::test_methods::noop().id().into();
+    let forwarder_id = AccountId::from_builtin_program(crate::test_methods::shard_forwarder().id());
+    let echo_id = AccountId::from_builtin_program(crate::test_methods::noop().id());
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let state = V03State::new()
@@ -235,7 +235,8 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     // An unauthorized pre_state panics the guest mid-execution — a chargeable
     // failure that is not OutOfGas. It still pays the whole declared budget:
     // metering written back on an error path must never undercharge.
-    let program_id: AccountId = crate::test_methods::auth_asserting_noop().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::auth_asserting_noop().id());
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let unsigned = AccountId::new([2_u8; 32]);
@@ -260,9 +261,116 @@ fn metered_guest_panic_is_charged_the_full_budget() {
         ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget);
     assert_eq!(
         outcome.cycles, budget,
-        "a failed execution pays its full declared budget"
+        "a panic pays its full declared budget"
     );
     result.expect("a charged revert still yields an applicable diff");
+}
+
+#[test]
+fn metered_nonzero_exit_is_charged_its_metered_cycles() {
+    // Unlike a panic, `env::exit(n)` keeps the session, so the revert pays what
+    // it actually ran rather than the whole budget.
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_programs(std::iter::once(crate::test_methods::exits_nonzero()));
+    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
+    let message = Message::try_new(
+        program_id,
+        vec![ProgramShardSelector::balance(from)],
+        vec![Nonce(0)],
+        (),
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget);
+    assert!(
+        outcome.cycles > 0 && outcome.cycles < budget,
+        "a non-zero exit is metered, not charged the full budget: {}",
+        outcome.cycles
+    );
+    let diff = result.expect("a charged revert still yields an applicable diff");
+    assert!(
+        diff.public_diff().is_empty(),
+        "a reverted action moves no balances"
+    );
+}
+
+#[test]
+fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
+    // The accumulation branch only matters once the caller has burned cycles: a chained
+    // callee's non-zero exit must charge caller + callee, not just the callee.
+    let chain_caller = crate::test_methods::chain_caller();
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to = AccountId::new([2_u8; 32]);
+    let state = V03State::new()
+        .with_public_account_balances([(from, 1_000), (to, 0)])
+        .with_test_programs();
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let run = |num_chain_calls: u32| {
+        let instruction: (
+            u128,
+            lee_core::program::ProgramId,
+            u32,
+            Option<lee_core::program::PdaSeed>,
+        ) = (
+            0,
+            crate::test_methods::exits_nonzero().id(),
+            num_chain_calls,
+            None,
+        );
+        let message = Message::try_new(
+            AccountId::from_builtin_program(chain_caller.id()),
+            vec![
+                ProgramShardSelector::balance(to),
+                ProgramShardSelector::balance(from),
+            ],
+            vec![Nonce(0)],
+            instruction,
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&from_key]);
+        let tx = crate::PublicTransaction::new(message, witness_set);
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget)
+    };
+
+    let (caller_only, ok) = run(0);
+    ok.expect("the caller alone succeeds");
+
+    // The callee alone, so the assertion below fails if its cycles are never folded in: a
+    // caller with one chained call burns only marginally more than with none.
+    let callee_message = Message::try_new(
+        AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
+        vec![ProgramShardSelector::balance(from)],
+        vec![Nonce(0)],
+        (),
+    )
+    .unwrap();
+    let callee_witness_set = WitnessSet::for_message(&callee_message, &[&from_key]);
+    let callee_tx = crate::PublicTransaction::new(callee_message, callee_witness_set);
+    let (callee_alone, _) =
+        ValidatedStateDiff::from_public_transaction_metered(&callee_tx, &state, 1, 0, budget);
+
+    let (outcome, result) = run(1);
+    assert!(
+        outcome.cycles >= caller_only.cycles.saturating_add(callee_alone.cycles)
+            && outcome.cycles < budget,
+        "caller + callee cycles are metered: {} vs caller-only {} + callee-only {}",
+        outcome.cycles,
+        caller_only.cycles,
+        callee_alone.cycles
+    );
+    let diff = result.expect("a charged revert still yields an applicable diff");
+    assert!(
+        diff.public_diff().is_empty(),
+        "a reverted action moves no balances"
+    );
 }
 
 #[test]

@@ -1,4 +1,8 @@
-#![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::arbitrary_source_item_ordering,
+    reason = "We don't care about it in tests"
+)]
 
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
@@ -43,8 +47,7 @@ use crate::{
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
     classify_settled_deliveries,
     config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
-        SequencerConfig,
+        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
@@ -60,6 +63,8 @@ const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 /// The inscription a test slash names; only has to match the approvals.
 const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
+/// The channel the slash fixtures are staked and signed on.
+const TEST_CHANNEL_ID: [u8; 32] = [0xC1; 32];
 
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
@@ -135,7 +140,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         max_block_size: bytesize::ByteSize::mib(1),
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
-        signing_key: *sequencer_sign_key_for_testing().value(),
+        signing_key: Some(*sequencer_sign_key_for_testing().value()),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -154,20 +159,24 @@ fn setup_sequencer_config() -> SequencerConfig {
 
 #[test]
 fn only_the_cross_zone_inbox_and_fee_are_sequencer_only() {
-    assert!(is_sequencer_only_program(
-        programs::cross_zone_inbox().id().into()
-    ));
-    assert!(is_sequencer_only_program(programs::fee().id().into()));
-    assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox().id().into()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::wrapped_token().id().into()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::ping_sender().id().into()
-    ));
-    assert!(!is_sequencer_only_program(programs::clock().id().into()));
+    assert!(is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::cross_zone_inbox().id()
+    )));
+    assert!(is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::fee().id()
+    )));
+    assert!(!is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::cross_zone_outbox().id()
+    )));
+    assert!(!is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::wrapped_token().id()
+    )));
+    assert!(!is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::ping_sender().id()
+    )));
+    assert!(!is_sequencer_only_program(AccountId::from_builtin_program(
+        programs::clock().id()
+    )));
 }
 
 #[test]
@@ -224,7 +233,7 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     };
     assert_eq!(
         fee_tx.message().program_account_id,
-        programs::fee().id().into()
+        AccountId::from_builtin_program(programs::fee().id())
     );
     assert_eq!(
         *clock_tx,
@@ -276,7 +285,9 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_account_id != programs::bridge().id().into() {
+    if public_tx.message.program_account_id
+        != AccountId::from_builtin_program(programs::bridge().id())
+    {
         return false;
     }
 
@@ -308,7 +319,7 @@ fn create_charged_bridge_deposit(
     payer_nonce: u128,
     payer_key: &PrivateKey,
 ) -> LeeTransaction {
-    let bridge_program_id: AccountId = programs::bridge().id().into();
+    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
     let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
     let message = lee::public_transaction::Message::try_new_with_fees(
         bridge_program_id,
@@ -340,10 +351,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     // guard in `settle_transaction` must reject it, so the builder drops it and
     // the produced block never includes it — proving the guard is wired on the
     // live settlement path, not only in the now-dead `validate_on_state`.
-    let mut config = setup_sequencer_config();
-    // The mint debits the bridge, so it must hold enough to execute; otherwise
-    // it underflows and we would be testing the wrong failure.
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -388,8 +396,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     // through that same path. Only the builder's origin-gated guard can drop a
     // *user*-submitted one. Without it the fee classification waves a forged
     // public deposit straight through (the consensus replay gap is #809).
-    let mut config = setup_sequencer_config();
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
@@ -441,8 +448,10 @@ fn cross_zone_test_config() -> SequencerConfig {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: programs::ping_sender().id().into(),
-                    target_account_id: programs::ping_receiver().id().into(),
+                    src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
+                    target_account_id: AccountId::from_builtin_program(
+                        programs::ping_receiver().id(),
+                    ),
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -468,14 +477,14 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// `src_block_id`. Built through the same builder the watcher uses, so a change
 /// to the encoding shows up here rather than passing silently.
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
-    let receiver_id: AccountId = programs::ping_receiver().id().into();
+    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
         &cross_zone::EmissionSource {
             src_zone: PEER_ZONE,
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
             src_tx_index: 0,
-            src_account_id: programs::ping_sender().id().into(),
+            src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
         },
         receiver_id,
         &[
@@ -554,7 +563,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     config.home = temp_dir.path().to_path_buf();
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (genesis_state, genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
@@ -601,9 +610,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 // TODO: Reimplement these tests
 // #[tokio::test]
 // async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
-//     let mut config = setup_sequencer_config();
-//     // The mint moves funds out of the bridge account, so it has to hold some.
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let deposit_op_id = [13_u8; 32];
 //     let expected_amount = 1_u64;
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -681,8 +688,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 
 // #[tokio::test]
 // async fn a_drained_deposit_is_not_minted_twice_across_turns() {
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let deposit_op_id = [17_u8; 32];
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
 
@@ -732,8 +738,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 //     // rests entirely on the receipt PDA reverting with the block — no requeue,
 //     // no bookkeeping of our own — so the still-pending record is drained again
 //     // on the next turn and the recipient is credited exactly once across the reorg.
-//     let mut config = setup_sequencer_config();
-//     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+//     let config = setup_sequencer_config();
 //     let recipient_id = initial_public_user_accounts()[0].account_id;
 //     let deposit_op_id = [0x2c_u8; 32];
 //     let amount = 500_u64;
@@ -828,8 +833,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     // duplicates out before the program executes, so this is the only test that
     // reaches that branch; applying the same mint twice asserts the second is a
     // no-op (credited once) rather than an error.
-    let mut config = setup_sequencer_config();
-    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let config = setup_sequencer_config();
     let recipient_id = initial_public_user_accounts()[0].account_id;
     let deposit_op_id = [0x5a_u8; 32];
     let amount = 500_u64;
@@ -931,7 +935,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
         "the drained delivery should be included in the produced block"
     );
 
-    let ping_receiver_program_id: AccountId = programs::ping_receiver().id().into();
+    let ping_receiver_program_id = AccountId::from_builtin_program(programs::ping_receiver().id());
     let record_id = ping_record_pda(ping_receiver_program_id);
     assert_eq!(
         sequencer
@@ -1961,7 +1965,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // Canonical clock invocation and a crafted variant with a different timestamp — both must
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
-        let clock_program_id: AccountId = programs::clock().id().into();
+        let clock_program_id = AccountId::from_builtin_program(programs::clock().id());
         let message = lee::public_transaction::Message::try_new(
             clock_program_id,
             system_accounts::clock_account_ids()
@@ -2005,7 +2009,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     let clock_chain_caller = test_programs::clock_chain_caller();
-    let clock_chain_caller_id: AccountId = clock_chain_caller.id().into();
+    let clock_chain_caller_id = AccountId::from_builtin_program(clock_chain_caller.id());
 
     // Deploy `clock_chain_caller` at `clock_chain_caller_id`.
     // A funded genesis account signs and pays both deployment fees.
@@ -2013,6 +2017,8 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
     let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
 
+    // Segments only ever hold `user_elf`.
+    let user_elf = clock_chain_caller.user_elf().expect("valid ProgramBinary");
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![ProgramShardSelector::new(
@@ -2021,7 +2027,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         )],
         vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
         program_loader_core::Instruction::WriteSegment {
-            bytecode: clock_chain_caller.elf().to_vec(),
+            bytecode: user_elf,
             next_segment: None,
         },
         common::test_utils::test_fee_declaration(payer.account_id),
@@ -2079,7 +2085,9 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let message = lee::public_transaction::Message::try_new(
         clock_chain_caller_id,
         system_accounts::clock_account_ids()
-            .map(|id| ProgramShardSelector::new(id, clock_program_id.into()))
+            .map(|id| {
+                ProgramShardSelector::new(id, AccountId::from_builtin_program(clock_program_id))
+            })
             .to_vec(),
         vec![], // no signers
         (clock_program_id, timestamp),
@@ -2112,7 +2120,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     // Corrupt the clock 01 account's clock shard so deserialization fails.
-    let clock_program_id: AccountId = programs::clock().id().into();
+    let clock_program_id = AccountId::from_builtin_program(programs::clock().id());
     let clock_account_id = system_accounts::clock_account_ids()[0];
     let mut corrupted = sequencer
         .with_state(|s| s.get_account_by_id(clock_account_id))
@@ -2165,8 +2173,8 @@ fn time_locked_transfer_transaction(
     amount: u128,
     deadline: u64,
 ) -> PublicTransaction {
-    let program_id: AccountId = test_programs::time_locked_transfer().id().into();
-    let clock_program_id: AccountId = programs::clock().id().into();
+    let program_id = AccountId::from_builtin_program(test_programs::time_locked_transfer().id());
+    let clock_program_id = AccountId::from_builtin_program(programs::clock().id());
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![
@@ -2280,8 +2288,8 @@ fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
 }
 
 fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> PublicTransaction {
-    let program_id: AccountId = test_programs::cooldown().id().into();
-    let clock_program_id: AccountId = programs::clock().id().into();
+    let program_id = AccountId::from_builtin_program(test_programs::cooldown().id());
+    let clock_program_id = AccountId::from_builtin_program(programs::clock().id());
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![
@@ -2312,7 +2320,7 @@ fn cooldown_opens_after_the_cooldown_elapses() {
     state.force_insert_account(
         state_id,
         Account::default().with_shard(
-            test_programs::cooldown().id().into(),
+            AccountId::from_builtin_program(test_programs::cooldown().id()),
             cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
@@ -2329,7 +2337,9 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         state
             .get_account_by_id(state_id)
             .data
-            .shard(test_programs::cooldown().id().into())
+            .shard(AccountId::from_builtin_program(
+                test_programs::cooldown().id()
+            ))
             .as_ref(),
         cooldown_data(cooldown_ms, block_timestamp)
     );
@@ -2350,7 +2360,7 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
     state.force_insert_account(
         state_id,
         Account::default().with_shard(
-            test_programs::cooldown().id().into(),
+            AccountId::from_builtin_program(test_programs::cooldown().id()),
             cooldown_data(cooldown_ms, last_run_timestamp)
                 .try_into()
                 .unwrap(),
@@ -2369,7 +2379,9 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         state
             .get_account_by_id(state_id)
             .data
-            .shard(test_programs::cooldown().id().into())
+            .shard(AccountId::from_builtin_program(
+                test_programs::cooldown().id()
+            ))
             .as_ref(),
         cooldown_data(cooldown_ms, last_run_timestamp)
     );
@@ -2390,7 +2402,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge().id().into(),
+            AccountId::from_builtin_program(programs::bridge().id()),
             vec![ProgramShardSelector::balance(
                 system_accounts::bridge_account_id(),
             )],
@@ -3864,9 +3876,10 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
             (funding_id, Account::funded(amount)),
             (
                 config_id,
-                system_accounts::sequencer_stake_config_account(Some(
-                    crate::config::default_channel_params(),
-                )),
+                system_accounts::sequencer_stake_config_account(
+                    Some(crate::config::default_channel_params()),
+                    Some(TEST_CHANNEL_ID),
+                ),
             ),
         ]);
 
@@ -3880,7 +3893,8 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
             .unwrap();
 
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -3910,7 +3924,9 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     assert!(
         !ownership_account
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id()
+            ))
             .is_empty(),
         "ownership account should hold sequencer_stake's record"
     );
@@ -3951,7 +3967,8 @@ fn stake_transaction(
         Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
             .unwrap();
 
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -3984,7 +4001,8 @@ fn stake_entry(
     state: &V03State,
     sequencer_key: sequencer_stake_core::SequencerKey,
 ) -> Option<sequencer_stake_core::SequencerEntry> {
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         state
             .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
@@ -4007,9 +4025,10 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             (funding_id, Account::funded(funding_balance)),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(Some(
-                    crate::config::default_channel_params(),
-                )),
+                system_accounts::sequencer_stake_config_account(
+                    Some(crate::config::default_channel_params()),
+                    Some(TEST_CHANNEL_ID),
+                ),
             ),
         ])
 }
@@ -4024,7 +4043,8 @@ fn unstake_request_transaction(
     destination: AccountId,
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4207,7 +4227,9 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
         !state
             .get_account_by_id(other_ownership_id)
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id()
+            ))
             .is_empty(),
         "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
     );
@@ -4242,9 +4264,10 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             (funding_id, Account::funded(amount)),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(Some(
-                    crate::config::default_channel_params(),
-                )),
+                system_accounts::sequencer_stake_config_account(
+                    Some(crate::config::default_channel_params()),
+                    Some(TEST_CHANNEL_ID),
+                ),
             ),
         ]);
 
@@ -4264,7 +4287,8 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     );
 
     // Full exit, releasing back to the (now drained) funding account.
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4325,7 +4349,9 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         !state
             .get_account_by_id(ownership_id)
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id()
+            ))
             .is_empty(),
         "the ownership account keeps sequencer_stake's record after a full exit"
     );
@@ -4364,7 +4390,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, _genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
@@ -4372,7 +4398,9 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     assert!(
         !stake_account
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id()
+            ))
             .is_empty()
     );
     assert_eq!(
@@ -4390,7 +4418,9 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
         state
             .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id(),
+            ))
             .as_ref(),
     )
     .expect("genesis config account should decode");
@@ -4406,7 +4436,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (mut state, _genesis_txs) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
@@ -4415,7 +4445,8 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         &PrivateKey::try_new([56; 32]).unwrap(),
     ));
 
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4447,7 +4478,9 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         state
             .get_account_by_id(stake_id)
             .data
-            .shard(programs::sequencer_stake().id().into())
+            .shard(AccountId::from_builtin_program(
+                programs::sequencer_stake().id(),
+            ))
             .as_ref(),
     )
     .expect("genesis stake account should hold a StakeRecord");
@@ -4475,7 +4508,8 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     // A mover that moves balance the wrong way: out of the custody account it was
     // handed, into the staker's own funding account.
     let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
-    let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4494,7 +4528,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
         sequencer_stake_core::Instruction::Stake {
             sequencer_key: test_sequencer_key(0x64),
             amount,
-            mover_account_id: test_programs::reverse_transfer().id().into(),
+            mover_account_id: AccountId::from_builtin_program(
+                test_programs::reverse_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -4518,7 +4554,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
 
 /// The sink burned stakes land in.
 fn slash_sink_id() -> AccountId {
-    sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake().id().into())
+    sequencer_stake_core::slash_sink_account_id(AccountId::from_builtin_program(
+        programs::sequencer_stake().id(),
+    ))
 }
 
 /// Stakes `amount` for a fresh key and returns everything a slash test needs.
@@ -4536,7 +4574,9 @@ fn slashable_state(
     let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
     let sequencer_key = test_sequencer_key(0x44);
 
-    let mut state = stake_test_state(funding_id, amount);
+    // Two peers alongside the offender: no single key can clear the threshold,
+    // so a burn takes approvals the offender cannot supply for itself.
+    let mut state = stake_test_state(funding_id, amount.saturating_mul(3));
     let stake = stake_transaction(
         &state,
         (funding_id, &funding_key),
@@ -4548,6 +4588,20 @@ fn slashable_state(
         .transition_from_public_transaction(&stake, 1, 0)
         .expect("Stake should succeed");
 
+    for (slot, seed) in [(2, 0x45), (3, 0x46)] {
+        let (peer_id, peer_key) = committee_ownership(seed);
+        let stake = stake_transaction(
+            &state,
+            (funding_id, &funding_key),
+            (peer_id, &peer_key),
+            test_sequencer_key(seed),
+            amount,
+        );
+        state
+            .transition_from_public_transaction(&stake, slot, 0)
+            .expect("Stake should succeed");
+    }
+
     (state, sequencer_key, ownership_id, ownership_key)
 }
 
@@ -4556,8 +4610,18 @@ fn test_approval(
     seed: u8,
     sequencer_key: sequencer_stake_core::SequencerKey,
 ) -> sequencer_stake_core::SlashApproval {
+    test_approval_on(TEST_CHANNEL_ID, seed, sequencer_key)
+}
+
+/// The same, over `channel_id` instead of the chain's own channel.
+fn test_approval_on(
+    channel_id: [u8; 32],
+    seed: u8,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+) -> sequencer_stake_core::SlashApproval {
     let key = Ed25519Key::from_bytes(&[seed; 32]);
-    let message = sequencer_stake_core::slash_approval_message(sequencer_key, TEST_INSCRIPTION);
+    let message =
+        sequencer_stake_core::slash_approval_message(channel_id, sequencer_key, TEST_INSCRIPTION);
     sequencer_stake_core::SlashApproval {
         signer: sequencer_stake_core::SequencerKey::new(key.public_key().to_bytes())
             .expect("a Bedrock public key is a valid Ed25519 public key"),
@@ -4570,10 +4634,15 @@ fn slash_transaction(
     sequencer_key: sequencer_stake_core::SequencerKey,
     approvals: Vec<sequencer_stake_core::SlashApproval>,
 ) -> PublicTransaction {
-    let LeeTransaction::Public(tx) =
-        crate::slashing::build_slash_tx(ownership_id, sequencer_key, TEST_INSCRIPTION, approvals)
-            .expect("Slash tx should build")
-    else {
+    let LeeTransaction::Public(tx) = sequencer_slasher_actor::build_slash_tx(
+        ownership_id,
+        &sequencer_slasher_actor::Offence {
+            offender: sequencer_key,
+            inscription: TEST_INSCRIPTION,
+        },
+        approvals,
+    )
+    .expect("Slash tx should build") else {
         unreachable!("build_slash_tx builds a public transaction")
     };
     tx
@@ -4587,10 +4656,13 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
     let slash = slash_transaction(
         ownership_id,
         sequencer_key,
-        vec![test_approval(0x44, sequencer_key)],
+        vec![
+            test_approval(0x45, sequencer_key),
+            test_approval(0x46, sequencer_key),
+        ],
     );
     state
-        .transition_from_public_transaction(&slash, 2, 0)
+        .transition_from_public_transaction(&slash, 4, 0)
         .expect("Slash should succeed");
 
     assert_eq!(
@@ -4639,10 +4711,13 @@ fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
     let slash = slash_transaction(
         ownership_id,
         sequencer_key,
-        vec![test_approval(0x44, sequencer_key)],
+        vec![
+            test_approval(0x45, sequencer_key),
+            test_approval(0x46, sequencer_key),
+        ],
     );
     state
-        .transition_from_public_transaction(&slash, 2, 0)
+        .transition_from_public_transaction(&slash, 4, 0)
         .expect("a stranger record does not block the burn");
 
     assert_eq!(state.get_account_by_id(funds_id).data.balance().unwrap(), 0);
@@ -4707,7 +4782,11 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
 #[test]
 fn a_slash_claws_back_a_pending_unstake() {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    // Two peers that are staying: the exiting offender approves nothing, and
+    // the two left still clear the threshold between them.
+    let mut state = committee_state(&[0x44, 0x45, 0x46], amount);
+    let sequencer_key = test_sequencer_key(0x44);
+    let (ownership_id, ownership_key) = committee_ownership(0x44);
     let destination = AccountId::new([77; 32]);
 
     let unstake = unstake_request_transaction(
@@ -4718,16 +4797,19 @@ fn a_slash_claws_back_a_pending_unstake() {
         destination,
     );
     state
-        .transition_from_public_transaction(&unstake, 2, 0)
+        .transition_from_public_transaction(&unstake, 4, 0)
         .expect("UnstakeRequest should succeed");
 
     let slash = slash_transaction(
         ownership_id,
         sequencer_key,
-        vec![test_approval(0x44, sequencer_key)],
+        vec![
+            test_approval(0x45, sequencer_key),
+            test_approval(0x46, sequencer_key),
+        ],
     );
     state
-        .transition_from_public_transaction(&slash, 3, 0)
+        .transition_from_public_transaction(&slash, 5, 0)
         .expect("Slash should succeed");
 
     // The pending release burned with the rest; nothing is left to finalize.
@@ -4759,8 +4841,196 @@ fn a_slash_claws_back_a_pending_unstake() {
     };
     assert!(
         state
-            .transition_from_public_transaction(&finalize, 4, 0)
+            .transition_from_public_transaction(&finalize, 6, 0)
             .is_err()
+    );
+}
+
+/// The account backing `seed`'s stake, and the key that owns it.
+fn committee_ownership(seed: u8) -> (AccountId, PrivateKey) {
+    let key = PrivateKey::try_new([seed.wrapping_add(0x50); 32]).unwrap();
+    (AccountId::from(&PublicKey::new_from_private_key(&key)), key)
+}
+
+/// A state staking one sequencer per seed, the first of which is the offender.
+fn committee_state(seeds: &[u8], amount: u128) -> V03State {
+    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let mut state = stake_test_state(
+        funding_id,
+        amount.saturating_mul(u128::try_from(seeds.len()).expect("committee fits a u128")),
+    );
+
+    for (slot, seed) in seeds.iter().enumerate() {
+        let (ownership_id, ownership_key) = committee_ownership(*seed);
+        let stake = stake_transaction(
+            &state,
+            (funding_id, &funding_key),
+            (ownership_id, &ownership_key),
+            test_sequencer_key(*seed),
+            amount,
+        );
+        state
+            .transition_from_public_transaction(
+                &stake,
+                u64::try_from(slot)
+                    .expect("committee fits a u64")
+                    .saturating_add(1),
+                0,
+            )
+            .expect("Stake should succeed");
+    }
+
+    state
+}
+
+#[test]
+fn a_committee_of_three_takes_two_approvals_to_slash() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let seeds = [0x44, 0x45, 0x46];
+    let mut state = committee_state(&seeds, amount);
+    let ownership_id = committee_ownership(seeds[0]).0;
+    let offender = test_sequencer_key(seeds[0]);
+
+    let one = slash_transaction(ownership_id, offender, vec![test_approval(0x45, offender)]);
+    assert!(
+        state
+            .transition_from_public_transaction(&one, 4, 0)
+            .is_err(),
+        "one of three approvals is under the threshold"
+    );
+
+    let two = slash_transaction(
+        ownership_id,
+        offender,
+        vec![test_approval(0x45, offender), test_approval(0x46, offender)],
+    );
+    state
+        .transition_from_public_transaction(&two, 4, 0)
+        .expect("two of three approvals should slash");
+
+    assert_eq!(
+        state
+            .get_account_by_id(slash_sink_id())
+            .data
+            .balance()
+            .unwrap(),
+        amount
+    );
+    assert_eq!(stake_entry(&state, offender), None);
+}
+
+/// Two zones can accredit the same keys, and approvals travel in the clear
+/// inside the `Slash` they authorize, so anyone could lift a bundle off one
+/// chain and replay it on the other.
+#[test]
+fn an_approval_signed_over_another_channel_does_not_slash() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let seeds = [0x44, 0x45, 0x46];
+    let mut state = committee_state(&seeds, amount);
+    let ownership_id = committee_ownership(seeds[0]).0;
+    let offender = test_sequencer_key(seeds[0]);
+    let other_zone = [0xC2; 32];
+
+    let replayed = slash_transaction(
+        ownership_id,
+        offender,
+        vec![
+            test_approval_on(other_zone, 0x45, offender),
+            test_approval_on(other_zone, 0x46, offender),
+        ],
+    );
+    assert!(
+        state
+            .transition_from_public_transaction(&replayed, 4, 0)
+            .is_err(),
+        "an approval for another zone must not burn stake here"
+    );
+    assert_eq!(
+        state
+            .get_account_by_id(slash_sink_id())
+            .data
+            .balance()
+            .unwrap(),
+        0
+    );
+
+    // The same signers over this chain's channel, so the channel id is the
+    // only thing that stood in the way.
+    let here = slash_transaction(
+        ownership_id,
+        offender,
+        vec![test_approval(0x45, offender), test_approval(0x46, offender)],
+    );
+    state
+        .transition_from_public_transaction(&here, 4, 0)
+        .expect("the same approvals over this channel should slash");
+    assert_eq!(
+        state
+            .get_account_by_id(slash_sink_id())
+            .data
+            .balance()
+            .unwrap(),
+        amount
+    );
+}
+
+#[test]
+fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let seeds = [0x44, 0x45, 0x46, 0x47];
+    let mut state = committee_state(&seeds, amount);
+    let ownership_id = committee_ownership(seeds[0]).0;
+    let offender = test_sequencer_key(seeds[0]);
+
+    // 0x47 releases its whole stake, leaving nothing behind its key.
+    let (leaving_id, leaving_key) = committee_ownership(seeds[3]);
+    let exit = unstake_request_transaction(
+        &state,
+        (leaving_id, &leaving_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        AccountId::new([78; 32]),
+    );
+    state
+        .transition_from_public_transaction(&exit, 5, 0)
+        .expect("UnstakeRequest should succeed");
+
+    let by_leaver = slash_transaction(ownership_id, offender, vec![test_approval(0x47, offender)]);
+    assert!(
+        state
+            .transition_from_public_transaction(&by_leaver, 6, 0)
+            .is_err(),
+        "a key with nothing left staked must not approve a burn"
+    );
+
+    let by_one_peer =
+        slash_transaction(ownership_id, offender, vec![test_approval(0x45, offender)]);
+    assert!(
+        state
+            .transition_from_public_transaction(&by_one_peer, 6, 0)
+            .is_err(),
+        "one key must never burn a peer's stake on its own"
+    );
+
+    // Three entries remain accredited, so two approvals clear the bar. Counting
+    // the leaver would put it at three and ask for one no one could give.
+    let by_two_peers = slash_transaction(
+        ownership_id,
+        offender,
+        vec![test_approval(0x45, offender), test_approval(0x46, offender)],
+    );
+    state
+        .transition_from_public_transaction(&by_two_peers, 6, 0)
+        .expect("the two remaining peers should be enough to slash");
+
+    assert_eq!(
+        state
+            .get_account_by_id(slash_sink_id())
+            .data
+            .balance()
+            .unwrap(),
+        amount
     );
 }
 
@@ -4793,7 +5063,11 @@ fn a_slash_without_enough_approvals_is_rejected() {
     let mut wrong_inscription = test_approval(0x44, sequencer_key);
     wrong_inscription.signature = {
         let key = Ed25519Key::from_bytes(&[0x44; 32]);
-        let message = sequencer_stake_core::slash_approval_message(sequencer_key, [0xFF; 32]);
+        let message = sequencer_stake_core::slash_approval_message(
+            TEST_CHANNEL_ID,
+            sequencer_key,
+            [0xFF; 32],
+        );
         key.sign_payload(&message).to_bytes().to_vec()
     };
     let mismatched = slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription]);
@@ -4837,14 +5111,16 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
 /// empty-peers carries exactly the four `InitConfig`s, in order.
 #[test]
 fn genesis_cross_zone_transactions_follow_the_declaration() {
-    let cross_zone_ids: [AccountId; 6] = [
-        programs::cross_zone_inbox().id().into(),
-        programs::cross_zone_outbox().id().into(),
-        programs::ping_sender().id().into(),
-        programs::ping_receiver().id().into(),
-        programs::bridge_lock().id().into(),
-        programs::wrapped_token().id().into(),
+    let cross_zone_program_ids: [ProgramId; 6] = [
+        programs::cross_zone_inbox().id(),
+        programs::cross_zone_outbox().id(),
+        programs::ping_sender().id(),
+        programs::ping_receiver().id(),
+        programs::bridge_lock().id(),
+        programs::wrapped_token().id(),
     ];
+    let cross_zone_ids: [AccountId; 6] =
+        cross_zone_program_ids.map(AccountId::from_builtin_program);
     let tx_program = |tx: &LeeTransaction| match tx {
         LeeTransaction::Public(public) => public.message().program_account_id,
         LeeTransaction::PrivacyPreserving(_) => {
@@ -4856,15 +5132,15 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     let mut config = setup_sequencer_config();
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
     assert!(
         !txs.iter()
             .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
         "a configless genesis must carry no cross-zone transaction"
     );
-    for id in cross_zone_ids {
-        assert!(state.get_program(ProgramId::from(id)).is_none());
+    for program_id in cross_zone_program_ids {
+        assert!(state.get_builtin_program(program_id).is_none());
     }
 
     let temp_dir = tempdir().unwrap();
@@ -4876,7 +5152,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         source_governance: None,
     });
     let key = test_bootstrap_sequencer_key(&config);
-    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let signing_key = config.block_signing_key().unwrap();
     let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
     let cross_zone_txs: Vec<_> = txs
         .iter()
@@ -4886,15 +5162,76 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     assert_eq!(
         cross_zone_txs,
         vec![
-            programs::wrapped_token().id().into(),
-            programs::ping_sender().id().into(),
-            programs::ping_receiver().id().into(),
-            programs::bridge_lock().id().into(),
-            programs::cross_zone_inbox().id().into(),
+            AccountId::from_builtin_program(programs::wrapped_token().id()),
+            AccountId::from_builtin_program(programs::ping_sender().id()),
+            AccountId::from_builtin_program(programs::ping_receiver().id()),
+            AccountId::from_builtin_program(programs::bridge_lock().id()),
+            AccountId::from_builtin_program(programs::cross_zone_inbox().id()),
         ],
         "the four InitConfigs then the inbox config, in the fixed order"
     );
-    for id in cross_zone_ids {
-        assert!(state.get_program(ProgramId::from(id)).is_some());
+    for program_id in cross_zone_program_ids {
+        assert!(state.get_builtin_program(program_id).is_some());
+    }
+}
+
+mod channel_update_extraction {
+    use logos_blockchain_core::mantle::{
+        ops::{
+            Op,
+            channel::inscribe::{Inscription, InscriptionOp},
+        },
+        transactions::{MantleTxBuilder, OpsProofs, SignedMantleTx, states::Unverified},
+    };
+    use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
+
+    use super::{sequencer_sign_key_for_testing, *};
+    use crate::block_publisher::channel_blocks;
+
+    /// A tx wrapping `block` in one inscribe op on `channel`.
+    fn inscribing_tx(
+        channel: ChannelId,
+        block: &common::block::Block,
+    ) -> SignedMantleTx<Unverified> {
+        let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+        let op = Op::ChannelInscribe(InscriptionOp {
+            channel_id: channel,
+            inscription,
+            parent: MsgId::root(),
+            signer: Ed25519Key::generate(&mut rand::rngs::OsRng).public_key(),
+        });
+        let raw = MantleTxBuilder::new()
+            .extend_ops([op])
+            .expect("ops fit")
+            .build()
+            .expect("tx builds");
+        SignedMantleTx::new(raw, OpsProofs::empty())
+    }
+
+    #[test]
+    fn a_custom_tx_yields_its_block() {
+        let channel = ChannelId::from([1; 32]);
+        let block = HashableBlockData {
+            block_id: 7,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 700,
+            transactions: Vec::new(),
+        }
+        .into_pending_block(&sequencer_sign_key_for_testing());
+
+        let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
+        let blocks = channel_blocks(&custom, channel);
+
+        assert_eq!(blocks.len(), 1, "the Custom tx carries one block");
+        assert_eq!(blocks[0].header.block_id, 7);
+        assert_eq!(blocks[0].header.hash, block.header.hash);
+    }
+
+    #[test]
+    fn a_config_tx_yields_nothing() {
+        let channel = ChannelId::from([1; 32]);
+        let raw = MantleTxBuilder::new().build().expect("tx builds");
+        let config = ChannelUpdateTx::Config(SignedMantleTx::new(raw, OpsProofs::empty()));
+        assert!(channel_blocks(&config, channel).is_empty());
     }
 }

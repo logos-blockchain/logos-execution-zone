@@ -1,5 +1,5 @@
 use lee_core::{
-    account::ProgramShardSelector,
+    account::{AccountId, ProgramShardSelector},
     program::{
         ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
         ShardStateDiff, read_lee_call, respond_unsupported_call,
@@ -28,7 +28,7 @@ fn main() {
     };
 
     let chained_call = ChainedCall {
-        program_account_id: target_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(target_program_id),
         instruction_data: target_instruction_data,
         shard_selectors: pre_states.iter().map(ProgramShardSelector::from).collect(),
         pda_seeds: pda_seed.into_iter().collect(),

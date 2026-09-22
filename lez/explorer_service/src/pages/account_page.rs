@@ -1,6 +1,6 @@
 use std::str::FromStr as _;
 
-use indexer_service_protocol::{Account, AccountId};
+use indexer_service_protocol::{AccountId, AccountSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
@@ -25,7 +25,7 @@ pub fn AccountPage() -> impl IntoView {
     // Load account data
     let account_resource = Resource::new(account_id, |acc_id_opt| async move {
         match acc_id_opt {
-            Some(acc_id) => api::get_account(acc_id).await,
+            Some(acc_id) => api::get_account_summary(acc_id).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
                 "Invalid account ID".to_owned(),
             )),
@@ -86,17 +86,15 @@ pub fn AccountPage() -> impl IntoView {
                         .get()
                         .map(|result| match result {
                             Ok(acc) => {
-                                let Account {
+                                let AccountSummary {
                                     nonce,
-                                    data: account_data,
+                                    balance,
+                                    shards,
                                 } = acc;
-                                let balance_str = account_data
-                                    .balance()
-                                    .map_or_else(
-                                        || "<malformed>".to_owned(),
-                                        |balance| balance.to_string(),
-                                    );
-                                let shards = account_data.shards;
+                                let balance_str = balance.map_or_else(
+                                    || "<malformed>".to_owned(),
+                                    |balance| balance.to_string(),
+                                );
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
@@ -135,9 +133,11 @@ pub fn AccountPage() -> impl IntoView {
                                                     <div class="info-grid">
                                                         {shards
                                                             .into_iter()
-                                                            .map(|(program, data)| {
-                                                                let program_str = program.to_string();
-                                                                let data_len = data.0.len();
+                                                            .map(|shard| {
+                                                                let program_str = shard
+                                                                    .program_account_id
+                                                                    .to_string();
+                                                                let data_len = shard.len;
                                                                 view! {
                                                                     <div class="info-row">
                                                                         <span class="info-label hash">

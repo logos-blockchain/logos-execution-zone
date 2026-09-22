@@ -18,7 +18,7 @@ fn write_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, Vec<u8>) {
     let target = AccountInput::with_shard(
         AccountId::new([0; 32]),
         true,
-        program.id().into(),
+        AccountId::from_builtin_program(program.id()),
         ShardData::empty(),
     );
     (program, vec![target], instruction_data, written)
@@ -30,7 +30,7 @@ fn program_execution() {
 
     let (program_output, _cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -50,7 +50,7 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     let mut env_builder = ExecutorEnv::builder();
     program
         .write_inputs(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -79,7 +79,7 @@ fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &[],
             &Vec::new(),
@@ -101,7 +101,7 @@ fn execute_reports_cycles_within_budget() {
     let (program, pre_states, instruction_data, _) = write_fixture();
     let (_, cycles) = program
         .execute(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             &pre_states,
             &instruction_data,
@@ -118,7 +118,7 @@ fn execute_reports_cycles_within_budget() {
 fn tiny_budget_is_out_of_gas() {
     let (program, pre_states, instruction_data, _) = write_fixture();
     let result = program.execute(
-        AccountId::from(program.id()),
+        AccountId::from_builtin_program(program.id()),
         None,
         &pre_states,
         &instruction_data,
@@ -138,7 +138,7 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
     // Stands in for a call kind a future protocol upgrade defines.
     env_builder.write_slice(&to_borsh_frame(&CallKind::Unknown(77)));
     let input = ProgramInput {
-        self_account_id: program.id().into(),
+        self_account_id: AccountId::from_builtin_program(program.id()),
         caller_account_id: None,
         pre_states: pre_states.clone(),
         instruction: instruction_data.clone(),
@@ -170,4 +170,24 @@ fn program_survives_a_call_kind_it_does_not_recognize() {
         .expect("an UnsupportedCallKind event must be emitted");
     let decoded = UnsupportedCallKind::try_from_slice(&event.data).unwrap();
     assert_eq!(decoded.raw_discriminant, 77);
+}
+
+/// A guest that halts with a non-zero code is rejected, but unlike a panic the session survives:
+/// the error carries the metered cycles so the caller can charge them.
+#[test]
+fn nonzero_exit_is_rejected_with_its_cycles() {
+    let program = crate::test_methods::exits_nonzero();
+    let err = program
+        .execute(
+            AccountId::from_builtin_program(program.id()),
+            None,
+            &[],
+            &Vec::new(),
+            DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, LeeError::ProgramExitedWithCode { code: 3, cycles } if cycles > 0),
+        "expected ProgramExitedWithCode {{ code: 3, cycles > 0 }}, got: {err:?}"
+    );
 }

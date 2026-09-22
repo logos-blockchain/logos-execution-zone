@@ -23,38 +23,35 @@ pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 pub type Slots = u32;
 
 #[must_use]
-pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id().into())
+pub fn bridge_account_id() -> AccountId {
+    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(programs::bridge().id()))
 }
 
+/// Holds the whole supply: genesis allocations and L1 deposits are both
+/// `Deposit`s that draw on it, so what it still holds is the unissued supply.
 #[must_use]
-pub fn faucet_account() -> Account {
+pub fn bridge_account() -> Account {
     Account::funded(u128::MAX)
 }
 
 #[must_use]
-pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id().into())
-}
-
-#[must_use]
 pub fn fee_program_id() -> AccountId {
-    programs::fee().id().into()
+    AccountId::from_builtin_program(programs::fee().id())
 }
 
 #[must_use]
 pub fn fee_state_account_id() -> AccountId {
-    fee_core::compute_fee_state_account_id(programs::fee().id().into())
+    fee_core::compute_fee_state_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 #[must_use]
 pub fn fee_escrow_account_id() -> AccountId {
-    fee_core::compute_fee_escrow_account_id(programs::fee().id().into())
+    fee_core::compute_fee_escrow_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 #[must_use]
 pub fn fee_inbox_account_id() -> AccountId {
-    fee_core::compute_fee_inbox_account_id(programs::fee().id().into())
+    fee_core::compute_fee_inbox_account_id(AccountId::from_builtin_program(programs::fee().id()))
 }
 
 /// Fee program account IDs in the order expected by the fee program.
@@ -71,7 +68,7 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn fee_state_account() -> Account {
     Account::default().with_shard(
-        programs::fee().id().into(),
+        AccountId::from_builtin_program(programs::fee().id()),
         fee_core::state::FeeState::genesis()
             .to_bytes()
             .try_into()
@@ -86,13 +83,15 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 
 #[must_use]
 pub fn sequencer_stake_config_account_id() -> AccountId {
-    sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id().into())
+    sequencer_stake_core::sequencer_stake_config_account_id(AccountId::from_builtin_program(
+        programs::sequencer_stake().id(),
+    ))
 }
 
 #[must_use]
 pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
     sequencer_stake_core::stake_funds_account_id(
-        programs::sequencer_stake().id().into(),
+        AccountId::from_builtin_program(programs::sequencer_stake().id()),
         ownership_id,
     )
 }
@@ -107,11 +106,13 @@ pub fn stake_funds_account_id(ownership_id: &AccountId) -> AccountId {
 #[must_use]
 pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
+    channel_id: Option<[u8; 32]>,
 ) -> Account {
     Account::default().with_shard(
-        programs::sequencer_stake().id().into(),
+        AccountId::from_builtin_program(programs::sequencer_stake().id()),
         sequencer_stake_core::SequencerStakeConfig {
             channel_params,
+            channel_id,
             entries: BTreeMap::new(),
         }
         .to_bytes()
@@ -123,7 +124,7 @@ pub fn sequencer_stake_config_account(
 #[must_use]
 pub fn clock_account() -> Account {
     Account::default().with_shard(
-        programs::clock().id().into(),
+        AccountId::from_builtin_program(programs::clock().id()),
         ClockAccountData {
             block_id: 0,
             timestamp: 0,

@@ -705,7 +705,7 @@ fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     } else {
         println!("{indent}Balance not read, nonce {}", account.nonce.0);
     }
-    let token_prog_id: AccountId = programs::token().id().into();
+    let token_prog_id = AccountId::from_builtin_program(programs::token().id());
     for (program, data) in account
         .data
         .shards

@@ -17,12 +17,16 @@ result
 
 wallet-ffi/wallet_ffi.h
 bedrock_signing_key
+# The devnet committee's keys are fixed and generated, and the compose file mounts them.
+!lez/configs/docker-all-in-one/devnet/*/bedrock_signing_key
 sequencer_stake_signing_key
 integration_tests/configs/debug/
 
 .DS_Store
 
 /integration_tests/cucumber_tests/temp/
+/bedrock/.resolved/
+/bedrock/.resolved-host/
 MyLogFile.log
 # default sequencer home for `just run-sequencer`
 lez/sequencer/service/sequencer_home/

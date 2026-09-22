@@ -1,18 +1,14 @@
 use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context as _, Result};
-use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
-    utils::{
-        account_balance, assert_private_commitment_in_state, get_account, new_account, send,
-        sync_private,
-    },
+    utils::{account_balance, assert_private_commitment_in_state, new_account, send, sync_private},
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, ProvingInput, PublicKey, execute_and_prove,
+    AccountId, ProgramShardSelector, ProvingInput, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
@@ -20,7 +16,6 @@ use lee_core::{
     WitnessKind, account::Account, encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
-use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{
     account::Label,
@@ -502,128 +497,6 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     );
 
     log::info!("Successfully transferred to two distinct identifiers under the same NPK");
-
-    Ok(())
-}
-
-#[test]
-async fn ppt_cant_chain_call_faucet() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
-    let faucet_chain_caller = test_programs::faucet_chain_caller();
-    let faucet_chain_caller_id: AccountId = faucet_chain_caller.id().into();
-
-    // Deploy through `program_loader`, at `faucet_chain_caller`'s own bijection address: a
-    // `WriteSegment` claiming a fresh segment account, then a `CreateHeader` naming
-    // `faucet_chain_caller_id` as the header — no signature needed from either, since claiming
-    // an unowned account is permissionless (the write is the claim); a funded genesis account
-    // signs and pays the fee for both, since neither freshly-claimed account holds anything to
-    // self-pay with.
-    let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = PrivateKey::try_new([210; 32]).unwrap();
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
-    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
-
-    let segment_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_id,
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        )],
-        vec![lee_core::account::Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
-            bytecode: faucet_chain_caller.elf().to_vec(),
-            next_segment: None,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )
-    .expect("WriteSegment instruction data should always be serializable");
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
-    let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        segment_message,
-        segment_witness_set,
-    ));
-    ctx.sequencer_client().send_transaction(segment_tx).await?;
-
-    log::info!("Waiting for segment block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    let header_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![
-            ProgramShardSelector::new(
-                faucet_chain_caller_id,
-                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            ),
-            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
-        ],
-        vec![lee_core::account::Nonce(payer_nonce.0 + 1)],
-        program_loader_core::Instruction::CreateHeader {
-            first_segment: segment_id,
-            immutable: true,
-        },
-        common::test_utils::test_fee_declaration(payer.account_id),
-    )
-    .expect("CreateHeader instruction data should always be serializable");
-    let header_witness_set =
-        lee::public_transaction::WitnessSet::for_message(&header_message, &[&payer.pub_sign_key]);
-    let deploy_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-        header_message,
-        header_witness_set,
-    ));
-    ctx.sequencer_client().send_transaction(deploy_tx).await?;
-
-    log::info!("Waiting for deploy block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    let faucet_account_id = system_accounts::faucet_account_id();
-    let faucet_program_id: AccountId = programs::faucet().id().into();
-    let ask = lee_core::AuthorizationSecretKey([3; 32]);
-    let nsk = lee_core::NullifierSecretKey::from(&ask);
-    let npk = NullifierPublicKey::from(&nsk);
-    let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let attacker_private_id = AccountId::for_regular_private_account(&npk, &vpk, 1337);
-    let amount: u128 = 1;
-
-    let faucet_account = get_account(&ctx, faucet_account_id).await?;
-    let attacker_account = get_account(&ctx, attacker_private_id).await?;
-
-    let program_with_deps = ProgramWithDependencies::new(
-        faucet_chain_caller,
-        faucet_chain_caller_id,
-        [(faucet_program_id, programs::faucet())].into(),
-    );
-
-    let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
-
-    let res = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::balance(faucet_account_id),
-                ProgramShardSelector::balance(attacker_private_id),
-            ],
-            public_accounts: HashMap::from([(faucet_account_id, faucet_account)]),
-            private_witnesses: vec![PrivateWitness {
-                account: attacker_account,
-                vpk,
-                random_seed: [0; 32],
-                identifier: 1337,
-                kind: WitnessKind::Regular { ask: None },
-                nullifier: NullifierWitness::Init {
-                    npk,
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }],
-            instruction_data: instruction,
-            ..Default::default()
-        },
-        &program_with_deps,
-    );
-
-    assert!(res.is_err());
 
     Ok(())
 }

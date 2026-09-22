@@ -277,7 +277,7 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
-        let unknown_program_id: AccountId = [0xdead_beef; 8].into();
+        let unknown_program_id = AccountId::from_builtin_program([0xdead_beef; 8]);
         let message = Message::try_new(
             unknown_program_id,
             vec![

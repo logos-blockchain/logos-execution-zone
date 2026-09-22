@@ -78,7 +78,7 @@ fn transition_from_sequence_of_native_transfer_invocations() {
 #[test]
 fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
     let program = crate::test_methods::native_spender();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::from_builtin_program(program.id());
     let stranger = AccountId::new([9; 32]);
     let stranger_record: ShardData = b"untouched".to_vec().try_into().unwrap();
 
@@ -154,7 +154,8 @@ fn a_guest_cannot_write_the_native_shard_publicly() {
     let target_id = AccountId::new([1; 32]);
     let other_id = AccountId::new([2; 32]);
     let mut state = V03State::new().with_test_programs();
-    let program_id: AccountId = crate::test_methods::foreign_shard_writer().id().into();
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::foreign_shard_writer().id());
 
     let message = public_transaction::Message::try_new(
         program_id,
@@ -191,7 +192,7 @@ fn a_guest_cannot_write_the_native_shard_publicly() {
 #[test]
 fn an_application_shard_write_leaves_the_native_balance_alone() {
     let program = crate::test_methods::data_changer();
-    let program_id: AccountId = program.id().into();
+    let program_id = AccountId::from_builtin_program(program.id());
     let account_id = AccountId::new([5; 32]);
     let mut state = V03State::new()
         .with_public_accounts([(account_id, Account::funded(250))])

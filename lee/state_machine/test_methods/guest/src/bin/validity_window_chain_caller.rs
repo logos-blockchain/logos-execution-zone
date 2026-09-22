@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::ProgramShardSelector,
+    account::{AccountId, ProgramShardSelector},
     program::{
         BlockValidityWindow, ChainedCall, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
         ShardStateDiff, TimestampValidityWindow, read_lee_call, respond_unsupported_call,
@@ -39,7 +39,7 @@ fn main() {
     ))
     .unwrap();
     let chained_call = ChainedCall {
-        program_account_id: chained_program_id.into(),
+        program_account_id: AccountId::from_builtin_program(chained_program_id),
         instruction_data: chained_instruction,
         shard_selectors: pre_states.iter().map(ProgramShardSelector::from).collect(),
         pda_seeds: vec![],

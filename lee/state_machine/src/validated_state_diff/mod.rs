@@ -152,11 +152,15 @@ impl ValidatedStateDiff {
             cycle_budget,
             &mut cycles_used,
         );
-        // any failure pays the full declared budget
-        let cycles = if result.is_err() {
-            cycle_budget
-        } else {
-            cycles_used
+        // A non-zero exit keeps its count: the failing call's cycles ride on the error since
+        // `execute_authorized` bailed before adding them. A panic or session-limit bail loses
+        // the count and pays the full budget.
+        let cycles = match &result {
+            Ok(_) => cycles_used,
+            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
+                cycles_used.saturating_add(*cycles)
+            }
+            Err(_) => cycle_budget,
         };
         let diff = match result {
             Ok(diff) => diff,
@@ -364,7 +368,7 @@ impl ValidatedStateDiff {
                 // Looks through `state_diff` first, falling back to `state` — so an earlier
                 // chained call in this same transaction that deployed this program is seen
                 // immediately, rather than only on the next transaction.
-                let Some((program_id, elf)) =
+                let Some((program_id, user_elf)) =
                     get_program_via(chained_call.program_account_id, |id| {
                         state_diff
                             .get(&id)
@@ -375,6 +379,7 @@ impl ValidatedStateDiff {
                         chained: caller_data.account_id.is_some(),
                     });
                 };
+                let elf = crate::program::attach_kernel(&user_elf);
                 let program = Program::new_unchecked(program_id, Cow::Owned(elf));
                 let (program_output, call_cycles) = program.execute(
                     chained_call.program_account_id,

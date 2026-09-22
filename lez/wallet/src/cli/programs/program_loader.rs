@@ -73,7 +73,7 @@ pub enum ProgramLoaderSubcommand {
     /// Deploy a new program: chunk `elf`, upload one segment per account in `segments` (in
     /// order), then create `header` pointing at the resulting chain.
     ///
-    /// The number of `segments` must exactly match the number of chunks `elf` splits into.
+    /// The number of `segments` must exactly match the number of chunks `user_elf` splits into.
     Deploy {
         /// Path to the program's compiled ELF binary.
         #[arg(long)]
@@ -96,7 +96,7 @@ pub enum ProgramLoaderSubcommand {
     /// Update an existing program in place: chunk `elf`, upload a fresh set of segments (segments
     /// are write-once, so a new chain is always created), then rewrite `header` to point at it.
     ///
-    /// The number of `segments` must exactly match the number of chunks `elf` splits into.
+    /// The number of `segments` must exactly match the number of chunks `user_elf` splits into.
     Update {
         /// Path to the program's new compiled ELF binary.
         #[arg(long)]

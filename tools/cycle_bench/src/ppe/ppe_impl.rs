@@ -13,7 +13,7 @@ use lee::{
 use lee_core::{
     PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, ProgramShardSelector, data::ShardData},
-    program::{PdaSeed, ProgramId},
+    program::PdaSeed,
 };
 use token_core::TokenHolding;
 
@@ -92,7 +92,7 @@ pub fn run_token_transfer_in_ppe() -> PpeBenchResult {
 }
 
 fn token_program_id() -> AccountId {
-    programs::token().id().into()
+    AccountId::from_builtin_program(programs::token().id())
 }
 
 fn token_holding(balance: u128) -> Account {
@@ -151,7 +151,7 @@ fn prove_chain_caller(
     let token_id = token_program_id();
     let pwd = ProgramWithDependencies::new(
         chain_caller,
-        chain_caller_id.into(),
+        AccountId::from_builtin_program(chain_caller_id),
         [(token_id, programs::token())].into(),
     );
 
@@ -164,7 +164,7 @@ fn prove_chain_caller(
     let pda_seed: Option<PdaSeed> = None;
     let instruction = (
         token_transfer_instruction()?,
-        ProgramId::from(token_id),
+        programs::token().id(),
         num_chain_calls,
         pda_seed,
     );

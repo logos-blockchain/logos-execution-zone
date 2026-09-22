@@ -17,8 +17,8 @@ use lee_core::{
     },
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramHeader,
-        ProgramId, ProgramSegment, TimestampValidityWindow, TransactionEvent,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow,
+        TransactionEvent,
     },
 };
 
@@ -58,6 +58,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::shard_forwarder());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::exits_nonzero());
         self.insert_program(&crate::test_methods::non_delegating_forwarder());
         self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::validity_window());
@@ -171,7 +172,7 @@ fn build_flash_swap_tx(
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
-        initiator.id().into(),
+        AccountId::from_builtin_program(initiator.id()),
         vec![
             ProgramShardSelector::balance(vault_id),
             ProgramShardSelector::balance(receiver_id),

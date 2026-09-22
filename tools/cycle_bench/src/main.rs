@@ -203,7 +203,7 @@ impl Case {
             pre_states,
             instruction_data,
         } = self;
-        let self_account_id: AccountId = program.id().into();
+        let self_account_id = AccountId::from_builtin_program(program.id());
         let caller_account_id: Option<AccountId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
@@ -295,7 +295,7 @@ fn token_holding(
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        programs::token().id().into(),
+        AccountId::from_builtin_program(programs::token().id()),
         ShardData::from(&TokenHolding::Fungible {
             definition_id,
             balance,
@@ -311,7 +311,7 @@ fn token_definition(
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        programs::token().id().into(),
+        AccountId::from_builtin_program(programs::token().id()),
         ShardData::from(&TokenDefinition::Fungible {
             name: String::from("test"),
             total_supply,
@@ -338,7 +338,7 @@ fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
     AccountInput::with_shard(
         account_id,
         false,
-        programs::clock().id().into(),
+        AccountId::from_builtin_program(programs::clock().id()),
         ClockAccountData {
             block_id,
             timestamp: Timestamp::from(0_u64),
@@ -365,28 +365,31 @@ fn amm_token_b_def_id() -> AccountId {
 }
 fn amm_pool_id() -> AccountId {
     compute_pool_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_token_a_def_id(),
         amm_token_b_def_id(),
-        programs::token().id().into(),
+        AccountId::from_builtin_program(programs::token().id()),
     )
 }
 fn amm_vault_a_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_pool_id(),
         amm_token_a_def_id(),
     )
 }
 fn amm_vault_b_id() -> AccountId {
     compute_vault_pda(
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         amm_pool_id(),
         amm_token_b_def_id(),
     )
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(programs::amm().id().into(), amm_pool_id())
+    compute_liquidity_token_pda(
+        AccountId::from_builtin_program(programs::amm().id()),
+        amm_pool_id(),
+    )
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -397,9 +400,9 @@ fn amm_pool_account() -> AccountInput {
     AccountInput::with_shard(
         amm_pool_id(),
         true,
-        programs::amm().id().into(),
+        AccountId::from_builtin_program(programs::amm().id()),
         ShardData::from(&PoolDefinition {
-            token_program_id: programs::token().id().into(),
+            token_program_id: AccountId::from_builtin_program(programs::token().id()),
             definition_token_a_id: amm_token_a_def_id(),
             definition_token_b_id: amm_token_b_def_id(),
             vault_a_id: amm_vault_a_id(),
@@ -438,15 +441,18 @@ fn amm_add_liquidity_pre_states() -> Vec<AccountInput> {
 fn ata_create_pre_states() -> Vec<AccountInput> {
     let owner_id = AccountId::new([91; 32]);
     let definition_id = AccountId::new([15; 32]);
-    let token_program_id: AccountId = programs::token().id().into();
+    let token_program_id = AccountId::from_builtin_program(programs::token().id());
     let owner = AccountInput::balance(owner_id, true, 0);
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
-    let ata_id = get_associated_token_account_id(&programs::ata().id().into(), &seed);
+    let ata_id = get_associated_token_account_id(
+        &AccountId::from_builtin_program(programs::ata().id()),
+        &seed,
+    );
     let ata_account = AccountInput::with_shard(
         ata_id,
         false,
-        programs::token().id().into(),
+        AccountId::from_builtin_program(programs::token().id()),
         ShardData::empty(),
     );
     vec![owner, token_def, ata_account]
@@ -523,7 +529,7 @@ fn main() -> Result<()> {
             programs::ata(),
             ata_create_pre_states(),
             &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token().id().into(),
+                token_program_id: AccountId::from_builtin_program(programs::token().id()),
             },
         )?,
     ];

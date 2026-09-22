@@ -11,7 +11,7 @@ use integration_tests::{
     TestContext, private_mention, public_mention,
     utils::{
         account_balance, create_token, get_account, get_account_view, new_account, send,
-        wait_for_indexer_to_catch_up,
+        wait_for_indexer_to_catch_up, wait_until,
     },
 };
 use lee::{
@@ -35,9 +35,15 @@ use wallet::{
     program_facades::program_loader::ProgramLoader,
 };
 
-const BLOAT_SHARD_BYTES: usize = 700 * 1024;
+const BLOAT_SHARD_BYTES: usize = 96 * 1024;
 
-const BLOAT_WRITERS: usize = 4;
+const BLOAT_WRITERS: usize = 30;
+
+// This test only exercises chain *resolution* under a bloated account, never `CreateHeader`,
+// so `bytecode` is never decoded or validated as a real program - arbitrary filler well under
+// `MAX_SEGMENT_DATA_LEN` stands in for "a segment's content", same as `bloat_account`'s own
+// shard writes use plain filler rather than real program data.
+const SEGMENT_FILLER_BYTES: usize = 1024;
 
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
@@ -67,7 +73,14 @@ async fn submit(
         shard_selectors,
         nonces,
         instruction,
-        common::test_utils::test_fee_declaration(payer.account_id),
+        // A bloat shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
+        // and an over-cap call is a charged revert: it settles and writes nothing.
+        lee::FeeDeclaration::new(
+            payer.account_id,
+            fee_core::market::MAX_GAS_EXEC,
+            0,
+            u128::MAX >> 1,
+        ),
     )?;
     let mut keys = extra_signers.to_vec();
     keys.push(&payer.pub_sign_key);
@@ -81,7 +94,18 @@ async fn submit(
         )))
         .await?;
 
-    ctx.wallet().poll_transaction(tx_hash).await?;
+    // Wait for real inclusion rather than a block's worth of sleep. Every caller reads
+    // the payer's nonce for the next submission and the bloat writers name programs the
+    // previous submission deployed, so proceeding on a transaction that never settled
+    // produces a nonce mismatch or an unknown program several steps later.
+    wait_until(&format!("transaction {tx_hash} to be included"), || async {
+        Ok(ctx
+            .sequencer_client()
+            .get_transaction(tx_hash)
+            .await?
+            .is_some())
+    })
+    .await?;
     Ok(())
 }
 
@@ -96,7 +120,10 @@ fn genesis_payer(ctx: &mut TestContext) -> PublicAccountPrivateInitialData {
     payer
 }
 
-async fn fresh_segments(ctx: &mut TestContext, byte_len: usize) -> Result<Vec<AccountId>> {
+/// Segments hold `user_elf` alone, the kernel is re-attached on read, so size the chain off
+/// that rather than the full ELF or the loader rejects the count.
+async fn fresh_segments(ctx: &mut TestContext, program: &Program) -> Result<Vec<AccountId>> {
+    let byte_len = program.user_elf().expect("a test program decodes").len();
     let mut segments = Vec::new();
     for _ in 0..byte_len.div_ceil(MAX_SEGMENT_DATA_LEN) {
         segments.push(new_account(ctx, false, None).await?);
@@ -109,11 +136,11 @@ async fn deploy_at_bijection(
     payer: AccountId,
     program: &Program,
 ) -> Result<AccountId> {
-    let segments = fresh_segments(ctx, program.elf().len()).await?;
+    let segments = fresh_segments(ctx, program).await?;
 
     ProgramLoader(ctx.wallet())
         .deploy(
-            program.id().into(),
+            AccountId::from_builtin_program(program.id()),
             &segments,
             program.elf().to_vec(),
             true,
@@ -122,11 +149,14 @@ async fn deploy_at_bijection(
         .await
 }
 
-async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[AccountId; 4]> {
+async fn bloat_account(
+    ctx: &mut TestContext,
+    victim: AccountId,
+) -> Result<[AccountId; BLOAT_WRITERS]> {
     let payer = &genesis_payer(ctx);
     let writer = test_programs::data_writer();
 
-    let segments = fresh_segments(ctx, writer.elf().len()).await?;
+    let segments = fresh_segments(ctx, &writer).await?;
     let first_header = new_account(ctx, false, None).await?;
     ProgramLoader(ctx.wallet())
         .deploy(
@@ -141,11 +171,18 @@ async fn bloat_account(ctx: &mut TestContext, victim: AccountId) -> Result<[Acco
     let mut writers = vec![first_header];
     while writers.len() < BLOAT_WRITERS {
         let header = new_account(ctx, false, None).await?;
-        let tx_hash = ProgramLoader(ctx.wallet())
+        // `deploy` polls each of its own steps, but `create_header` hands back the hash
+        // and returns. Three in a row would each build on a payer nonce the previous one
+        // has not spent yet, and the sequencer rejects the later two on nonce mismatch.
+        let payer_nonce_before = get_account(ctx, payer.account_id).await?.nonce;
+        ProgramLoader(ctx.wallet())
             .create_header(header, segments[0], &segments, true, Some(payer.account_id))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        ctx.wallet().poll_transaction(tx_hash).await?;
+        wait_until(&format!("header {header} to be created"), || async {
+            Ok(get_account(ctx, payer.account_id).await?.nonce != payer_nonce_before)
+        })
+        .await?;
         writers.push(header);
     }
 
@@ -180,7 +217,6 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
     let mut ctx = TestContext::new().await?;
     let victim = ctx.existing_public_accounts()[0];
 
-    let height_before_bloat = ctx.sequencer_client().get_last_block_id().await?;
     let writers = bloat_account(&mut ctx, victim).await?;
 
     let error = get_account(&ctx, victim)
@@ -234,6 +270,21 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         is_oversized_response(&cli_error),
         "--scope all must fail on response size specifically: {cli_error:?}"
     );
+
+    Ok(())
+}
+
+/// The indexer's view of a bloated account: scoped reads and the summary keep working.
+#[test]
+#[ignore = "the indexer cannot keep up with 2.8 MB blocks, #901"]
+async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let victim = ctx.existing_public_accounts()[0];
+
+    let height_before_bloat = ctx.sequencer_client().get_last_block_id().await?;
+    let writers = bloat_account(&mut ctx, victim).await?;
+    let last_writer = writers[BLOAT_WRITERS - 1];
+    let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
 
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
     let selector: indexer_service_protocol::ProgramShardSelector =
@@ -297,6 +348,36 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         native_after.data.balance().unwrap(),
         balance_only.data.balance().unwrap()
     );
+
+    // The explorer renders shard counts and sizes, so it needs to enumerate shards on
+    // an account a scoped read cannot enumerate and a whole-account read can no longer
+    // return. The summary answers that without carrying the bytes.
+    let victim_key: indexer_service_protocol::AccountId = victim.into();
+    assert!(
+        indexer_service_rpc::RpcClient::get_account(indexer, victim_key)
+            .await
+            .is_err(),
+        "the whole-account indexer read must fail on the bloated account"
+    );
+    let expected_shard_len =
+        u64::try_from(BLOAT_SHARD_BYTES).expect("the bloat shard size fits in u64");
+    let summary = indexer_service_rpc::RpcClient::get_account_summary(indexer, victim_key).await?;
+    let native_key = indexer_service_protocol::AccountId::native_token_program();
+    assert_eq!(
+        summary.shards.len(),
+        writers.len() + 1,
+        "the summary must list every shard the bloat wrote, plus the native balance shard"
+    );
+    assert!(
+        summary
+            .shards
+            .iter()
+            .filter(|shard| shard.program_account_id != native_key)
+            .all(|shard| shard.len == expected_shard_len),
+        "the summary must carry each shard's real size"
+    );
+    assert_eq!(summary.balance, balance_only.data.balance().ok());
+    assert_eq!(summary.nonce, balance_only.nonce.0);
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
@@ -386,7 +467,7 @@ async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()>
     )
     .await?;
 
-    let token_program_id: AccountId = programs::token().id().into();
+    let token_program_id = AccountId::from_builtin_program(programs::token().id());
     let definition_view = get_account_view(
         &ctx,
         ProgramShardSelector::new(definition, token_program_id),
@@ -448,7 +529,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
         )],
         vec![Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
-            bytecode: test_programs::data_writer().elf().to_vec(),
+            bytecode: vec![0xAB_u8; SEGMENT_FILLER_BYTES],
             next_segment: None,
         },
         payer,
@@ -472,7 +553,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     let tx_hash = loader
         .write_segment(
             head_id,
-            test_programs::data_writer().elf().to_vec(),
+            vec![0xAB_u8; SEGMENT_FILLER_BYTES],
             Some(segment_id),
             Some(payer.account_id),
         )

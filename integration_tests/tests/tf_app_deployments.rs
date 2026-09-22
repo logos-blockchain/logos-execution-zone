@@ -21,6 +21,7 @@ use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
 use testing_framework_core::scenario::NodeClients;
 
 #[tokio::test]
+#[ignore = "Blocked until LEZ's Logos revision includes logos-blockchain#3467 (fixes logos-blockchain#3431 port-allocation race)"]
 async fn complete_lez_stack_can_be_deployed_as_one_app() -> Result<()> {
     let mut deployment = new_deployment();
 
@@ -38,6 +39,7 @@ async fn complete_lez_stack_can_be_deployed_as_one_app() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Blocked until LEZ's Logos revision includes logos-blockchain#3467 (fixes logos-blockchain#3431 port-allocation race)"]
 async fn lez_apps_can_be_deployed_individually() -> Result<()> {
     let mut deployment = new_deployment();
 
@@ -76,6 +78,7 @@ async fn lez_apps_can_be_deployed_individually() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "Blocked until LEZ's Logos revision includes logos-blockchain#3467 (fixes logos-blockchain#3431 port-allocation race)"]
 async fn lez_services_can_be_redeployed_after_explicit_shutdown() -> Result<()> {
     let state_dir = tempdir()?;
     let mut bedrock_deployment = new_deployment();

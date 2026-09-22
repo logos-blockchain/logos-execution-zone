@@ -32,8 +32,8 @@ use token_core::{TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
-    FfiBytes32, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult,
-    FfiU128, WalletHandle, error,
+    FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -209,7 +209,8 @@ unsafe extern "C" {
         account_mentions_size: usize,
         instruction_data: *const u8,
         instruction_data_size: usize,
-        program_id: FfiProgramId,
+        program_account_id: FfiBytes32,
+        payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -644,7 +645,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     );
     assert_eq!(balance_only.nonce.0, 2);
 
-    let program_id = AccountId::from(programs::token().id());
+    let program_id = AccountId::from_builtin_program(programs::token().id());
     let mut out_program_full = FfiAccount::default();
     let program_full: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
@@ -1652,8 +1653,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_id =
-        lee_core::program::ProgramId::from(lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID);
+    let program_account_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
@@ -1662,7 +1662,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             account_mentions_size,
             instruction_data_ptr,
             instruction_data_size,
-            program_id.into(),
+            program_account_id.into(),
+            std::ptr::null(),
             &raw mut transaction_result,
         )
         .unwrap();
@@ -1718,7 +1719,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     let definition_id = ctx.ctx().existing_private_accounts()[0];
     let definition: FfiBytes32 = definition_id.into();
     let holding: FfiBytes32 = ctx.ctx().existing_private_accounts()[1].into();
-    let token_program = AccountId::from(programs::token().id());
+    let token_program = AccountId::from_builtin_program(programs::token().id());
     let total_supply = 100_u128;
 
     let mut transaction_result = FfiTransactionResult::default();
@@ -1762,6 +1763,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
 
     let program_with_dependencies = FfiProgramWithDependencies {
         program: programs::token().into(),
+        self_account_id: FfiBytes32::from_account_id(token_program),
         deps: std::ptr::null(),
         deps_size: 0,
     };

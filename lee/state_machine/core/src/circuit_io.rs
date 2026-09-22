@@ -33,6 +33,9 @@ pub struct PrivacyPreservingCircuitInput {
     /// The top-level call's own dispatch address.
     pub program_account_id: AccountId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
+    /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
+    pub ciphertext_padding: Option<u32>,
     /// Shard selectors passed to the initial call.
     pub initial_shard_selectors: Vec<ProgramShardSelector>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by

@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::{AccountIdentity, AccountMention};
+pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -70,12 +70,7 @@ const ASSUMED_BASE_FEE: u128 = 64;
 const ASSUMED_DATA_BYTES: u128 = 100_000;
 
 /// Default cap on the fee reservation for wallet-built public transactions.
-#[expect(
-    clippy::as_conversions,
-    reason = "u128::from is not const; the widening is lossless"
-)]
-pub const DEFAULT_MAX_FEE: u128 =
-    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+pub const DEFAULT_MAX_FEE: u128 = max_fee_for(DEFAULT_GAS_LIMIT);
 
 pub enum AccDecodeData {
     Skip,
@@ -107,6 +102,13 @@ pub enum ExecutionFailureKind {
     ConflictingAccountIdentity(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
+    #[error("Program bytecode is not a valid RISC0 program binary")]
+    InvalidProgramBinary(#[source] anyhow::Error),
+    #[error(
+        "Program uses a non-default kernel ELF; only programs built with the protocol's \
+         default kernel can be deployed"
+    )]
+    UnsupportedKernelElf,
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
@@ -404,7 +406,7 @@ impl WalletCore {
 
         if let Some(seed) = entry.pda_seed {
             Some(AccountIdentity::PrivatePdaShared {
-                authority: AccountId::from(entry.authority_program_id?),
+                authority: AccountId::from_builtin_program(entry.authority_program_id?),
                 seed,
                 nsk: keys.nullifier_secret_key(),
                 vpk,
@@ -517,7 +519,7 @@ impl WalletCore {
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::for_private_pda(
-            &AccountId::from(program_id),
+            &AccountId::from_builtin_program(program_id),
             &pda_seed,
             &npk,
             &vpk,
@@ -815,6 +817,13 @@ impl WalletCore {
 
         tx_pre_check(&acc_manager.pre_states())?;
 
+        for account_id in acc_manager.accounts_outgrowing_pad() {
+            warn!(
+                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
+                 identifiable by length in this transaction"
+            );
+        }
+
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
@@ -823,6 +832,7 @@ impl WalletCore {
             private_witnesses: acc_manager.private_witnesses(),
             instruction_data,
             dummy_inputs: acc_manager.dummy_inputs_default(),
+            ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
         // Prove on a blocking thread and use `block_on` for async shard lookups.
@@ -886,15 +896,45 @@ impl WalletCore {
         instruction_data: InstructionData,
         program_account_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_account_id, |_| Ok(()))
+        self.send_pub_tx_paid_by(accounts, instruction_data, program_account_id, None)
             .await
     }
 
+    /// Like [`Self::send_pub_tx`], but `payer` (if given) covers the fee instead of the wallet's
+    /// self-pay selection. See [`Self::send_pub_tx_with_pre_check`].
+    pub async fn send_pub_tx_paid_by(
+        &self,
+        accounts: Vec<AccountMention>,
+        instruction_data: InstructionData,
+        program_account_id: AccountId,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_pub_tx_with_pre_check(
+            accounts,
+            instruction_data,
+            program_account_id,
+            payer,
+            |_| Ok(()),
+        )
+        .await
+    }
+
+    /// Sends a public transaction over `accounts`, paid by `payer` if given.
+    ///
+    /// `payer: None` picks the first funded signing account in `accounts`, or the first signing
+    /// account if none is funded (see [`AccountManager::fee_payer_account_id`]).
+    ///
+    /// An explicit payer may be one of `accounts`' signing entries, or any other public account
+    /// whose signing key the wallet holds: the latter co-signs (nonce and signature appended
+    /// after `accounts`' own) without joining the message's `account_ids`, so programs with a
+    /// fixed account shape (like the `program_loader`, whose accounts are all freshly claimed
+    /// and unfunded) can still be paid for.
     pub async fn send_pub_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program_account_id: AccountId,
+        payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -911,16 +951,42 @@ impl WalletCore {
         tx_pre_check(&acc_manager.pre_states())?;
 
         let shard_selectors = acc_manager.shard_selectors();
-        let nonces = acc_manager.public_account_nonces();
+        let account_ids = acc_manager.public_account_ids();
+        let mut nonces = acc_manager.public_account_nonces();
 
-        let payer = acc_manager
-            .fee_payer_account_id(self)
-            .await?
-            .ok_or_else(|| {
-                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                    "Public transaction has no signing account to pay its fees".to_owned(),
-                ))
-            })?;
+        let invalid_input = |msg: &str| {
+            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                msg.to_owned(),
+            ))
+        };
+        let (payer, co_signer) = match payer {
+            None => (
+                acc_manager
+                    .fee_payer_account_id(self)
+                    .await?
+                    .ok_or_else(|| {
+                        invalid_input("Public transaction has no signing account to pay its fees")
+                    })?,
+                None,
+            ),
+            Some(payer) if acc_manager.signs_for(payer) => (payer, None),
+            Some(payer) if account_ids.contains(&payer) => {
+                return Err(invalid_input(
+                    "Fee payer is a non-signing account of this transaction",
+                ));
+            }
+            Some(payer) => {
+                let key = self.get_account_public_signing_key(payer).ok_or_else(|| {
+                    invalid_input("Fee payer's signing key is not held by this wallet")
+                })?;
+                let account = self
+                    .get_account_view(ProgramShardSelector::balance(payer))
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
+                nonces.push(account.nonce);
+                (payer, Some(key))
+            }
+        };
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_account_id,
@@ -929,36 +995,28 @@ impl WalletCore {
             instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
-                DEFAULT_GAS_LIMIT,
+                self.config.gas_limit,
                 0,
-                DEFAULT_MAX_FEE,
+                max_fee_for(self.config.gas_limit),
             )),
         );
 
         let message_hash = message.hash();
-        let signatures_public_keys = acc_manager
+        let mut signatures_public_keys = acc_manager
             .sign_message(message_hash)
             .map_err(ExecutionFailureKind::SignError)?;
+        if let Some(key) = co_signer {
+            signatures_public_keys.push((
+                lee::Signature::new(key, &message_hash),
+                lee::PublicKey::new_from_private_key(key),
+            ));
+        }
 
         let witness_set =
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
-        first_success_or_error(
-            self.multi_sequencer_client
-                .metered_send_transaction(LeeTransaction::Public(tx))
-                .await,
-        )
-    }
-
-    /// Submits an already-built public transaction directly, for callers that need to construct
-    /// their own [`FeeDeclaration`] (e.g. a facade taking a separate fee payer) instead of going
-    /// through [`Self::send_pub_tx`]'s self-pay selection.
-    pub(crate) async fn submit_public_transaction(
-        &self,
-        tx: lee::public_transaction::PublicTransaction,
-    ) -> Result<HashType, ExecutionFailureKind> {
         first_success_or_error(
             self.multi_sequencer_client
                 .metered_send_transaction(LeeTransaction::Public(tx))
@@ -1144,6 +1202,22 @@ impl WalletCore {
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
+}
+
+/// Sizes a fee cap for a given gas limit: a wallet that raises its gas limit
+/// must raise its fee cap in step, or the reservation cannot cover the gas.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "u128::from is not const; the widening is lossless"
+)]
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "gas_limit and ASSUMED_DATA_BYTES both fit well within u128::MAX, so the widened \
+              sum and product cannot overflow"
+)]
+pub const fn max_fee_for(gas_limit: u64) -> u128 {
+    (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
 }
 
 /// Collapses the per-sequencer send results into one outcome: the first

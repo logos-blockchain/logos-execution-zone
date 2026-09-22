@@ -55,6 +55,10 @@ pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
 const DEFAULT_PUBLIC_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x11; 32], [0x22; 32]];
 const DEFAULT_PRIVATE_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x33; 32], [0x44; 32]];
 
+// Keep this identity separate from the sorted public-account fixture ordering. The private pool
+// is funded by this account at genesis and when private accounts are initialized.
+const PRIVATE_FUNDER_ACCOUNT_SEED: [u8; 32] = [0x11; 32];
+
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {
     pub key_chain: KeyChain,
@@ -164,7 +168,7 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
+        signing_key: Some(signing_key.unwrap_or(SEQUENCER_SIGNING_KEY)),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -194,6 +198,14 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
         .into_iter()
         .zip(INITIAL_PUBLIC_BALANCES_FOR_WALLET)
         .collect()
+}
+
+/// The public account that funds the private accounts' balances.
+#[must_use]
+pub fn private_funder_account_id() -> AccountId {
+    let private_key = PrivateKey::try_new(PRIVATE_FUNDER_ACCOUNT_SEED)
+        .expect("Fixed private funder account seed must be valid");
+    AccountId::from(&PublicKey::new_from_private_key(&private_key))
 }
 
 #[must_use]
@@ -264,11 +276,8 @@ pub fn genesis_from_accounts(
         .into_iter()
         .map(|(account_id, balance)| GenesisAction::SupplyAccount {
             account_id,
-            balance,
+            balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
-        .chain(std::iter::once(GenesisAction::SupplyBridgeAccount {
-            balance: 1_000_000,
-        }))
         .collect()
 }
 
@@ -293,6 +302,7 @@ pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
             distribution_limit: 1,
             calibration_limit: 5,
         },
+        gas_limit: wallet::DEFAULT_GAS_LIMIT,
     })
 }
 
@@ -441,6 +451,20 @@ pub const fn source_only_cross_zone() -> CrossZoneConfig {
 mod tests {
     use super::*;
 
+    #[test]
+    fn private_funder_identity_matches_configured_index() {
+        let public_accounts = default_public_accounts_for_wallet();
+        let configured_funder = AccountId::from(&PublicKey::new_from_private_key(
+            &public_accounts[PRIVATE_FUNDER_INDEX].0,
+        ));
+
+        assert_eq!(
+            private_funder_account_id(),
+            configured_funder,
+            "PRIVATE_FUNDER_INDEX must select the explicitly configured private funder"
+        );
+    }
+
     /// `fund_private_accounts` drains the private balances out of the funder.
     #[test]
     fn genesis_supplies_the_funder_enough_to_seed_every_private_account() {
@@ -459,7 +483,6 @@ mod tests {
                     balance,
                 } if *account_id == wanted => Some(*balance),
                 GenesisAction::SupplyAccount { .. }
-                | GenesisAction::SupplyBridgeAccount { .. }
                 | GenesisAction::SupplyBridgeLockHolding { .. }
                 | GenesisAction::StakeSequencer { .. } => None,
             })
@@ -467,7 +490,7 @@ mod tests {
 
         let funder_supply = supplied(funder).expect("the funder is supplied at genesis");
         assert_eq!(
-            funder_supply.checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
+            u128::from(funder_supply).checked_sub(public_accounts[PRIVATE_FUNDER_INDEX].1),
             Some(private_total),
             "genesis must give the funder its own balance plus every private balance"
         );

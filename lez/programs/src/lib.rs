@@ -11,10 +11,9 @@ mod inner {
     use guests::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID, BRIDGE_ELF,
         BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
-        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
-        FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF,
-        WRAPPED_TOKEN_ID,
+        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FEE_ELF, FEE_ID,
+        PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -53,12 +52,6 @@ mod inner {
             ASSOCIATED_TOKEN_ACCOUNT_ID,
             Cow::Borrowed(ASSOCIATED_TOKEN_ACCOUNT_ELF),
         )
-    }
-
-    #[must_use]
-    #[inline]
-    pub const fn faucet() -> Program {
-        Program::new_unchecked(FAUCET_ID, Cow::Borrowed(FAUCET_ELF))
     }
 
     #[must_use]
@@ -120,15 +113,18 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                bridge().id().into(),
+                AccountId::from_builtin_program(bridge().id()),
                 vec![
                     ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
-                        bridge().id().into(),
+                        AccountId::from_builtin_program(bridge().id()),
                     )),
                     ProgramShardSelector::balance(recipient_id),
                     ProgramShardSelector::new(
-                        bridge_core::deposit_receipt_account_id(bridge().id().into(), op_id),
-                        bridge().id().into(),
+                        bridge_core::deposit_receipt_account_id(
+                            AccountId::from_builtin_program(bridge().id()),
+                            op_id,
+                        ),
+                        AccountId::from_builtin_program(bridge().id()),
                     ),
                 ],
                 vec![],
@@ -153,7 +149,9 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(bridge().id().into()),
+                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
+                        bridge().id(),
+                    )),
                     Account::funded(u128::from(amount)),
                 )])
                 .with_programs([bridge()]);
@@ -162,7 +160,10 @@ mod inner {
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
-            assert_eq!(events[0].account_id, AccountId::from(bridge().id()));
+            assert_eq!(
+                events[0].account_id,
+                AccountId::from_builtin_program(bridge().id())
+            );
             assert_eq!(
                 events[0].event.selector,
                 bridge_core::event::Deposit::SELECTOR
@@ -184,14 +185,11 @@ mod inner {
         #[test]
         fn builtin_programs() {
             let token_program = token();
-            let faucet_program = faucet();
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();
 
             assert_eq!(token_program.id(), TOKEN_ID);
             assert_eq!(token_program.elf(), TOKEN_ELF);
-            assert_eq!(faucet_program.id(), FAUCET_ID);
-            assert_eq!(faucet_program.elf(), FAUCET_ELF);
             assert_eq!(bridge_program.id(), BRIDGE_ID);
             assert_eq!(bridge_program.elf(), BRIDGE_ELF);
             assert_eq!(sequencer_stake_program.id(), SEQUENCER_STAKE_ID);
@@ -204,7 +202,6 @@ mod inner {
                 (AMM_ELF, AMM_ID),
                 (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
                 (CLOCK_ELF, CLOCK_ID),
-                (FAUCET_ELF, FAUCET_ID),
                 (FEE_ELF, FEE_ID),
                 (BRIDGE_ELF, BRIDGE_ID),
                 (TOKEN_ELF, TOKEN_ID),

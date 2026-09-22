@@ -73,7 +73,7 @@ impl LeeTransaction {
     }
 
     /// Validates the transaction against the current state and returns the resulting diff
-    /// without applying it. Rejects transactions that modify clock, faucet or bridge accounts,
+    /// without applying it. Rejects transactions that modify clock, fee or bridge accounts,
     /// whether directly or indirectly via chain calls.
     ///
     /// This check is required for all user transactions. Only sequencer transactions may bypass
@@ -190,9 +190,14 @@ pub struct TxEvents {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id().into(),
+        AccountId::from_builtin_program(programs::clock().id()),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| ProgramShardSelector::new(id, programs::clock().id().into()))
+            .map(|id| {
+                ProgramShardSelector::new(
+                    id,
+                    AccountId::from_builtin_program(programs::clock().id()),
+                )
+            })
             .to_vec(),
         vec![],
         timestamp,
@@ -227,19 +232,21 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
         return false;
     }
     let message = public_tx.message();
-    if message.program_account_id == programs::bridge().id().into() {
+    if message.program_account_id == AccountId::from_builtin_program(programs::bridge().id()) {
         return matches!(
             borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
             Ok(bridge_core::Instruction::Deposit { .. })
         );
     }
-    if message.program_account_id == programs::cross_zone_inbox().id().into() {
+    if message.program_account_id
+        == AccountId::from_builtin_program(programs::cross_zone_inbox().id())
+    {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
             Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
         );
     }
-    if message.program_account_id == programs::ping_sender().id().into() {
+    if message.program_account_id == AccountId::from_builtin_program(programs::ping_sender().id()) {
         return matches!(
             borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
             Ok(ping_core::SenderInstruction::Send { .. })
@@ -261,7 +268,7 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
         return false;
     };
     let message = public_tx.message();
-    if message.program_account_id != programs::bridge_lock().id().into() {
+    if message.program_account_id != AccountId::from_builtin_program(programs::bridge_lock().id()) {
         return false;
     }
     matches!(
@@ -281,7 +288,8 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().program_account_id == programs::sequencer_stake().id().into()
+    public_tx.message().program_account_id
+        == AccountId::from_builtin_program(programs::sequencer_stake().id())
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
@@ -294,7 +302,7 @@ pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
-    let fee_program_id: AccountId = programs::fee().id().into();
+    let fee_program_id = AccountId::from_builtin_program(programs::fee().id());
     // Select the fee state shard and balances for the escrow, inbox, and producer.
     let shard_selectors = vec![
         ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
@@ -333,10 +341,7 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
     let is_restricted = system_accounts::clock_account_ids()
         .into_iter()
         .chain(system_accounts::fee_account_ids())
-        .chain([
-            system_accounts::faucet_account_id(),
-            system_accounts::bridge_account_id(),
-        ])
+        .chain(std::iter::once(system_accounts::bridge_account_id()))
         .any(|id| id == target);
     if is_restricted {
         Err(format!(
@@ -370,7 +375,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
-        programs::fee().id().into(),
+        AccountId::from_builtin_program(programs::fee().id()),
         vec![
             ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
             ProgramShardSelector::balance(payer),
@@ -382,7 +387,7 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
 }
 
 /// Rejects a diff that modifies any always-restricted system account (the clock
-/// accounts, the faucet, or the fee subsystem's accounts).
+/// accounts or the fee subsystem's accounts).
 ///
 /// These are written only by their sequencer-forced invocations, never by a user
 /// transaction. Enforcing this on the apply/settlement path as well as the
@@ -396,7 +401,6 @@ pub fn validate_no_restricted_account_modification(
 ) -> Result<(), lee::error::LeeError> {
     let restricted_modification_accounts = system_accounts::clock_account_ids()
         .into_iter()
-        .chain(std::iter::once(system_accounts::faucet_account_id()))
         .chain(system_accounts::fee_account_ids());
     for account_id in restricted_modification_accounts {
         validate_doesnt_modify_account(state, diff, account_id)?;
@@ -495,8 +499,6 @@ mod tests {
         // The restricted system accounts are rejected.
         validate_reward_target(system_accounts::bridge_account_id())
             .expect_err("the bridge is not a valid reward target");
-        validate_reward_target(system_accounts::faucet_account_id())
-            .expect_err("the faucet is not a valid reward target");
         for fee_account in system_accounts::fee_account_ids() {
             validate_reward_target(fee_account)
                 .expect_err("a fee account is not a valid reward target");
@@ -646,11 +648,14 @@ mod tests {
 
     #[test]
     fn system_account_ids_are_distinct_and_non_default() {
-        let faucet = system_accounts::faucet_account_id();
         let bridge = system_accounts::bridge_account_id();
-        assert_ne!(faucet, AccountId::default());
+        let clock = system_accounts::clock_account_ids();
         assert_ne!(bridge, AccountId::default());
-        assert_ne!(faucet, bridge);
+        assert!(
+            clock
+                .iter()
+                .all(|id| *id != bridge && *id != AccountId::default())
+        );
     }
 
     #[test]

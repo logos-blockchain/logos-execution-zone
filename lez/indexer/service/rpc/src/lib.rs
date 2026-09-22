@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
-    HashType, IndexerStatus, ProgramShardSelector, Transaction,
+    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Transaction,
 };
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
@@ -68,6 +68,15 @@ pub trait Rpc {
         account_id: AccountId,
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned>;
+
+    /// The account's balance, nonce, and one entry per shard carrying its size only.
+    /// Safe to call on any account: unlike `getAccount`, the response does not grow
+    /// with shard contents.
+    #[method(name = "getAccountSummary")]
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned>;
 
     #[method(name = "getAccountView")]
     async fn get_account_view(

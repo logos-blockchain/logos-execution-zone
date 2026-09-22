@@ -67,6 +67,12 @@ pub fn write_segment(
         "WriteSegment requires exactly {expected_len} account(s)"
     );
     let (target, rest) = pre_states.split_first().expect("length checked above");
+    // A program at this address would run as the loader, and so could rewrite any program's
+    // header or segments.
+    assert_ne!(
+        target.account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
+    );
     assert!(
         target.shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "segment target already deployed"
@@ -103,6 +109,12 @@ fn reject_reserved_target(account_id: AccountId) {
     assert_ne!(
         account_id, NATIVE_TOKEN_PROGRAM_ID,
         "the native token program has no deployable bytecode"
+    );
+    // A program at this address would run as the loader, and so could rewrite any program's
+    // header or segments.
+    assert_ne!(
+        account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
     );
 }
 
@@ -207,6 +219,9 @@ pub fn update_header(
 /// and recomputing the real `image_id` over the result — the same walk `get_program_via` does at
 /// resolution time, so a program built here decodes exactly as it will later execute. Never
 /// trusts a caller-supplied `image_id`, and rejects a chain over `MAX_PROGRAM_SEGMENTS`.
+///
+/// Segments only ever hold `user_elf`; the protocol's default kernel is re-attached here
+/// before the image id is computed.
 fn compute_image_id(segments_with_header: &[AccountInput]) -> ProgramId {
     let mut elf = Vec::new();
     let mut expected_next = segments_with_header.get(1).map(|pre| pre.account_id);
@@ -235,7 +250,9 @@ fn compute_image_id(segments_with_header: &[AccountInput]) -> ProgramId {
         "the chain continues past the last supplied segment account"
     );
 
-    risc0_binfmt::compute_image_id(&elf)
+    let full_binary =
+        risc0_binfmt::ProgramBinary::new(&elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode();
+    risc0_binfmt::compute_image_id(&full_binary)
         .expect("concatenated segment bytecode must decode as a valid RISC0 program binary")
         .into()
 }

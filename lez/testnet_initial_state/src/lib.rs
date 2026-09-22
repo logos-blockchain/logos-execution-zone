@@ -174,13 +174,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
     initial_public_user_accounts()
         .iter()
         .map(|acc_data| (acc_data.account_id, Account::funded(acc_data.balance)))
-        .chain([
-            (
-                system_accounts::faucet_account_id(),
-                system_accounts::faucet_account(),
-            ),
-            (system_accounts::bridge_account_id(), Account::default()),
-        ])
+        .chain([(
+            system_accounts::bridge_account_id(),
+            system_accounts::bridge_account(),
+        )])
         .chain(
             system_accounts::clock_account_ids()
                 .into_iter()
@@ -188,7 +185,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         )
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
-            system_accounts::sequencer_stake_config_account(None),
+            system_accounts::sequencer_stake_config_account(None, None),
         )])
         .chain([
             (
@@ -208,7 +205,6 @@ fn initial_programs(cross_zone: bool) -> Vec<Program> {
         programs::clock(),
         programs::fee(),
         programs::ata(),
-        programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),
     ];
@@ -395,7 +391,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(fee_program_id.into()),
+                .shard(AccountId::from_builtin_program(fee_program_id)),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
@@ -408,30 +404,26 @@ mod tests {
 
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
-        let faucet_id = system_accounts::faucet_account_id();
+        // System-account IDs must be distinct and non-default, and the genesis
+        // bridge account must carry its expected field values. Catches mutations
+        // that replace `system_bridge_account` with `Default::default()`, delete
+        // its `balance`, or replace `system_bridge_account_id` with
+        // `Default::default()`.
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
-        assert_ne!(faucet_id, bridge_id);
 
         let state = initial_state(true);
 
-        let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(
-            faucet.data.balance().unwrap(),
-            u128::MAX,
-            "faucet must hold u128::MAX"
-        );
-        assert_eq!(
-            faucet.data.shards.keys().copied().collect::<Vec<_>>(),
-            vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
-            "the faucet holds balance alone, no program's record"
-        );
-
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
-            bridge,
-            Account::default(),
-            "the bridge escrow starts empty, before any deposit mints through it"
+            bridge.data.balance().unwrap(),
+            u128::MAX,
+            "the bridge holds the whole supply"
+        );
+        assert_eq!(
+            bridge.data.shards.keys().copied().collect::<Vec<_>>(),
+            vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
+            "the bridge holds balance alone, no program's record"
         );
     }
 
@@ -449,12 +441,14 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                with.get_builtin_program(id).is_some(),
+                "registered when declared"
+            );
+            assert!(
+                without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
         }
-        assert!(without.get_program(programs::faucet().id()).is_some());
     }
 }

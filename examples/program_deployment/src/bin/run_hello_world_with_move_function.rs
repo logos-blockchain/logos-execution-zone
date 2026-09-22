@@ -1,6 +1,13 @@
+use std::collections::HashMap;
+
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
-use lee::{ProgramShardSelector, PublicTransaction, program::Program, public_transaction};
+use lee::{
+    AccountId, ProgramShardSelector, PublicTransaction,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    public_transaction,
+};
+use program_deployment::deploy_program;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -14,11 +21,13 @@ use wallet::{AccountIdentity, WalletCore};
 //
 //
 // Usage:
-//   cargo run --bin run_hello_world_with_move_function /path/to/guest/binary <function> <params>
+//   cargo run --bin run_hello_world_with_move_function \
+//     /path/to/guest/binary <payer_account_id> <function> <params>
 //
 // Example:
 //   cargo run --bin run_hello_world_with_move_function \
 //     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin \
+//     <funded payer account_id> \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
 const WRITE_FUNCTION_ID: u8 = 0;
@@ -30,6 +39,9 @@ type Instruction = (u8, Vec<u8>);
 struct Cli {
     /// Path to program binary.
     program_path: String,
+
+    /// An existing, funded account to pay the deployment fee.
+    payer: AccountId,
 
     #[command(subcommand)]
     command: Command,
@@ -61,12 +73,18 @@ enum Command {
 async fn main() {
     let cli = Cli::parse();
 
-    // Load the program
-    let bytecode: Vec<u8> = std::fs::read(cli.program_path).unwrap();
-    let program = Program::new(bytecode.into()).unwrap();
-
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().await.unwrap();
+    let mut wallet_core = WalletCore::from_env().await.unwrap();
+
+    // Deploy the program through `program_loader`; `program` is also needed directly below, as
+    // the local proving bundle for the private-tx arms.
+    let bytecode: Vec<u8> = std::fs::read(cli.program_path).unwrap();
+    let program = Program::new(bytecode.clone().into()).unwrap();
+    let program_account_id = deploy_program(&mut wallet_core, bytecode, cli.payer)
+        .await
+        .unwrap();
+    let program_with_dependencies =
+        ProgramWithDependencies::new(program, program_account_id, HashMap::new());
 
     match cli.command {
         Command::WritePublic {
@@ -77,8 +95,8 @@ async fn main() {
             let account_id = account_id.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id().into(),
-                vec![ProgramShardSelector::new(account_id, program.id().into())],
+                program_account_id,
+                vec![ProgramShardSelector::new(account_id, program_account_id)],
                 nonces,
                 instruction,
             )
@@ -100,14 +118,14 @@ async fn main() {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
             let accounts = vec![
-                AccountIdentity::PrivateOwned(account_id).select_program_shard(program.id().into()),
+                AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id),
             ];
 
             wallet_core
                 .send_privacy_preserving_tx(
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
-                    &program.into(),
+                    &program_with_dependencies,
                 )
                 .await
                 .unwrap();
@@ -118,10 +136,10 @@ async fn main() {
             let to = to.parse().unwrap();
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
-                program.id().into(),
+                program_account_id,
                 vec![
-                    ProgramShardSelector::new(from, program.id().into()),
-                    ProgramShardSelector::new(to, program.id().into()),
+                    ProgramShardSelector::new(from, program_account_id),
+                    ProgramShardSelector::new(to, program_account_id),
                 ],
                 nonces,
                 instruction,
@@ -141,18 +159,17 @@ async fn main() {
             let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let program_id = program.id().into();
 
             let accounts = vec![
-                AccountIdentity::Public(from).select_program_shard(program_id),
-                AccountIdentity::PrivateOwned(to).select_program_shard(program_id),
+                AccountIdentity::Public(from).select_program_shard(program_account_id),
+                AccountIdentity::PrivateOwned(to).select_program_shard(program_account_id),
             ];
 
             wallet_core
                 .send_privacy_preserving_tx(
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
-                    &program.into(),
+                    &program_with_dependencies,
                 )
                 .await
                 .unwrap();

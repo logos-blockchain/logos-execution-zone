@@ -8,7 +8,7 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId, ProgramId, ShardData, SharedSecretKey};
+use lee::{AccountId, ShardData, SharedSecretKey};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -61,13 +61,6 @@ impl From<NullifierPublicKey> for FfiNullifierPublicKey {
     fn from(value: NullifierPublicKey) -> Self {
         Self { data: value.0 }
     }
-}
-
-/// Program ID - 8 u32 values (32 bytes total).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiProgramId {
-    pub data: [u32; 8],
 }
 
 /// U128 - 16 bytes little endian.
@@ -700,18 +693,6 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 })
             }
         }
-    }
-}
-
-impl From<ProgramId> for FfiProgramId {
-    fn from(value: ProgramId) -> Self {
-        Self { data: value }
-    }
-}
-
-impl From<FfiProgramId> for ProgramId {
-    fn from(value: FfiProgramId) -> Self {
-        value.data
     }
 }
 
