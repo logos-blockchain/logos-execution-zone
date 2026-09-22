@@ -2,30 +2,38 @@ use super::*;
 use crate::account::Account;
 
 #[test]
-fn unsupported_call_kind_selector_matches_its_derivation() {
-    use sha2::Digest as _;
+fn call_kind_discriminants_are_pinned_and_unknown_ones_are_rejected() {
+    assert_eq!(borsh::to_vec(&CallKind::Execute).unwrap(), vec![0]);
+    assert_eq!(borsh::to_vec(&CallKind::Resolve).unwrap(), vec![1]);
 
-    assert_eq!(
-        UnsupportedCallKind::SELECTOR[..],
-        sha2::Sha256::digest(UnsupportedCallKind::SELECTOR_NAME.as_bytes())[..8]
-    );
+    for byte in 2..=u8::MAX {
+        assert!(
+            borsh::from_slice::<CallKind>(&[byte]).is_err(),
+            "{byte} decoded as a call kind"
+        );
+    }
 }
 
 #[test]
-fn call_kind_round_trips_execute_and_preserves_unknown_discriminants() {
-    let execute = borsh::to_vec(&CallKind::Execute).unwrap();
-    assert_eq!(
-        borsh::from_slice::<CallKind>(&execute).unwrap(),
-        CallKind::Execute
-    );
+fn the_journal_tag_separates_the_two_entrypoints() {
+    let execute = GuestOutput::Execute(ProgramOutput::new(
+        AccountId::default(),
+        None,
+        vec![],
+        vec![],
+    ));
+    let resolve = GuestOutput::Resolve(resolution(AccountId::new([2; 32]), None));
 
-    // Any nonzero discriminant must decode as `Unknown`, not fail.
-    for byte in 1..=u8::MAX {
-        assert_eq!(
-            borsh::from_slice::<CallKind>(&[byte]).unwrap(),
-            CallKind::Unknown(byte)
-        );
-    }
+    assert_eq!(borsh::to_vec(&execute).unwrap()[0], 0);
+    assert_eq!(borsh::to_vec(&resolve).unwrap()[0], 1);
+    assert_eq!(
+        borsh::from_slice::<GuestOutput>(&borsh::to_vec(&execute).unwrap()).unwrap(),
+        execute
+    );
+    assert_eq!(
+        borsh::from_slice::<GuestOutput>(&borsh::to_vec(&resolve).unwrap()).unwrap(),
+        resolve
+    );
 }
 
 #[test]
@@ -157,24 +165,32 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
     assert!(result.is_err());
 }
 
-// ---- validate_execution tests ----
+// ---- validation tests ----
+
+fn resolution(evaluator: AccountId, post_data: Option<ShardData>) -> ResolveOutput {
+    ResolveOutput {
+        input: ResolveInput {
+            self_account_id: evaluator,
+            selector: ProgramShardSelector::new(AccountId::new([7; 32]), evaluator),
+            pre_data: ShardData::empty(),
+            effect_data: Vec::new(),
+        },
+        post_data,
+    }
+}
 
 #[test]
 fn a_data_write_on_a_foreign_shard_is_rejected() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::with_shard(
-        account_id,
-        true,
-        AccountId::new([1; 32]),
-        ShardData::empty(),
+    let mut output = resolution(
+        executing_account_id,
+        Some(b"record".to_vec().try_into().unwrap()),
     );
-    let state_diffs = [ShardStateDiff::new(
-        pre,
-        b"record".to_vec().try_into().unwrap(),
-    )];
+    output.input.selector.program_account_id = AccountId::new([1; 32]);
 
-    let result = validate_execution(&state_diffs, executing_account_id);
+    let expected = output.input.clone();
+    let result = validate_resolution(&expected, &output);
 
     assert!(matches!(
         result,
@@ -187,32 +203,25 @@ fn a_data_write_on_a_foreign_shard_is_rejected() {
 
 #[test]
 fn a_data_write_on_the_executing_shard_is_accepted() {
-    let executing_account_id = AccountId::new([2; 32]);
-    let pre = AccountInput::with_shard(
-        AccountId::new([7; 32]),
-        true,
-        executing_account_id,
-        ShardData::empty(),
+    let output = resolution(
+        AccountId::new([2; 32]),
+        Some(b"record".to_vec().try_into().unwrap()),
     );
-    let state_diffs = [ShardStateDiff::new(
-        pre,
-        b"record".to_vec().try_into().unwrap(),
-    )];
 
-    assert!(validate_execution(&state_diffs, executing_account_id).is_ok());
+    assert!(validate_resolution(&output.input.clone(), &output).is_ok());
 }
 
 #[test]
 fn a_guest_cannot_write_the_native_balance_shard() {
-    let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::balance(account_id, true, 5);
-    let state_diffs = [ShardStateDiff::new(
-        pre,
-        crate::native_token::encode_balance(50),
-    )];
+    let mut output = resolution(
+        AccountId::new([2; 32]),
+        Some(crate::native_token::encode_balance(50)),
+    );
+    output.input.selector.program_account_id = crate::native_token::NATIVE_TOKEN_PROGRAM_ID;
 
-    let result = validate_execution(&state_diffs, executing_account_id);
+    let expected = output.input.clone();
+    let result = validate_resolution(&expected, &output);
 
     assert!(matches!(
         result,
@@ -222,50 +231,95 @@ fn a_guest_cannot_write_the_native_balance_shard() {
 
 #[test]
 fn two_shard_selectors_of_one_account_in_a_call_are_accepted() {
-    let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
-    let state_diffs = [
-        ShardStateDiff::unchanged(AccountInput::with_shard(
-            account_id,
-            true,
-            executing_account_id,
-            ShardData::empty(),
-        )),
-        ShardStateDiff::unchanged(AccountInput::balance(account_id, true, 5)),
+    let accounts = [
+        AccountMeta::new(account_id, true, AccountId::new([2; 32])),
+        AccountMeta::balance(account_id, true),
     ];
 
-    assert!(validate_execution(&state_diffs, executing_account_id).is_ok());
+    assert!(validate_execution(&accounts, &[]).is_ok());
 }
 
 #[test]
-fn apply_diff_keeps_the_pre_shard_when_nothing_is_written() {
-    let program = AccountId::new([2; 32]);
-    let data: ShardData = b"record".to_vec().try_into().unwrap();
-    let pre = AccountInput::with_shard(AccountId::new([7; 32]), true, program, data);
-    let mut account = Account::default();
+fn a_repeated_shard_selector_in_a_call_is_rejected() {
+    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
 
-    account.data.apply_diff(&ShardStateDiff::unchanged(pre));
-
-    assert!(account.data.shards.is_empty());
+    assert!(matches!(
+        validate_execution(&[account.clone(), account], &[]),
+        Err(ExecutionValidationError::AccountShardSelectorsNotUnique)
+    ));
 }
 
 #[test]
-fn apply_diff_replaces_the_written_shard() {
+fn several_effects_may_name_one_input_handle_but_no_other_selector() {
+    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
+    let effect = ShardEffect::new(&account, &7_u8);
+    let foreign = ShardEffect {
+        selector: ProgramShardSelector::balance(AccountId::new([7; 32])),
+        data: Vec::new(),
+    };
+
+    assert!(validate_execution(std::slice::from_ref(&account), &[effect.clone(), effect]).is_ok());
+    assert!(matches!(
+        validate_execution(std::slice::from_ref(&account), &[foreign]),
+        Err(ExecutionValidationError::EffectOutsideInputs { .. })
+    ));
+}
+
+#[test]
+fn apply_resolution_keeps_the_pre_shard_and_writes_only_the_selected_one() {
     let program = AccountId::new([2; 32]);
-    let pre = AccountInput::with_shard(
-        AccountId::new([7; 32]),
-        true,
-        program,
-        b"old".to_vec().try_into().unwrap(),
-    );
+    let other = AccountId::new([3; 32]);
+    let held: ShardData = b"held".to_vec().try_into().unwrap();
+    let untouched: ShardData = b"untouched".to_vec().try_into().unwrap();
+    let mut account = Account::default()
+        .with_shard(program, held.clone())
+        .with_shard(other, untouched.clone());
+
+    account.data.apply_resolution(&resolution(program, None));
+
+    assert_eq!(account.data.shard(program), &held);
+
     let written: ShardData = b"new".to_vec().try_into().unwrap();
-    let mut account = Account::default();
-
     account
         .data
-        .apply_diff(&ShardStateDiff::new(pre, written.clone()));
+        .apply_resolution(&resolution(program, Some(written.clone())));
 
     assert_eq!(account.data.shard(program), &written);
+    assert_eq!(account.data.shard(other), &untouched);
+}
+
+#[test]
+fn a_plan_records_its_input_echo_and_every_obligation() {
+    let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
+    let input = ProgramInput {
+        self_account_id: AccountId::new([2; 32]),
+        caller_account_id: Some(AccountId::new([9; 32])),
+        accounts: vec![
+            account.clone(),
+            AccountMeta::balance(AccountId::new([7; 32]), false),
+        ],
+        instruction: 7_u8,
+    };
+    let mut plan = Plan::new(&input, vec![7]);
+
+    let checked = plan.require(&account, &b"guard".to_vec(), Proposed::new(42_u128));
+    plan.update(&account, &b"write".to_vec());
+    plan.block_window(10_u64..);
+
+    assert_eq!(checked.get(), 42);
+    assert_eq!(plan.output.accounts, input.accounts);
+    assert_eq!(plan.output.self_account_id, input.self_account_id);
+    assert_eq!(plan.output.caller_account_id, input.caller_account_id);
+    assert_eq!(plan.output.instruction_data, vec![7]);
+    assert_eq!(plan.output.block_validity_window.start(), Some(10));
+    assert_eq!(
+        plan.output.effects,
+        vec![
+            ShardEffect::new(&account, &b"guard".to_vec()),
+            ShardEffect::new(&account, &b"write".to_vec()),
+        ]
+    );
 }
 
 #[test]
@@ -503,18 +557,30 @@ fn program_id_account_id_conversion_round_trips() {
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
 }
 
-fn foreign_shard_with_history() -> AccountInput {
-    AccountInput::with_shard(
-        AccountId::new([7; 32]),
-        true,
-        AccountId::new([2; 32]),
-        b"record".to_vec().try_into().unwrap(),
-    )
+#[test]
+fn a_foreign_shard_may_be_inspected_and_kept() {
+    let mut output = resolution(AccountId::new([9; 32]), None);
+    output.input.selector.program_account_id = AccountId::new([2; 32]);
+    output.input.pre_data = b"record".to_vec().try_into().unwrap();
+
+    assert!(validate_resolution(&output.input.clone(), &output).is_ok());
 }
 
 #[test]
-fn a_foreign_shard_with_history_may_be_echoed_byte_identically() {
-    let diff = ShardStateDiff::unchanged(foreign_shard_with_history());
+fn a_resolver_that_echoes_another_input_is_rejected_before_ownership_is_judged() {
+    // The echo decides both who owns the shard and where the write lands, so a resolver that
+    // renames itself the native token program would otherwise mint into the balance shard while
+    // passing the ownership check on its own forged pair.
+    let scheduled = resolution(AccountId::new([2; 32]), None).input;
 
-    assert!(validate_execution(&[diff], AccountId::new([9; 32])).is_ok());
+    let mut forged = resolution(
+        crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        Some(crate::native_token::encode_balance(1_000_000)),
+    );
+    forged.input.selector.program_account_id = crate::native_token::NATIVE_TOKEN_PROGRAM_ID;
+
+    assert!(matches!(
+        validate_resolution(&scheduled, &forged),
+        Err(ExecutionValidationError::ResolveInputMismatch { .. })
+    ));
 }
