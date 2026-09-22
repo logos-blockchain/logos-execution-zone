@@ -9,7 +9,7 @@ use lee_core::{
 
 use crate::{Effect, transfer_call};
 
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AddBinding {
     pub token_program_id: AccountId,
     pub vault_a_id: AccountId,
@@ -24,35 +24,6 @@ pub struct AddBinding {
     pub amount_liquidity: u128,
     pub reserve_bound_a: u128,
     pub reserve_bound_b: u128,
-}
-
-// Everything an add sends outside the pool's own shard. Every quantity here is derived from
-// reserves the planner cannot read, so the legs are reachable only from a `Checked` copy.
-#[derive(Clone, Copy)]
-struct Deposit {
-    token_program_id: AccountId,
-    definition_token_a_id: AccountId,
-    definition_token_b_id: AccountId,
-    amount_to_add_token_a: u128,
-    amount_to_add_token_b: u128,
-    amount_liquidity: u128,
-    reserve_bound_a: u128,
-    reserve_bound_b: u128,
-}
-
-impl From<&AddBinding> for Deposit {
-    fn from(binding: &AddBinding) -> Self {
-        Self {
-            token_program_id: binding.token_program_id,
-            definition_token_a_id: binding.definition_token_a_id,
-            definition_token_b_id: binding.definition_token_b_id,
-            amount_to_add_token_a: binding.amount_to_add_token_a,
-            amount_to_add_token_b: binding.amount_to_add_token_b,
-            amount_liquidity: binding.amount_liquidity,
-            reserve_bound_a: binding.reserve_bound_a,
-            reserve_bound_b: binding.reserve_bound_b,
-        }
-    }
 }
 
 pub fn add_liquidity(
@@ -78,7 +49,7 @@ pub fn add_liquidity(
         "Both max-balances must be nonzero"
     );
 
-    let proposal = Proposed::new(Deposit::from(&binding));
+    let proposal = Proposed::new(binding);
     let deposit = plan
         .require(pool, &Effect::AddLiquidity(binding), proposal)
         .get();

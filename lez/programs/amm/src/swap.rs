@@ -7,7 +7,7 @@ use lee_core::{
 
 use crate::{Effect, transfer_call};
 
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SwapBinding {
     pub token_program_id: AccountId,
     pub vault_a_id: AccountId,
@@ -21,42 +21,13 @@ pub struct SwapBinding {
     pub reserve_bound_b: u128,
 }
 
-// Everything a swap sends outside the pool's own shard. The pool effect is what turns these
-// proposals into facts, so the legs are reachable only from a `Checked` copy.
-#[derive(Clone, Copy)]
-struct Route {
-    token_program_id: AccountId,
-    input_is_token_a: bool,
-    definition_id_in: AccountId,
-    definition_id_out: AccountId,
-    amount_in: u128,
-    amount_out: u128,
-    reserve_bound_a: u128,
-    reserve_bound_b: u128,
-}
-
-impl From<&SwapBinding> for Route {
-    fn from(binding: &SwapBinding) -> Self {
-        Self {
-            token_program_id: binding.token_program_id,
-            input_is_token_a: binding.input_is_token_a,
-            definition_id_in: binding.definition_id_in,
-            definition_id_out: binding.definition_id_out,
-            amount_in: binding.amount_in,
-            amount_out: binding.amount_out,
-            reserve_bound_a: binding.reserve_bound_a,
-            reserve_bound_b: binding.reserve_bound_b,
-        }
-    }
-}
-
 pub fn swap_exact_input(
     plan: &mut Plan,
     accounts: &[AccountMeta; 5],
     min_amount_out: u128,
     binding: SwapBinding,
 ) {
-    let proposal = Proposed::new(Route::from(&binding));
+    let proposal = Proposed::new(binding);
 
     // An `amount_out` the pool never priced is a vault drain: the withdraw leg pays it out of
     // reserves that never backed it. `require` emits the pool's effect before it hands the value
@@ -84,7 +55,7 @@ pub fn swap_exact_output(
 ) {
     assert_ne!(binding.amount_out, 0, "Exact amount out must be nonzero");
 
-    let proposal = Proposed::new(Route::from(&binding));
+    let proposal = Proposed::new(binding);
 
     let route = plan
         .require(&accounts[0], &Effect::SwapExactOutput(binding), proposal)
@@ -98,7 +69,7 @@ pub fn swap_exact_output(
     plan_swap_legs(plan, accounts, &route);
 }
 
-fn plan_swap_legs(plan: &mut Plan, accounts: &[AccountMeta; 5], route: &Route) {
+fn plan_swap_legs(plan: &mut Plan, accounts: &[AccountMeta; 5], route: &SwapBinding) {
     let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = accounts;
 
     plan.effect(

@@ -8,7 +8,7 @@ use token_core::TokenKind;
 
 use crate::{Effect, transfer_call};
 
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct RemoveBinding {
     pub token_program_id: AccountId,
     pub vault_a_id: AccountId,
@@ -21,35 +21,6 @@ pub struct RemoveBinding {
     pub amount_to_remove_token_b: u128,
     pub amount_liquidity_burned: u128,
     pub liquidity_supply_bound: u128,
-}
-
-// Everything a removal sends outside the pool's own shard, including the definitions whose vault
-// PDA seeds authorize the withdrawals. Reachable only from a `Checked` copy.
-#[derive(Clone, Copy)]
-struct Withdrawal {
-    token_program_id: AccountId,
-    definition_token_a_id: AccountId,
-    definition_token_b_id: AccountId,
-    amount_to_remove_token_a: u128,
-    amount_to_remove_token_b: u128,
-    amount_liquidity_burned: u128,
-    liquidity_pool_id: AccountId,
-    liquidity_supply_bound: u128,
-}
-
-impl From<&RemoveBinding> for Withdrawal {
-    fn from(binding: &RemoveBinding) -> Self {
-        Self {
-            token_program_id: binding.token_program_id,
-            definition_token_a_id: binding.definition_token_a_id,
-            definition_token_b_id: binding.definition_token_b_id,
-            amount_to_remove_token_a: binding.amount_to_remove_token_a,
-            amount_to_remove_token_b: binding.amount_to_remove_token_b,
-            amount_liquidity_burned: binding.amount_liquidity_burned,
-            liquidity_pool_id: binding.liquidity_pool_id,
-            liquidity_supply_bound: binding.liquidity_supply_bound,
-        }
-    }
 }
 
 pub fn remove_liquidity(
@@ -82,7 +53,7 @@ pub fn remove_liquidity(
         "Minimum withdraw amount must be nonzero"
     );
 
-    let proposal = Proposed::new(Withdrawal::from(&binding));
+    let proposal = Proposed::new(binding);
     let withdrawal = plan
         .require(pool, &Effect::RemoveLiquidity(binding), proposal)
         .get();
