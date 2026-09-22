@@ -11,48 +11,51 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData, Instruction,
 };
-use lee_core::program::{
-    AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-    respond_unsupported_call,
-};
+use lee_core::program::{LeeCall, Plan, ProgramInput, Proposed, read_lee_call, resolve_write};
 
-fn update_if_multiple(
-    pre: AccountInput,
-    divisor: u64,
-    current_block_id: u64,
-    updated_data: &[u8],
-) -> ShardStateDiff {
-    if current_block_id.is_multiple_of(divisor) {
-        let new_data = updated_data
-            .to_vec()
-            .try_into()
-            .expect("Clock account data should fit in account data");
-        ShardStateDiff::new(pre, new_data)
-    } else {
-        ShardStateDiff::unchanged(pre)
-    }
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum Effect {
+    /// Advancing by exactly one is what pins the proposed block ID the 10- and 50-block
+    /// schedule is decided from.
+    Advance(ClockAccountData),
+    Record(ClockAccountData),
 }
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: timestamp,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => execute(input, instruction_data),
+        LeeCall::Resolve(input) => {
+            let effect =
+                borsh::from_slice(&input.effect_data).expect("the clock wrote its own effect");
+            let data = resolve_effect(&effect, &input.pre_data)
+                .try_into()
+                .expect("Clock account data should fit in account data");
+            resolve_write(input, data)
+        }
+    }
+}
 
-    let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
+fn resolve_effect(effect: &Effect, pre_data: &[u8]) -> Vec<u8> {
+    match effect {
+        Effect::Advance(data) => {
+            let previous = ClockAccountData::from_bytes(pre_data);
+            assert_eq!(
+                previous.block_id.checked_add(1),
+                Some(data.block_id),
+                "Clock block id must advance by exactly one from the account's own"
+            );
+            data.to_bytes()
+        }
+        Effect::Record(data) => data.to_bytes(),
+    }
+}
+
+fn execute(input: ProgramInput<Instruction>, instruction_data: Vec<u8>) -> ! {
+    let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(input.accounts.clone()) else {
         panic!("Invalid number of input accounts");
     };
 
-    // Verify pre-states correspond to the expected clock account IDs.
+    // Verify the accounts correspond to the expected clock account IDs.
     if pre_01.account_id != CLOCK_01_PROGRAM_ACCOUNT_ID
         || pre_10.account_id != CLOCK_10_PROGRAM_ACCOUNT_ID
         || pre_50.account_id != CLOCK_50_PROGRAM_ACCOUNT_ID
@@ -60,27 +63,70 @@ fn main() {
         panic!("Invalid input accounts");
     }
 
-    let prev_data = ClockAccountData::from_bytes(pre_01.shard_of(self_account_id));
-    let current_block_id = prev_data
-        .block_id
-        .checked_add(1)
-        .expect("Next block id should be within u64 boundaries");
-
-    let updated_data = ClockAccountData {
-        block_id: current_block_id,
+    let Instruction {
         timestamp,
+        block_id,
+    } = input.instruction;
+    let updated_data = ClockAccountData {
+        block_id,
+        timestamp,
+    };
+
+    let mut plan = Plan::new(&input, instruction_data);
+    // The every-block account resolves first: the schedule below may only be decided from a
+    // block ID its own account has already vouched for.
+    let current_block_id = plan.require(
+        &pre_01,
+        &Effect::Advance(updated_data),
+        Proposed::new(block_id),
+    );
+    if current_block_id.get().is_multiple_of(10) {
+        plan.update(&pre_10, &Effect::Record(updated_data));
     }
-    .to_bytes();
+    if current_block_id.get().is_multiple_of(50) {
+        plan.update(&pre_50, &Effect::Record(updated_data));
+    }
+    plan.write()
+}
 
-    let diff_01 = update_if_multiple(pre_01, 1, current_block_id, &updated_data);
-    let diff_10 = update_if_multiple(pre_10, 10, current_block_id, &updated_data);
-    let diff_50 = update_if_multiple(pre_50, 50, current_block_id, &updated_data);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![diff_01, diff_10, diff_50],
-    )
-    .write();
+    fn data(block_id: u64) -> ClockAccountData {
+        ClockAccountData {
+            block_id,
+            timestamp: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn the_every_block_account_advances_by_one() {
+        assert_eq!(
+            resolve_effect(&Effect::Advance(data(8)), &data(7).to_bytes()),
+            data(8).to_bytes()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock block id must advance by exactly one")]
+    fn a_block_id_that_skips_ahead_is_refused() {
+        // The block ID drives the 10/50 schedule, so a forged one would silently move every
+        // coarser clock account off its cadence.
+        resolve_effect(&Effect::Advance(data(9)), &data(7).to_bytes());
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock block id must advance by exactly one")]
+    fn a_block_id_that_repeats_is_refused() {
+        resolve_effect(&Effect::Advance(data(7)), &data(7).to_bytes());
+    }
+
+    #[test]
+    fn a_coarser_account_stores_the_same_values() {
+        assert_eq!(
+            resolve_effect(&Effect::Record(data(50)), &data(40).to_bytes()),
+            data(50).to_bytes()
+        );
+    }
 }

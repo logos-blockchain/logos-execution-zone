@@ -32,8 +32,13 @@ pub enum Instruction {
     /// revenue to escrow, tips to the producer), and pay the smoothed payout.
     ///
     /// Accounts: `[state, escrow, inbox, producer]`; `state` is named under this program's
-    /// shard, the rest are balance-only.
-    Distribute(BlockFeeSummary),
+    /// shard, the rest are balance-only. `payout` is the producer's smoothed share, proposed
+    /// here and required by the fee-state effect to equal what the real state's own
+    /// [`state::FeeState::apply_block`] returns.
+    Distribute {
+        summary: BlockFeeSummary,
+        payout: Balance,
+    },
     /// Per-transaction refund: return `amount` (the unspent part of the reserve)
     /// from the inbox to the payer.
     ///

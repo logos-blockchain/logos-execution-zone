@@ -72,11 +72,16 @@ impl borsh::BorshDeserialize for SequencerKey {
 pub enum Instruction {
     /// Locks `amount` into the stake funds account of `sequencer_key`'s ownership account.
     /// First use initializes the ownership account's shard for this program.
+    ///
+    /// `balance_before` and `has_record` are caller proposals, each checked against the
+    /// account it describes before anything derived from it is applied.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
         mover_account_id: AccountId,
         mover_instruction_data: InstructionData,
+        balance_before: u128,
+        has_record: bool,
     },
 
     /// Self-chained only: verifies the mover deposited `expected_balance_after`.
@@ -84,14 +89,24 @@ pub enum Instruction {
 
     /// Records a request to release `amount` to `destination`; no balance
     /// moves yet. Must leave the account at zero or at/above the minimum.
+    ///
+    /// `sequencer_key` selects which config entry this request is measured against, and the
+    /// ownership record is what checks it.
     UnstakeRequest {
+        sequencer_key: SequencerKey,
         amount: u128,
         destination: AccountId,
     },
 
     /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
     /// Block-inclusion validity is enforced outside this program.
-    FinalizeUnstake,
+    ///
+    /// Nothing else authorizes this, so `sequencer_key`, `amount` and the destination account
+    /// the call names must be exactly the pending request the ownership account holds.
+    FinalizeUnstake {
+        sequencer_key: SequencerKey,
+        amount: u128,
+    },
 
     /// Sets the channel params once, at genesis. Rejected once they are set,
     /// so nothing can move them afterwards.
@@ -100,11 +115,15 @@ pub enum Instruction {
     /// Burns the key's whole stake to the sink and removes its entry.
     ///
     /// Only `approvals` authorize this. The reason for the offence is not checked.
+    ///
+    /// `total_staked` is the burn amount, proposed here and required by the config effect to
+    /// be the entry's actual tracked stake.
     Slash {
         sequencer_key: SequencerKey,
         /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
         inscription: [u8; 32],
         approvals: Vec<SlashApproval>,
+        total_staked: u128,
     },
 }
 

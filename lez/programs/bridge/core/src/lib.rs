@@ -16,13 +16,17 @@ pub enum Instruction {
     /// - Bridge PDA account
     /// - Recipient account
     /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard. A
-    ///   nonempty shard marks the deposit as already processed; repeats transfer nothing.
+    ///   nonempty shard marks the deposit as already processed; repeats transfer nothing, but must
+    ///   say so in `already_processed`, which the receipt's own effect checks against it.
     Deposit {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
         recipient_id: AccountId,
         amount: u64,
+        /// Untrusted claim that the receipt is already written. A wrong claim is refused either
+        /// way: a stale one can be rebuilt, and a false one cannot mint twice.
+        already_processed: bool,
     },
 
     /// Transfers native tokens from a user account to the bridge PDA account.

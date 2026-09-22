@@ -240,7 +240,14 @@ impl SeenShard {
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
-    Dispatch(CrossZoneMessage),
+    ///
+    /// `already_seen` is the delivering party's claim about the seen shard: it decides whether
+    /// this dispatch fires the target call or is a replay no-op. The seen shard checks the
+    /// claim against itself, so a stale one is refused rather than silently taken either way.
+    Dispatch {
+        message: CrossZoneMessage,
+        already_seen: bool,
+    },
     /// Initializes the inbox config account at genesis.
     InitConfig(InboxConfig),
 }

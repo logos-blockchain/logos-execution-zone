@@ -26,6 +26,9 @@ pub enum Instruction {
         token_a_amount: u128,
         token_b_amount: u128,
         token_program_id: AccountId,
+        definition_token_a_id: AccountId,
+        definition_token_b_id: AccountId,
+        pool_is_empty: bool,
     },
 
     /// Adds liquidity to the Pool.
@@ -42,6 +45,14 @@ pub enum Instruction {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
+        token_program_id: AccountId,
+        definition_token_a_id: AccountId,
+        definition_token_b_id: AccountId,
+        amount_to_add_token_a: u128,
+        amount_to_add_token_b: u128,
+        amount_liquidity: u128,
+        reserve_bound_a: u128,
+        reserve_bound_b: u128,
     },
 
     /// Removes liquidity from the Pool.
@@ -58,6 +69,13 @@ pub enum Instruction {
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
+        token_program_id: AccountId,
+        definition_token_a_id: AccountId,
+        definition_token_b_id: AccountId,
+        amount_to_remove_token_a: u128,
+        amount_to_remove_token_b: u128,
+        amount_liquidity_burned: u128,
+        liquidity_supply_bound: u128,
     },
 
     /// Swap some quantity of Tokens (either Token A or Token B)
@@ -74,6 +92,12 @@ pub enum Instruction {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
+        token_program_id: AccountId,
+        token_definition_id_out: AccountId,
+        input_is_token_a: bool,
+        amount_out: u128,
+        reserve_bound_a: u128,
+        reserve_bound_b: u128,
     },
 
     /// Swap tokens specifying the exact desired output amount,
@@ -90,10 +114,16 @@ pub enum Instruction {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
+        token_program_id: AccountId,
+        token_definition_id_out: AccountId,
+        input_is_token_a: bool,
+        amount_in: u128,
+        reserve_bound_a: u128,
+        reserve_bound_b: u128,
     },
 }
 
-#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
     /// The token program selected when the pool is initialized.
     pub token_program_id: AccountId,
@@ -228,4 +258,56 @@ pub fn compute_liquidity_token_pda_seed(pool_id: AccountId) -> PdaSeed {
             .try_into()
             .expect("Hash output must be exactly 32 bytes long"),
     )
+}
+
+// The wallet calls these on observed reserves to build a proposal; each resolver calls them on
+// actual reserves to verify it, so a rule that drifted between the two would price a trade the
+// pool then refuses. `None` is a pool that cannot price the trade at all.
+//
+// Rounding is part of the price: exact-input floors and exact-output takes the ceiling, so a
+// caller cannot buy a pool out a unit at a time from either side.
+#[must_use]
+pub fn quote_exact_input(reserve_in: u128, reserve_out: u128, amount_in: u128) -> Option<u128> {
+    reserve_out
+        .checked_mul(amount_in)?
+        .checked_div(reserve_in.checked_add(amount_in)?)
+}
+
+// The caller checks `amount_out < reserve_out` first so it can attribute that rejection to its
+// own guard; this returns `None` rather than underflowing if it did not.
+#[must_use]
+pub fn quote_exact_output(reserve_in: u128, reserve_out: u128, amount_out: u128) -> Option<u128> {
+    Some(
+        reserve_in
+            .checked_mul(amount_out)?
+            .div_ceil(reserve_out.checked_sub(amount_out)?),
+    )
+}
+
+#[must_use]
+pub fn ideal_deposit(reserve_this: u128, reserve_other: u128, max_other: u128) -> Option<u128> {
+    reserve_this
+        .checked_mul(max_other)?
+        .checked_div(reserve_other)
+}
+
+// The smaller of the two shares is what the pool can actually back.
+#[must_use]
+pub fn liquidity_minted(
+    supply: u128,
+    amount_a: u128,
+    amount_b: u128,
+    reserve_a: u128,
+    reserve_b: u128,
+) -> Option<u128> {
+    let from_a = supply.checked_mul(amount_a)?.checked_div(reserve_a)?;
+    let from_b = supply.checked_mul(amount_b)?.checked_div(reserve_b)?;
+    Some(if from_a < from_b { from_a } else { from_b })
+}
+
+// Also computes the LP burn itself, passing the supply as `reserve`: the division is what
+// refuses a removal against an empty pool.
+#[must_use]
+pub fn withdrawal_share(reserve: u128, liquidity_amount: u128, supply: u128) -> Option<u128> {
+    reserve.checked_mul(liquidity_amount)?.checked_div(supply)
 }

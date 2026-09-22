@@ -1,59 +1,35 @@
 use faucet_core::Instruction;
 use lee_core::{
     native_token::custody_transfer,
-    program::{
-        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{LeeCall, Plan, read_lee_call},
 };
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: Instruction::GenesisTransfer { amount },
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let LeeCall::Execute(input, instruction_data) = read_lee_call::<Instruction>() else {
+        panic!("Faucet emits no effect to resolve");
     };
+    let Instruction::GenesisTransfer { amount } = &input.instruction;
 
     assert!(
-        caller_account_id.is_none(),
+        input.caller_account_id.is_none(),
         "Faucet cannot be invoked through chain calls"
     );
 
-    let [faucet, recipient] =
-        <[_; 2]>::try_from(pre_states).expect("GenesisTransfer requires exactly 2 accounts");
+    let [faucet, recipient] = <[_; 2]>::try_from(input.accounts.clone())
+        .expect("GenesisTransfer requires exactly 2 accounts");
 
     assert_eq!(
         faucet.account_id,
-        faucet_core::compute_faucet_account_id(self_account_id),
+        faucet_core::compute_faucet_account_id(input.self_account_id),
         "First account must be faucet PDA"
     );
 
-    let transfer = custody_transfer(
+    let mut plan = Plan::new(&input, instruction_data);
+    plan.call(custody_transfer(
         faucet.account_id,
         faucet_core::compute_faucet_seed(),
         recipient.account_id,
-        amount,
-    );
-
-    let post_diffs = vec![
-        ShardStateDiff::unchanged(faucet),
-        ShardStateDiff::unchanged(recipient),
-    ];
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        post_diffs,
-    )
-    .with_chained_calls(vec![transfer])
-    .write();
+        *amount,
+    ));
+    plan.write()
 }

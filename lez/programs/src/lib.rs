@@ -118,7 +118,12 @@ mod inner {
 
         use super::*;
 
-        fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
+        fn deposit_tx(
+            op_id: [u8; 32],
+            recipient_id: AccountId,
+            amount: u64,
+            already_processed: bool,
+        ) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
                 bridge().id().into(),
                 vec![
@@ -136,6 +141,7 @@ mod inner {
                     l1_deposit_op_id: op_id,
                     recipient_id,
                     amount,
+                    already_processed,
                 },
             )
             .unwrap();
@@ -158,7 +164,7 @@ mod inner {
                 )])
                 .with_programs([bridge()]);
 
-            let tx = deposit_tx(op_id, recipient_id, amount);
+            let tx = deposit_tx(op_id, recipient_id, amount, false);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
@@ -176,7 +182,12 @@ mod inner {
                 }
             );
 
-            let replayed = state.transition_from_public_transaction(&tx, 2, 0).unwrap();
+            // The receipt is written now, so the redelivery has to declare itself a replay: the
+            // receipt's own effect refuses a transaction that still claims to be the first.
+            let replay = deposit_tx(op_id, recipient_id, amount, true);
+            let replayed = state
+                .transition_from_public_transaction(&replay, 2, 0)
+                .unwrap();
 
             assert_eq!(replayed.len(), 0);
         }

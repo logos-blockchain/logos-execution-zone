@@ -1,13 +1,15 @@
 #![cfg(test)]
 
-use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{
+    AtaContents, compute_ata_seed, get_associated_token_account_id,
+};
 use borsh::BorshSerialize;
 use lee::{
     Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, ShardData,
     V03State, error::LeeError, public_transaction,
 };
 use lee_core::account::Nonce;
-use token_core::TokenHolding;
+use token_core::{TokenHolding, TokenKind};
 
 fn token_program_id() -> AccountId {
     programs::token().id().into()
@@ -41,6 +43,7 @@ fn create_tx(
     shard_selectors: Vec<ProgramShardSelector>,
     nonces: Vec<Nonce>,
     signing_keys: &[&PrivateKey],
+    contents: AtaContents,
 ) -> PublicTransaction {
     public_tx(
         ata_program_id(),
@@ -48,6 +51,8 @@ fn create_tx(
         nonces,
         associated_token_account_core::Instruction::Create {
             token_program_id: token_program_id(),
+            kind: TokenKind::Fungible,
+            contents,
         },
         signing_keys,
     )
@@ -128,7 +133,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
 
     assert_rejected(
         &mut state,
-        &create_tx(repair_selectors.clone(), vec![], &[]),
+        &create_tx(repair_selectors.clone(), vec![], &[], AtaContents::Squatted),
         3,
         "Owner authorization is missing",
     );
@@ -138,7 +143,9 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
             token_program_id(),
             vec![definition_selector, ata_selector],
             vec![],
-            token_core::Instruction::InitializeAccount,
+            token_core::Instruction::InitializeAccount {
+                kind: TokenKind::Fungible,
+            },
             &[],
         ),
         3,
@@ -150,7 +157,12 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     let intended_definition_before = state.get_account_by_id(INTENDED_DEFINITION_ID);
 
     let owner_nonce = state.get_account_by_id(owner_id).nonce;
-    let repair_tx = create_tx(repair_selectors, vec![owner_nonce], &[&owner_key]);
+    let repair_tx = create_tx(
+        repair_selectors,
+        vec![owner_nonce],
+        &[&owner_key],
+        AtaContents::Squatted,
+    );
     state
         .transition_from_public_transaction(&repair_tx, 3, 0)
         .unwrap();

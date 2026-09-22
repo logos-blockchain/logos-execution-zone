@@ -1,69 +1,79 @@
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, ShardStateDiff},
+    program::{AccountMeta, Plan},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
-#[must_use]
+use crate::Effect;
+
 pub fn mint(
-    definition_account: &AccountInput,
-    user_holding_account: &AccountInput,
-    self_account_id: AccountId,
+    plan: &mut Plan,
+    definition_account: &AccountMeta,
+    user_holding_account: &AccountMeta,
     amount_to_mint: u128,
-) -> Vec<ShardStateDiff> {
+) {
     assert!(
         definition_account.is_authorized,
         "Definition authorization is missing"
     );
 
-    let mut definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
-        .expect("Token Definition account must be valid");
-    let holding_shard = user_holding_account.shard_of(self_account_id);
-    let mut holding = if holding_shard.is_empty() {
-        TokenHolding::zeroized_from_definition(definition_account.account_id, &definition)
+    plan.update(
+        definition_account,
+        &Effect::MintSupply {
+            amount: amount_to_mint,
+        },
+    );
+    plan.update(
+        user_holding_account,
+        &Effect::MintHolding {
+            definition_id: definition_account.account_id,
+            amount: amount_to_mint,
+        },
+    );
+}
+
+#[must_use]
+pub fn mint_supply(pre_data: &ShardData, amount_to_mint: u128) -> ShardData {
+    let mut definition =
+        TokenDefinition::try_from(pre_data).expect("Token Definition account must be valid");
+
+    let TokenDefinition::Fungible { total_supply, .. } = &mut definition else {
+        panic!("Cannot mint additional supply for Non-Fungible Tokens");
+    };
+    *total_supply = total_supply
+        .checked_add(amount_to_mint)
+        .expect("Total supply overflow");
+
+    ShardData::from(&definition)
+}
+
+#[must_use]
+pub fn mint_holding(
+    pre_data: &ShardData,
+    definition_id: AccountId,
+    amount_to_mint: u128,
+) -> ShardData {
+    let mut holding = if pre_data.is_empty() {
+        TokenHolding::Fungible {
+            definition_id,
+            balance: 0,
+        }
     } else {
-        TokenHolding::try_from(holding_shard).expect("Token Holding account must be valid")
+        TokenHolding::try_from(pre_data).expect("Token Holding account must be valid")
     };
 
     assert_eq!(
-        definition_account.account_id,
+        definition_id,
         holding.definition_id(),
         "Mismatch Token Definition and Token Holding"
     );
 
-    match (&mut definition, &mut holding) {
-        (
-            TokenDefinition::Fungible {
-                name: _,
-                metadata_id: _,
-                total_supply,
-            },
-            TokenHolding::Fungible {
-                definition_id: _,
-                balance,
-            },
-        ) => {
-            *balance = balance
-                .checked_add(amount_to_mint)
-                .expect("Balance overflow on minting");
+    let TokenHolding::Fungible { balance, .. } = &mut holding else {
+        panic!("Mismatched Token Definition and Token Holding types");
+    };
+    *balance = balance
+        .checked_add(amount_to_mint)
+        .expect("Balance overflow on minting");
 
-            *total_supply = total_supply
-                .checked_add(amount_to_mint)
-                .expect("Total supply overflow");
-        }
-        (
-            TokenDefinition::NonFungible { .. },
-            TokenHolding::NftMaster { .. } | TokenHolding::NftPrintedCopy { .. },
-        ) => {
-            panic!("Cannot mint additional supply for Non-Fungible Tokens");
-        }
-        _ => panic!("Mismatched Token Definition and Token Holding types"),
-    }
-
-    let definition_diff =
-        ShardStateDiff::new(definition_account.clone(), ShardData::from(&definition));
-
-    let holding_diff = ShardStateDiff::new(user_holding_account.clone(), ShardData::from(&holding));
-
-    vec![definition_diff, holding_diff]
+    ShardData::from(&holding)
 }

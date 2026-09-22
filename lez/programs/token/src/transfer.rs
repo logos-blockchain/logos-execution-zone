@@ -1,109 +1,103 @@
 use lee_core::{
-    account::{AccountId, ShardData},
-    program::{AccountInput, ShardStateDiff},
+    account::ShardData,
+    program::{AccountMeta, Plan, Proposed},
 };
-use token_core::TokenHolding;
+use token_core::{TokenDescriptor, TokenHolding};
 
-#[must_use]
+use crate::Effect;
+
 pub fn transfer(
-    sender: &AccountInput,
-    recipient: &AccountInput,
-    self_account_id: AccountId,
+    plan: &mut Plan,
+    sender: &AccountMeta,
+    recipient: &AccountMeta,
+    descriptor: TokenDescriptor,
     balance_to_move: u128,
-) -> Vec<ShardStateDiff> {
+) {
     assert!(sender.is_authorized, "Sender authorization is missing");
 
-    let mut sender_holding =
-        TokenHolding::try_from(sender.shard_of(self_account_id)).expect("Invalid sender data");
-
-    let recipient_shard = recipient.shard_of(self_account_id);
-    let mut recipient_holding = if recipient_shard.is_empty() {
-        TokenHolding::zeroized_clone_from(&sender_holding)
-    } else {
-        TokenHolding::try_from(recipient_shard).expect("Invalid recipient data")
-    };
-
-    assert_eq!(
-        sender_holding.definition_id(),
-        recipient_holding.definition_id(),
-        "Sender and recipient definition id mismatch"
-    );
-
-    match (&mut sender_holding, &mut recipient_holding) {
-        (
-            TokenHolding::Fungible {
-                definition_id: _,
-                balance: sender_balance,
+    // Both the asset and the amount reach the recipient's shard, which never sees the sender's
+    // contents. The sender's own effect is what ties them to what the sender really holds.
+    let (descriptor, amount) = plan
+        .require(
+            sender,
+            &Effect::Withdraw {
+                descriptor,
+                amount: balance_to_move,
             },
-            TokenHolding::Fungible {
-                definition_id: _,
-                balance: recipient_balance,
-            },
-        ) => {
-            *sender_balance = sender_balance
-                .checked_sub(balance_to_move)
-                .expect("Insufficient balance");
+            Proposed::new((descriptor, balance_to_move)),
+        )
+        .get();
 
-            *recipient_balance = recipient_balance
-                .checked_add(balance_to_move)
-                .expect("Recipient balance overflow");
+    plan.update(recipient, &Effect::Deposit { descriptor, amount });
+}
+
+#[must_use]
+pub fn withdraw(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128) -> ShardData {
+    let mut holding = TokenHolding::try_from(pre_data).expect("Invalid sender data");
+    assert_kind(&holding, descriptor);
+
+    match &mut holding {
+        TokenHolding::Fungible { balance, .. } => {
+            *balance = balance.checked_sub(amount).expect("Insufficient balance");
         }
-        (
-            TokenHolding::NftMaster {
-                definition_id: _,
-                print_balance: sender_print_balance,
-            },
-            TokenHolding::NftMaster {
-                definition_id: _,
-                print_balance: recipient_print_balance,
-            },
-        ) => {
+        TokenHolding::NftMaster { print_balance, .. } => {
             assert_eq!(
-                *recipient_print_balance, 0,
-                "Invalid balance in recipient account for NFT transfer"
-            );
-
-            assert_eq!(
-                *sender_print_balance, balance_to_move,
+                *print_balance, amount,
                 "Invalid balance for NFT Master transfer"
             );
-
-            std::mem::swap(sender_print_balance, recipient_print_balance);
+            *print_balance = 0;
         }
-        (
-            TokenHolding::NftPrintedCopy {
-                definition_id: _,
-                owned: sender_owned,
-            },
-            TokenHolding::NftPrintedCopy {
-                definition_id: _,
-                owned: recipient_owned,
-            },
-        ) => {
-            assert_eq!(
-                balance_to_move, 1,
-                "Invalid balance for NFT Printed Copy transfer"
-            );
-
-            assert!(*sender_owned, "Sender does not own the NFT Printed Copy");
-
-            assert!(
-                !*recipient_owned,
-                "Recipient already owns the NFT Printed Copy"
-            );
-
-            *sender_owned = false;
-            *recipient_owned = true;
-        }
-        _ => {
-            panic!("Mismatched token holding types for transfer");
+        TokenHolding::NftPrintedCopy { owned, .. } => {
+            assert_eq!(amount, 1, "Invalid balance for NFT Printed Copy transfer");
+            assert!(*owned, "Sender does not own the NFT Printed Copy");
+            *owned = false;
         }
     }
 
-    let sender_diff = ShardStateDiff::new(sender.clone(), ShardData::from(&sender_holding));
+    ShardData::from(&holding)
+}
 
-    let recipient_diff =
-        ShardStateDiff::new(recipient.clone(), ShardData::from(&recipient_holding));
+#[must_use]
+pub fn deposit(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128) -> ShardData {
+    let mut holding = if pre_data.is_empty() {
+        descriptor.zeroized()
+    } else {
+        TokenHolding::try_from(pre_data).expect("Invalid recipient data")
+    };
+    assert_kind(&holding, descriptor);
 
-    vec![sender_diff, recipient_diff]
+    match &mut holding {
+        TokenHolding::Fungible { balance, .. } => {
+            *balance = balance
+                .checked_add(amount)
+                .expect("Recipient balance overflow");
+        }
+        TokenHolding::NftMaster { print_balance, .. } => {
+            assert_eq!(
+                *print_balance, 0,
+                "Invalid balance in recipient account for NFT transfer"
+            );
+            *print_balance = amount;
+        }
+        TokenHolding::NftPrintedCopy { owned, .. } => {
+            assert_eq!(amount, 1, "Invalid balance for NFT Printed Copy transfer");
+            assert!(!*owned, "Recipient already owns the NFT Printed Copy");
+            *owned = true;
+        }
+    }
+
+    ShardData::from(&holding)
+}
+
+fn assert_kind(holding: &TokenHolding, descriptor: &TokenDescriptor) {
+    assert_eq!(
+        holding.definition_id(),
+        descriptor.definition_id,
+        "Sender and recipient definition id mismatch"
+    );
+    assert_eq!(
+        holding.kind(),
+        descriptor.kind,
+        "Mismatched token holding types for transfer"
+    );
 }

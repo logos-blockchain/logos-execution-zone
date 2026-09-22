@@ -6,169 +6,17 @@
 //! AMM program accepts [`Instruction`] as input, refer to the corresponding documentation
 //! for more details.
 
-use std::num::NonZero;
-
-use amm_core::Instruction;
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
-};
+use amm_program::core::Instruction;
+use lee_core::program::{LeeCall, read_lee_call, resolve_keep, resolve_write};
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction,
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => {
+            amm_program::execute(input, instruction_data).write()
+        }
+        LeeCall::Resolve(input) => match amm_program::resolve(&input) {
+            Some(data) => resolve_write(input, data),
+            None => resolve_keep(input),
         },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
-
-    let (state_diffs, chained_calls) = match instruction {
-        Instruction::NewDefinition {
-            token_a_amount,
-            token_b_amount,
-            token_program_id,
-        } => {
-            let [
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
-            amm_program::new_definition::new_definition(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
-                NonZero::new(token_a_amount).expect("Token A should have a nonzero amount"),
-                NonZero::new(token_b_amount).expect("Token B should have a nonzero amount"),
-                self_account_id,
-                token_program_id,
-            )
-        }
-        Instruction::AddLiquidity {
-            min_amount_liquidity,
-            max_amount_to_add_token_a,
-            max_amount_to_add_token_b,
-        } => {
-            let [
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
-            amm_program::add::add_liquidity(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
-                NonZero::new(min_amount_liquidity)
-                    .expect("Min amount of liquidity should be nonzero"),
-                max_amount_to_add_token_a,
-                max_amount_to_add_token_b,
-                self_account_id,
-            )
-        }
-        Instruction::RemoveLiquidity {
-            remove_liquidity_amount,
-            min_amount_to_remove_token_a,
-            min_amount_to_remove_token_b,
-        } => {
-            let [
-                pool,
-                vault_a,
-                vault_b,
-                pool_definition_lp,
-                user_holding_a,
-                user_holding_b,
-                user_holding_lp,
-            ] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly seven accounts");
-            amm_program::remove::remove_liquidity(
-                &pool,
-                &vault_a,
-                &vault_b,
-                &pool_definition_lp,
-                &user_holding_a,
-                &user_holding_b,
-                &user_holding_lp,
-                NonZero::new(remove_liquidity_amount)
-                    .expect("Remove liquidity amount must be nonzero"),
-                min_amount_to_remove_token_a,
-                min_amount_to_remove_token_b,
-                self_account_id,
-            )
-        }
-        Instruction::SwapExactInput {
-            swap_amount_in,
-            min_amount_out,
-            token_definition_id_in,
-        } => {
-            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
-                .try_into()
-                .expect("SwapExactInput instruction requires exactly five accounts");
-            amm_program::swap::swap_exact_input(
-                pool,
-                vault_a,
-                vault_b,
-                user_holding_a,
-                user_holding_b,
-                swap_amount_in,
-                min_amount_out,
-                token_definition_id_in,
-                self_account_id,
-            )
-        }
-        Instruction::SwapExactOutput {
-            exact_amount_out,
-            max_amount_in,
-            token_definition_id_in,
-        } => {
-            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
-                .try_into()
-                .expect("SwapExactOutput instruction requires exactly five accounts");
-            amm_program::swap::swap_exact_output(
-                pool,
-                vault_a,
-                vault_b,
-                user_holding_a,
-                user_holding_b,
-                exact_amount_out,
-                max_amount_in,
-                token_definition_id_in,
-                self_account_id,
-            )
-        }
-    };
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    }
 }

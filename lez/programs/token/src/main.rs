@@ -6,112 +6,17 @@
 //! Token program accepts [`Instruction`] as input, refer to the corresponding documentation
 //! for more details.
 
-use lee_core::program::{
-    ProgramCall, ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
-};
+use lee_core::program::{LeeCall, read_lee_call, resolve_keep, resolve_write};
 use token_program::core::Instruction;
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction,
+    match read_lee_call::<Instruction>() {
+        LeeCall::Execute(input, instruction_data) => {
+            token_program::execute(input, instruction_data).write()
+        }
+        LeeCall::Resolve(input) => match token_program::resolve(&input) {
+            Some(data) => resolve_write(input, data),
+            None => resolve_keep(input),
         },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
-
-    let state_diffs = match instruction {
-        Instruction::Transfer {
-            amount_to_transfer: balance_to_move,
-        } => {
-            let [sender, recipient] = pre_states
-                .try_into()
-                .expect("Transfer instruction requires exactly two accounts");
-            token_program::transfer::transfer(&sender, &recipient, self_account_id, balance_to_move)
-        }
-        // TODO(cross-zone): nothing here checks the caller, so the cross-zone inbox
-        // can deliver into this program on a peer's word, letting the peer drive
-        // writes in token's own shard at addresses it names. That is the same
-        // reach any local caller has; a peer just pays no local fee.
-        Instruction::NewFungibleDefinition { name, total_supply } => {
-            let [definition_account, holding_account] = pre_states
-                .try_into()
-                .expect("NewFungibleDefinition instruction requires exactly two accounts");
-            token_program::new_definition::new_fungible_definition(
-                &definition_account,
-                &holding_account,
-                self_account_id,
-                name,
-                total_supply,
-            )
-        }
-        Instruction::NewDefinitionWithMetadata {
-            new_definition,
-            metadata,
-        } => {
-            let [definition_account, holding_account, metadata_account] = pre_states
-                .try_into()
-                .expect("NewDefinitionWithMetadata instruction requires exactly three accounts");
-            token_program::new_definition::new_definition_with_metadata(
-                &definition_account,
-                &holding_account,
-                &metadata_account,
-                self_account_id,
-                new_definition,
-                *metadata,
-            )
-        }
-        Instruction::InitializeAccount => {
-            let [definition_account, account_to_initialize] = pre_states
-                .try_into()
-                .expect("InitializeAccount instruction requires exactly two accounts");
-            token_program::initialize::initialize_account(
-                &definition_account,
-                &account_to_initialize,
-                self_account_id,
-            )
-        }
-        Instruction::Burn { amount_to_burn } => {
-            let [definition_account, user_holding_account] = pre_states
-                .try_into()
-                .expect("Burn instruction requires exactly two accounts");
-            token_program::burn::burn(
-                &definition_account,
-                &user_holding_account,
-                self_account_id,
-                amount_to_burn,
-            )
-        }
-        Instruction::Mint { amount_to_mint } => {
-            let [definition_account, user_holding_account] = pre_states
-                .try_into()
-                .expect("Mint instruction requires exactly two accounts");
-            token_program::mint::mint(
-                &definition_account,
-                &user_holding_account,
-                self_account_id,
-                amount_to_mint,
-            )
-        }
-        Instruction::PrintNft => {
-            let [master_account, printed_account] = pre_states
-                .try_into()
-                .expect("PrintNft instruction requires exactly two accounts");
-            token_program::print_nft::print_nft(&master_account, &printed_account, self_account_id)
-        }
-    };
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .write();
+    }
 }

@@ -1,47 +1,78 @@
-use std::num::NonZeroU128;
-
 use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, ChainedCall, ShardStateDiff},
+    program::{AccountMeta, ChainedCall, Plan, Proposed},
 };
+use token_core::TokenKind;
 
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-#[must_use]
+use crate::{Effect, transfer_call};
+
+#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RemoveBinding {
+    pub token_program_id: AccountId,
+    pub vault_a_id: AccountId,
+    pub vault_b_id: AccountId,
+    pub liquidity_pool_id: AccountId,
+    pub definition_token_a_id: AccountId,
+    pub definition_token_b_id: AccountId,
+    pub remove_liquidity_amount: u128,
+    pub amount_to_remove_token_a: u128,
+    pub amount_to_remove_token_b: u128,
+    pub amount_liquidity_burned: u128,
+    pub liquidity_supply_bound: u128,
+}
+
+// Everything a removal sends outside the pool's own shard, including the definitions whose vault
+// PDA seeds authorize the withdrawals. Reachable only from a `Checked` copy.
+#[derive(Clone, Copy)]
+struct Withdrawal {
+    token_program_id: AccountId,
+    definition_token_a_id: AccountId,
+    definition_token_b_id: AccountId,
+    amount_to_remove_token_a: u128,
+    amount_to_remove_token_b: u128,
+    amount_liquidity_burned: u128,
+    liquidity_pool_id: AccountId,
+    liquidity_supply_bound: u128,
+}
+
+impl From<&RemoveBinding> for Withdrawal {
+    fn from(binding: &RemoveBinding) -> Self {
+        Self {
+            token_program_id: binding.token_program_id,
+            definition_token_a_id: binding.definition_token_a_id,
+            definition_token_b_id: binding.definition_token_b_id,
+            amount_to_remove_token_a: binding.amount_to_remove_token_a,
+            amount_to_remove_token_b: binding.amount_to_remove_token_b,
+            amount_liquidity_burned: binding.amount_liquidity_burned,
+            liquidity_pool_id: binding.liquidity_pool_id,
+            liquidity_supply_bound: binding.liquidity_supply_bound,
+        }
+    }
+}
+
 pub fn remove_liquidity(
-    pool: &AccountInput,
-    vault_a: &AccountInput,
-    vault_b: &AccountInput,
-    pool_definition_lp: &AccountInput,
-    user_holding_a: &AccountInput,
-    user_holding_b: &AccountInput,
-    user_holding_lp: &AccountInput,
-    remove_liquidity_amount: NonZeroU128,
+    plan: &mut Plan,
+    accounts: &[AccountMeta; 7],
     min_amount_to_remove_token_a: u128,
     min_amount_to_remove_token_b: u128,
-    self_account_id: AccountId,
-) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
-    let remove_liquidity_amount: u128 = remove_liquidity_amount.into();
+    binding: RemoveBinding,
+) {
+    let [
+        pool,
+        vault_a,
+        vault_b,
+        pool_definition_lp,
+        user_holding_a,
+        user_holding_b,
+        user_holding_lp,
+    ] = accounts;
 
-    // 1. Fetch Pool state
-    let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
-        .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
-    let token_program_id = pool_def_data.token_program_id;
-
-    assert!(pool_def_data.active, "Pool is inactive");
-    assert_eq!(
-        pool_def_data.liquidity_pool_id, pool_definition_lp.account_id,
-        "LP definition mismatch"
+    assert!(
+        binding.remove_liquidity_amount != 0,
+        "Remove liquidity amount must be nonzero"
     );
-    assert_eq!(
-        vault_a.account_id, pool_def_data.vault_a_id,
-        "Vault A was not provided"
-    );
-    assert_eq!(
-        vault_b.account_id, pool_def_data.vault_b_id,
-        "Vault B was not provided"
-    );
-
     assert!(
         min_amount_to_remove_token_a != 0,
         "Minimum withdraw amount must be nonzero"
@@ -51,115 +82,169 @@ pub fn remove_liquidity(
         "Minimum withdraw amount must be nonzero"
     );
 
-    // 2. Compute withdrawal amounts
-    let user_holding_lp_data = token_core::TokenHolding::try_from(
-        user_holding_lp.shard_of(token_program_id),
+    let proposal = Proposed::new(Withdrawal::from(&binding));
+    let withdrawal = plan
+        .require(pool, &Effect::RemoveLiquidity(binding), proposal)
+        .get();
+
+    // The pool effect requires the real supply to be at least this bound and this guard requires
+    // the holding to be at most the same bound, which together reproduce the cross-account
+    // `user_lp_balance <= liquidity_pool_supply` the single-`Execute` version could read directly.
+    plan.effect(
+        user_holding_lp,
+        &Effect::LiquidityHoldingIsBounded {
+            token_program_id: withdrawal.token_program_id,
+            definition_id: withdrawal.liquidity_pool_id,
+            maximum: withdrawal.liquidity_supply_bound,
+        },
+    );
+
+    assert!(
+        withdrawal.amount_to_remove_token_a >= min_amount_to_remove_token_a,
+        "Insufficient minimal withdraw amount (Token A) provided for liquidity amount"
+    );
+    assert!(
+        withdrawal.amount_to_remove_token_b >= min_amount_to_remove_token_b,
+        "Insufficient minimal withdraw amount (Token B) provided for liquidity amount"
+    );
+
+    plan.call(
+        ChainedCall::new(
+            withdrawal.token_program_id,
+            vec![
+                ProgramShardSelector::from(pool_definition_lp),
+                ProgramShardSelector::from(user_holding_lp),
+            ],
+            &token_core::Instruction::Burn {
+                amount_to_burn: withdrawal.amount_liquidity_burned,
+                kind: TokenKind::Fungible,
+            },
+        )
+        .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]),
+    );
+    plan.call(
+        transfer_call(
+            withdrawal.token_program_id,
+            vault_b,
+            user_holding_b,
+            withdrawal.definition_token_b_id,
+            withdrawal.amount_to_remove_token_b,
+        )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
+            pool.account_id,
+            withdrawal.definition_token_b_id,
+        )]),
+    );
+    plan.call(
+        transfer_call(
+            withdrawal.token_program_id,
+            vault_a,
+            user_holding_a,
+            withdrawal.definition_token_a_id,
+            withdrawal.amount_to_remove_token_a,
+        )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
+            pool.account_id,
+            withdrawal.definition_token_a_id,
+        )]),
+    );
+}
+
+#[must_use]
+pub fn pool_after_remove(pre_data: &ShardData, binding: &RemoveBinding) -> ShardData {
+    let pool = PoolDefinition::try_from(pre_data)
+        .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
+
+    assert!(pool.active, "Pool is inactive");
+    assert_eq!(
+        pool.token_program_id, binding.token_program_id,
+        "Remove liquidity routes through a token program the pool does not use"
+    );
+    assert_eq!(
+        pool.liquidity_pool_id, binding.liquidity_pool_id,
+        "LP definition mismatch"
+    );
+    assert_eq!(
+        binding.vault_a_id, pool.vault_a_id,
+        "Vault A was not provided"
+    );
+    assert_eq!(
+        binding.vault_b_id, pool.vault_b_id,
+        "Vault B was not provided"
+    );
+    assert_eq!(
+        binding.definition_token_a_id, pool.definition_token_a_id,
+        "Token A definition is not the pool's"
+    );
+    assert_eq!(
+        binding.definition_token_b_id, pool.definition_token_b_id,
+        "Token B definition is not the pool's"
+    );
+    assert!(
+        pool.liquidity_pool_supply >= binding.liquidity_supply_bound,
+        "Invalid liquidity account provided"
+    );
+
+    let withdraw_amount_a = amm_core::withdrawal_share(
+        pool.reserve_a,
+        binding.remove_liquidity_amount,
+        pool.liquidity_pool_supply,
     )
-    .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token");
+    .expect("reserve * liquidity amount overflows u128");
+    let withdraw_amount_b = amm_core::withdrawal_share(
+        pool.reserve_b,
+        binding.remove_liquidity_amount,
+        pool.liquidity_pool_supply,
+    )
+    .expect("reserve * liquidity amount overflows u128");
+
+    assert_eq!(
+        withdraw_amount_a, binding.amount_to_remove_token_a,
+        "Proposed Token A withdrawal does not match the pool's removal calculation"
+    );
+    assert_eq!(
+        withdraw_amount_b, binding.amount_to_remove_token_b,
+        "Proposed Token B withdrawal does not match the pool's removal calculation"
+    );
+
+    let delta_lp = amm_core::withdrawal_share(
+        pool.liquidity_pool_supply,
+        binding.remove_liquidity_amount,
+        pool.liquidity_pool_supply,
+    )
+    .expect("supply * liquidity amount overflows u128");
+
+    assert_eq!(
+        delta_lp, binding.amount_liquidity_burned,
+        "Proposed LP burn does not match the pool's removal calculation"
+    );
+
+    let liquidity_pool_supply = pool.liquidity_pool_supply - delta_lp;
+
+    ShardData::from(&PoolDefinition {
+        liquidity_pool_supply,
+        reserve_a: pool.reserve_a - withdraw_amount_a,
+        reserve_b: pool.reserve_b - withdraw_amount_b,
+        active: liquidity_pool_supply != 0,
+        ..pool
+    })
+}
+
+pub fn liquidity_holding_is_bounded(pre_data: &ShardData, definition_id: AccountId, maximum: u128) {
     let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: user_lp_balance,
-    } = user_holding_lp_data
+        definition_id: holding_definition_id,
+        balance,
+    } = token_core::TokenHolding::try_from(pre_data)
+        .expect("Remove liquidity: AMM Program expects a valid Token Account for liquidity token")
     else {
         panic!(
             "Remove liquidity: AMM Program expects a valid Fungible Token Holding Account for liquidity token"
         );
     };
 
-    assert!(
-        user_lp_balance <= pool_def_data.liquidity_pool_supply,
-        "Invalid liquidity account provided"
-    );
+    assert!(balance <= maximum, "Invalid liquidity account provided");
     assert_eq!(
-        user_holding_lp_data.definition_id(),
-        pool_def_data.liquidity_pool_id,
+        holding_definition_id, definition_id,
         "Invalid liquidity account provided"
     );
-
-    let withdraw_amount_a =
-        (pool_def_data.reserve_a * remove_liquidity_amount) / pool_def_data.liquidity_pool_supply;
-    let withdraw_amount_b =
-        (pool_def_data.reserve_b * remove_liquidity_amount) / pool_def_data.liquidity_pool_supply;
-
-    // 3. Validate and slippage check
-    assert!(
-        withdraw_amount_a >= min_amount_to_remove_token_a,
-        "Insufficient minimal withdraw amount (Token A) provided for liquidity amount"
-    );
-    assert!(
-        withdraw_amount_b >= min_amount_to_remove_token_b,
-        "Insufficient minimal withdraw amount (Token B) provided for liquidity amount"
-    );
-
-    // 4. Calculate LP to reduce cap by
-    let delta_lp: u128 = (pool_def_data.liquidity_pool_supply * remove_liquidity_amount)
-        / pool_def_data.liquidity_pool_supply;
-
-    let active: bool = pool_def_data.liquidity_pool_supply - delta_lp != 0;
-
-    // 5. Update pool account
-    let pool_post_definition = PoolDefinition {
-        liquidity_pool_supply: pool_def_data.liquidity_pool_supply - delta_lp,
-        reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
-        reserve_b: pool_def_data.reserve_b - withdraw_amount_b,
-        active,
-        ..pool_def_data
-    };
-
-    // Chaincall for Token A withdraw
-    let call_token_a = ChainedCall::new(
-        token_program_id,
-        vec![
-            ProgramShardSelector::from(vault_a),
-            ProgramShardSelector::from(user_holding_a),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: withdraw_amount_a,
-        },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
-        pool.account_id,
-        pool_def_data.definition_token_a_id,
-    )]);
-    // Chaincall for Token B withdraw
-    let call_token_b = ChainedCall::new(
-        token_program_id,
-        vec![
-            ProgramShardSelector::from(vault_b),
-            ProgramShardSelector::from(user_holding_b),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: withdraw_amount_b,
-        },
-    )
-    .with_pda_seeds(vec![compute_vault_pda_seed(
-        pool.account_id,
-        pool_def_data.definition_token_b_id,
-    )]);
-    // Chaincall for LP adjustment
-    let call_token_lp = ChainedCall::new(
-        token_program_id,
-        vec![
-            ProgramShardSelector::from(pool_definition_lp),
-            ProgramShardSelector::from(user_holding_lp),
-        ],
-        &token_core::Instruction::Burn {
-            amount_to_burn: delta_lp,
-        },
-    )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
-
-    let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
-
-    let post_diffs = vec![
-        ShardStateDiff::new(pool.clone(), ShardData::from(&pool_post_definition)),
-        ShardStateDiff::unchanged(vault_a.clone()),
-        ShardStateDiff::unchanged(vault_b.clone()),
-        ShardStateDiff::unchanged(pool_definition_lp.clone()),
-        ShardStateDiff::unchanged(user_holding_a.clone()),
-        ShardStateDiff::unchanged(user_holding_b.clone()),
-        ShardStateDiff::unchanged(user_holding_lp.clone()),
-    ];
-
-    (post_diffs, chained_calls)
 }
