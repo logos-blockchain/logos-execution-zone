@@ -34,7 +34,7 @@ use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
     FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128,
     WalletHandle, error,
-    generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
+    generic_transaction::{FfiProgramDependency, FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
 };
@@ -1761,11 +1761,17 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_with_dependencies = FfiProgramWithDependencies {
+    let ffi_programs = vec![FfiProgramDependency {
         program: programs::token().into(),
+        account_id: FfiBytes32::from_account_id(token_program),
+    }];
+    let programs_size = ffi_programs.len();
+    let programs_ptr =
+        Box::into_raw(ffi_programs.into_boxed_slice()) as *const FfiProgramDependency;
+    let program_with_dependencies = FfiProgramWithDependencies {
         self_account_id: FfiBytes32::from_account_id(token_program),
-        deps: std::ptr::null(),
-        deps_size: 0,
+        programs: programs_ptr,
+        programs_size,
     };
 
     unsafe {

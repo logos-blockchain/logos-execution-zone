@@ -318,13 +318,17 @@ typedef struct FfiProgramDependency {
 } FfiProgramDependency;
 
 /**
+ * Every program an execution may dispatch, root included, each paired with the account it is
+ * deployed at, plus the address the top-level call is dispatched to.
+ *
+ * `programs` is empty for native execution, which has no bytecode to supply.
+ *
  * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
-  struct FfiProgram program;
   struct FfiBytes32 self_account_id;
-  const struct FfiProgramDependency *deps;
-  uintptr_t deps_size;
+  const struct FfiProgramDependency *programs;
+  uintptr_t programs_size;
 } FfiProgramWithDependencies;
 
 /**
