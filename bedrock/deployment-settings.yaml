@@ -45,6 +45,8 @@ cryptarchia:
       rate_num: 0
       rate_den: 1
       target_claim_per_block: 1
+      pow_share: 0
+      share_den: 100
       slot_window: 100
   sdp_config:
     service_params:
