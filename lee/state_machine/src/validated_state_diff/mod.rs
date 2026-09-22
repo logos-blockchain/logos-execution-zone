@@ -656,15 +656,15 @@ fn fold_public_resolutions(
                 effect_data: data.clone(),
             };
             // Native balance is protocol-recomputed; every other evaluator is the guest the
-            // proof's image claims already bound to this account.
-            let expected = input.clone();
+            // proof's image claims already bound to this account. Only the native branch builds
+            // an output of its own, so only it needs a copy of the scheduled input.
             let output = if *program_account_id == NATIVE_TOKEN_PROGRAM_ID {
                 ResolveOutput {
                     post_data: Some(
                         native_token::resolve(&input)
                             .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?,
                     ),
-                    input,
+                    input: input.clone(),
                 }
             } else {
                 if !loaded.contains_key(program_account_id) {
@@ -684,7 +684,7 @@ fn fold_public_resolutions(
                 charge(&mut cycles_used, call_cycles);
                 output
             };
-            validate_resolution(&expected, &output).map_err(|source| {
+            validate_resolution(&input, &output).map_err(|source| {
                 InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
                     program_account_id: *program_account_id,
                     source,
