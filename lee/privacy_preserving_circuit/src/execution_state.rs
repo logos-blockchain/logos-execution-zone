@@ -527,9 +527,7 @@ fn accepted_output(
     }
 
     // Check that `reported_output` is consistent with the execution of the corresponding
-    // program. `env::verify` needs the invoked program's real image id, not its dispatch
-    // address — resolved from the prover-supplied (and independently, externally verified)
-    // claims. See `ProgramImageClaim`.
+    // program.
     let image_id = image_id_by_account_id
         .get(&chained_call.program_account_id)
         .copied()

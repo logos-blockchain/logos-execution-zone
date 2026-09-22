@@ -5,14 +5,11 @@ use crate::{
     program::{AccountInput, ChainedCall, InstructionData, PdaSeed, ProgramOutput, ShardStateDiff},
 };
 
+/// Hardcoded native token shard address.
 pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
 
-/// Instruction type for the native token program.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Transfer `amount` of native balance from sender to recipient.
-    ///
-    /// Required accounts: `[sender, recipient]`, both selecting the native shard.
     Transfer { amount: Balance },
 }
 

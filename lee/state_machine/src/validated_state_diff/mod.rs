@@ -346,9 +346,6 @@ impl ValidatedStateDiff {
                 chained_call.program_account_id, real_pre_states, chained_call.instruction_data
             );
             let program_output = if chained_call.program_account_id == NATIVE_TOKEN_PROGRAM_ID {
-                // Native dispatch, on the scheduled program account ID: the protocol's own
-                // transfer implementation runs as Rust, with no zkVM session to charge cycles
-                // against.
                 native_token::execute(
                     caller_data.account_id,
                     &real_pre_states,

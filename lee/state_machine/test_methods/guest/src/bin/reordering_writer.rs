@@ -7,8 +7,7 @@ use lee_core::{
 };
 
 /// Writes its own shard on both accounts, but reports its two diffs in the opposite order from
-/// `pre_states` — proves order is irrelevant now that each diff embeds its own pre-state, unlike
-/// the old two-array `pre_states`/`post_diffs` shape where a reordered report was rejected.
+/// `pre_states`.
 type Instruction = Vec<u8>;
 
 fn main() {
@@ -38,7 +37,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        // Swapped: the second account's diff first, the first account's second.
+        // Swapped.
         vec![second_diff, first_diff],
     )
     .write();
