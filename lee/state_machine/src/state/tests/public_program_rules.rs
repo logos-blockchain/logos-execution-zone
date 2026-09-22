@@ -416,3 +416,44 @@ fn reordered_state_diffs_are_rejected() {
         "expected InconsistentAccountPreState for the reordered rows, got {result:?}"
     );
 }
+
+#[test]
+fn a_root_omitting_rows_its_chained_call_returns_is_rejected() {
+    let forwarder_id =
+        AccountId::from_builtin_program(crate::test_methods::non_delegating_forwarder().id());
+    let mut state = V03State::new()
+        .with_public_account_balances([
+            (AccountId::new([1; 32]), 100),
+            (AccountId::new([2; 32]), 0),
+        ])
+        .with_test_programs();
+    let message = public_transaction::Message::try_new(
+        forwarder_id,
+        vec![
+            ProgramShardSelector::balance(AccountId::new([1; 32])),
+            ProgramShardSelector::balance(AccountId::new([2; 32])),
+        ],
+        vec![],
+        (
+            crate::test_methods::noop().id(),
+            Vec::<u8>::new(),
+            false,
+            Vec::<PdaSeed>::new(),
+        ),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == forwarder_id
+        ),
+        "expected InputRowsMismatch for the root, got {result:?}"
+    );
+}

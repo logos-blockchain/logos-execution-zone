@@ -1398,3 +1398,28 @@ fn dropped_public_account_is_caught_before_proving() {
         "dropping account2 should prevent a valid proof, got {result:?}"
     );
 }
+
+#[test]
+fn injected_public_account_is_caught_before_proving() {
+    let program = crate::test_methods::injects_undeclared_pre_state();
+    let program_id = AccountId::from_builtin_program(program.id());
+
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance(AccountId::new([1; 32]))],
+            instruction_data: Program::serialize_instruction(AccountId::new([2; 32])).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == program_id
+        ),
+        "injecting account2 should prevent a valid proof, got {result:?}"
+    );
+}

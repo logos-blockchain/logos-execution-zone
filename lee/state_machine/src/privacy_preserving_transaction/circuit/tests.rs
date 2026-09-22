@@ -1332,3 +1332,128 @@ fn a_top_level_shard_selector_is_never_resolved_for() {
         "the chained call must have run against the supplied value, not the resolver's"
     );
 }
+
+fn prove_program(
+    program: &Program,
+    caller_account_id: Option<AccountId>,
+    pre_states: &[AccountInput],
+    instruction_data: &InstructionData,
+) -> (Receipt, ProgramOutput) {
+    let receipt = execute_and_prove_program(
+        program,
+        AccountId::from_builtin_program(program.id()),
+        caller_account_id,
+        pre_states,
+        instruction_data,
+    )
+    .unwrap();
+    let output = borsh::from_slice(from_frame(&receipt.journal.bytes).unwrap()).unwrap();
+    (receipt, output)
+}
+
+fn prove_circuit_directly(
+    root: &Program,
+    initial_shard_selectors: Vec<ProgramShardSelector>,
+    calls: Vec<(Receipt, ProgramOutput)>,
+    programs: &[&Program],
+) -> Result<(), LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    let mut program_outputs = Vec::new();
+    for (receipt, output) in calls {
+        env_builder.add_assumption(receipt);
+        program_outputs.push(output);
+    }
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs,
+        private_witnesses: Vec::new(),
+        program_account_id: AccountId::from_builtin_program(root.id()),
+        dummy_inputs: Vec::new(),
+        ciphertext_padding: None,
+        initial_shard_selectors,
+        program_image_claims: programs
+            .iter()
+            .map(|program| ProgramImageClaim {
+                account_id: AccountId::from_builtin_program(program.id()),
+                image_id: program.id(),
+            })
+            .collect(),
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&circuit_input)?));
+    default_prover()
+        .prove_with_opts(
+            env_builder.build().unwrap(),
+            PRIVACY_PRESERVING_CIRCUIT_ELF,
+            &ProverOpts::succinct(),
+        )
+        .map(drop)
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))
+}
+
+#[test]
+fn a_root_is_bound_to_the_selectors_it_declares_in_the_circuit() {
+    let noop = crate::test_methods::noop();
+    let (a, b) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let call = prove_program(
+        &noop,
+        None,
+        &[
+            AccountInput::balance(a, false, 0),
+            AccountInput::balance(b, false, 0),
+        ],
+        &Program::serialize_instruction(()).unwrap(),
+    );
+    let declaring = |account_ids: Vec<AccountId>| {
+        prove_circuit_directly(
+            &noop,
+            account_ids
+                .into_iter()
+                .map(ProgramShardSelector::balance)
+                .collect(),
+            vec![call.clone()],
+            &[&noop],
+        )
+    };
+
+    declaring(vec![a, b]).expect("a root declaring exactly the rows it returned must prove");
+    for declared in [vec![b, a], vec![a]] {
+        let result = declaring(declared);
+        assert!(
+            matches!(&result, Err(LeeError::CircuitProvingError(msg))
+                if msg.contains("Callee ran on shard selectors the chained call did not name")),
+            "refused for the wrong reason: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn a_chained_call_on_an_account_the_root_did_not_declare_is_rejected_by_the_circuit() {
+    let root = crate::test_methods::references_undeclared_account();
+    let noop = crate::test_methods::noop();
+    let (declared, undeclared) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let unit = Program::serialize_instruction(()).unwrap();
+    let root_call = prove_program(
+        &root,
+        None,
+        &[AccountInput::balance(declared, false, 0)],
+        &Program::serialize_instruction((noop.id(), unit.clone(), undeclared)).unwrap(),
+    );
+    let child_call = prove_program(
+        &noop,
+        Some(AccountId::from_builtin_program(root.id())),
+        &[AccountInput::balance(undeclared, false, 5)],
+        &unit,
+    );
+
+    let result = prove_circuit_directly(
+        &root,
+        vec![ProgramShardSelector::balance(declared)],
+        vec![root_call, child_call],
+        &[&root, &noop],
+    );
+
+    assert!(
+        matches!(&result, Err(LeeError::CircuitProvingError(msg))
+            if msg.contains("which the root call did not declare")),
+        "refused for the wrong reason: {result:?}"
+    );
+}
