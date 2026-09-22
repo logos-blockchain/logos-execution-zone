@@ -1,8 +1,8 @@
 use crate::api::types::{
     FfiNonce, FfiVec,
     transaction::{
-        FfiPrivateAction, FfiProgramShardSelector, FfiPublicAction, FfiSignaturePubKeyEntry,
-        FfiTransaction,
+        FfiPrivateAction, FfiProgramShardSelector, FfiPublicAction, FfiPublicResolution,
+        FfiSignaturePubKeyEntry, FfiTransaction,
     },
 };
 
@@ -23,3 +23,5 @@ pub type FfiProof = FfiVecU8;
 pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
+
+pub type FfiPublicResolutionList = FfiVec<FfiPublicResolution>;

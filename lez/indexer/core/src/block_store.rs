@@ -510,9 +510,13 @@ fn settled_test_block(
     let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
         &sequencer_sign_key_for_testing(),
     ));
+    let payout =
+        chain_state::apply::block_payout(&chain_state::apply::opening_fee_state(state), &summary);
     let mut transactions = txs;
-    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        summary, payout, producer,
+    )));
+    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
@@ -1695,6 +1699,7 @@ mod accept_tests {
                     l1_deposit_op_id: [7_u8; 32],
                     recipient_id: lee::AccountId::new([3_u8; 32]),
                     amount: 5,
+                    already_processed: false,
                 },
             )
             .expect("valid message");

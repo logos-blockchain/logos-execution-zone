@@ -839,7 +839,10 @@ impl CrossZoneVerifier {
             return None;
         }
         match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
-            Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
+            // `already_seen` is not re-derived here: a dispatch whose claim differs from the
+            // constant `build_dispatch_from_emission` pins fails the byte-equality check in
+            // `verify_block`.
+            Ok(InboxInstruction::Dispatch { message, .. }) => Some(message),
             // Only a dispatch carries a cross-zone message to re-derive; a genesis
             // `InitConfig` is not verifier-relevant.
             Ok(InboxInstruction::InitConfig(_)) | Err(_) => None,

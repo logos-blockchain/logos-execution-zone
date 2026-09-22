@@ -8,8 +8,8 @@ use crate::{
     EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus,
     IndexerSyncState, Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    PublicActionWithID, PublicKey, PublicMessage, PublicResolution, PublicTransaction, Selector,
+    ShardData, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -355,11 +355,41 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
+impl From<lee_core::execution_state::PublicResolution> for PublicResolution {
+    fn from(value: lee_core::execution_state::PublicResolution) -> Self {
+        let lee_core::execution_state::PublicResolution::Apply {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+        Self::Apply {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data,
+        }
+    }
+}
+
+impl From<PublicResolution> for lee_core::execution_state::PublicResolution {
+    fn from(value: PublicResolution) -> Self {
+        let PublicResolution::Apply {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+        Self::Apply {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data,
+        }
+    }
+}
+
 impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
         Self {
             account_id: value.account_id.into(),
-            post: value.post.into(),
+            resolutions: value.resolutions.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -398,19 +428,12 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
     }
 }
 
-impl TryFrom<PublicActionWithID>
-    for lee::privacy_preserving_transaction::message::PublicActionWithID
-{
-    type Error = lee::error::LeeError;
-
-    fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
-        Ok(Self {
+impl From<PublicActionWithID> for lee::privacy_preserving_transaction::message::PublicActionWithID {
+    fn from(value: PublicActionWithID) -> Self {
+        Self {
             account_id: value.account_id.into(),
-            post: value
-                .post
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-        })
+            resolutions: value.resolutions.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -437,10 +460,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window,
         } = value;
 
-        let public_actions = public_actions
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()?;
+        let public_actions = public_actions.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
@@ -1013,6 +1033,30 @@ mod tests {
         assert_eq!(
             lee_core::account::Account::try_from(restored).unwrap(),
             account
+        );
+    }
+
+    #[test]
+    fn public_action_resolutions_keep_their_order_through_the_mirror() {
+        // A repeated write to one shard, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and settlement folds them in emission order.
+        let apply = |data: u8| lee_core::execution_state::PublicResolution::Apply {
+            program_account_id: lee_core::account::AccountId::new([1; 32]),
+            shard_program_account_id: lee_core::account::AccountId::new([2; 32]),
+            data: vec![data],
+        };
+        let action = lee::privacy_preserving_transaction::message::PublicActionWithID {
+            account_id: lee_core::account::AccountId::new([3; 32]),
+            resolutions: vec![apply(7), apply(8), apply(9), apply(7)],
+        };
+
+        let mirrored = PublicActionWithID::from(action.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PublicActionWithID = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::PublicActionWithID::from(restored),
+            action
         );
     }
 

@@ -287,9 +287,20 @@ pub struct FeeDeclaration {
 pub type InstructionData = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum PublicResolution {
+    Apply {
+        program_account_id: AccountId,
+        shard_program_account_id: AccountId,
+        data: InstructionData,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post: AccountData,
+    /// Ordered: settlement folds these onto the account's shards in this order, so any
+    /// representation of them has to keep it.
+    pub resolutions: Vec<PublicResolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

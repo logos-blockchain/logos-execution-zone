@@ -2,17 +2,16 @@ use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramId, ProgramShardSelector, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
-    ValidityWindow, WitnessSet,
+    PublicActionWithID, PublicKey, PublicMessage, PublicResolution, PublicTransaction, Signature,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
     FfiU128, FfiVec,
-    account::FfiAccountData,
     vectors::{
         FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramShardSelectorList,
-        FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiProof, FfiPublicActionList, FfiPublicResolutionList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -244,7 +243,11 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                             account_id: AccountId {
                                 value: ffi_val.account_id.data,
                             },
-                            post: ffi_val.post.into(),
+                            resolutions: {
+                                let ffi_resolutions: Vec<FfiPublicResolution> =
+                                    ffi_val.resolutions.into();
+                                ffi_resolutions.into_iter().map(Into::into).collect()
+                            },
                         })
                         .collect()
                 },
@@ -296,21 +299,67 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
+/// One account-local effect, its `data` opaque bytes the resolving program defines.
+#[repr(C)]
+pub struct FfiPublicResolution {
+    pub program_account_id: FfiAccountId,
+    pub shard_program_account_id: FfiAccountId,
+    pub data: FfiInstructionDataList,
+}
+
+impl From<PublicResolution> for FfiPublicResolution {
+    fn from(value: PublicResolution) -> Self {
+        let PublicResolution::Apply {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data: data.into(),
+        }
+    }
+}
+
+impl From<FfiPublicResolution> for PublicResolution {
+    fn from(value: FfiPublicResolution) -> Self {
+        let FfiPublicResolution {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self::Apply {
+            program_account_id: AccountId {
+                value: program_account_id.data,
+            },
+            shard_program_account_id: AccountId {
+                value: shard_program_account_id.data,
+            },
+            data: data.into(),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
-    pub post: FfiAccountData,
+    /// In settlement order, which both conversions preserve.
+    pub resolutions: FfiPublicResolutionList,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post: lee::AccountData = value
-            .post
-            .try_into()
-            .expect("Source is in blocks, must fit");
         Self {
             account_id: value.account_id.into(),
-            post: post.into(),
+            resolutions: value
+                .resolutions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -592,6 +641,39 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_action_resolutions_keep_their_order_over_the_ffi() {
+        // A repeated write to one shard, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and settlement folds them in emission order.
+        let apply = |data: u8| PublicResolution::Apply {
+            program_account_id: AccountId { value: [1; 32] },
+            shard_program_account_id: AccountId { value: [2; 32] },
+            data: vec![data],
+        };
+        let original = PrivacyPreservingTransaction {
+            hash: HashType([4; 32]),
+            message: PrivacyPreservingMessage {
+                public_actions: vec![PublicActionWithID {
+                    account_id: AccountId { value: [3; 32] },
+                    resolutions: vec![apply(7), apply(8), apply(9), apply(7)],
+                }],
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow((None, None)),
+                timestamp_validity_window: ValidityWindow((None, None)),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: Some(Proof(vec![])),
+            },
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
+
+        assert_eq!(back.message.public_actions, original.message.public_actions);
+    }
 
     #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {

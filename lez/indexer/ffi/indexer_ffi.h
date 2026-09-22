@@ -224,41 +224,28 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * One program's shard on an account.
+ * One account-local effect, its `data` opaque bytes the resolving program defines.
  */
-typedef struct FfiShard {
-  struct FfiBytes32 program;
-  /**
-   * Pointer to shard data bytes.
-   */
-  uint8_t *data;
-  /**
-   * Length of shard data.
-   */
-  uintptr_t data_len;
-  /**
-   * Capacity of shard data.
-   */
-  uintptr_t data_cap;
-} FfiShard;
+typedef struct FfiPublicResolution {
+  FfiAccountId program_account_id;
+  FfiAccountId shard_program_account_id;
+  FfiInstructionDataList data;
+} FfiPublicResolution;
 
-/**
- * An account's program shards, the native balance among them.
- */
-typedef struct FfiAccountData {
-  /**
-   * Pointer to the account's shards.
-   */
-  struct FfiShard *shards;
-  /**
-   * Number of shards.
-   */
-  uintptr_t shards_len;
-} FfiAccountData;
+typedef struct FfiVec_FfiPublicResolution {
+  struct FfiPublicResolution *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicResolution;
+
+typedef struct FfiVec_FfiPublicResolution FfiPublicResolutionList;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccountData post;
+  /**
+   * In settlement order, which both conversions preserve.
+   */
+  FfiPublicResolutionList resolutions;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -350,6 +337,25 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * One program's shard on an account.
+ */
+typedef struct FfiShard {
+  struct FfiBytes32 program;
+  /**
+   * Pointer to shard data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of shard data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of shard data.
+   */
+  uintptr_t data_cap;
+} FfiShard;
 
 /**
  * Account data structure - C-compatible version of lee Account.
