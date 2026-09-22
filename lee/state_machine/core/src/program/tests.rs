@@ -159,29 +159,45 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 // ---- validate_execution tests ----
 
 #[test]
-fn a_data_write_on_a_foreign_shard_is_rejected() {
+fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected() {
     let executing_account_id = AccountId::new([2; 32]);
     let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::with_shard(
-        account_id,
-        true,
-        AccountId::new([1; 32]),
-        ShardData::empty(),
-    );
-    let state_diffs = [ShardStateDiff::new(
-        pre,
-        b"record".to_vec().try_into().unwrap(),
-    )];
+    // Another program's shard and the native balance shard are both foreign to the executing
+    // program, and are refused by the same rule.
+    let cases = [
+        (
+            "another program's shard",
+            AccountInput::with_shard(
+                account_id,
+                true,
+                AccountId::new([1; 32]),
+                ShardData::empty(),
+            ),
+            b"record".to_vec().try_into().unwrap(),
+        ),
+        (
+            "the native balance shard",
+            AccountInput::balance(account_id, true, 5),
+            crate::native_token::encode_balance(50),
+        ),
+    ];
 
-    let result = validate_execution(&state_diffs, executing_account_id);
+    for (shard, pre, written) in cases {
+        let state_diffs = [ShardStateDiff::new(pre, written)];
 
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::ForeignShardWrite {
-            account_id: id,
-            executing_account_id: executing,
-        }) if id == account_id && executing == executing_account_id
-    ));
+        let result = validate_execution(&state_diffs, executing_account_id);
+
+        assert!(
+            matches!(
+                &result,
+                Err(ExecutionValidationError::ForeignShardWrite {
+                    account_id: id,
+                    executing_account_id: executing,
+                }) if *id == account_id && *executing == executing_account_id
+            ),
+            "writing {shard} must be refused, got {result:?}"
+        );
+    }
 }
 
 #[test]
@@ -199,24 +215,6 @@ fn a_data_write_on_the_executing_shard_is_accepted() {
     )];
 
     assert!(validate_execution(&state_diffs, executing_account_id).is_ok());
-}
-
-#[test]
-fn a_guest_cannot_write_the_native_balance_shard() {
-    let executing_account_id = AccountId::new([2; 32]);
-    let account_id = AccountId::new([7; 32]);
-    let pre = AccountInput::balance(account_id, true, 5);
-    let state_diffs = [ShardStateDiff::new(
-        pre,
-        crate::native_token::encode_balance(50),
-    )];
-
-    let result = validate_execution(&state_diffs, executing_account_id);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionValidationError::ForeignShardWrite { account_id: id, .. }) if id == account_id
-    ));
 }
 
 #[test]

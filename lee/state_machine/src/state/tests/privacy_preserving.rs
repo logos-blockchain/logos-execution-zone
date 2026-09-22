@@ -243,42 +243,39 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 }
 
 #[test]
-fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
+fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_in_the_circuit() {
     let program = crate::test_methods::data_changer();
     let target_id = AccountId::new([0; 32]);
     let foreign_program_account_id =
         AccountId::from_builtin_program(crate::test_methods::noop().id());
+    // Another program's shard and the native balance shard are both foreign to the executing
+    // program; the circuit refuses each for the same reason the public path does.
+    let cases = [
+        (
+            "another program's shard",
+            ProgramShardSelector::new(target_id, foreign_program_account_id),
+            vec![7_u8; 4],
+        ),
+        (
+            "the native balance shard",
+            ProgramShardSelector::balance(target_id),
+            encode_balance(500).to_vec(),
+        ),
+    ];
 
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::new(
-                target_id,
-                foreign_program_account_id,
-            )],
-            instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
+    for (shard, selector, written) in cases {
+        let result = execute_and_prove(
+            ProvingInput {
+                shard_selectors: vec![selector],
+                instruction_data: Program::serialize_instruction(written).unwrap(),
+                ..Default::default()
+            },
+            &program.clone().into(),
+        );
 
-    assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
-}
-
-#[test]
-fn a_guest_cannot_write_the_native_shard_in_the_circuit() {
-    let program = crate::test_methods::data_changer();
-    let target_id = AccountId::new([3; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(target_id)],
-            instruction_data: Program::serialize_instruction(encode_balance(500).to_vec()).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
-
-    assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+        assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+        assert!(result.is_err(), "writing {shard} must be refused");
+    }
 }
 
 #[test]

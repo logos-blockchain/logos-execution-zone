@@ -148,38 +148,3 @@ fn a_repeated_shard_selector_is_rejected() {
     };
     assert!(message.contains("Duplicate shard selectors"), "{message}");
 }
-
-#[test]
-fn a_guest_cannot_write_the_native_shard_publicly() {
-    let target_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
-    let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
-
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::balance(target_id)],
-        vec![],
-        encode_balance(500).to_vec(),
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-
-    let result = state.transition_from_public_transaction(
-        &PublicTransaction::new(message, witness_set),
-        1,
-        0,
-    );
-
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::ExecutionValidationFailed(
-                    ExecutionValidationError::ForeignShardWrite { account_id, .. }
-                )
-            )) if account_id == target_id
-        ),
-        "a guest wrote the native shard: {result:?}"
-    );
-    assert_eq!(state.get_account_by_id(target_id), Account::default());
-}

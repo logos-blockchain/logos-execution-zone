@@ -104,34 +104,49 @@ fn program_should_transfer_balance_from_an_authorized_account() {
 }
 
 #[test]
-fn a_data_write_on_a_foreign_shard_is_rejected_publicly() {
+fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_publicly() {
     let target_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
     let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
     let foreign_program_account_id =
         AccountId::from_builtin_program(crate::test_methods::noop().id());
+    // Another program's shard and the native balance shard are both foreign to the executing
+    // program, and public execution refuses each by the same rule.
+    let cases = [
+        (
+            "another program's shard",
+            ProgramShardSelector::new(target_id, foreign_program_account_id),
+            vec![7_u8; 4],
+        ),
+        (
+            "the native balance shard",
+            ProgramShardSelector::balance(target_id),
+            encode_balance(500).to_vec(),
+        ),
+    ];
 
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::new(
-            target_id,
-            foreign_program_account_id,
-        )],
-        vec![],
-        vec![7_u8; 4],
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
+    for (shard, selector, written) in cases {
+        let mut state = V03State::new().with_test_programs();
+        let message =
+            public_transaction::Message::try_new(program_id, vec![selector], vec![], written)
+                .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
 
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    assert!(matches!(
-        result,
-        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::ForeignShardWrite { account_id, executing_account_id }
-        ))) if account_id == target_id && executing_account_id == program_id
-    ));
+        assert!(
+            matches!(
+                &result,
+                Err(LeeError::InvalidProgramBehavior(
+                    InvalidProgramBehaviorError::ExecutionValidationFailed(
+                        ExecutionValidationError::ForeignShardWrite { account_id, .. }
+                    )
+                )) if *account_id == target_id
+            ),
+            "writing {shard} must be refused, got {result:?}"
+        );
+        assert_eq!(state.get_account_by_id(target_id), Account::default());
+    }
 }
 
 #[test]
