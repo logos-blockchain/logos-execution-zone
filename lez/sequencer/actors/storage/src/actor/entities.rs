@@ -41,12 +41,8 @@ pub enum ColumnFamily {
     Meta,
     /// Small records deleted as the work they track settles.
     Pending,
-    /// Many small records, maps block hashes to block ids.
-    BlockHashToBlockIdMap,
-    /// Many small records, maps account ids to block ids, which affect them.
-    ///
-    /// Contains chains of records.
-    AccountIdToBlockIdMap,
+    /// Many small records, contains various maps.
+    BlockMeta,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -54,7 +50,7 @@ impl db::ColumnFamilies for ColumnFamily {
         let mut options = rocksdb::Options::default();
 
         match *self {
-            Self::Block | Self::BlockHashToBlockIdMap | Self::AccountIdToBlockIdMap => {
+            Self::Block | Self::BlockMeta => {
                 // Written in bursts of whole blocks, so more memtables to fill
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
@@ -374,7 +370,7 @@ pub struct BlockHashToBlockIdMappingDestination {
 impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
     type Key = HashType;
 
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockHashToBlockIdMap;
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
     const TYPE_NAME: &'static str = db::type_name!(BlockHashToBlockIdMappingDestination);
 }
 
@@ -412,7 +408,7 @@ pub struct AccountIdToBlockIdDestination {
 impl db::Storable<ColumnFamily> for AccountIdToBlockIdDestination {
     type Key = AccountIdToBlockIdKey;
 
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::AccountIdToBlockIdMap;
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
     const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdDestination);
 }
 
