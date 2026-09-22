@@ -1,5 +1,8 @@
 use core::fmt;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+};
 
 use anyhow::Result;
 use keycard_wallet::KeycardWallet;
@@ -510,6 +513,21 @@ impl AccountManager {
         &mut self,
         wallet: &WalletCore,
     ) -> Result<Option<AccountId>, ExecutionFailureKind> {
+        self.fee_payer_account_id_with(|selector| public_account_view(wallet, selector))
+            .await
+    }
+
+    /// [`Self::fee_payer_account_id`] over an injected balance read, so the selection policy is
+    /// exercisable without a wallet. A candidate whose native shard is already materialised is
+    /// never fetched, and the walk stops at the first funded signer.
+    async fn fee_payer_account_id_with<F, Fut>(
+        &mut self,
+        mut fetch_view: F,
+    ) -> Result<Option<AccountId>, ExecutionFailureKind>
+    where
+        F: FnMut(ProgramShardSelector) -> Fut,
+        Fut: Future<Output = Result<Account, ExecutionFailureKind>>,
+    {
         let mut first_signer = None;
         for index in 0..self.states.len() {
             let (State::Public {
@@ -527,9 +545,7 @@ impl AccountManager {
                 .shards
                 .contains_key(&NATIVE_TOKEN_PROGRAM_ID)
             {
-                let view =
-                    public_account_view(wallet, ProgramShardSelector::balance(account.account_id))
-                        .await?;
+                let view = fetch_view(ProgramShardSelector::balance(account.account_id)).await?;
                 merge_public_view(account, &view)?;
             }
             if account
