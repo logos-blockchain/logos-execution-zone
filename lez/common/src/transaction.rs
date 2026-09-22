@@ -1,7 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
 use lee_core::{
-    BlockId, Timestamp, native_token::NATIVE_TOKEN_PROGRAM_ID, program::TransactionEvent,
+    BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::TransactionEvent,
 };
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -185,17 +186,27 @@ pub struct TxEvents {
     pub events: Vec<TransactionEvent>,
 }
 
-/// Returns the canonical Clock Program invocation transaction for the given block timestamp.
+/// Returns the canonical Clock Program invocation transaction for the given block header.
 /// Every valid block must end with exactly one occurrence of this transaction.
+///
+/// `block_id` is a proposal the every-block clock account pins to its own prior ID plus one,
+/// and the header's ID is always that value: genesis seeds the account at zero and numbers its
+/// own block one, every applied block advances the account by exactly one, and nothing else may
+/// write it ([`validate_no_restricted_account_modification`]). Reading it from the header
+/// rather than from state keeps this transaction a pure function of the header, so every
+/// follower rebuilds it byte for byte.
 #[must_use]
-pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
+pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::clock().id().into(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
             .map(|id| ProgramShardSelector::new(id, programs::clock().id().into()))
             .to_vec(),
         vec![],
-        timestamp,
+        clock_core::Instruction {
+            timestamp,
+            block_id,
+        },
     )
     .expect("Clock invocation message should always be constructable");
     lee::PublicTransaction::new(
@@ -236,7 +247,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     if message.program_account_id == programs::cross_zone_inbox().id().into() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
-            Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
+            Ok(cross_zone_inbox_core::Instruction::Dispatch { .. })
         );
     }
     if message.program_account_id == programs::ping_sender().id().into() {
@@ -289,9 +300,14 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
 /// Every valid block must contain exactly one occurrence of this transaction as its
 /// second-to-last transaction, immediately before the clock invocation. The producer
 /// account rides as the fourth account so the guest can pay it.
+///
+/// `payout` is the producer's smoothed share, proposed here and required by the fee-state
+/// effect to equal what the real state's own market update returns; derive it with
+/// `chain_state::apply::block_payout`.
 #[must_use]
 pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
+    payout: Balance,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
     let fee_program_id: AccountId = programs::fee().id().into();
@@ -306,7 +322,7 @@ pub fn fee_invocation(
         fee_program_id,
         shard_selectors,
         vec![],
-        fee_core::Instruction::Distribute(summary),
+        fee_core::Instruction::Distribute { summary, payout },
     )
     .expect("Fee invocation message should always be constructable");
     lee::PublicTransaction::new(

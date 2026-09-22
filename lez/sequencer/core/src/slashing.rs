@@ -127,6 +127,7 @@ pub(crate) fn slash_candidates(
                 offender,
                 inscription,
                 vec![approve(approver, offender, inscription)],
+                entry.total_staked,
             )
             .inspect_err(|err| warn!("Failed to build a Slash tx: {err:#}"))
             .ok()
@@ -160,6 +161,7 @@ pub(crate) fn build_slash_tx(
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
     approvals: Vec<SlashApproval>,
+    total_staked: u128,
 ) -> Result<LeeTransaction> {
     let program_id: AccountId = programs::sequencer_stake().id().into();
     let message = Message::try_new(
@@ -178,6 +180,7 @@ pub(crate) fn build_slash_tx(
             sequencer_key,
             inscription,
             approvals,
+            total_staked,
         },
     )
     .context("Failed to build a Slash message")?;

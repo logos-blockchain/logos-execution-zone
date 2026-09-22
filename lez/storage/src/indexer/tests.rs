@@ -41,8 +41,12 @@ fn settled_block(
     let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
         &common::test_utils::sequencer_sign_key_for_testing(),
     ));
-    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    let payout =
+        chain_state::apply::block_payout(&chain_state::apply::opening_fee_state(state), &summary);
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        summary, payout, producer,
+    )));
+    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,

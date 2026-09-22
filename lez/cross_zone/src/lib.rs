@@ -137,7 +137,15 @@ fn build_inbox_dispatch_tx(
         inbox_id,
         shard_selectors,
         vec![],
-        Instruction::Dispatch(msg.clone()),
+        // Always the fresh branch: the value has to be a constant for the watcher's injected
+        // tx and the verifier's re-derived one to stay byte-identical, and an already-delivered
+        // message is dropped before it is ever included (`dispatch_already_delivered` in the
+        // sequencer's `build_block_from_mempool`). A stale one rejects at the seen shard and is
+        // rebuilt.
+        Instruction::Dispatch {
+            message: msg.clone(),
+            already_seen: false,
+        },
     )
     .expect("inbox dispatch instruction must serialize");
 

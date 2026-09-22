@@ -70,7 +70,9 @@ pub fn state_and_diff(
 /// The fee tail carries `BlockFeeSummary::default()`, so this helper is only
 /// valid for blocks whose `transactions` settle to the default summary — i.e.
 /// fee-exempt txs. Passing charged transactions builds a block that fails the
-/// byte-for-byte fee-summary check in `apply_block_to_state`.
+/// byte-for-byte fee-summary check in `apply_block_to_state`. A chain of such
+/// blocks never collects revenue, so its smoothing window stays empty and the
+/// payout the fee state produces stays zero.
 ///
 /// - `id`: block id, provide zero for genesis.
 /// - `prev_hash`: hash of previous block, provide None for genesis.
@@ -83,11 +85,13 @@ pub fn produce_dummy_block(
 ) -> Block {
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
+        0,
         lee::AccountId::from(&lee::PublicKey::new_from_private_key(
             &sequencer_sign_key_for_testing(),
         )),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(
+        id,
         id.saturating_mul(100),
     )));
 

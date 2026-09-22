@@ -48,8 +48,11 @@ pub fn committee_update(
     (desired != live).then_some(desired)
 }
 
-/// Ownership-account id + pending-release details for every entry with a
-/// pending unstake — candidates *worth attempting*, not necessarily valid yet.
+/// Ownership-account id, the key its record backs, and the pending-release details for every
+/// entry with a pending unstake — candidates *worth attempting*, not necessarily valid yet.
+///
+/// The key comes from the ownership record rather than the config entry: it is the record
+/// `FinalizeUnstake` is checked against, and an unsigned release has nothing else naming it.
 ///
 /// Whether one is actually includable in a block is a separate check,
 /// [`finalize_unstake_is_valid`], applied uniformly to every `FinalizeUnstake`
@@ -57,7 +60,9 @@ pub fn committee_update(
 /// sequencer's own proactive construction) or from the mempool (anyone else
 /// submitting it directly, per spec).
 #[must_use]
-pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId, PendingUnstake)> {
+pub fn finalize_unstake_candidates(
+    state: &lee::V03State,
+) -> Vec<(lee::AccountId, SequencerKey, PendingUnstake)> {
     let Some(config) = read_config(state) else {
         return Vec::new();
     };
@@ -67,7 +72,11 @@ pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId
         .into_values()
         .filter_map(|entry| {
             let record = stake_record(state, entry.account_id)?;
-            Some((entry.account_id, record.pending_unstake?))
+            Some((
+                entry.account_id,
+                record.sequencer_key,
+                record.pending_unstake?,
+            ))
         })
         .collect()
 }
@@ -340,7 +349,7 @@ mod tests {
 
         assert_eq!(
             finalize_unstake_candidates(&state_with([staked])),
-            vec![(staked.account_id, staked.pending.unwrap())]
+            vec![(staked.account_id, staked.key, staked.pending.unwrap())]
         );
     }
 

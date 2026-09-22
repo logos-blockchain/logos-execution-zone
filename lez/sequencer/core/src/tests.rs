@@ -199,9 +199,13 @@ fn settled_peer_block(
     let timestamp = id.saturating_mul(100);
     let summary = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
         .expect("test transactions settle");
+    let payout =
+        chain_state::apply::block_payout(&chain_state::apply::opening_fee_state(state), &summary);
     let mut transactions = txs;
-    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        summary, payout, producer,
+    )));
+    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,
@@ -228,7 +232,10 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     );
     assert_eq!(
         *clock_tx,
-        LeeTransaction::Public(clock_invocation(block.header.timestamp))
+        LeeTransaction::Public(clock_invocation(
+            block.header.block_id,
+            block.header.timestamp
+        ))
     );
 }
 
@@ -325,6 +332,7 @@ fn create_charged_bridge_deposit(
             l1_deposit_op_id: op_id,
             recipient_id,
             amount,
+            already_processed: false,
         },
         common::test_utils::test_fee_declaration(payer),
     )
@@ -1717,6 +1725,7 @@ fn the_committee_gate_holds_back_neither_ordinary_txs_nor_unknown_accounts() {
     let state = V03State::new();
     let finalize_unstake = build_finalize_unstake_tx(
         AccountId::new([1; 32]),
+        test_sequencer_key(0x11),
         sequencer_stake_core::PendingUnstake {
             amount: 10,
             destination: AccountId::new([2; 32]),
@@ -1960,26 +1969,11 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
 
     // Canonical clock invocation and a crafted variant with a different timestamp — both must
     // be dropped because their diffs touch the clock accounts.
-    let crafted_clock_tx = {
-        let clock_program_id: AccountId = programs::clock().id().into();
-        let message = lee::public_transaction::Message::try_new(
-            clock_program_id,
-            system_accounts::clock_account_ids()
-                .map(|id| ProgramShardSelector::new(id, clock_program_id))
-                .to_vec(),
-            vec![],
-            42_u64,
-        )
-        .unwrap();
-        LeeTransaction::Public(lee::PublicTransaction::new(
-            message,
-            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-        ))
-    };
+    let crafted_clock_tx = LeeTransaction::Public(clock_invocation(1, 42));
     mempool_handle
         .push((
             TransactionOrigin::User,
-            LeeTransaction::Public(clock_invocation(0)),
+            LeeTransaction::Public(clock_invocation(1, 0)),
         ))
         .await
         .unwrap();
@@ -2075,6 +2069,11 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // state diff modifies clock accounts and drop the transaction.
     let clock_program_id = programs::clock().id();
     let timestamp: u64 = 0;
+    // The chained clock call must SUCCEED for this test to mean anything: the verdict is that the
+    // sequencer drops the tx for touching clock accounts, not that the call failed on its own. The
+    // clock's guard requires the proposal to be its current block id plus one, and the forced clock
+    // tail runs after user transactions, so the value read here is still current when it executes.
+    let block_id = sequencer.chain_height().await + 1;
 
     let message = lee::public_transaction::Message::try_new(
         clock_chain_caller_id,
@@ -2082,7 +2081,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
             .map(|id| ProgramShardSelector::new(id, clock_program_id.into()))
             .to_vec(),
         vec![], // no signers
-        (clock_program_id, timestamp),
+        (clock_program_id, timestamp, block_id),
     )
     .unwrap();
     let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(
@@ -2151,7 +2150,11 @@ fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03St
         state.force_insert_account(clock_id, system_accounts::clock_account());
     }
     state
-        .transition_from_public_transaction(&clock_invocation(clock_timestamp), 1, clock_timestamp)
+        .transition_from_public_transaction(
+            &clock_invocation(1, clock_timestamp),
+            1,
+            clock_timestamp,
+        )
         .expect("Clock invocation should advance the clock");
     state
 }
@@ -2279,7 +2282,11 @@ fn cooldown_data(cooldown_ms: u64, last_run_timestamp: u64) -> Vec<u8> {
     buf
 }
 
-fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> PublicTransaction {
+fn cooldown_transaction(
+    state_id: AccountId,
+    clock_account_id: AccountId,
+    timestamp: u64,
+) -> PublicTransaction {
     let program_id: AccountId = test_programs::cooldown().id().into();
     let clock_program_id: AccountId = programs::clock().id().into();
     let message = lee::public_transaction::Message::try_new(
@@ -2289,7 +2296,7 @@ fn cooldown_transaction(state_id: AccountId, clock_account_id: AccountId) -> Pub
             ProgramShardSelector::new(clock_account_id, clock_program_id),
         ],
         vec![],
-        (),
+        timestamp,
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
@@ -2319,7 +2326,11 @@ fn cooldown_opens_after_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
+    let tx = cooldown_transaction(
+        state_id,
+        system_accounts::clock_account_ids()[0],
+        block_timestamp,
+    );
 
     state
         .transition_from_public_transaction(&tx, 2, block_timestamp)
@@ -2357,7 +2368,11 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
         ),
     );
 
-    let tx = cooldown_transaction(state_id, system_accounts::clock_account_ids()[0]);
+    let tx = cooldown_transaction(
+        state_id,
+        system_accounts::clock_account_ids()[0],
+        block_timestamp,
+    );
 
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 
@@ -3895,6 +3910,8 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
             amount,
             mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
+            balance_before: 0,
+            has_record: false,
         },
     )
     .unwrap();
@@ -3952,6 +3969,16 @@ fn stake_transaction(
             .unwrap();
 
     let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let balance_before = state
+        .get_account_by_id(system_accounts::stake_funds_account_id(&ownership_id))
+        .data
+        .balance()
+        .expect("the stake funds account holds a decodable balance");
+    let has_record = !state
+        .get_account_by_id(ownership_id)
+        .data
+        .shard(sequencer_stake_program_id)
+        .is_empty();
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -3972,6 +3999,8 @@ fn stake_transaction(
             amount,
             mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
+            balance_before,
+            has_record,
         },
     )
     .unwrap();
@@ -4025,6 +4054,14 @@ fn unstake_request_transaction(
 ) -> PublicTransaction {
     let (ownership_id, ownership_key) = ownership;
     let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
+    let sequencer_key = sequencer_stake_core::StakeRecord::from_bytes(
+        state
+            .get_account_by_id(ownership_id)
+            .data
+            .shard(sequencer_stake_program_id),
+    )
+    .expect("the ownership account holds a stake record")
+    .sequencer_key;
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
@@ -4033,6 +4070,7 @@ fn unstake_request_transaction(
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key,
             amount,
             destination,
         },
@@ -4276,6 +4314,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key,
             amount,
             destination: funding_id,
         },
@@ -4288,6 +4327,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 
     let finalize = build_finalize_unstake_tx(
         ownership_id,
+        sequencer_key,
         sequencer_stake_core::PendingUnstake {
             amount,
             destination: funding_id,
@@ -4428,6 +4468,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         // The genesis Stake transaction already signed once with this account.
         vec![Nonce(1)],
         sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key: bootstrap_sequencer_key,
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
         },
@@ -4496,6 +4537,8 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
             amount,
             mover_account_id: test_programs::reverse_transfer().id().into(),
             mover_instruction_data,
+            balance_before: amount,
+            has_record: false,
         },
     )
     .unwrap();
@@ -4569,11 +4612,16 @@ fn slash_transaction(
     ownership_id: AccountId,
     sequencer_key: sequencer_stake_core::SequencerKey,
     approvals: Vec<sequencer_stake_core::SlashApproval>,
+    total_staked: u128,
 ) -> PublicTransaction {
-    let LeeTransaction::Public(tx) =
-        crate::slashing::build_slash_tx(ownership_id, sequencer_key, TEST_INSCRIPTION, approvals)
-            .expect("Slash tx should build")
-    else {
+    let LeeTransaction::Public(tx) = crate::slashing::build_slash_tx(
+        ownership_id,
+        sequencer_key,
+        TEST_INSCRIPTION,
+        approvals,
+        total_staked,
+    )
+    .expect("Slash tx should build") else {
         unreachable!("build_slash_tx builds a public transaction")
     };
     tx
@@ -4588,6 +4636,7 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
         ownership_id,
         sequencer_key,
         vec![test_approval(0x44, sequencer_key)],
+        amount,
     );
     state
         .transition_from_public_transaction(&slash, 2, 0)
@@ -4640,6 +4689,7 @@ fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
         ownership_id,
         sequencer_key,
         vec![test_approval(0x44, sequencer_key)],
+        amount,
     );
     state
         .transition_from_public_transaction(&slash, 2, 0)
@@ -4683,6 +4733,7 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
 
     let finalize = build_finalize_unstake_tx(
         ownership_id,
+        sequencer_key,
         sequencer_stake_core::PendingUnstake {
             amount,
             destination,
@@ -4725,6 +4776,7 @@ fn a_slash_claws_back_a_pending_unstake() {
         ownership_id,
         sequencer_key,
         vec![test_approval(0x44, sequencer_key)],
+        amount,
     );
     state
         .transition_from_public_transaction(&slash, 3, 0)
@@ -4749,6 +4801,7 @@ fn a_slash_claws_back_a_pending_unstake() {
     );
     let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
         ownership_id,
+        sequencer_key,
         sequencer_stake_core::PendingUnstake {
             amount,
             destination,
@@ -4770,7 +4823,7 @@ fn a_slash_without_enough_approvals_is_rejected() {
     let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
 
     // No signatures, no authorization.
-    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new());
+    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new(), amount);
     assert!(
         state
             .transition_from_public_transaction(&unapproved, 2, 0)
@@ -4782,6 +4835,7 @@ fn a_slash_without_enough_approvals_is_rejected() {
         ownership_id,
         sequencer_key,
         vec![test_approval(0x55, sequencer_key)],
+        amount,
     );
     assert!(
         state
@@ -4796,7 +4850,8 @@ fn a_slash_without_enough_approvals_is_rejected() {
         let message = sequencer_stake_core::slash_approval_message(sequencer_key, [0xFF; 32]);
         key.sign_payload(&message).to_bytes().to_vec()
     };
-    let mismatched = slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription]);
+    let mismatched =
+        slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription], amount);
     assert!(
         state
             .transition_from_public_transaction(&mismatched, 2, 0)

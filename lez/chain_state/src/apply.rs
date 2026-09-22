@@ -156,7 +156,7 @@ pub fn apply_block_to_state(
     let LeeTransaction::Public(clock_tx) = clock_entry else {
         return Err(BlockIngestError::InvalidClockTransaction);
     };
-    if *clock_tx != clock_invocation(block.header.timestamp) {
+    if *clock_tx != clock_invocation(block.header.block_id, block.header.timestamp) {
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
@@ -218,7 +218,7 @@ pub fn apply_block_to_state(
     // balance from L1 deposits (or the faucet and inflate its supply).
     let producer_account = common::transaction::fee_invocation_producer(fee_tx)
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
-    if *fee_tx != fee_invocation(summary, producer_account) {
+    if *fee_tx != fee_invocation(summary, block_payout(&opening, &summary), producer_account) {
         return Err(BlockIngestError::InvalidFeeTransaction);
     }
     common::transaction::validate_reward_target(producer_account)
@@ -283,6 +283,16 @@ pub fn opening_fee_state(state: &V03State) -> FeeState {
             .data
             .shard(system_accounts::fee_program_id()),
     )
+}
+
+/// The producer payout a block settling to `summary` pays out of the escrow.
+///
+/// The fee state is written only by the forced fee transaction, so the state a block opens on
+/// is still the state that transaction resolves against; the fee guest recomputes this against
+/// it and refuses a proposal that does not match.
+#[must_use]
+pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
+    opening.clone().apply_block(summary)
 }
 
 /// Derives the block fee summary the given user transactions settle to.
@@ -681,7 +691,7 @@ mod tests {
             timestamp: 100,
             transactions: vec![
                 produce_dummy_empty_transaction(),
-                LeeTransaction::Public(clock_invocation(100)),
+                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());
@@ -703,11 +713,12 @@ mod tests {
             transactions: vec![
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
+                    0,
                     lee::AccountId::from(&lee::PublicKey::new_from_private_key(
                         &sequencer_sign_key_for_testing(),
                     )),
                 )),
-                LeeTransaction::Public(clock_invocation(100)),
+                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());
@@ -836,7 +847,7 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let fee_program_id = fee_invocation(BlockFeeSummary::default(), attacker)
+        let fee_program_id = fee_invocation(BlockFeeSummary::default(), 0, attacker)
             .message()
             .program_account_id;
         let message = lee::public_transaction::Message::try_new_with_fees(
@@ -1024,8 +1035,11 @@ mod tests {
         let timestamp = id.saturating_mul(100);
         let summary = super::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle");
-        transactions.push(LeeTransaction::Public(fee_invocation(summary, reward)));
-        transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+        let payout = super::block_payout(&super::opening_fee_state(state), &summary);
+        transactions.push(LeeTransaction::Public(fee_invocation(
+            summary, payout, reward,
+        )));
+        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev_hash,

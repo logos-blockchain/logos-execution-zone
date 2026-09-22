@@ -545,8 +545,11 @@ mod tests {
             &sequencer_sign_key_for_testing(),
         ));
         let mut transactions = txs;
-        transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-        transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+        let payout = crate::apply::block_payout(&crate::apply::opening_fee_state(state), &summary);
+        transactions.push(LeeTransaction::Public(fee_invocation(
+            summary, payout, producer,
+        )));
+        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         let block = HashableBlockData {
             block_id: id,
             prev_block_hash: prev,

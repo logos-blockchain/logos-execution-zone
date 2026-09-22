@@ -8,13 +8,13 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, Nonce, ProgramShardSelector},
+    account::{Account, Nonce, ProgramShardSelector, ShardData},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
     },
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{AccountInput, PdaSeed},
+    program::PdaSeed,
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -196,6 +196,26 @@ pub struct AccountMention {
     pub program_account_id: AccountId,
 }
 
+/// A shard the wallet read. Execution binds the account handle and resolves against live state,
+/// never this copy.
+pub struct SelectedShard {
+    pub selector: ProgramShardSelector,
+    pub is_authorized: bool,
+    pub data: ShardData,
+}
+
+impl SelectedShard {
+    /// Returns the shard data. Panics unless this row selects `program`'s shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &ShardData {
+        assert_eq!(
+            self.selector.program_account_id, program,
+            "SelectedShard carries another program's shard"
+        );
+        &self.data
+    }
+}
+
 pub struct PrivateAccountKeys {
     pub ssk: SharedSecretKey,
 }
@@ -243,12 +263,17 @@ impl State {
         }
     }
 
-    fn input(&self, shard_selector: ProgramShardSelector) -> AccountInput {
-        AccountInput::at(
-            shard_selector,
-            self.is_authorized(),
-            &self.account().account.data,
-        )
+    fn selected(&self, selector: ProgramShardSelector) -> SelectedShard {
+        SelectedShard {
+            selector,
+            is_authorized: self.is_authorized(),
+            data: self
+                .account()
+                .account
+                .data
+                .shard(selector.program_account_id)
+                .clone(),
+        }
     }
 }
 
@@ -335,11 +360,11 @@ impl AccountManager {
         )
     }
 
-    /// The selected account inputs, in declaration order.
-    pub fn pre_states(&self) -> Vec<AccountInput> {
+    /// The selected shards, in declaration order.
+    pub fn selected_shards(&self) -> Vec<SelectedShard> {
         self.rows
             .iter()
-            .map(|row| self.states[row.account].input(self.row_selector(row)))
+            .map(|row| self.states[row.account].selected(self.row_selector(row)))
             .collect()
     }
 
@@ -359,19 +384,6 @@ impl AccountManager {
                 }
                 | State::PublicKeycard { account, .. } => Some(account.account_id),
                 State::Public { sk: None, .. } | State::Private(_) => None,
-            })
-            .collect()
-    }
-
-    /// The fetched public account views, keyed by account ID.
-    pub fn public_accounts(&self) -> HashMap<AccountId, Account> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some((account.account_id, account.account.clone()))
-                }
-                State::Private(_) => None,
             })
             .collect()
     }
@@ -969,7 +981,7 @@ mod tests {
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.pre_states()[0].is_authorized);
+        assert!(!manager.selected_shards()[0].is_authorized);
         assert!(matches!(
             manager.private_witnesses()[0].kind,
             WitnessKind::Regular { ask: None }
@@ -1020,7 +1032,7 @@ mod tests {
         assert_eq!(pre.identifier, 9);
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.pre_states()[0].is_authorized);
+        assert!(!manager.selected_shards()[0].is_authorized);
         let witnesses = manager.private_witnesses();
         assert!(
             matches!(&witnesses[0].kind, WitnessKind::Pda { binding } if *binding == (authority, seed))

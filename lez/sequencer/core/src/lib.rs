@@ -1300,13 +1300,14 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let opening = chain_state::apply::opening_fee_state(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
         let mut gas_budget = DeclaredGasBudget::default();
-        // The fee tx's summary is only known after the loop; a default-summary
-        // placeholder sizes identically (the summary struct is fixed-size).
+        // The fee tx's summary and payout are only known after the loop; a default-summary,
+        // zero-payout placeholder sizes identically (both are fixed-size).
         let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
             fee_core::BlockFeeSummary::default(),
+            0,
             producer_account,
         ));
-        let clock_tx = clock_invocation(new_block_timestamp);
+        let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
@@ -1479,7 +1480,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             }
         }
 
-        let fee_tx = fee_invocation(summary, producer_account);
+        let fee_tx = fee_invocation(
+            summary,
+            chain_state::apply::block_payout(&opening, &summary),
+            producer_account,
+        );
         working_state
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
             .context("Fee transaction failed. Aborting block production.")?;
@@ -2154,6 +2159,10 @@ fn build_genesis_state(
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
+    // Read before the genesis transactions, the way `apply_block_to_state` reads the opening
+    // state of any other block, so the payout the forced fee tx carries is the one a replaying
+    // follower derives.
+    let genesis_opening = chain_state::apply::opening_fee_state(&state);
 
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
@@ -2249,9 +2258,11 @@ fn build_genesis_state(
         || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
         |(_, ownership_public_key, _)| lee::AccountId::from(ownership_public_key),
     );
+    let genesis_summary = fee_core::BlockFeeSummary::default();
+    let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
     for tx in [
-        fee_invocation(fee_core::BlockFeeSummary::default(), producer),
-        clock_invocation(0),
+        fee_invocation(genesis_summary, genesis_payout, producer),
+        clock_invocation(GENESIS_BLOCK_ID, 0),
     ] {
         state
             .transition_from_public_transaction(&tx, GENESIS_BLOCK_ID, 0)
@@ -2357,11 +2368,16 @@ fn genesis_stake_message(
             lee_core::account::Nonce(funding_nonce),
             lee_core::account::Nonce(0),
         ],
+        // A genesis stake opens a fresh ownership account and funds a stake account nothing
+        // has credited yet. The offchain signer of this exact message has no chain to read,
+        // so both proposals have to follow from the arguments it is given.
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
             mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
+            balance_before: 0,
+            has_record: false,
         },
     )
     .expect("Failed to build genesis Stake message")
@@ -2536,10 +2552,13 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
             ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
+        // Always the mint branch: the builder drops a deposit whose receipt is already written
+        // (`deposit_already_minted` in `build_block_from_mempool`), so a replay is never built.
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
             recipient_id: metadata.recipient_id,
             amount: event.amount,
+            already_processed: false,
         },
     )
     .context("Failed to build bridge deposit message")?;
@@ -2578,7 +2597,7 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     }
 
     match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
-        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => message
+        Ok(sequencer_stake_core::Instruction::FinalizeUnstake { .. }) => message
             .shard_selectors
             .first()
             .map(|shard_selector| shard_selector.account_id),
@@ -2592,8 +2611,8 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
-        .filter_map(|(ownership_id, pending)| {
-            build_finalize_unstake_tx(ownership_id, pending)
+        .filter_map(|(ownership_id, sequencer_key, pending)| {
+            build_finalize_unstake_tx(ownership_id, sequencer_key, pending)
                 .inspect_err(|err| warn!("Failed to build FinalizeUnstake tx: {err:#}"))
                 .ok()
         })
@@ -2603,6 +2622,7 @@ fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction>
 // Unsigned: FinalizeUnstake needs no authorization, per the program.
 fn build_finalize_unstake_tx(
     ownership_id: AccountId,
+    sequencer_key: sequencer_stake_core::SequencerKey,
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
     let sequencer_stake_program_id: AccountId = programs::sequencer_stake().id().into();
@@ -2618,7 +2638,10 @@ fn build_finalize_unstake_tx(
             ),
         ],
         vec![],
-        sequencer_stake_core::Instruction::FinalizeUnstake,
+        sequencer_stake_core::Instruction::FinalizeUnstake {
+            sequencer_key,
+            amount: pending.amount,
+        },
     )
     .context("Failed to build FinalizeUnstake message")?;
 
@@ -2664,7 +2687,7 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     }
 
     match borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data) {
-        Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
+        Ok(cross_zone_inbox_core::Instruction::Dispatch { message, .. }) => Some(message),
         Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
     }
 }
