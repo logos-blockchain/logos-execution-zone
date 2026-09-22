@@ -7,8 +7,7 @@ use lee_core::{
 };
 
 /// Same transfer as `simple_balance_transfer`, but reports its two diffs in the opposite order
-/// from `pre_states` — proves order is irrelevant now that each diff embeds its own pre-state,
-/// unlike the old two-array `pre_states`/`post_diffs` shape where a reordered report was rejected.
+/// from `pre_states`.
 type Instruction = u128;
 
 fn main() {

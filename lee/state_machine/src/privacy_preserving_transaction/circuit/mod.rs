@@ -16,7 +16,7 @@ use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover}
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::{Program, check_exit_code},
+    program::{Program, check_exit_code, check_input_rows},
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
@@ -166,19 +166,6 @@ pub fn execute_and_prove_with(
             )
     };
 
-    // Accounts authorized by credentials remain authorized across calls.
-    let mut globally_authorized: HashSet<AccountId> = shard_selectors
-        .iter()
-        .map(|shard_selector| shard_selector.account_id)
-        .filter(|account_id| {
-            is_authorized_top(account_id)
-                && !witness_at(account_id).is_some_and(PrivateWitness::is_pda)
-        })
-        .collect();
-
-    // Accounts the traversal has already reached, so a later sighting is not a first one.
-    let mut seen: HashSet<AccountId> = HashSet::new();
-
     // Shard selectors whose values must not be fetched again.
     let mut covered: HashSet<ProgramShardSelector> = shard_selectors.iter().copied().collect();
 
@@ -231,7 +218,6 @@ pub fn execute_and_prove_with(
             for shard_selector in &chained_call.shard_selectors {
                 let account_id = shard_selector.account_id;
                 let is_authorized = caller_authorized_accounts.contains(&account_id)
-                    || globally_authorized.contains(&account_id)
                     || authorized_pdas.contains(&account_id)
                     || seed_derives_private_pda(&account_id);
                 let witnessed = witness_at(&account_id).is_some();
@@ -250,7 +236,6 @@ pub fn execute_and_prove_with(
                 }
 
                 resolved.push(AccountInput::at(*shard_selector, is_authorized, account));
-                seen.insert(account_id);
             }
             resolved
         } else {
@@ -272,6 +257,11 @@ pub fn execute_and_prove_with(
                 )
             })?)
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        check_input_rows(
+            chained_call.program_account_id,
+            &real_pre_states,
+            &program_output.state_diffs,
+        )?;
 
         // Authorization scoped to this call's own subtree: starts from what this call itself
         // inherited from its caller, plus every account this call's own output reports
@@ -283,23 +273,14 @@ pub fn execute_and_prove_with(
             let pre = &diff.pre_state;
             let account_id = pre.account_id;
 
-            let first_sighting = seen.insert(account_id);
-            let pda_match =
-                authorized_pdas.contains(&account_id) || seed_derives_private_pda(&account_id);
-
             materialized
-                .entry(account_id)
-                .or_default()
+                .get_mut(&account_id)
+                .expect("input rows only name materialized accounts")
                 .apply_diff(diff)
                 .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            covered.insert(ProgramShardSelector::from(pre));
 
             if pre.is_authorized {
                 authorized_output_accounts.insert(account_id);
-                // Keep authorization from credentials available across calls.
-                if first_sighting && !pda_match {
-                    globally_authorized.insert(account_id);
-                }
             }
         }
 

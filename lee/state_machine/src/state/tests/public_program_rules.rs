@@ -4,8 +4,8 @@ use super::*;
 
 /// A program can drop an entire account from its own output by simply omitting its
 /// `AccountStateDiff` — `validate_execution` has no way to catch this on its own, since a
-/// shorter `state_diffs` list is perfectly well-formed. This must still be rejected: every
-/// account the caller declared in the transaction must appear somewhere in the final diff.
+/// shorter `state_diffs` list is perfectly well-formed. This must still be rejected: every call
+/// returns exactly one row per input.
 #[test]
 fn program_should_fail_if_it_drops_a_declared_account() {
     let mut state = V03State::new()
@@ -30,10 +30,10 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput { account_id }
-            )) if account_id == AccountId::new([2; 32])
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == program_id
         ),
-        "expected DeclaredAccountMissingFromOutput for the dropped account, got {result:?}"
+        "expected InputRowsMismatch for the dropped account, got {result:?}"
     );
 }
 
@@ -255,13 +255,10 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
-                    account_id: err_account_id,
-                    ..
-                }
-            )) if err_account_id == fabricated_account_id
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == program_id
         ),
-        "expected UndeclaredAccountInProgramOutput for the fabricated account, got {result:?}"
+        "expected InputRowsMismatch for the fabricated account, got {result:?}"
     );
 }
 
@@ -326,10 +323,10 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
         matches!(
             result,
             Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::ChainedCallAccountsMismatch { program_account_id }
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
             )) if program_account_id == AccountId::from_builtin_program(owner)
         ),
-        "expected ChainedCallAccountsMismatch for the callee, got {result:?}"
+        "expected InputRowsMismatch for the callee, got {result:?}"
     );
 }
 
@@ -378,11 +375,10 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
     assert_eq!(state.get_account_by_id(to), recipient_pre);
 }
 
-/// Order no longer carries meaning: each `AccountStateDiff` embeds its own pre-state, so a
-/// program listing its diffs in a different order than it received the corresponding pre-states
-/// still validates and applies correctly.
+/// A program listing its diffs in a different order than it received the corresponding
+/// pre-states is rejected.
 #[test]
-fn reordered_state_diffs_still_succeed() {
+fn reordered_state_diffs_are_rejected() {
     let program = crate::test_methods::reordering_transfer();
     let from_key = PrivateKey::try_new([23; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
@@ -408,11 +404,56 @@ fn reordered_state_diffs_still_succeed() {
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
-    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    assert_eq!(
-        state.get_account_by_id(from).data.balance,
-        initial_balance - amount
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InconsistentAccountPreState { account_id, .. }
+            )) if account_id == from
+        ),
+        "expected InconsistentAccountPreState for the reordered rows, got {result:?}"
     );
-    assert_eq!(state.get_account_by_id(to).data.balance, amount);
+}
+
+#[test]
+fn a_root_omitting_rows_its_chained_call_returns_is_rejected() {
+    let forwarder_id =
+        AccountId::from_builtin_program(crate::test_methods::non_delegating_forwarder().id());
+    let mut state = V03State::new()
+        .with_public_account_balances([
+            (AccountId::new([1; 32]), 100),
+            (AccountId::new([2; 32]), 0),
+        ])
+        .with_test_programs();
+    let message = public_transaction::Message::try_new(
+        forwarder_id,
+        vec![
+            ProgramShardSelector::balance(AccountId::new([1; 32])),
+            ProgramShardSelector::balance(AccountId::new([2; 32])),
+        ],
+        vec![],
+        (
+            crate::test_methods::noop().id(),
+            Vec::<u8>::new(),
+            false,
+            Vec::<PdaSeed>::new(),
+        ),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == forwarder_id
+        ),
+        "expected InputRowsMismatch for the root, got {result:?}"
+    );
 }

@@ -11,8 +11,7 @@ use lee_core::{
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
     program::{
         AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
-        TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        pre_states_match_shard_selectors, validate_execution,
+        TransactionEvent, compute_public_authorized_pdas, get_program_via, validate_execution,
     },
 };
 use log::debug;
@@ -24,7 +23,7 @@ use crate::{
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
-    program::Program,
+    program::{Program, check_input_rows},
     public_transaction::PublicTransaction,
     state::MAX_NUMBER_CHAINED_CALLS,
 };
@@ -278,8 +277,6 @@ impl ValidatedStateDiff {
             .iter()
             .map(|shard_selector| shard_selector.account_id)
             .collect();
-        // Shard selectors seen in program outputs.
-        let mut shard_selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
         let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
@@ -392,80 +389,11 @@ impl ValidatedStateDiff {
                 chained_call.program_account_id, program_output
             );
 
-            // A chained callee must account for exactly the shard selectors its caller named, in
-            // order. The top-level call has no caller, so it's exempt here.
-            ensure!(
-                caller_data.account_id.is_none()
-                    || pre_states_match_shard_selectors(
-                        &chained_call.shard_selectors,
-                        &program_output.state_diffs
-                    ),
-                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
-                    program_account_id: chained_call.program_account_id
-                }
-            );
-
-            let named_accounts: HashSet<AccountId> = chained_call
-                .shard_selectors
-                .iter()
-                .map(|shard_selector| shard_selector.account_id)
-                .collect();
-
-            for pre in program_output
-                .state_diffs
-                .iter()
-                .map(|diff| &diff.pre_state)
-            {
-                let account_id = pre.account_id;
-                ensure!(
-                    named_accounts.contains(&account_id),
-                    InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
-                        program_account_id: chained_call.program_account_id,
-                        account_id
-                    }
-                );
-
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let shard_selector = ProgramShardSelector::from(pre);
-                let expected = state_diff
-                    .get(&account_id)
-                    .or_else(|| state.get_account_by_id_ref(account_id))
-                    .unwrap_or(&absent);
-                let consistent = expected.data.balance == pre.balance
-                    && pre
-                        .shard
-                        .as_ref()
-                        .is_none_or(|(program, data)| expected.data.shard(*program) == data);
-                ensure!(
-                    consistent,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(AccountInput::at(
-                            shard_selector,
-                            pre.is_authorized,
-                            &expected.data
-                        )),
-                        actual: Box::new(pre.clone())
-                    }
-                );
-
-                // Check that the program output pre_states marked as authorized are indeed
-                // authorized, and vice-versa.
-                let is_indeed_authorized = is_authorized(&account_id);
-                ensure!(
-                    !pre.is_authorized || is_indeed_authorized,
-                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
-                );
-                ensure!(
-                    pre.is_authorized || !is_indeed_authorized,
-                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
-                        account_id
-                    }
-                );
-
-                shard_selectors_seen.insert(shard_selector);
-            }
+            check_input_rows(
+                chained_call.program_account_id,
+                &real_pre_states,
+                &program_output.state_diffs,
+            )?;
 
             // Verify that the program output's self_account_id matches the expected address.
             ensure!(
@@ -534,9 +462,8 @@ impl ValidatedStateDiff {
 
             // Source from `program_output.state_diffs` (the callee's own checked echo), not
             // `chained_call.shard_selectors` (bare shard selectors the caller supplied, carrying no
-            // authorization claim at all and forgeable, audit-issue 91) — the loop above
-            // already gates program_output's `is_authorized` via the `!pre.is_authorized ||
-            // is_indeed_authorized` check.
+            // authorization claim at all and forgeable, audit-issue 91) — `check_input_rows`
+            // above already binds program_output's `is_authorized` to `real_pre_states`.
             //
             // Union with the caller's authorized set so that authorization is monotonically
             // growing: once an account is authorized at any point in the chain it remains
@@ -563,16 +490,6 @@ impl ValidatedStateDiff {
             chain_calls_counter = chain_calls_counter
                 .checked_add(1)
                 .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Every initial shard selector must appear in a program output.
-        for shard_selector in shard_selectors {
-            ensure!(
-                shard_selectors_seen.contains(shard_selector),
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: shard_selector.account_id
-                }
-            );
         }
 
         Ok(Self(StateDiff {

@@ -65,7 +65,10 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![AccountStateDiff::unchanged(pda.clone())],
+        pre_states
+            .into_iter()
+            .map(AccountStateDiff::unchanged)
+            .collect(),
     )
     .with_chained_calls(chained_calls)
     .write();

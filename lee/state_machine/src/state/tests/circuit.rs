@@ -391,46 +391,9 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
 }
 
+/// Checks authorization and the public journal for a PDA delegated to a callee.
 #[test]
-fn a_private_pda_first_seen_in_a_callee_is_bound_by_its_witness_and_granted_by_the_caller() {
-    let forwarder = crate::test_methods::non_delegating_forwarder();
-    let callee = crate::test_methods::auth_asserting_noop();
-    let keys = test_private_account_keys_1();
-    let seed = PdaSeed::new([77; 32]);
-    let forwarder_id = AccountId::from_builtin_program(forwarder.id());
-
-    let account_id = AccountId::for_private_pda(&forwarder_id, &seed, &keys.npk(), &keys.vpk(), 0);
-
-    let callee_id = AccountId::from_builtin_program(callee.id());
-    let program_with_deps =
-        ProgramWithDependencies::new(forwarder, forwarder_id, [(callee_id, callee)].into());
-
-    execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_pda_witness(
-                &keys,
-                0,
-                (forwarder_id, seed),
-                Account::default(),
-            )],
-            instruction_data: Program::serialize_instruction((
-                callee_id,
-                Program::serialize_instruction(()).unwrap(),
-                false,
-                vec![seed],
-            ))
-            .unwrap(),
-            ..Default::default()
-        },
-        &program_with_deps,
-    )
-    .expect("a caller's pda_seeds must authorize a private PDA it delegates at first sight");
-}
-
-/// Checks authorization and the public journal for a PDA first seen in a callee.
-#[test]
-fn delegated_public_pda_first_seen_in_callee_is_authorized() {
+fn delegated_public_pda_is_authorized_in_callee() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::auth_asserting_noop();
     let seed = PdaSeed::new([77; 32]);
@@ -448,7 +411,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                false,
+                true,
                 vec![seed],
             ))
             .unwrap(),
@@ -456,7 +419,7 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
         },
         &program_with_deps,
     )
-    .expect("a caller's pda_seeds must authorize a public PDA it delegates at first sight");
+    .expect("a caller's pda_seeds must authorize a public PDA it delegates");
 
     // The callee ran with the PDA authorized (auth_asserting_noop did not panic), while the
     // journal exports the credential view: a seed grant is not a signer-backed claim.
@@ -465,9 +428,8 @@ fn delegated_public_pda_first_seen_in_callee_is_authorized() {
     assert!(!output.public_actions[0].is_authorized);
 }
 
-/// A delegated seed that doesn't match the account's real derivation can't be distinguished
-/// in-circuit from an ordinary non-PDA account — it falls back to the same first-sight,
-/// credential-backed path.
+/// A delegated seed that doesn't match the account's real derivation grants nothing, so the
+/// callee sees the credential claim made for the account at the root.
 #[test]
 fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
@@ -489,7 +451,7 @@ fn wrong_seed_public_pda_first_sight_is_exported_as_credential_claim() {
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
-                false,
+                true,
                 vec![wrong_seed],
             ))
             .unwrap(),
@@ -790,12 +752,9 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
     .expect("an account authorized in an ancestor's output stays authorized two calls below it");
 }
 
-/// The circuit tracks accounts by `AccountId` across the whole call tree, not per-step: a
-/// *private* account handed to an intermediate call but never declared in that step's own
-/// `state_diffs` is still correctly resolved — including its private-witness
-/// (npk/vpk/nullifier) binding — when a later chained call references it by id.
+/// A root that omits its input rows is rejected even when a later chained call returns them.
 #[test]
-fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
+fn a_root_omitting_its_input_rows_is_rejected() {
     let forwarder = crate::test_methods::non_delegating_forwarder();
     let callee = crate::test_methods::noop();
     let callee_id = AccountId::from_builtin_program(callee.id());
@@ -807,7 +766,7 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
     let program_with_deps =
         ProgramWithDependencies::new(forwarder, forwarder_id, [(callee_id, callee)].into());
 
-    let (output, proof) = execute_and_prove(
+    let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             private_witnesses: vec![init_witness(&keys, 0, Account::default())],
@@ -822,14 +781,17 @@ fn unused_private_pre_state_is_pulled_by_a_later_chained_call() {
             ..Default::default()
         },
         &program_with_deps,
-    )
-    .expect(
-        "a private account never declared in an intermediate step's own pre/post states is \
-         still resolved, witness binding included, when a later chained call references it by \
-         id",
     );
 
-    assert!(proof.is_valid_for(&output));
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == forwarder_id
+        ),
+        "expected InputRowsMismatch for the root, got {result:?}"
+    );
 }
 
 /// Delegated PDA authorization survives reordered inputs and witnesses.
@@ -876,8 +838,7 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     );
 
     result.expect(
-        "a private PDA delegated through a reordering, non-reporting top-level program must \
-         still be provable",
+        "a private PDA delegated through a reordering top-level program must still be provable",
     );
 }
 
@@ -1409,10 +1370,11 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
     );
 }
 
-/// Rejects a proof when an initial shard selector is missing from all program outputs.
+/// Rejects a proof when the root drops one of its input rows.
 #[test]
-fn dropped_public_account_through_the_privacy_circuit_is_caught() {
+fn dropped_public_account_is_caught_before_proving() {
     let program = crate::test_methods::dropped_account();
+    let program_id = AccountId::from_builtin_program(program.id());
 
     let result = execute_and_prove(
         ProvingInput {
@@ -1427,7 +1389,37 @@ fn dropped_public_account_through_the_privacy_circuit_is_caught() {
     );
 
     assert!(
-        matches!(result, Err(LeeError::CircuitProvingError(_))),
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == program_id
+        ),
         "dropping account2 should prevent a valid proof, got {result:?}"
+    );
+}
+
+#[test]
+fn injected_public_account_is_caught_before_proving() {
+    let program = crate::test_methods::injects_undeclared_pre_state();
+    let program_id = AccountId::from_builtin_program(program.id());
+
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::balance(AccountId::new([1; 32]))],
+            instruction_data: Program::serialize_instruction(AccountId::new([2; 32])).unwrap(),
+            ..Default::default()
+        },
+        &program.into(),
+    );
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+            )) if program_account_id == program_id
+        ),
+        "injecting account2 should prevent a valid proof, got {result:?}"
     );
 }

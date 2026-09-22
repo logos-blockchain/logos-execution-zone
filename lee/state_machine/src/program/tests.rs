@@ -1,14 +1,14 @@
 use borsh::BorshDeserialize as _;
 use lee_core::{
-    account::{AccountId, BalanceDiff},
-    program::{AccountInput, CallKind, ProgramInput, UnsupportedCallKind},
+    account::{AccountId, BalanceDiff, ShardData},
+    program::{AccountInput, AccountStateDiff, CallKind, ProgramInput, UnsupportedCallKind},
     to_borsh_frame, to_frame,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor};
 
 use crate::{
-    error::LeeError,
-    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program},
+    error::{InvalidProgramBehaviorError, LeeError},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_input_rows},
 };
 
 fn transfer_fixture() -> (Program, Vec<AccountInput>, Vec<u8>, u128) {
@@ -211,4 +211,53 @@ fn nonzero_exit_is_rejected_with_its_cycles() {
         matches!(err, LeeError::ProgramExitedWithCode { code: 3, cycles } if cycles > 0),
         "expected ProgramExitedWithCode {{ code: 3, cycles > 0 }}, got: {err:?}"
     );
+}
+
+#[test]
+fn input_rows_must_be_returned_exactly() {
+    let program_account_id = AccountId::new([9; 32]);
+    let inputs = vec![
+        AccountInput::with_shard(
+            AccountId::new([1; 32]),
+            true,
+            5,
+            program_account_id,
+            ShardData::try_from(vec![1]).unwrap(),
+        ),
+        AccountInput::balance(AccountId::new([2; 32]), false, 0),
+    ];
+    let check = |rows: &[AccountInput]| {
+        let diffs: Vec<_> = rows
+            .iter()
+            .cloned()
+            .map(AccountStateDiff::unchanged)
+            .collect();
+        check_input_rows(program_account_id, &inputs, &diffs)
+    };
+    let tamperings: [fn(&mut Vec<AccountInput>); 7] = [
+        |rows| rows.swap(0, 1),
+        |rows| rows[0].is_authorized = false,
+        |rows| rows[1].is_authorized = true,
+        |rows| rows[0].balance = 6,
+        |rows| rows[0].shard.as_mut().unwrap().0 = AccountId::new([8; 32]),
+        |rows| rows[0].shard.as_mut().unwrap().1 = ShardData::empty(),
+        |rows| rows[0].shard = None,
+    ];
+
+    assert!(check(&inputs).is_ok());
+    for tamper in tamperings {
+        let mut rows = inputs.clone();
+        tamper(&mut rows);
+        assert!(matches!(
+            check(&rows),
+            Err(InvalidProgramBehaviorError::InconsistentAccountPreState { .. })
+        ));
+    }
+    let extended = [inputs.as_slice(), &inputs[1..]].concat();
+    for rows in [&inputs[..1], extended.as_slice()] {
+        assert!(matches!(
+            check(rows),
+            Err(InvalidProgramBehaviorError::InputRowsMismatch { .. })
+        ));
+    }
 }

@@ -4,14 +4,20 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Cycles},
     from_frame,
-    program::{AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput},
+    program::{
+        AccountInput, AccountStateDiff, CallKind, InstructionData, ProgramId, ProgramInput,
+        ProgramOutput,
+    },
     to_borsh_frame, to_frame,
 };
 #[cfg(not(feature = "prove"))]
 use risc0_zkvm::default_executor;
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, ExitCode};
 
-use crate::error::LeeError;
+use crate::{
+    ensure,
+    error::{InvalidProgramBehaviorError, LeeError},
+};
 
 #[cfg(feature = "prove")]
 pub(crate) mod image_cache;
@@ -210,6 +216,28 @@ pub(crate) fn check_exit_code(
             Err(on_failure(format!("unexpected exit {exit_code:?}")))
         }
     }
+}
+
+pub(crate) fn check_input_rows(
+    program_account_id: AccountId,
+    inputs: &[AccountInput],
+    diffs: &[AccountStateDiff],
+) -> Result<(), InvalidProgramBehaviorError> {
+    ensure!(
+        diffs.len() == inputs.len(),
+        InvalidProgramBehaviorError::InputRowsMismatch { program_account_id }
+    );
+    for (expected, diff) in inputs.iter().zip(diffs) {
+        ensure!(
+            diff.pre_state == *expected,
+            InvalidProgramBehaviorError::InconsistentAccountPreState {
+                account_id: expected.account_id,
+                expected: Box::new(expected.clone()),
+                actual: Box::new(diff.pre_state.clone()),
+            }
+        );
+    }
+    Ok(())
 }
 
 /// Re-attaches the protocol's fixed kernel ELF to `user_elf`, producing a full `ProgramBinary`

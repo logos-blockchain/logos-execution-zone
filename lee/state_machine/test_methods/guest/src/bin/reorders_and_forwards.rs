@@ -1,13 +1,13 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
     program::{
-        ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
+        AccountStateDiff, ChainedCall, InstructionData, PdaSeed, ProgramCall, ProgramId,
+        ProgramInput, ProgramOutput, read_lee_call, respond_unsupported_call,
     },
 };
 
-/// Reports empty pre/post (pure passthrough) and forwards its two `pre_states` to one callee in
-/// reversed order, delegating `pda_seeds`.
+/// Echoes its two `pre_states` unchanged and forwards them to one callee in reversed order,
+/// delegating `pda_seeds`.
 type Instruction = (ProgramId, InstructionData, Vec<PdaSeed>);
 
 fn main() {
@@ -29,13 +29,7 @@ fn main() {
         return;
     };
 
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        Vec::new(),
-    )
-    .with_chained_calls(vec![ChainedCall {
+    let chained_call = ChainedCall {
         program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
         shard_selectors: vec![
@@ -43,6 +37,17 @@ fn main() {
             ProgramShardSelector::from(&first),
         ],
         pda_seeds,
-    }])
+    };
+
+    ProgramOutput::new(
+        self_account_id,
+        caller_account_id,
+        instruction_data,
+        vec![
+            AccountStateDiff::unchanged(first),
+            AccountStateDiff::unchanged(second),
+        ],
+    )
+    .with_chained_calls(vec![chained_call])
     .write();
 }

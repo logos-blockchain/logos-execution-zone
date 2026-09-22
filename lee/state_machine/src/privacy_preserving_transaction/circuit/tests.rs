@@ -1087,15 +1087,8 @@ fn forwarder_over_callee() -> (ProgramWithDependencies, AccountId, AccountId) {
     )
 }
 
-fn forwarder_instruction(
-    own_write: Option<(AccountId, &[u8])>,
-    calls: &[(AccountId, ProgramShardSelector, Vec<u8>)],
-) -> Vec<u8> {
-    Program::serialize_instruction((
-        own_write.map(|(target, bytes)| (target, bytes.to_vec())),
-        calls.to_vec(),
-    ))
-    .unwrap()
+fn forwarder_instruction(calls: &[(AccountId, ProgramShardSelector, Vec<u8>)]) -> Vec<u8> {
+    Program::serialize_instruction(calls.to_vec()).unwrap()
 }
 
 fn calls_at(
@@ -1119,10 +1112,10 @@ fn data_changer_instruction(write: &[u8]) -> Vec<u8> {
 }
 
 fn forward_to(account_id: AccountId, callee_id: AccountId, write: &[u8]) -> Vec<u8> {
-    forwarder_instruction(
-        None,
-        &calls_at(account_id, &[(callee_id, data_changer_instruction(write))]),
-    )
+    forwarder_instruction(&calls_at(
+        account_id,
+        &[(callee_id, data_changer_instruction(write))],
+    ))
 }
 
 fn input_with(
@@ -1219,16 +1212,13 @@ fn an_empty_resolution_is_asked_once_and_matches_not_resolving_at_all() {
     let second = vec![0xC2; 12];
     let sparse =
         Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[
-                (callee_id, data_changer_instruction(&first)),
-                (callee_id, data_changer_instruction(&second)),
-            ],
-        ),
-    );
+    let instruction = forwarder_instruction(&calls_at(
+        account_id,
+        &[
+            (callee_id, data_changer_instruction(&first)),
+            (callee_id, data_changer_instruction(&second)),
+        ],
+    ));
 
     let (unresolved_output, _) = execute_and_prove(
         input_with(
@@ -1309,13 +1299,10 @@ fn a_top_level_shard_selector_is_never_resolved_for() {
     let account_id = AccountId::new([7; 32]);
     let supplied = ShardData::try_from(vec![0xA1; 12]).unwrap();
 
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[(forwarder_id, forwarder_instruction(None, &[]))],
-        ),
-    );
+    let instruction = forwarder_instruction(&calls_at(
+        account_id,
+        &[(forwarder_id, forwarder_instruction(&[]))],
+    ));
 
     let mut asked: Vec<ProgramShardSelector> = Vec::new();
     let (output, proof) = execute_and_prove_with(
@@ -1346,53 +1333,127 @@ fn a_top_level_shard_selector_is_never_resolved_for() {
     );
 }
 
-#[test]
-fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
-    let forwarder = crate::test_methods::shard_forwarder();
-    let echo = crate::test_methods::noop();
-    let forwarder_id = AccountId::from_builtin_program(forwarder.id());
-    let echo_id = AccountId::from_builtin_program(echo.id());
-    let program = ProgramWithDependencies::new(forwarder, forwarder_id, [(echo_id, echo)].into());
-
-    let account_id = AccountId::new([7; 32]);
-    let fresh_id = AccountId::new([8; 32]);
-    let written = vec![0xA1; 12];
-
-    let instruction = forwarder_instruction(
-        Some((fresh_id, &written)),
-        &[(
-            echo_id,
-            ProgramShardSelector::new(fresh_id, forwarder_id),
-            Program::serialize_instruction(()).unwrap(),
-        )],
-    );
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, Account::default(), instruction),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
-        },
+fn prove_program(
+    program: &Program,
+    caller_account_id: Option<AccountId>,
+    pre_states: &[AccountInput],
+    instruction_data: &InstructionData,
+) -> (Receipt, ProgramOutput) {
+    let receipt = execute_and_prove_program(
+        program,
+        AccountId::from_builtin_program(program.id()),
+        caller_account_id,
+        pre_states,
+        instruction_data,
     )
     .unwrap();
+    let output = borsh::from_slice(from_frame(&receipt.journal.bytes).unwrap()).unwrap();
+    (receipt, output)
+}
+
+fn prove_circuit_directly(
+    root: &Program,
+    initial_shard_selectors: Vec<ProgramShardSelector>,
+    calls: Vec<(Receipt, ProgramOutput)>,
+    programs: &[&Program],
+) -> Result<(), LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    let mut program_outputs = Vec::new();
+    for (receipt, output) in calls {
+        env_builder.add_assumption(receipt);
+        program_outputs.push(output);
+    }
+    let circuit_input = PrivacyPreservingCircuitInput {
+        program_outputs,
+        private_witnesses: Vec::new(),
+        program_account_id: AccountId::from_builtin_program(root.id()),
+        dummy_inputs: Vec::new(),
+        ciphertext_padding: None,
+        initial_shard_selectors,
+        program_image_claims: programs
+            .iter()
+            .map(|program| ProgramImageClaim {
+                account_id: AccountId::from_builtin_program(program.id()),
+                image_id: program.id(),
+            })
+            .collect(),
+    };
+    env_builder.write_slice(&to_frame(&borsh::to_vec(&circuit_input)?));
+    default_prover()
+        .prove_with_opts(
+            env_builder.build().unwrap(),
+            PRIVACY_PRESERVING_CIRCUIT_ELF,
+            &ProverOpts::succinct(),
+        )
+        .map(drop)
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))
+}
+
+#[test]
+fn a_root_is_bound_to_the_selectors_it_declares_in_the_circuit() {
+    let noop = crate::test_methods::noop();
+    let (a, b) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let call = prove_program(
+        &noop,
+        None,
+        &[
+            AccountInput::balance(a, false, 0),
+            AccountInput::balance(b, false, 0),
+        ],
+        &Program::serialize_instruction(()).unwrap(),
+    );
+    let declaring = |account_ids: Vec<AccountId>| {
+        prove_circuit_directly(
+            &noop,
+            account_ids
+                .into_iter()
+                .map(ProgramShardSelector::balance)
+                .collect(),
+            vec![call.clone()],
+            &[&noop],
+        )
+    };
+
+    declaring(vec![a, b]).expect("a root declaring exactly the rows it returned must prove");
+    for declared in [vec![b, a], vec![a]] {
+        let result = declaring(declared);
+        assert!(
+            matches!(&result, Err(LeeError::CircuitProvingError(msg))
+                if msg.contains("Callee ran on shard selectors the chained call did not name")),
+            "refused for the wrong reason: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn a_chained_call_on_an_account_the_root_did_not_declare_is_rejected_by_the_circuit() {
+    let root = crate::test_methods::references_undeclared_account();
+    let noop = crate::test_methods::noop();
+    let (declared, undeclared) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let unit = Program::serialize_instruction(()).unwrap();
+    let root_call = prove_program(
+        &root,
+        None,
+        &[AccountInput::balance(declared, false, 0)],
+        &Program::serialize_instruction((noop.id(), unit.clone(), undeclared)).unwrap(),
+    );
+    let child_call = prove_program(
+        &noop,
+        Some(AccountId::from_builtin_program(root.id())),
+        &[AccountInput::balance(undeclared, false, 5)],
+        &unit,
+    );
+
+    let result = prove_circuit_directly(
+        &root,
+        vec![ProgramShardSelector::balance(declared)],
+        vec![root_call, child_call],
+        &[&root, &noop],
+    );
 
     assert!(
-        !asked.contains(&ProgramShardSelector::new(fresh_id, forwarder_id)),
-        "the root's own write covers the shard selector; fetching for it would drop that write: \
-         {asked:?}"
-    );
-    assert!(proof.is_valid_for(&output));
-
-    let fresh = output
-        .public_actions
-        .iter()
-        .find(|action| action.account_id == fresh_id)
-        .expect("the fresh account must appear in the journal");
-    assert_eq!(
-        fresh.post.shards[&forwarder_id],
-        ShardData::try_from(written).unwrap(),
-        "the callee must have run against the root's write, not the resolver's value"
+        matches!(&result, Err(LeeError::CircuitProvingError(msg))
+            if msg.contains("which the root call did not declare")),
+        "refused for the wrong reason: {result:?}"
     );
 }

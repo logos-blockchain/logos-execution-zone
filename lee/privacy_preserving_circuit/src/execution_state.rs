@@ -141,7 +141,7 @@ impl ExecutionState {
         let initial_call = ChainedCall {
             program_account_id,
             instruction_data: first_output.instruction_data.clone(),
-            shard_selectors: Vec::new(),
+            shard_selectors: initial_shard_selectors.to_vec(),
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
@@ -172,13 +172,10 @@ impl ExecutionState {
 
             // Check that the callee used the requested shard selectors.
             assert!(
-                // If the call is top-level, nothing to check.
-                caller_data.account_id.is_none()
-                    // Else, match.
-                    || pre_states_match_shard_selectors(
-                        &chained_call.shard_selectors,
-                        &program_output.state_diffs
-                    ),
+                pre_states_match_shard_selectors(
+                    &chained_call.shard_selectors,
+                    &program_output.state_diffs
+                ),
                 "Callee ran on shard selectors the chained call did not name"
             );
 
@@ -259,16 +256,6 @@ impl ExecutionState {
             "Inner call without a chained call found",
         );
 
-        // Every initial shard selector must appear in a program output.
-        for shard_selector in initial_shard_selectors {
-            assert!(
-                execution_state
-                    .shard_selectors_seen
-                    .contains(shard_selector),
-                "initial shard selector {shard_selector:?} is missing from the final execution state"
-            );
-        }
-
         execution_state
     }
 
@@ -296,7 +283,11 @@ impl ExecutionState {
             if self.post_states.contains_key(&account_id) {
                 self.check_known_account_authorization(&caller, caller_pda_seeds, witness, pre);
             } else {
-                self.journal_first_sight(&caller, caller_pda_seeds, witness, pre);
+                assert!(
+                    caller.account_id.is_none(),
+                    "Chained call named account {account_id}, which the root call did not declare"
+                );
+                self.journal_first_sight(witness, pre);
             }
 
             // Save each public shard's first observed state for the verifier.
@@ -347,71 +338,25 @@ impl ExecutionState {
     }
 
     /// Initializes an account's state and checks its authorization.
-    fn journal_first_sight(
-        &mut self,
-        caller: &CallerData,
-        caller_pda_seeds: &[PdaSeed],
-        witness: Option<&PrivateWitness>,
-        pre: &AccountInput,
-    ) {
+    fn journal_first_sight(&mut self, witness: Option<&PrivateWitness>, pre: &AccountInput) {
         let account_id = pre.account_id;
         if let Some(witness) = witness {
-            match &witness.kind {
-                WitnessKind::Regular { ask } => {
-                    assert_eq!(
-                        pre.is_authorized,
-                        ask.is_some(),
-                        "Regular private account {account_id} must be authorized exactly by its supplied credential"
-                    );
-                }
-                WitnessKind::Pda { .. } => {
-                    let granted = private_seed_granted(caller, caller_pda_seeds, witness);
-                    if let Some((program, seed)) = granted {
-                        assert_family_binding(
-                            &mut self.pda_family_binding,
-                            program,
-                            seed,
-                            account_id,
-                        );
-                    }
-                    assert_eq!(
-                        pre.is_authorized,
-                        granted.is_some()
-                            || self.is_already_authorized(caller, account_id, Some(witness)),
-                        "Inconsistent authorization for private PDA {account_id}"
-                    );
-                }
-            }
+            assert_eq!(
+                pre.is_authorized,
+                matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
+                "Private account {account_id} must be authorized exactly by its supplied credential"
+            );
             self.post_states
                 .insert(account_id, witness.account.data.clone());
         } else {
-            let granted = public_seed_granted(caller, caller_pda_seeds, account_id);
-            if let Some((program, seed)) = granted {
-                assert!(
-                    pre.is_authorized,
-                    "Caller-seeded public PDA must be declared authorized at first sight: {account_id}"
-                );
-                assert_family_binding(&mut self.pda_family_binding, program, seed, account_id);
-            }
-            self.post_states.insert(
-                account_id,
-                AccountData {
-                    balance: pre.balance,
-                    ..AccountData::default()
-                },
-            );
+            let observed = AccountData {
+                balance: pre.balance,
+                ..AccountData::default()
+            };
+            self.post_states.insert(account_id, observed.clone());
             self.public_order.push(account_id);
-            self.public_pre_states.insert(
-                account_id,
-                (
-                    // Public PDAs cannot sign, so their journal authorization is false.
-                    granted.is_none() && pre.is_authorized,
-                    AccountData {
-                        balance: pre.balance,
-                        ..AccountData::default()
-                    },
-                ),
-            );
+            self.public_pre_states
+                .insert(account_id, (pre.is_authorized, observed));
         }
     }
 
@@ -433,27 +378,9 @@ impl ExecutionState {
         }
         assert_eq!(
             pre.is_authorized,
-            granted.is_some() || self.is_already_authorized(caller, account_id, witness),
+            granted.is_some() || caller.authorized_accounts.contains(&account_id),
             "Inconsistent authorization for account {account_id}",
         );
-    }
-
-    /// Whether the account is authorized by its credentials or an inherited caller grant.
-    fn is_already_authorized(
-        &self,
-        caller: &CallerData,
-        account_id: AccountId,
-        witness: Option<&PrivateWitness>,
-    ) -> bool {
-        caller.authorized_accounts.contains(&account_id)
-            || witness.map_or_else(
-                || {
-                    self.public_pre_states
-                        .get(&account_id)
-                        .is_some_and(|(is_authorized, _)| *is_authorized)
-                },
-                |witness| matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
-            )
     }
 
     #[cfg(test)]
