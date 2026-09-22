@@ -7,6 +7,8 @@ use lee_core::{
     program::{InstructionData, PdaSeed},
 };
 
+pub mod guests;
+
 /// What `chain_caller` dispatches.
 ///
 /// The callee is named by address rather than by bytecode identity: a program may be deployed at
