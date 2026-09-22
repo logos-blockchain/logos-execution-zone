@@ -46,6 +46,7 @@ mod genesis;
 mod native_transfer;
 mod privacy_preserving;
 mod public_program_rules;
+mod robinhood;
 mod validity_window;
 
 impl V03State {
@@ -67,6 +68,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::validity_window());
         self.insert_program(&crate::test_methods::flash_swap_initiator());
         self.insert_program(&crate::test_methods::flash_swap_callback());
+        self.insert_program(&crate::test_methods::robinhood());
         self.insert_program(&crate::test_methods::malicious_self_program_id());
         self.insert_program(&crate::test_methods::malicious_caller_program_id());
         self.insert_program(&crate::test_methods::pda_spend_proxy());
