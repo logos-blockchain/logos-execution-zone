@@ -56,6 +56,9 @@ pub enum InvalidProgramBehaviorError {
     #[error("Chained call to {program_account_id} did not execute")]
     ChainedCallDidNotExecute { program_account_id: AccountId },
 
+    #[error("Program {program_account_id} ran on instruction data its caller did not send")]
+    MismatchedInstructionData { program_account_id: AccountId },
+
     #[error(transparent)]
     ExecutionValidationFailed(#[from] ExecutionValidationError),
 
