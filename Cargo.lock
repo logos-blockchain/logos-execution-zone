@@ -558,7 +558,10 @@ name = "associated_token_account_program"
 version = "0.1.0"
 dependencies = [
  "associated_token_account_core",
+ "borsh",
+ "lee",
  "lee_core",
+ "programs",
  "token_core",
 ]
 
@@ -3219,8 +3222,6 @@ name = "example_program_deployment_programs"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "bytemuck",
- "hex",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -4695,6 +4696,7 @@ dependencies = [
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",
+ "lee_core",
  "log",
  "serde_json",
  "tokio",
@@ -4832,6 +4834,7 @@ dependencies = [
  "indexer_service",
  "indexer_service_protocol",
  "indexer_service_rpc",
+ "jsonrpsee",
  "key_protocol",
  "lee",
  "lee_core",
@@ -4852,6 +4855,7 @@ dependencies = [
  "system_accounts",
  "tempfile",
  "test_fixtures",
+ "test_methods",
  "test_programs",
  "testing-framework",
  "testing-framework-app",
@@ -9491,10 +9495,12 @@ dependencies = [
 name = "program_deployment"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "common",
  "lee",
  "lee_core",
+ "program_loader_core",
  "sequencer_service_rpc",
  "tokio",
  "wallet",

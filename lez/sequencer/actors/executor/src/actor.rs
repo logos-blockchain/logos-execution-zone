@@ -14,7 +14,7 @@ use kameo::{
 };
 use lee_core::{
     BlockId,
-    account::{Balance, Nonce},
+    account::{Account, Balance, Nonce, ProgramShardSelector},
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
@@ -34,8 +34,8 @@ use crate::{
     ExecutorActorTrait, Result,
     error::Error,
     protocol::{
-        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountIdToAffectingTxMapItemUptoLimit,
-        GetAccountNonces, GetAccountReply, GetBlock, GetBlockHashToBlockIdMapItem, GetBlockRange,
+        FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
+        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
         GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
         RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
@@ -390,7 +390,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.sequencer
-            .with_state(|state| state.get_account_by_id(account_id).balance)
+            .with_state(|state| {
+                state
+                    .get_account_by_id_ref(account_id)
+                    .map_or(0, |account| account.data.balance)
+            })
             .await
     }
 }
@@ -443,7 +447,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .with_state(|state| {
                 account_ids
                     .into_iter()
-                    .map(|account_id| state.get_account_by_id(account_id).nonce)
+                    .map(|account_id| {
+                        state
+                            .get_account_by_id_ref(account_id)
+                            .map_or_else(Nonce::default, |account| account.nonce)
+                    })
                     .collect()
             })
             .await
@@ -491,6 +499,37 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
                 .with_state(|state| state.get_account_by_id(account_id))
                 .await,
         }
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetAccountView>
+    for ExecutorActor<S, BP>
+{
+    type Reply = GetAccountReply;
+
+    async fn handle(
+        &mut self,
+        GetAccountView {
+            shard_selector:
+                ProgramShardSelector {
+                    account_id,
+                    program_account_id,
+                },
+        }: GetAccountView,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let account = self
+            .sequencer
+            .with_state(|state| {
+                state
+                    .get_account_by_id_ref(account_id)
+                    .map_or_else(Default::default, |account| Account {
+                        nonce: account.nonce,
+                        data: account.data.project(program_account_id),
+                    })
+            })
+            .await;
+        GetAccountReply { account }
     }
 }
 
@@ -551,37 +590,35 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
     }
 }
 
-impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetBlockHashToBlockIdMapItem> for ExecutorActor<S, BP>
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockByHash>
+    for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<u64>>;
 
     async fn handle(
         &mut self,
-        msg: GetBlockHashToBlockIdMapItem,
+        msg: GetBlockByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetBlockHashToBlockIdMapItem>(msg.into())
+            .ask::<sequencer_storage_actor::protocol::GetBlockByHash>(msg.into())
             .await
             .map_err(Into::into)
     }
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
-    Message<GetAccountIdToAffectingTxMapItemUptoLimit> for ExecutorActor<S, BP>
+    Message<GetAccountTransactions> for ExecutorActor<S, BP>
 {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
     async fn handle(
         &mut self,
-        msg: GetAccountIdToAffectingTxMapItemUptoLimit,
+        msg: GetAccountTransactions,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetAccountIdToAffectingTxMapItemUptoLimit>(
-                msg.into(),
-            )
+            .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
             .await
             .map_err(Into::into)
     }

@@ -127,7 +127,7 @@ pub struct SetCrossZonePeerTip {
     pub tip: PeerChainTip,
 }
 
-pub struct GetBlockHashToBlockIdMapItem {
+pub struct GetBlockByHash {
     pub block_hash: HashType,
 }
 
@@ -135,7 +135,7 @@ pub struct GetTxHashToBlockIdMapItem {
     pub tx_hash: HashType,
 }
 
-pub struct GetAccountIdToAffectingTxMapItemUptoLimit {
+pub struct GetAccountTransactions {
     pub account_id: AccountId,
     pub offset: u64,
     pub limit: u64,

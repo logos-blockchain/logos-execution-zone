@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
-use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::program::DEFAULT_PROGRAM_OWNER;
+use lee::{Account, AccountData, AccountId, PrivateKey, PublicKey, V03State, program::Program};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -112,10 +111,11 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
     vec![
         PrivateAccountPrivateInitialData {
             account: Account {
-                program_owner: DEFAULT_PROGRAM_OWNER,
-                balance: PRIV_ACC_A_INITIAL_BALANCE,
-                data: Data::default(),
-                nonce: 0.into(),
+                data: AccountData {
+                    balance: PRIV_ACC_A_INITIAL_BALANCE,
+                    ..AccountData::default()
+                },
+                ..Account::default()
             },
             key_chain: key_chain_1,
             chain_index: None,
@@ -123,10 +123,11 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
         },
         PrivateAccountPrivateInitialData {
             account: Account {
-                program_owner: DEFAULT_PROGRAM_OWNER,
-                balance: PRIV_ACC_B_INITIAL_BALANCE,
-                data: Data::default(),
-                nonce: 0.into(),
+                data: AccountData {
+                    balance: PRIV_ACC_B_INITIAL_BALANCE,
+                    ..AccountData::default()
+                },
+                ..Account::default()
             },
             key_chain: key_chain_2,
             chain_index: None,
@@ -154,12 +155,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             let account_id =
                 lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
 
-            let mut acc = init_comm_data.account.clone();
-
-            acc.program_owner = programs::authenticated_transfer().id().into();
-
             (
-                lee_core::Commitment::new(&account_id, &acc),
+                lee_core::Commitment::new(&account_id, &init_comm_data.account),
                 lee_core::Nullifier::for_account_initialization(&account_id),
             )
         })
@@ -192,8 +189,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
-                    balance: acc_data.balance,
+                    data: AccountData {
+                        balance: acc_data.balance,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )
@@ -216,14 +215,8 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 system_accounts::fee_state_account_id(),
                 system_accounts::fee_state_account(),
             ),
-            (
-                system_accounts::fee_escrow_account_id(),
-                system_accounts::fee_account(),
-            ),
-            (
-                system_accounts::fee_inbox_account_id(),
-                system_accounts::fee_account(),
-            ),
+            (system_accounts::fee_escrow_account_id(), Account::default()),
+            (system_accounts::fee_inbox_account_id(), Account::default()),
         ])
         .collect()
 }
@@ -383,12 +376,7 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_A_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
             }
         );
 
@@ -400,18 +388,13 @@ mod tests {
                     .key_chain
                     .viewing_public_key
                     .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_B_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
+                account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
             }
         );
     }
 
     #[test]
-    fn genesis_fee_accounts_are_registered_and_owned() {
+    fn genesis_fee_accounts_are_registered_with_their_records() {
         let state = initial_state(true);
         let fee_program_id = programs::fee().id();
 
@@ -423,55 +406,47 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.program_owner, fee_program_id.into());
-            assert_eq!(account.balance, 0);
+            assert_eq!(account.data.balance, 0);
         }
 
         // The fee-state account carries the genesis market state; escrow and
         // inbox start empty.
         let fee_state = fee_core::state::FeeState::from_bytes(
-            &state
+            state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .into_inner(),
+                .shard(AccountId::from_builtin_program(fee_program_id)),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
             system_accounts::fee_escrow_account_id(),
             system_accounts::fee_inbox_account_id(),
         ] {
-            assert!(
-                state
-                    .get_account_by_id(empty_id)
-                    .data
-                    .into_inner()
-                    .is_empty()
-            );
+            assert!(state.get_account_by_id(empty_id).data.shards.is_empty());
         }
     }
 
     #[test]
     fn genesis_system_accounts_have_expected_contents() {
         // System-account IDs must be distinct and non-default, and the genesis
-        // bridge account must carry its expected field values.  Catches mutations
+        // bridge account must carry its expected field values. Catches mutations
         // that replace `system_bridge_account` with `Default::default()`, delete
-        // its `balance`/`program_owner` fields, or replace
-        // `system_bridge_account_id` with `Default::default()`.
+        // its `balance`, or replace `system_bridge_account_id` with
+        // `Default::default()`.
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
 
         let state = initial_state(true);
-        let default_owner = Account::default().program_owner;
 
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
-            bridge.balance,
+            bridge.data.balance,
             u128::MAX,
             "the bridge holds the whole supply"
         );
-        assert_ne!(
-            bridge.program_owner, default_owner,
-            "bridge must have a non-default program_owner"
+        assert!(
+            bridge.data.shards.is_empty(),
+            "the bridge holds balance alone, no program's record"
         );
     }
 
@@ -489,9 +464,12 @@ mod tests {
         let with = initial_state(true);
         let without = initial_state(false);
         for id in cross_zone_ids {
-            assert!(with.get_program(id).is_some(), "registered when declared");
             assert!(
-                without.get_program(id).is_none(),
+                with.get_builtin_program(id).is_some(),
+                "registered when declared"
+            );
+            assert!(
+                without.get_builtin_program(id).is_none(),
                 "absent when not declared"
             );
         }

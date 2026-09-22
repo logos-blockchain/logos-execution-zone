@@ -6,14 +6,19 @@
     clippy::integer_division_remainder_used,
     reason = "Mock service uses intentional casts and format patterns for test data generation"
 )]
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use indexer_service_protocol::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Selector, Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
+    BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
+    ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -109,12 +114,16 @@ impl MockIndexerService {
             accounts.insert(
                 *account_id,
                 Account {
-                    program_owner: AccountId {
-                        value: [i as u8; 32],
-                    },
-                    balance: 1000 * (i as u128 + 1),
-                    data: Data(vec![0xaa, 0xbb, 0xcc]),
                     nonce: i as u128,
+                    data: AccountData {
+                        balance: 1000 * (i as u128 + 1),
+                        shards: BTreeMap::from([(
+                            AccountId {
+                                value: [i as u8; 32],
+                            },
+                            ShardData(vec![0xaa, 0xbb, 0xcc]),
+                        )]),
+                    },
                 },
             );
         }
@@ -271,6 +280,26 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
+    async fn get_account_summary(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AccountSummary, ErrorObjectOwned> {
+        let account = self.get_account(account_id).await?;
+        Ok(AccountSummary {
+            nonce: account.nonce,
+            balance: account.data.balance,
+            shards: account
+                .data
+                .shards
+                .iter()
+                .map(|(program, data)| ShardSummary {
+                    program_account_id: *program,
+                    len: u64::try_from(data.0.len()).expect("a shard is capped well under u64"),
+                })
+                .collect(),
+        })
+    }
+
     async fn get_account_at_block(
         &self,
         account_id: AccountId,
@@ -285,6 +314,24 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .get(&account_id)
             .cloned()
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
+    }
+
+    async fn get_account_view(
+        &self,
+        selector: ProgramShardSelector,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(project_account(
+            self.state.read().await.accounts.get(&selector.account_id),
+            selector,
+        ))
+    }
+
+    async fn get_account_view_at_block(
+        &self,
+        selector: ProgramShardSelector,
+        _block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        self.get_account_view(selector).await
     }
 
     async fn get_transaction(
@@ -333,7 +380,11 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .transactions
                 .values()
                 .filter(|(tx, _)| match tx {
-                    Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
+                    Transaction::Public(pub_tx) => pub_tx
+                        .message
+                        .shard_selectors
+                        .iter()
+                        .any(|shard_selector| shard_selector.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
                         .public_actions
@@ -387,7 +438,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
         Ok(records
             .into_iter()
-            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
+            .filter(|record| record.matches_fields(filter.program_account_id, filter.selector))
             .collect())
     }
 
@@ -416,6 +467,38 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     }
 }
 
+fn project_account(account: Option<&Account>, selector: ProgramShardSelector) -> Account {
+    let Some(account) = account else {
+        return Account {
+            nonce: 0,
+            data: AccountData {
+                balance: 0,
+                shards: BTreeMap::new(),
+            },
+        };
+    };
+    let shards = selector
+        .program_account_id
+        .map_or_else(BTreeMap::new, |program| {
+            BTreeMap::from([(
+                program,
+                account
+                    .data
+                    .shards
+                    .get(&program)
+                    .cloned()
+                    .unwrap_or(ShardData(Vec::new())),
+            )])
+        });
+    Account {
+        nonce: account.nonce,
+        data: AccountData {
+            balance: account.data.balance,
+            shards,
+        },
+    }
+}
+
 // One canned event per block: the first transaction emits one event from a fixed program.
 fn mock_event_record(block: &Block) -> Option<EventRecord> {
     let tx = block.body.transactions.first()?;
@@ -423,7 +506,7 @@ fn mock_event_record(block: &Block) -> Option<EventRecord> {
         block_id: block.header.block_id,
         tx_index: 0,
         tx_hash: *tx.hash(),
-        program_id: ProgramId([7_u32; 8]),
+        program_account_id: AccountId { value: [7; 32] },
         selector: Selector([1_u8; 8]),
         data: vec![block.header.block_id as u8; 4],
     })
@@ -438,10 +521,16 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            program_id: ProgramId([1_u32; 8]),
-            account_ids: vec![
-                account_ids[tx_idx as usize % account_ids.len()],
-                account_ids[(tx_idx as usize + 1) % account_ids.len()],
+            program_account_id: AccountId { value: [1; 32] },
+            shard_selectors: vec![
+                ProgramShardSelector {
+                    account_id: account_ids[tx_idx as usize % account_ids.len()],
+                    program_account_id: None,
+                },
+                ProgramShardSelector {
+                    account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
+                    program_account_id: None,
+                },
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             instruction_data: vec![1, 2, 3, 4],
@@ -465,11 +554,12 @@ fn mock_privacy_preserving_tx(
         message: PrivacyPreservingMessage {
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post_state: Account {
-                    program_owner: AccountId { value: [1_u8; 32] },
+                post: AccountData {
                     balance: 500,
-                    data: Data(vec![0xdd, 0xee]),
-                    nonce: block_id as u128,
+                    shards: BTreeMap::from([(
+                        AccountId { value: [1_u8; 32] },
+                        ShardData(vec![0xdd, 0xee]),
+                    )]),
                 },
             }],
             nonces: vec![block_id as u128],
@@ -585,7 +675,7 @@ mod tests {
         };
         let matching = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([7_u32; 8])),
+            program_account_id: Some(AccountId { value: [7; 32] }),
             ..GetEventsFilter::default()
         };
         let hit = service.get_events(matching).await.unwrap();
@@ -594,7 +684,7 @@ mod tests {
 
         let mismatched = GetEventsFilter {
             tx_hash: Some(tx_hash),
-            program_id: Some(ProgramId([8_u32; 8])),
+            program_account_id: Some(AccountId { value: [8; 32] }),
             ..GetEventsFilter::default()
         };
         let miss = service.get_events(mismatched).await.unwrap();

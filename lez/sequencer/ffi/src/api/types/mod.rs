@@ -195,3 +195,15 @@ impl<T> FfiOption<T> {
         }
     }
 }
+
+impl<T> From<Option<T>> for FfiOption<T> {
+    fn from(value: Option<T>) -> Self {
+        value.map_or_else(Self::from_none, |val| Self::from_value(val))
+    }
+}
+
+impl<T> From<FfiOption<T>> for Option<T> {
+    fn from(value: FfiOption<T>) -> Self {
+        value.is_some.then(|| unsafe { value.value.read() })
+    }
+}

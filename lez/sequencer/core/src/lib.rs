@@ -20,7 +20,7 @@ use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
@@ -1305,19 +1305,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         // the very task production needs). Draining here also subsumes the old
         // startup replay.
         //
-        // Skip any deposit whose receipt PDA the bridge owns in the state we
-        // build on — it was minted by us or by a peer whose block we adopted.
-        // An orphan reverts the receipt with the block, so the next turn
-        // re-mints without any bookkeeping of our own.
-        //
-        // TODO(squatting): a receipt owned by anyone else — a program that
-        // wrote data to the derivable address before the mint — fails that
-        // predicate for ever, so its deposit is rebuilt and executed on every
-        // block for the life of the chain: a failed application is dropped,
-        // not retired, and only dispatches carry a failure budget. Known and
-        // accepted for now. Namespaced accounts remove ownership and with it
-        // the squat; retiring a mint that fails for good for any other reason
-        // wants a deposit dead letter like the dispatch one, alongside.
+        // Skip deposits whose receipt has a nonempty bridge shard.
+        // Reverting a block also reverts its receipts, allowing those deposits to be retried.
         let pending_deposits: VecDeque<LeeTransaction> = self
             .store
             .get_pending_deposit_events()
@@ -1343,9 +1332,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
-        // The reward target is this sequencer's own stake ownership account,
-        // already claimed when it staked. Look it up by our own sequencer key
-        // (our Bedrock signing key) in the live stake config.
+        // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
             self.bedrock_signing_key.public_key().to_bytes(),
         )
@@ -1850,15 +1837,13 @@ impl LiveCommittee {
     }
 }
 
-/// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
-/// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
-/// program keeps.
+/// Whether `deposit_op_id` has already been minted in `state`.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
-    let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id().into(), deposit_op_id.0);
+    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
+    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| receipt.program_owner == programs::bridge().id().into())
+        .is_some_and(|receipt| !receipt.data.shard(bridge_program_id).is_empty())
 }
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
@@ -1872,15 +1857,17 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 /// delivery's replay record, it is what will make it abort, and calling that
 /// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
+    let inbox_program_id = AccountId::from_builtin_program(programs::cross_zone_inbox().id());
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
-        programs::cross_zone_inbox().id().into(),
+        inbox_program_id,
         &message.src_zone,
         message.src_block_id,
     );
     state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
-        cross_zone_inbox_core::SeenShard::from_bytes(shard.data.as_ref()).is_ok_and(|seen| {
-            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
-        })
+        cross_zone_inbox_core::SeenShard::from_bytes(shard.data.shard(inbox_program_id).as_ref())
+            .is_ok_and(|seen| {
+                seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
+            })
     })
 }
 
@@ -2264,8 +2251,8 @@ fn build_genesis_state(
 
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
-    // is initialized: each builtin has a user-callable InitConfig, so a default
-    // config PDA would be claimable by the first initializer. The inbox's is
+    // is initialized: each builtin has a user-callable InitConfig, so an empty
+    // config shard would be left for whoever calls it first. The inbox's is
     // receiving-zones-only.
     // The self-stake is appended here, so every index below is an index into
     // this list, not into `config.genesis`.
@@ -2338,15 +2325,13 @@ fn build_genesis_state(
     })
     .collect();
 
-    // The genesis fee tx credits the first staked sequencer's ownership
-    // account, already claimed by its stake tx above (which ran earlier in this
-    // same genesis block), so no separate initialization is needed.
+    // The genesis fee transaction credits the first staked sequencer's ownership account.
     //
     // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
     // it did not bootstrap) has no staked account to reward, so it falls back to
     // the signing key's account: this genesis is a throwaway placeholder (the real
     // one is replayed from the channel), the summary is the default, so the
-    // credit is zero and the unclaimed account is left untouched.
+    // credit is zero and the account is left untouched.
     let producer = staked.first().map_or_else(
         || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
         |stake| lee::AccountId::from(&stake.owner),
@@ -2480,13 +2465,18 @@ fn genesis_stake_message(
     // funds this account needs no signature from it, so its count starts at 0.
     let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
 
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     Message::try_new(
-        programs::sequencer_stake().id().into(),
+        sequencer_stake_program_id,
         vec![
-            genesis_stake_funding_account(),
-            ownership_id,
-            system_accounts::stake_funds_account_id(&ownership_id),
-            system_accounts::sequencer_stake_config_account_id(),
+            ProgramShardSelector::balance(genesis_stake_funding_account()),
+            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                sequencer_stake_program_id,
+            ),
         ],
         vec![
             lee_core::account::Nonce(funding_nonce),
@@ -2495,7 +2485,9 @@ fn genesis_stake_message(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: programs::authenticated_transfer().id().into(),
+            mover_account_id: AccountId::from_builtin_program(
+                programs::authenticated_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )
@@ -2523,9 +2515,14 @@ fn build_init_channel_params_transaction(
     channel_params: config::ChannelParams,
     channel_id: [u8; 32],
 ) -> PublicTransaction {
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = Message::try_new(
-        programs::sequencer_stake().id().into(),
-        vec![system_accounts::sequencer_stake_config_account_id()],
+        sequencer_stake_program_id,
+        vec![ProgramShardSelector::new(
+            system_accounts::sequencer_stake_config_account_id(),
+            sequencer_stake_program_id,
+        )],
         vec![],
         sequencer_stake_core::Instruction::InitChannelParams {
             params: channel_params,
@@ -2609,7 +2606,7 @@ fn bridge_lock_holdings(
 #[must_use]
 pub fn is_sequencer_only_program(program_account_id: AccountId) -> bool {
     cross_zone::is_sequencer_only_program(program_account_id)
-        || program_account_id == programs::fee().id().into()
+        || program_account_id == AccountId::from_builtin_program(programs::fee().id())
 }
 
 /// Op id of the `index`-th genesis allocation.
@@ -2632,15 +2629,15 @@ fn build_supply_account_genesis_transaction(
     amount: u64,
     op_id: [u8; 32],
 ) -> PublicTransaction {
-    let bridge_program_id: AccountId = programs::bridge().id().into();
+    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, op_id);
 
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            system_accounts::bridge_account_id(),
-            *account_id,
-            receipt_id,
+            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::balance(*account_id),
+            ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
@@ -2668,7 +2665,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::try_from_slice(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id: AccountId = programs::bridge().id().into();
+    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
@@ -2677,9 +2674,9 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            system_accounts::bridge_account_id(),
-            metadata.recipient_id,
-            receipt_id,
+            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::balance(metadata.recipient_id),
+            ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
@@ -2719,14 +2716,17 @@ fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> 
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::sequencer_stake().id().into() {
+    if message.program_account_id
+        != AccountId::from_builtin_program(programs::sequencer_stake().id())
+    {
         return None;
     }
 
     match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
-        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
-            message.account_ids.first().copied()
-        }
+        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => message
+            .shard_selectors
+            .first()
+            .map(|shard_selector| shard_selector.account_id),
         Ok(_) | Err(_) => None,
     }
 }
@@ -2750,13 +2750,18 @@ fn build_finalize_unstake_tx(
     ownership_id: AccountId,
     pending: sequencer_stake_core::PendingUnstake,
 ) -> Result<LeeTransaction> {
+    let sequencer_stake_program_id =
+        AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = Message::try_new(
-        programs::sequencer_stake().id().into(),
+        sequencer_stake_program_id,
         vec![
-            ownership_id,
-            system_accounts::stake_funds_account_id(&ownership_id),
-            pending.destination,
-            system_accounts::sequencer_stake_config_account_id(),
+            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
+            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::balance(pending.destination),
+            ProgramShardSelector::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                sequencer_stake_program_id,
+            ),
         ],
         vec![],
         sequencer_stake_core::Instruction::FinalizeUnstake,
@@ -2800,7 +2805,9 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::cross_zone_inbox().id().into() {
+    if message.program_account_id
+        != AccountId::from_builtin_program(programs::cross_zone_inbox().id())
+    {
         return None;
     }
 
@@ -2906,7 +2913,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::bridge().id().into() {
+    if message.program_account_id != AccountId::from_builtin_program(programs::bridge().id()) {
         return None;
     }
 
@@ -2928,7 +2935,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_account_id != programs::bridge().id().into() {
+    if message.program_account_id != AccountId::from_builtin_program(programs::bridge().id()) {
         return None;
     }
 

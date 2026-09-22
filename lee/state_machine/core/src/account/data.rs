@@ -4,45 +4,20 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-/// Raised from the original 100 KiB to accommodate program elfs stored directly in
-/// `Account.data` under the Program-as-Account migration.
-///
-/// Observed elfs currently run 375 KB-520 KB, plus 631 KB for the fixed
-/// privacy-preserving circuit itself. This value is a rough placeholder, not a considered
-/// protocol constant yet — it still needs to be refined against real transaction/block-size
-/// budgets (e.g. `SequencerConfig::max_block_size`, currently 1 MiB) before this is something
-/// production traffic should rely on.
-pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
+pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(100);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, BorshSerialize)]
-pub struct Data(Vec<u8>);
+pub struct ShardData(Vec<u8>);
 
-impl Data {
+impl ShardData {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(Vec::new())
+    }
+
     #[must_use]
     pub fn into_inner(self) -> Vec<u8> {
         self.0
-    }
-
-    /// Reads data from a cursor.
-    #[cfg(feature = "host")]
-    pub fn from_cursor(
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Self, crate::error::LeeCoreError> {
-        use std::io::Read as _;
-
-        let mut u32_bytes = [0_u8; 4];
-        cursor.read_exact(&mut u32_bytes)?;
-        let data_length = u32::from_le_bytes(u32_bytes);
-        if u64::from(data_length) > DATA_MAX_LENGTH.as_u64() {
-            return Err(
-                std::io::Error::new(std::io::ErrorKind::InvalidData, DataTooBigError).into(),
-            );
-        }
-
-        let mut data =
-            vec![0; usize::try_from(data_length).expect("data length is expected to fit in usize")];
-        cursor.read_exact(&mut data)?;
-        Ok(Self(data))
     }
 }
 
@@ -50,13 +25,13 @@ impl Data {
 #[error("data length exceeds maximum allowed length of {} bytes", DATA_MAX_LENGTH.as_u64())]
 pub struct DataTooBigError;
 
-impl From<Data> for Vec<u8> {
-    fn from(data: Data) -> Self {
+impl From<ShardData> for Vec<u8> {
+    fn from(data: ShardData) -> Self {
         data.0
     }
 }
 
-impl TryFrom<Vec<u8>> for Data {
+impl TryFrom<Vec<u8>> for ShardData {
     type Error = DataTooBigError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
@@ -70,7 +45,7 @@ impl TryFrom<Vec<u8>> for Data {
     }
 }
 
-impl Deref for Data {
+impl Deref for ShardData {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -78,25 +53,25 @@ impl Deref for Data {
     }
 }
 
-impl AsRef<[u8]> for Data {
+impl AsRef<[u8]> for ShardData {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl<'de> Deserialize<'de> for Data {
+impl<'de> Deserialize<'de> for ShardData {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        /// Data deserialization visitor.
+        /// `ShardData` deserialization visitor.
         ///
         /// Compared to a simple deserialization into a `Vec<u8>`, this visitor enforces
         /// early length check defined by [`DATA_MAX_LENGTH`].
         struct DataVisitor;
 
         impl<'de> serde::de::Visitor<'de> for DataVisitor {
-            type Value = Data;
+            type Value = ShardData;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(
@@ -127,7 +102,7 @@ impl<'de> Deserialize<'de> for Data {
                     vec.push(value);
                 }
 
-                Ok(Data(vec))
+                Ok(ShardData(vec))
             }
         }
 
@@ -135,7 +110,7 @@ impl<'de> Deserialize<'de> for Data {
     }
 }
 
-impl BorshDeserialize for Data {
+impl BorshDeserialize for ShardData {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         // Implementation adapted from `impl BorshDeserialize for Vec<T>`
 
@@ -166,7 +141,7 @@ mod tests {
             usize::try_from(DATA_MAX_LENGTH.as_u64())
                 .expect("DATA_MAX_LENGTH fits in usize")
         ];
-        let result = Data::try_from(max_vec);
+        let result = ShardData::try_from(max_vec);
         assert!(result.is_ok());
     }
 
@@ -178,7 +153,7 @@ mod tests {
                 .expect("DATA_MAX_LENGTH fits in usize")
                 + 1
         ];
-        let result = Data::try_from(big_vec);
+        let result = ShardData::try_from(big_vec);
         assert!(matches!(result, Err(DataTooBigError)));
     }
 
@@ -193,7 +168,7 @@ mod tests {
         let mut serialized = Vec::new();
         <_ as BorshSerialize>::serialize(&too_big_data, &mut serialized).unwrap();
 
-        let result = <Data as BorshDeserialize>::deserialize(&mut serialized.as_ref());
+        let result = <ShardData as BorshDeserialize>::deserialize(&mut serialized.as_ref());
         assert!(result.is_err());
     }
 
@@ -207,7 +182,7 @@ mod tests {
         ];
         let json = serde_json::to_string(&data).unwrap();
 
-        let result: Result<Data, _> = serde_json::from_str(&json);
+        let result: Result<ShardData, _> = serde_json::from_str(&json);
         assert!(result.is_err());
     }
 }

@@ -7,7 +7,7 @@ use common::{
     transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{Account, AccountId, V03State};
+use lee::{Account, AccountData, AccountId, V03State};
 use lee_core::program::{ProgramEvent, TransactionEvent};
 
 use crate::{
@@ -19,15 +19,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetAccountIdToAffectingTxMapItemUptoLimit, GetBlock, GetBlockEvents,
-        GetBlockHashToBlockIdMapItem, GetChannelCursor, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetTransactionByHash, GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
-        WithdrawalReconciliationKey,
+        GetAccountTransactions, GetBlock, GetBlockByHash, GetBlockEvents, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, WithdrawalReconciliationKey,
     },
 };
 
@@ -118,7 +117,10 @@ fn state_with_balance(balance: u128) -> Arc<V03State> {
     Arc::new(V03State::new().with_public_accounts([(
         marker_id(),
         Account {
-            balance,
+            data: AccountData {
+                balance,
+                ..AccountData::default()
+            },
             ..Account::default()
         },
     )]))
@@ -147,6 +149,7 @@ async fn stored_balance(storage_ref: &ActorRef<StorageActor>) -> u128 {
         .expect("Failed to read the stored state")
         .expect("The store holds a chain")
         .get_account_by_id(marker_id())
+        .data
         .balance
 }
 
@@ -443,7 +446,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -454,7 +457,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block1a.header.hash
             })
             .await
@@ -465,7 +468,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block2.header.hash
             })
             .await
@@ -481,7 +484,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -492,7 +495,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block1b.header.hash
             })
             .await
@@ -503,7 +506,7 @@ async fn net_shortening_reorg_drops_block_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: block2.header.hash
             })
             .await
@@ -531,11 +534,11 @@ async fn net_shortening_reorg_drops_acc_maps() {
     let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
     let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
 
-    let clock_1_acc = genesis_clock_tx.message.account_ids[0];
+    let clock_1_acc = genesis_clock_tx.message.shard_selectors[0].account_id;
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 3,
@@ -556,7 +559,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 3,
@@ -1035,7 +1038,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .expect("The final snapshot is stored");
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
-    assert_eq!(final_state.get_account_by_id(marker_id()).balance, 200);
+    assert_eq!(final_state.get_account_by_id(marker_id()).data.balance, 200);
     assert_eq!(stored_balance(&storage_ref).await, 300);
 }
 
@@ -1116,7 +1119,7 @@ async fn an_unseeded_store_reports_no_chain() {
     );
     assert!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: [0; 32].into()
             })
             .await
@@ -1129,7 +1132,7 @@ async fn an_unseeded_store_reports_no_chain() {
             .await
             .expect("Failed to get events for block id")
             .is_none()
-    )
+    );
 }
 
 /// The property that lets a genesis go in as an ordinary block write.
@@ -1142,7 +1145,7 @@ async fn the_first_block_written_starts_the_chain() {
     let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
     let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
     assert_eq!(
         storage_ref
@@ -1160,7 +1163,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: genesis.header.hash
             })
             .await
@@ -1169,7 +1172,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 100,
@@ -1207,7 +1210,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetBlockHashToBlockIdMapItem {
+            .ask(GetBlockByHash {
                 block_hash: second_hash
             })
             .await
@@ -1216,7 +1219,7 @@ async fn the_first_block_written_starts_the_chain() {
     );
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 100,
@@ -1238,7 +1241,7 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_clock_tx = clock_invocation(3_u64.saturating_mul(100));
     let block_4_clock_tx = clock_invocation(4_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.account_ids[0];
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
     // A later block extends the chain rather than restarting it.
     let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
@@ -1278,7 +1281,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 0,
                 limit: 2,
@@ -1293,7 +1296,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 1,
                 limit: 2,
@@ -1308,7 +1311,7 @@ async fn acc_id_to_tx_map_corectness() {
 
     assert_eq!(
         storage_ref
-            .ask(GetAccountIdToAffectingTxMapItemUptoLimit {
+            .ask(GetAccountTransactions {
                 account_id: clock_1_acc,
                 offset: 1,
                 limit: 3,

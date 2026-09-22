@@ -12,21 +12,21 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountIdToAffectingTxMapItemUptoLimit,
-        GetAllBlocks, GetBlock, GetBlockHashToBlockIdMapItem, GetChannelCursor,
-        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
-        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, ResetAllBlocksToPending, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes, StoreUpdateOutcome,
-        ZoneAnchorRecord,
+        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
+        GetBlockByHash, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
+        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
+        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
+        StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
 
-pub trait StorageActorTrait: Actor<Args = Self, Error = Error>
+pub trait StorageActorTrait:
+    Actor<Args = Self, Error = Error>
     + Message<AtomicUpdate, Reply = Result<StoreUpdateOutcome>>
     + Message<GetBlock, Reply = Result<Option<Block>>>
     + Message<GetAllBlocks, Reply = Result<Vec<Block>>>
@@ -61,8 +61,8 @@ pub trait StorageActorTrait: Actor<Args = Self, Error = Error>
     + Message<DeleteCrossZonePeerFloor, Reply = Result<()>>
     + Message<GetCrossZonePeerTip, Reply = Result<Option<PeerChainTip>>>
     + Message<SetCrossZonePeerTip, Reply = Result<()>>
-    + Message<GetBlockHashToBlockIdMapItem, Reply = Result<Option<u64>>>
-    + Message<GetAccountIdToAffectingTxMapItemUptoLimit, Reply = Result<Option<Vec<LeeTransaction>>>>
+    + Message<GetBlockByHash, Reply = Result<Option<u64>>>
+    + Message<GetAccountTransactions, Reply = Result<Option<Vec<LeeTransaction>>>>
     + Message<DumpDb, Reply = Result<DbDump>>
 {
 }

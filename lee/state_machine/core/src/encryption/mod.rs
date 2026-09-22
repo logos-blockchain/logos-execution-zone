@@ -253,10 +253,10 @@ mod tests {
     }
 
     fn account_with_data(data_len: usize) -> Account {
-        Account {
-            data: vec![7_u8; data_len].try_into().expect("data fits"),
-            ..Account::default()
-        }
+        Account::default().with_shard(
+            AccountId::new([8_u8; 32]),
+            vec![7_u8; data_len].try_into().expect("data fits"),
+        )
     }
 
     fn plaintext_len(account: &Account) -> u32 {
@@ -316,10 +316,8 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account {
-            balance: 42,
-            ..account_with_data(37)
-        };
+        let mut account = account_with_data(37);
+        account.data.balance = 42;
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([1_u8; 32]),
             seed: PdaSeed::new([2_u8; 32]),
@@ -370,11 +368,10 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account {
-            program_owner: [12_u32; 8].into(),
-            balance: 999,
-            ..Account::default()
-        };
+        let account = Account::funded(999).with_shard(
+            AccountId::new([12; 32]),
+            b"shard record".to_vec().try_into().unwrap(),
+        );
         let kind = PrivateAccountKind::Regular(0);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
@@ -390,7 +387,7 @@ mod tests {
         let wrong_ss = SharedSecretKey([0_u8; 32]);
         let bad_via_ss = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
         assert!(
-            bad_via_ss.is_none() || bad_via_ss.is_some_and(|(_, a)| a.balance != 999),
+            bad_via_ss.is_none() || bad_via_ss.is_some_and(|(_, a)| a.data.balance != 999),
             "wrong shared secret must not produce the correct plaintext"
         );
 
@@ -398,7 +395,7 @@ mod tests {
         let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
-            bad_via_nlf.is_none() || bad_via_nlf.is_some_and(|(_, a)| a.balance != 999),
+            bad_via_nlf.is_none() || bad_via_nlf.is_some_and(|(_, a)| a.data.balance != 999),
             "wrong nullifier must not produce the correct plaintext"
         );
     }

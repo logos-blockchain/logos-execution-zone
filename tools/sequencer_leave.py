@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from committee_watch import CONFIG_SEED, decode_stake_config, pda, program_id, rpc
+from committee_watch import stake_config
 
 DEFAULT_CONFIG = "lez/sequencer/service/configs/debug/sequencer_config.json"
 DEFAULT_WALLET = "lez/wallet/configs/debug"
@@ -64,9 +64,7 @@ def main() -> None:
     ).strip().splitlines()[-1]
     print(f"    key {key}")
 
-    config = decode_stake_config(
-        bytes(rpc(args.sequencer, "getAccount", [pda(program_id(repo), CONFIG_SEED)])["data"])
-    )
+    config = stake_config(repo, args.sequencer)
     entry = config["entries"].get(key)
     if entry is None:
         raise SystemExit(f"{key} has no stake entry; nothing to unstake")

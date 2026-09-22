@@ -263,6 +263,7 @@ zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
 enum-iterator = "2.3.0"
+cbindgen = "0.29"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

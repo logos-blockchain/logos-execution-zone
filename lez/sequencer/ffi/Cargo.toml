@@ -23,7 +23,7 @@ kameo_actors.workspace = true
 anyhow.workspace = true
 
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen.workspace = true
 
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]

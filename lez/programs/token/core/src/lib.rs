@@ -1,32 +1,34 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, Data};
+use lee_core::account::{AccountId, ShardData};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.
+///
+/// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfer tokens from sender to recipient.
     ///
     /// Required accounts:
     /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or authorized and uninitialized).
+    /// - Recipient's Token Holding account (initialized or empty).
     Transfer { amount_to_transfer: u128 },
 
     /// Create a new fungible token definition without metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized).
+    /// - Token Definition account (empty),
+    /// - Token Holding account (empty).
     NewFungibleDefinition { name: String, total_supply: u128 },
 
     /// Create a new fungible or non-fungible token definition with metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized, authorized),
-    /// - Token Holding account (uninitialized, authorized),
-    /// - Token Metadata account (uninitialized, authorized).
+    /// - Token Definition account (empty),
+    /// - Token Holding account (empty),
+    /// - Token Metadata account (empty).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
         /// Boxed to avoid large enum variant size.
@@ -36,14 +38,14 @@ pub enum Instruction {
     /// Initialize a token holding account for a given token definition.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized, any authorization),
-    /// - Token Holding account (uninitialized, authorized),
+    /// - Token Definition account (initialized),
+    /// - Token Holding account,
     InitializeAccount,
 
     /// Burn tokens from the holder's account.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized, any authorization),
+    /// - Token Definition account (initialized),
     /// - Token Holding account (initialized, authorized).
     Burn { amount_to_burn: u128 },
 
@@ -51,14 +53,14 @@ pub enum Instruction {
     ///
     /// Required accounts:
     /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (uninitialized or authorized and initialized).
+    /// - Token Holding account (initialized or empty).
     Mint { amount_to_mint: u128 },
 
     /// Print a new NFT from the master copy.
     ///
     /// Required accounts:
-    /// - NFT Master Token Holding account (authorized),
-    /// - NFT Printed Copy Token Holding account (uninitialized, authorized).
+    /// - NFT Master Token Holding account (initialized, authorized),
+    /// - NFT Printed Copy Token Holding account (empty).
     PrintNft,
 }
 
@@ -88,15 +90,15 @@ pub enum TokenDefinition {
     },
 }
 
-impl TryFrom<&Data> for TokenDefinition {
+impl TryFrom<&ShardData> for TokenDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenDefinition> for Data {
+impl From<&TokenDefinition> for ShardData {
     fn from(definition: &TokenDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -104,7 +106,7 @@ impl From<&TokenDefinition> for Data {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into Data")
+        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
     }
 }
 
@@ -172,15 +174,15 @@ impl TokenHolding {
     }
 }
 
-impl TryFrom<&Data> for TokenHolding {
+impl TryFrom<&ShardData> for TokenHolding {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenHolding> for Data {
+impl From<&TokenHolding> for ShardData {
     fn from(holding: &TokenHolding) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(holding));
@@ -188,7 +190,7 @@ impl From<&TokenHolding> for Data {
         BorshSerialize::serialize(holding, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token holding encoded data should fit into Data")
+        Self::try_from(data).expect("Token holding encoded data should fit into ShardData")
     }
 }
 
@@ -223,15 +225,15 @@ pub enum MetadataStandard {
     Expanded,
 }
 
-impl TryFrom<&Data> for TokenMetadata {
+impl TryFrom<&ShardData> for TokenMetadata {
     type Error = std::io::Error;
 
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
+    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenMetadata> for Data {
+impl From<&TokenMetadata> for ShardData {
     fn from(metadata: &TokenMetadata) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(metadata));
@@ -239,6 +241,6 @@ impl From<&TokenMetadata> for Data {
         BorshSerialize::serialize(metadata, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token metadata encoded data should fit into Data")
+        Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
     }
 }

@@ -1,17 +1,17 @@
 use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
     EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramId, Proof, PublicActionWithID, PublicKey,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector, Proof, PublicActionWithID,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature,
-    FfiU128, FfiVec,
-    account::FfiAccount,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
+    account::FfiAccountData,
     vectors::{
-        FfiAccountIdList, FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramShardSelectorList,
+        FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -48,15 +48,12 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_id: ProgramId(value.message.program_id.data),
-                account_ids: {
-                    let std_vec: Vec<_> = value.message.account_ids.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| AccountId {
-                            value: ffi_val.data,
-                        })
-                        .collect()
+                program_account_id: AccountId {
+                    value: value.message.program_account_id.data,
+                },
+                shard_selectors: {
+                    let std_vec: Vec<_> = value.message.shard_selectors.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
@@ -127,10 +124,49 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
     }
 }
 
+/// Selects an account's balance and optionally one program shard.
+///
+/// `program_account_id` is used only when `has_program_account_id` is true.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiProgramShardSelector {
+    pub account_id: FfiAccountId,
+    pub has_program_account_id: bool,
+    pub program_account_id: FfiAccountId,
+}
+
+impl From<ProgramShardSelector> for FfiProgramShardSelector {
+    fn from(value: ProgramShardSelector) -> Self {
+        let ProgramShardSelector {
+            account_id,
+            program_account_id,
+        } = value;
+
+        Self {
+            account_id: account_id.into(),
+            has_program_account_id: program_account_id.is_some(),
+            program_account_id: program_account_id.map(Into::into).unwrap_or_default(),
+        }
+    }
+}
+
+impl From<FfiProgramShardSelector> for ProgramShardSelector {
+    fn from(value: FfiProgramShardSelector) -> Self {
+        Self {
+            account_id: AccountId {
+                value: value.account_id.data,
+            },
+            program_account_id: value.has_program_account_id.then_some(AccountId {
+                value: value.program_account_id.data,
+            }),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_id: FfiProgramId,
-    pub account_ids: FfiAccountIdList,
+    pub program_account_id: FfiAccountId,
+    pub shard_selectors: FfiProgramShardSelectorList,
     pub nonces: FfiNonceList,
     pub instruction_data: FfiInstructionDataList,
     pub has_fee: bool,
@@ -140,16 +176,16 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_id,
-            account_ids,
+            program_account_id,
+            shard_selectors,
             nonces,
             instruction_data,
             fee,
         } = value;
 
         Self {
-            program_id: program_id.into(),
-            account_ids: account_ids
+            program_account_id: program_account_id.into(),
+            shard_selectors: shard_selectors
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -213,7 +249,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                             account_id: AccountId {
                                 value: ffi_val.account_id.data,
                             },
-                            post_state: ffi_val.post_state.into(),
+                            post: ffi_val.post.into(),
                         })
                         .collect()
                 },
@@ -268,18 +304,18 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 #[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
-    pub post_state: FfiAccount,
+    pub post: FfiAccountData,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post_state: lee::Account = value
-            .post_state
+        let post: lee::AccountData = value
+            .post
             .try_into()
             .expect("Source is in blocks, must fit");
         Self {
             account_id: value.account_id.into(),
-            post_state: post_state.into(),
+            post: post.into(),
         }
     }
 }
@@ -567,8 +603,11 @@ mod tests {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
             message: PublicMessage {
-                program_id: ProgramId([2; 8]),
-                account_ids: vec![AccountId { value: [3; 32] }],
+                program_account_id: AccountId { value: [2; 32] },
+                shard_selectors: vec![ProgramShardSelector {
+                    account_id: AccountId { value: [3; 32] },
+                    program_account_id: None,
+                }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],
                 fee,

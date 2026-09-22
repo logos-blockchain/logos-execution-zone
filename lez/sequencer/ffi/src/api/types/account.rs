@@ -1,9 +1,79 @@
-use lee::{Account, AccountId, Data};
+use std::collections::BTreeMap;
+
+use lee::{Account, AccountData, AccountId, ShardData};
 
 use crate::{
     OperationStatus,
-    api::types::{FfiBytes32, FfiU128},
+    api::types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
 };
+
+#[repr(C)]
+pub struct FfiAccountData {
+    /// Balance as little-endian [u8; 16].
+    pub balance: FfiU128,
+    /// Account shards keys.
+    pub account_data_keys: FfiVec<FfiAccountId>,
+    /// Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
+    pub account_data_values: FfiVec<FfiVecU8>,
+}
+
+impl From<AccountData> for FfiAccountData {
+    fn from(value: AccountData) -> Self {
+        let AccountData { balance, shards } = value;
+
+        let acc_data_keys = shards.keys().copied().map(Into::into).collect::<Vec<_>>();
+        let acc_data_values = shards
+            .values()
+            .cloned()
+            .map(ShardData::into_inner)
+            .map(Into::into)
+            .collect::<Vec<_>>();
+
+        Self {
+            balance: balance.into(),
+            account_data_keys: acc_data_keys.into(),
+            account_data_values: acc_data_values.into(),
+        }
+    }
+}
+
+impl TryFrom<FfiAccountData> for AccountData {
+    type Error = OperationStatus;
+
+    fn try_from(value: FfiAccountData) -> Result<Self, Self::Error> {
+        let keys_ffi: Vec<_> = value.account_data_keys.into();
+        let keys_std: Vec<AccountId> = keys_ffi.into_iter().map(Into::into).collect();
+
+        let values_ffi: Vec<_> = value.account_data_values.into();
+        let values_std_raw: Vec<Vec<u8>> = values_ffi.into_iter().map(Into::into).collect();
+
+        if values_std_raw.len() != keys_std.len() {
+            log::error!(
+                "Failed to cast `FfiAccount` into `Account`, err: Keys and values length mismatch"
+            );
+            return Err(OperationStatus::CastError);
+        }
+
+        let mut values_std = vec![];
+
+        for raw_shard in values_std_raw {
+            let shard: ShardData = raw_shard.try_into().map_err(|e| {
+                log::error!("Failed to cast `FfiAccount` into `Account`, err: {e}");
+                OperationStatus::CastError
+            })?;
+
+            values_std.push(shard);
+        }
+
+        Ok(Self {
+            balance: value.balance.into(),
+            shards: keys_std
+                .into_iter()
+                .zip(values_std)
+                .collect::<BTreeMap<_, _>>(),
+        })
+    }
+}
 
 /// Account data structure - C-compatible version of lee Account.
 ///
@@ -11,15 +81,8 @@ use crate::{
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    pub program_owner: FfiBytes32,
-    /// Balance as little-endian [u8; 16].
-    pub balance: FfiU128,
-    /// Pointer to account data bytes.
-    pub data: *mut u8,
-    /// Length of account data.
-    pub data_len: usize,
-    /// Capacity of account data.
-    pub data_cap: usize,
+    /// Account data struct.
+    pub account_data: FfiAccountData,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
 }
@@ -34,49 +97,27 @@ impl From<&lee::AccountId> for FfiBytes32 {
 
 impl From<lee::Account> for FfiAccount {
     fn from(value: lee::Account) -> Self {
-        let lee::Account {
-            program_owner,
-            balance,
-            data,
-            nonce,
-        } = value;
-
-        let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
+        let lee::Account { data, nonce } = value;
 
         Self {
-            program_owner: FfiBytes32::from_account_id(&program_owner),
-            balance: balance.into(),
-            data,
-            data_len,
-            data_cap,
+            account_data: data.into(),
             nonce: nonce.0.into(),
         }
     }
 }
 
-// Also can be used to free `FfiAccount`
 impl TryFrom<FfiAccount> for Account {
     type Error = OperationStatus;
 
     fn try_from(value: FfiAccount) -> Result<Self, Self::Error> {
         let FfiAccount {
-            program_owner,
-            balance,
-            data,
-            data_cap,
-            data_len,
+            account_data,
             nonce,
         } = value;
 
         Ok(Self {
-            program_owner: AccountId::new(program_owner.data),
-            balance: balance.into(),
-            data: Data::try_from(unsafe { Vec::from_raw_parts(data, data_len, data_cap) })
-                .map_err(|e| {
-                    log::error!("Failed to cast `Vec<u8>` into Data, err: {e}");
-                    OperationStatus::CastError
-                })?,
             nonce: Into::<u128>::into(nonce).into(),
+            data: account_data.try_into()?,
         })
     }
 }
@@ -115,5 +156,46 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
 
     if let Ok(orig_val) = orig_val_res {
         drop(orig_val);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use lee::{Account, AccountData, AccountId, ShardData};
+    use lee_core::account::Nonce;
+
+    use crate::api::types::account::FfiAccount;
+
+    #[test]
+    fn account_roundtrip() {
+        let mut shards = BTreeMap::new();
+
+        shards.insert(
+            AccountId::new([42; 32]),
+            ShardData::try_from(vec![1, 1, 1, 1]).expect("Must fit"),
+        );
+        shards.insert(
+            AccountId::new([43; 32]),
+            ShardData::try_from(vec![2, 2, 2, 2]).expect("Must fit"),
+        );
+        shards.insert(
+            AccountId::new([44; 32]),
+            ShardData::try_from(vec![3, 3, 3, 3]).expect("Must fit"),
+        );
+
+        let account_std = Account {
+            nonce: Nonce::from(5),
+            data: AccountData {
+                balance: 10,
+                shards,
+            },
+        };
+
+        let ffi_account: FfiAccount = account_std.clone().into();
+        let account_std_trip: Account = ffi_account.try_into().expect("Must be castable");
+
+        assert_eq!(account_std_trip, account_std);
     }
 }

@@ -4,7 +4,7 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Cycles},
+    account::{AccountId, Cycles, ShardData},
     program::ProgramInput,
     to_borsh_frame, to_frame,
 };
@@ -13,20 +13,13 @@ use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
 
 use crate::{
     error::LeeError,
-    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
+    program::{AccountInput, DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
-fn transfer_pre_states() -> Vec<AccountWithMetadata> {
+fn transfer_pre_states() -> Vec<AccountInput> {
     vec![
-        AccountWithMetadata::new(
-            Account {
-                balance: 77_665_544_332_211,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        ),
-        AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32])),
+        AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
+        AccountInput::balance(AccountId::new([1; 32]), false, 0),
     ]
 }
 
@@ -40,7 +33,7 @@ fn bare_env(budget: Cycles) -> ExecutorEnv<'static> {
 /// A fresh `ExecutorEnv` carrying the same inputs `Program::execute` would write.
 fn env_for(
     program: &Program,
-    pre_states: &[AccountWithMetadata],
+    pre_states: &[AccountInput],
     instruction: &[u8],
     budget: Cycles,
 ) -> ExecutorEnv<'static> {
@@ -48,7 +41,7 @@ fn env_for(
     builder.session_limit(Some(budget));
     program
         .write_inputs(
-            AccountId::from(program.id()),
+            AccountId::from_builtin_program(program.id()),
             None,
             pre_states,
             instruction,
@@ -72,7 +65,7 @@ fn baseline(env: ExecutorEnv<'_>, elf: &[u8]) -> anyhow::Result<SessionOutcome> 
 /// real programs with several shapes of input.
 #[test]
 fn cached_path_matches_rebuild_path() {
-    let cases: Vec<(&str, Program, Vec<AccountWithMetadata>, Vec<u8>)> = vec![
+    let cases: Vec<(&str, Program, Vec<AccountInput>, Vec<u8>)> = vec![
         (
             "simple_balance_transfer",
             crate::test_methods::simple_balance_transfer(),
@@ -88,18 +81,20 @@ fn cached_path_matches_rebuild_path() {
         (
             "data_changer",
             crate::test_methods::data_changer(),
-            vec![AccountWithMetadata::new(
-                Account::default(),
-                true,
+            vec![AccountInput::with_shard(
                 AccountId::new([3; 32]),
+                true,
+                0,
+                AccountId::from_builtin_program(crate::test_methods::data_changer().id()),
+                ShardData::empty(),
             )],
             Program::serialize_instruction(vec![9_u8; 32]).unwrap(),
         ),
         (
-            "squatter",
-            crate::test_methods::squatter(),
+            "foreign_shard_writer",
+            crate::test_methods::foreign_shard_writer(),
             transfer_pre_states(),
-            Program::serialize_instruction((vec![7_u8; 8], 5_u128)).unwrap(),
+            Program::serialize_instruction(vec![7_u8; 8]).unwrap(),
         ),
         (
             "malformed_journal",
@@ -223,7 +218,7 @@ fn guest_panic_is_not_out_of_gas() {
     builder.session_limit(Some(DEFAULT_PUBLIC_CYCLE_BUDGET));
     builder.write_slice(&to_borsh_frame(&lee_core::program::CallKind::Execute));
     let input = ProgramInput {
-        self_account_id: spoof.id().into(),
+        self_account_id: AccountId::from_builtin_program(spoof.id()),
         caller_account_id: None,
         pre_states: Vec::new(),
         instruction: Vec::<u8>::new(),
