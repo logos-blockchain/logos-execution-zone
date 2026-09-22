@@ -13,6 +13,16 @@ mod guests {
 
 #[must_use]
 #[inline]
+pub const fn reverse_transfer() -> Program {
+    use guests::{REVERSE_TRANSFER_ELF, REVERSE_TRANSFER_ID, REVERSE_TRANSFER_PATH};
+
+    let _unused = REVERSE_TRANSFER_PATH;
+
+    Program::new_unchecked(REVERSE_TRANSFER_ID, Cow::Borrowed(REVERSE_TRANSFER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn data_writer() -> Program {
     use guests::{DATA_WRITER_ELF, DATA_WRITER_ID, DATA_WRITER_PATH};
 

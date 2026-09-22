@@ -17,7 +17,7 @@ use lee::{
     Account, AccountId, PrivateKey, ProgramId, ProgramShardSelector, PublicKey, PublicTransaction,
     V03State, program::Program,
 };
-use lee_core::{account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID};
+use lee_core::account::Nonce;
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -38,7 +38,6 @@ use sequencer_storage_actor::{
     },
 };
 use tempfile::tempdir;
-use test_guest_core::ChainCall;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
@@ -4500,7 +4499,7 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let mut state =
-        stake_test_state(funding_id, amount).with_programs([test_programs::chain_caller()]);
+        stake_test_state(funding_id, amount).with_programs([test_programs::reverse_transfer()]);
 
     // Seed the custody account so there is something worth taking.
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
@@ -4508,14 +4507,7 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
 
     // A mover that moves balance the wrong way: out of the custody account it was
     // handed, into the staker's own funding account.
-    // `chain_caller` permutes its two inputs, so the chained transfer debits the custody
-    // account it was handed and credits the staker's own funding account.
-    let mover_instruction_data = Program::serialize_instruction(ChainCall::new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
-            .unwrap(),
-    ))
-    .unwrap();
+    let mover_instruction_data = Program::serialize_instruction(amount).unwrap();
     let sequencer_stake_program_id =
         AccountId::from_builtin_program(programs::sequencer_stake().id());
     let message = lee::public_transaction::Message::try_new(
@@ -4536,7 +4528,9 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
         sequencer_stake_core::Instruction::Stake {
             sequencer_key: test_sequencer_key(0x64),
             amount,
-            mover_account_id: AccountId::from_builtin_program(test_programs::chain_caller().id()),
+            mover_account_id: AccountId::from_builtin_program(
+                test_programs::reverse_transfer().id(),
+            ),
             mover_instruction_data,
         },
     )

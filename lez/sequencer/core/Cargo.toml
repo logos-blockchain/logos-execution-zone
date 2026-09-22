@@ -64,7 +64,6 @@ test-utils = []
 cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 futures.workspace = true
-test_guest_core.workspace = true
 test_programs.workspace = true
 program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
