@@ -93,7 +93,7 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
             sender,
             Account::funded(100).with_shard(stranger, stranger_record.clone()),
         )])
-        .with_test_programs();
+        .with_programs([crate::test_methods::native_spender()]);
 
     let message = public_transaction::Message::try_new(
         program_id,

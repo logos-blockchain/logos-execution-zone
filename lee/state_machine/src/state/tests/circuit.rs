@@ -1075,7 +1075,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
 
 #[test]
 fn private_authorized_uninitialized_account() {
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::noop()]);
 
     // Set up keys for the authorized private account
     let private_keys = test_private_account_keys_1();
@@ -1109,7 +1109,10 @@ fn private_authorized_uninitialized_account() {
 
 #[test]
 fn private_account_claimed_then_used_without_init_flag_should_fail() {
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::data_changer(),
+        crate::test_methods::noop(),
+    ]);
 
     // Set up keys for the private account
     let private_keys = test_private_account_keys_1();

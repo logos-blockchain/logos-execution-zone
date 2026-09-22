@@ -54,7 +54,7 @@ fn emitted(n: u8) -> ProgramEvent {
 #[test]
 fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::event_emitter()]);
     let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let tx = program_transaction(
@@ -82,7 +82,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 #[test]
 fn chained_events_follow_depth_first_pre_order() {
     let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::event_emitter()]);
     let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
@@ -134,7 +134,10 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
         &PdaSeed::new([1; 32]),
     );
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::event_emitter(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, Account::funded(1000));
 
     // Zero-amount flash swap: the emitter runs as the callback, the second of the initiator's
@@ -169,7 +172,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
 #[test]
 fn program_that_emits_nothing_yields_no_events() {
     let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::noop()]);
 
     let tx = program_transaction(
         AccountId::from_builtin_program(crate::test_methods::noop().id()),
@@ -188,7 +191,7 @@ fn emitted_events_leave_state_untouched() {
     let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let run = |events: Vec<ProgramEvent>| {
-        let mut state = V03State::new().with_test_programs();
+        let mut state = V03State::new().with_programs([crate::test_methods::event_emitter()]);
         let tx = program_transaction(
             emitter_id,
             account_id,
@@ -223,7 +226,7 @@ fn example_event_selector_matches_its_derivation() {
 #[test]
 fn events_are_filterable_by_selector_and_decodable() {
     let account_id = AccountId::new([1; 32]);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::event_emitter()]);
     let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
 
     let example = ExampleEvent {

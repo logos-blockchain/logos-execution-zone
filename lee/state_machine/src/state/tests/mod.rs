@@ -47,33 +47,6 @@ mod public_program_rules;
 mod validity_window;
 
 impl V03State {
-    /// Include test programs in the builtin programs map.
-    #[must_use]
-    pub fn with_test_programs(mut self) -> Self {
-        self.insert_program(&crate::test_methods::dropped_account());
-        self.insert_program(&crate::test_methods::data_changer());
-        self.insert_program(&crate::test_methods::auth_asserting_noop());
-        self.insert_program(&crate::test_methods::private_pda_delegator());
-        self.insert_program(&crate::test_methods::noop());
-        self.insert_program(&crate::test_methods::shard_forwarder());
-        self.insert_program(&crate::test_methods::chain_caller());
-        self.insert_program(&crate::test_methods::exits_nonzero());
-        self.insert_program(&crate::test_methods::non_delegating_forwarder());
-        self.insert_program(&crate::test_methods::event_emitter());
-        self.insert_program(&crate::test_methods::validity_window());
-        self.insert_program(&crate::test_methods::flash_swap_initiator());
-        self.insert_program(&crate::test_methods::flash_swap_callback());
-        self.insert_program(&crate::test_methods::malicious_self_program_id());
-        self.insert_program(&crate::test_methods::malicious_caller_program_id());
-        self.insert_program(&crate::test_methods::pda_spend_proxy());
-        self.insert_program(&crate::test_methods::validity_window_chain_caller());
-        self.insert_program(&crate::test_methods::references_undeclared_account());
-        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
-        self.insert_program(&crate::test_methods::reordering_writer());
-        self.insert_program(&crate::test_methods::native_spender());
-        self
-    }
-
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
         let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);

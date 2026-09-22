@@ -13,7 +13,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
             (AccountId::new([1; 32]), 100),
             (AccountId::new([2; 32]), 0),
         ])
-        .with_test_programs();
+        .with_programs([crate::test_methods::dropped_account()]);
     let shard_selectors = vec![
         ProgramShardSelector::balance(AccountId::new([1; 32])),
         ProgramShardSelector::balance(AccountId::new([2; 32])),
@@ -41,9 +41,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
 fn program_should_fail_if_it_debits_an_unauthorized_account() {
     let sender_account_id = AccountId::new([1; 32]);
     let receiver_account_id = AccountId::new([2; 32]);
-    let mut state = V03State::new()
-        .with_public_account_balances([(sender_account_id, 100)])
-        .with_test_programs();
+    let mut state = V03State::new().with_public_account_balances([(sender_account_id, 100)]);
     let amount: u128 = 1;
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
@@ -76,8 +74,7 @@ fn program_should_transfer_balance_from_an_authorized_account() {
     let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
     let receiver_account_id = AccountId::new([2; 32]);
     let mut state = V03State::new()
-        .with_public_account_balances([(sender_account_id, 100), (receiver_account_id, 0)])
-        .with_test_programs();
+        .with_public_account_balances([(sender_account_id, 100), (receiver_account_id, 0)]);
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
@@ -125,7 +122,10 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_public
     ];
 
     for (shard, selector, written) in cases {
-        let mut state = V03State::new().with_test_programs();
+        let mut state = V03State::new().with_programs([
+            crate::test_methods::data_changer(),
+            crate::test_methods::noop(),
+        ]);
         let message =
             public_transaction::Message::try_new(program_id, vec![selector], vec![], written)
                 .unwrap();
@@ -154,7 +154,7 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     let target_id = AccountId::new([1; 32]);
     let mut state = V03State::new()
         .with_public_accounts([(target_id, Account::funded(250))])
-        .with_test_programs();
+        .with_programs([crate::test_methods::data_changer()]);
     let program_id = AccountId::from_builtin_program(crate::test_methods::data_changer().id());
     let written = vec![7_u8; 4];
 
@@ -186,7 +186,10 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
     let undeclared_account_id = AccountId::new([99; 32]);
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 0)])
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::noop(),
+            crate::test_methods::references_undeclared_account(),
+        ]);
     let program_id =
         AccountId::from_builtin_program(crate::test_methods::references_undeclared_account().id());
     let callee_id = crate::test_methods::noop().id();
@@ -225,7 +228,7 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
     let fabricated_account_id = AccountId::new([123; 32]);
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 0)])
-        .with_test_programs();
+        .with_programs([crate::test_methods::injects_undeclared_pre_state()]);
     let program_id =
         AccountId::from_builtin_program(crate::test_methods::injects_undeclared_pre_state().id());
     let message = public_transaction::Message::try_new(
@@ -263,7 +266,10 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
             (AccountId::new([1; 32]), 100),
             (AccountId::new([2; 32]), 0),
         ])
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::dropped_account(),
+            crate::test_methods::non_delegating_forwarder(),
+        ]);
 
     // The forwarder names both accounts for the callee; the callee journals only the first.
     let message = public_transaction::Message::try_new(
@@ -344,7 +350,7 @@ fn reordered_state_diffs_still_succeed() {
     let written = vec![7_u8; 4];
     let first = AccountId::new([23; 32]);
     let second = AccountId::new([24; 32]);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::reordering_writer()]);
 
     let message = public_transaction::Message::try_new(
         program_id,

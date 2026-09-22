@@ -91,6 +91,8 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
+    // A native transfer runs no guest, so it claims no program image.
+    assert!(output.program_image_claims.is_empty());
 
     let [action] = output.public_actions.try_into().unwrap();
     assert_eq!(action.account_id, sender_id);
@@ -1367,30 +1369,4 @@ fn a_guest_supplied_for_the_reserved_id_is_refused() {
         panic!("a guest was accepted for the native token program: {result:?}");
     };
     assert!(message.contains("no deployable bytecode"), "{message}");
-}
-
-#[test]
-fn a_native_transfer_claims_no_program_image() {
-    let sender_id = AccountId::new([3; 32]);
-    let recipient_id = AccountId::new([4; 32]);
-
-    let (output, _proof) = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_id),
-            ],
-            signers: [sender_id].into(),
-            public_accounts: [(sender_id, Account::funded(100))].into(),
-            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
-                amount: 7,
-            })
-            .unwrap(),
-            ..Default::default()
-        },
-        &ProgramWithDependencies::native(),
-    )
-    .expect("the transfer proves");
-
-    assert!(output.program_image_claims.is_empty());
 }

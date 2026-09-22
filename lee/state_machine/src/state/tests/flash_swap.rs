@@ -20,7 +20,10 @@ fn flash_swap_successful() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
@@ -69,7 +72,10 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
@@ -124,7 +130,10 @@ fn flash_swap_self_call_targets_correct_program() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
@@ -161,7 +170,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let vault_account = Account::funded(1000);
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::flash_swap_initiator()]);
     state.force_insert_account(vault_id, vault_account);
 
     let instruction = FlashSwapInstruction::InvariantCheck {
@@ -191,7 +200,8 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     let acc_id = AccountId::new([99; 32]);
     let account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state =
+        V03State::new().with_programs([crate::test_methods::malicious_self_program_id()]);
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(
@@ -217,7 +227,8 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     let acc_id = AccountId::new([99; 32]);
     let account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state =
+        V03State::new().with_programs([crate::test_methods::malicious_caller_program_id()]);
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(

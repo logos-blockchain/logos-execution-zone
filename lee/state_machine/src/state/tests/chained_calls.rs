@@ -11,7 +11,7 @@ fn public_chained_call() {
     let initial_balance = 1000;
     let mut state = V03State::new()
         .with_public_account_balances([(from, initial_balance), (to, 0)])
-        .with_test_programs();
+        .with_programs([crate::test_methods::chain_caller()]);
     let from_key = key;
     let amount: u128 = 37;
     let instruction = ChainCall::new(
@@ -55,7 +55,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
     let initial_balance = 100;
     let mut state = V03State::new()
         .with_public_account_balances([(from, initial_balance), (to, 0)])
-        .with_test_programs();
+        .with_programs([crate::test_methods::chain_caller()]);
     let from_key = key;
     let amount: u128 = 0;
     let instruction = ChainCall::new(
@@ -99,7 +99,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
     let initial_balance = 1000;
     let mut state = V03State::new()
         .with_public_account_balances([(from, initial_balance), (to, 0)])
-        .with_test_programs();
+        .with_programs([crate::test_methods::chain_caller()]);
     let amount: u128 = 58;
     let instruction = ChainCall::new(
         NATIVE_TOKEN_PROGRAM_ID,
@@ -149,7 +149,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
                 Account::default().with_shard(stranger, stranger_data.clone()),
             ),
         ])
-        .with_test_programs();
+        .with_programs([crate::test_methods::chain_caller()]);
 
     // The transaction executes the chain_caller program, which internally calls the
     // native token program
@@ -209,7 +209,7 @@ fn private_chained_call(number_of_calls: u32) {
             (from_commitment, from_init_nullifier),
             (to_commitment, to_init_nullifier),
         ])
-        .with_test_programs();
+        .with_programs([crate::test_methods::chain_caller()]);
     let amount: u128 = 37;
     let instruction = ChainCall::new(
         NATIVE_TOKEN_PROGRAM_ID,

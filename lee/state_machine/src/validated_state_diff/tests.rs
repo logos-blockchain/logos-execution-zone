@@ -180,7 +180,10 @@ fn chained_calls_share_one_budget() {
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let state = V03State::new()
         .with_public_account_balances([(from, 1_000)])
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::noop(),
+            crate::test_methods::shard_forwarder(),
+        ]);
     let callee = (
         echo_id,
         ProgramShardSelector::new(from, echo_id),
@@ -243,7 +246,7 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     let unsigned = AccountId::new([2_u8; 32]);
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_test_programs();
+        .with_programs([crate::test_methods::auth_asserting_noop()]);
     let message = Message::try_new(
         program_id,
         vec![
@@ -312,7 +315,10 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     let to = AccountId::new([2_u8; 32]);
     let state = V03State::new()
         .with_public_account_balances([(from, 1_000), (to, 0)])
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::chain_caller(),
+            crate::test_methods::exits_nonzero(),
+        ]);
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let run = |num_chain_calls: u32| {
         let instruction = ChainCall::new(
