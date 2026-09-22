@@ -187,6 +187,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn robinhood() -> Program {
+        Program::new_unchecked(
+            test_methods::ROBINHOOD_ID,
+            Cow::Borrowed(test_methods::ROBINHOOD_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn malicious_self_program_id() -> Program {
         Program::new_unchecked(
             test_methods::MALICIOUS_SELF_PROGRAM_ID_ID,
