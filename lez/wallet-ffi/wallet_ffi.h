@@ -133,6 +133,15 @@ typedef enum FfiAccountIdentityKind {
 } FfiAccountIdentityKind;
 
 /**
+ * Which of `Disclosed`/`Shadow`/`Undisclosed` a program (or dependency) is resolved as.
+ */
+typedef enum FfiProgramKind {
+  PROGRAM_DISCLOSED = 0,
+  PROGRAM_SHADOW = 1,
+  PROGRAM_UNDISCLOSED = 2,
+} FfiProgramKind;
+
+/**
  * Opaque pointer to the Wallet instance.
  *
  * This type is never instantiated directly - it's used as an opaque handle
@@ -307,27 +316,48 @@ typedef struct FfiProgram {
   uintptr_t elf_size;
 } FfiProgram;
 
+typedef struct FfiProgramHeader {
+  struct FfiBytes32 image_id;
+  struct FfiBytes32 program_first_segment;
+  bool immutable;
+} FfiProgramHeader;
+
 /**
- * A program paired with the account id it's deployed at.
- *
  * Intended to be created manually.
  */
-typedef struct FfiProgramDependency {
+typedef struct FfiMembershipProof {
+  uintptr_t index;
+  const struct FfiBytes32 *path;
+  uintptr_t path_len;
+} FfiMembershipProof;
+
+/**
+ * Intended to be created manually.
+ */
+typedef struct FfiDependency {
   struct FfiProgram program;
+  /**
+   * Where `program` is actually deployed. Ignored for `ProgramShadow`, whose account id is
+   * always derived from `program` instead — never a real header's address.
+   */
   struct FfiBytes32 account_id;
-} FfiProgramDependency;
+  enum FfiProgramKind kind;
+  struct FfiProgramHeader program_header;
+  struct FfiMembershipProof membership_proof;
+} FfiDependency;
 
 /**
  * Every program an execution may dispatch, root included, each paired with the account it is
  * deployed at, plus the address the top-level call is dispatched to.
  *
- * `programs` is empty for native execution, which has no bytecode to supply.
+ * The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
+ * address instead. `programs` is empty for native execution, which has no bytecode to supply.
  *
  * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
   struct FfiBytes32 self_account_id;
-  const struct FfiProgramDependency *programs;
+  const struct FfiDependency *programs;
   uintptr_t programs_size;
 } FfiProgramWithDependencies;
 

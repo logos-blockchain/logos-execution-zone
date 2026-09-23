@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, ProgramImageClaim,
-    PublicAction, WitnessKind,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, ProgramImageWitness,
+    PublicAction, ShadowProgramWitness, WitnessKind,
     account::{AccountData, AccountId, ProgramShardSelector},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -42,17 +42,17 @@ impl ExecutionState {
         program_account_id: AccountId,
         program_outputs: Vec<ProgramOutput>,
         initial_shard_selectors: &[ProgramShardSelector],
-        program_image_claims: &[ProgramImageClaim],
+        program_image_witnesses: &[ProgramImageWitness],
+        shadow_program_witnesses: &[ShadowProgramWitness],
     ) -> Self {
-        // Untrusted claims supplied by the prover: `env::verify` needs a real image id, not an
-        // arbitrary dispatch address. The circuit does not check these against real chain state —
-        // the sequencer does that independently (`V03State::get_program_image_id`) before
-        // accepting the proof, which fails naturally if a claim is a lie (the receipt's actually
-        // committed bytes won't match the reconstructed output). See `ProgramImageClaim`.
+        // Untrusted witnesses supplied by the prover: `env::verify` needs a real image id, not an
+        // arbitrary dispatch address. `Disclosed` is not checked against real chain state here —
+        // the sequencer does that independently before accepting the proof. `Undisclosed` is
+        // checked in-circuit instead, when deriving the published claim.
         assert!(
-            !program_image_claims
+            !program_image_witnesses
                 .iter()
-                .any(|claim| claim.account_id == NATIVE_TOKEN_PROGRAM_ID),
+                .any(|witness| witness.account_id() == NATIVE_TOKEN_PROGRAM_ID),
             "The native token program has no deployable bytecode to claim"
         );
         assert_eq!(
@@ -60,10 +60,18 @@ impl ExecutionState {
             initial_shard_selectors.len(),
             "An account may select several shards, but never the same one twice"
         );
-        let image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_claims
+        let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
             .iter()
-            .map(|claim| (claim.account_id, claim.image_id))
+            .map(|witness| (witness.account_id(), witness.image_id()))
             .collect();
+        for witness in shadow_program_witnesses {
+            let account_id = AccountId::for_shadow_program(&witness.image_id);
+            let previous = image_id_by_account_id.insert(account_id, witness.image_id);
+            assert!(
+                previous.is_none(),
+                "account {account_id} claimed by both a program-image claim and a shadow witness"
+            );
+        }
 
         let mut execution_state = Self {
             witness_by_account: HashMap::new(),
@@ -714,6 +722,7 @@ mod tests {
             vec![report],
             selectors,
             &[],
+            &[],
         )
     }
 
@@ -761,6 +770,7 @@ mod tests {
                 ProgramShardSelector::balance(recipient),
             ],
             &[],
+            &[],
         ));
     }
 
@@ -775,6 +785,7 @@ mod tests {
             vec![tampered_native_report(30)],
             &[selector, selector],
             &[],
+            &[],
         ));
     }
 
@@ -786,10 +797,11 @@ mod tests {
             native_token::NATIVE_TOKEN_PROGRAM_ID,
             vec![tampered_native_report(30)],
             &native_selectors(),
-            &[ProgramImageClaim {
+            &[ProgramImageWitness::Disclosed {
                 account_id: native_token::NATIVE_TOKEN_PROGRAM_ID,
                 image_id: [7; 8],
             }],
+            &[],
         ));
     }
 }

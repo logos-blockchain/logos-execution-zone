@@ -9,6 +9,26 @@ use program_loader_core::Instruction;
 
 use super::*;
 
+fn loader_tx(
+    account_ids: Vec<AccountId>,
+    nonces: Vec<Nonce>,
+    instruction: Instruction,
+    signers: &[&PrivateKey],
+) -> PublicTransaction {
+    let message = public_transaction::Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        account_ids
+            .into_iter()
+            .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+            .collect(),
+        nonces,
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, signers);
+    PublicTransaction::new(message, witness_set)
+}
+
 /// Proof that a program's bytecode split across multiple segment accounts reconstructs into
 /// something that executes identically to the original: writes several segments (linked
 /// tail-to-head, at arbitrary addresses) plus a `ProgramHeader` directly via
@@ -231,27 +251,17 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut shard_selectors = vec![ProgramShardSelector::new(
-        header_account_id,
-        PROGRAM_LOADER_ACCOUNT_ID,
-    )];
-    shard_selectors.extend(
-        segment_account_ids
-            .iter()
-            .map(|id| ProgramShardSelector::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
-    );
-    let message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        shard_selectors,
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let tx = loader_tx(
+        account_ids,
         vec![Nonce(0)],
         Instruction::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
-    )
-    .expect("CreateHeader instruction data should always be serializable");
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
-    let tx = PublicTransaction::new(message, witness_set);
+        &[&header_key],
+    );
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
@@ -370,5 +380,178 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         state.get_account_by_id(target_id),
         Account::default(),
         "noop changes nothing"
+    );
+}
+
+#[test]
+fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
+    let mut state = V03State::new();
+    let honest_program = crate::test_methods::noop();
+    let weakened_program = crate::test_methods::shard_forwarder();
+    let segment_account_ids = force_insert_segment_chain(&mut state, honest_program.elf(), 0x20);
+
+    let shadow_addr = AccountId::for_shadow_program(&weakened_program.id());
+
+    let unrelated_key = PrivateKey::try_new([0x77; 32]).unwrap();
+    let mut account_ids = vec![shadow_addr];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let tx = loader_tx(
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+        &[&unrelated_key],
+    );
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let err = result.expect_err("a header target the signer doesn't control must be rejected");
+    assert!(
+        err.to_string().contains("must be an authorized account"),
+        "rejection should cite the authorization rule, got: {err}"
+    );
+    assert_eq!(
+        state.get_account_by_id(shadow_addr),
+        Account::default(),
+        "the shadow-derived account must remain unclaimed after a rejected deploy"
+    );
+}
+
+/// A `CreateHeader` transaction with `immutable: true` lands the private commitment mirroring the
+/// finalized header, so it can later be referenced in a privacy-preserving transaction without
+/// public disclosure.
+#[test]
+fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x01);
+
+    let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let tx = loader_tx(
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+        &[&header_key],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("an immutable-from-birth CreateHeader should succeed");
+
+    let expected_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: segment_account_ids[0],
+        immutable: true,
+    };
+    let commitment =
+        program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
+    assert!(
+        state.get_proof_for_commitment(&commitment).is_some(),
+        "an immutable-from-birth header must land its private mirror commitment"
+    );
+}
+
+/// A `CreateHeader` transaction with `immutable: false` leaves the private commitment tree
+/// untouched — only a header that's actually immutable ever gets a mirror commitment.
+#[test]
+fn create_header_mutable_leaves_commitment_tree_unchanged() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let root_before = state.commitment_root();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x02);
+
+    let header_key = PrivateKey::try_new([0xCD; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let tx = loader_tx(
+        account_ids,
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+        },
+        &[&header_key],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("a mutable CreateHeader should succeed");
+
+    assert_eq!(
+        state.commitment_root(),
+        root_before,
+        "a header deployed with immutable: false must not emit any private commitment"
+    );
+}
+
+/// An `UpdateHeader` transaction that flips `immutable` from `false` to `true` lands the private
+/// mirror commitment at that exact moment — the same as being immutable from birth.
+#[test]
+fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x03);
+
+    let header_key = PrivateKey::try_new([0xEF; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let mut account_ids = vec![header_account_id];
+    account_ids.extend_from_slice(&segment_account_ids);
+    let create_tx = loader_tx(
+        account_ids.clone(),
+        vec![Nonce(0)],
+        Instruction::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&create_tx, 1, 0)
+        .expect("the initial mutable CreateHeader should succeed");
+
+    let root_after_create = state.commitment_root();
+    let current_nonce = state.get_account_by_id(header_account_id).nonce;
+
+    let update_tx = loader_tx(
+        account_ids,
+        vec![current_nonce],
+        Instruction::UpdateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: true,
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&update_tx, 2, 0)
+        .expect("flipping immutable to true via UpdateHeader should succeed");
+
+    assert_ne!(
+        state.commitment_root(),
+        root_after_create,
+        "flipping immutable to true must land a new private commitment"
+    );
+
+    let expected_header = ProgramHeader {
+        image_id: program.id(),
+        program_first_segment: segment_account_ids[0],
+        immutable: true,
+    };
+    let commitment =
+        program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
+    assert!(
+        state.get_proof_for_commitment(&commitment).is_some(),
+        "the landed commitment must match the now-immutable header"
     );
 }
