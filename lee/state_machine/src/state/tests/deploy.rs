@@ -118,7 +118,11 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "the reconstructed binary must recompute to the same image_id"
     );
 
-    let pre_states = vec![AccountInput::balance(AccountId::new([21; 32]), true, 0)];
+    let pre_states = vec![AccountInput::native_balance(
+        AccountId::new([21; 32]),
+        true,
+        0,
+    )];
     let instruction_data = Program::serialize_instruction(()).unwrap();
 
     let direct_output = program

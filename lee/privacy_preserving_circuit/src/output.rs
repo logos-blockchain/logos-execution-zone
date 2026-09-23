@@ -247,7 +247,6 @@ mod tests {
     fn public_action_post_is_projected_onto_the_touched_shards() {
         let account_id = AccountId::new([9; 32]);
         let pre = AccountData {
-            balance: 10,
             shards: [(SHARD_A, data(b"a"))].into(),
         };
         let post_state = Account::funded(7)
@@ -264,7 +263,6 @@ mod tests {
                 is_authorized: true,
                 pre,
                 post: AccountData {
-                    balance: 7,
                     shards: [(SHARD_A, data(b"a-rewritten"))].into(),
                 },
             }]

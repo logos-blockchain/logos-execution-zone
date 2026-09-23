@@ -193,13 +193,6 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
-
-/**
  * One program's shard on an account.
  */
 typedef struct FfiShard {
@@ -218,18 +211,22 @@ typedef struct FfiShard {
 } FfiShard;
 
 /**
+ * U128 - 16 bytes little endian.
+ */
+typedef struct FfiU128 {
+  uint8_t data[16];
+} FfiU128;
+
+/**
  * Account data structure - C-compatible version of lee Account.
  *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
+ * Note: `nonce` is a u128 value represented as a little-endian
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
   /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
-  /**
-   * Pointer to this account's shards, ordered by program address.
+   * Pointer to this account's shards, ordered by program address. The native balance is the
+   * shard of the native token program.
    */
   const struct FfiShard *shards;
   /**
@@ -285,14 +282,11 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * An account identity with an optional program shard selection.
- *
- * `program_account_id` is ignored when `has_program_account_id` is false.
+ * An account identity with the program shard it selects.
  */
 typedef struct FfiAccountMention {
   struct FfiAccountIdentity identity;
   struct FfiBytes32 program_account_id;
-  bool has_program_account_id;
 } FfiAccountMention;
 
 /**
@@ -353,20 +347,18 @@ typedef struct FfiDependency {
 } FfiDependency;
 
 /**
+ * Every program an execution may dispatch, root included, each paired with the account it is
+ * deployed at, plus the address the top-level call is dispatched to.
+ *
+ * The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
+ * address instead. `programs` is empty for native execution, which has no bytecode to supply.
+ *
  * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
-  struct FfiProgram program;
-  /**
-   * Where `program` is actually deployed. Ignored for `ProgramShadow`, whose account id is
-   * always derived from `program` instead — never a real header's address.
-   */
   struct FfiBytes32 self_account_id;
-  enum FfiProgramKind self_kind;
-  struct FfiProgramHeader self_program_header;
-  struct FfiMembershipProof self_membership_proof;
-  const struct FfiDependency *deps;
-  uintptr_t deps_size;
+  const struct FfiDependency *programs;
+  uintptr_t programs_size;
 } FfiProgramWithDependencies;
 
 /**
@@ -1158,26 +1150,6 @@ enum WalletFfiError wallet_ffi_program_loader_update(struct WalletHandle *handle
                                                      bool immutable,
                                                      const struct FfiBytes32 *payer,
                                                      struct FfiTransactionResult *out_result);
-
-/**
- * Writes elf data of authenticated transfer program into buffer.
- *
- * WARNING: Result is not consisent and change between versions, use for testing purposes only.
- *
- * # Parameters
- * - `ffi_program`: Valid pointer to `FfiProgram`
- *
- * # Returns
- * - `Success` if deployment was submitted successfully
- * - Error code on other failures
- *
- * # Memory
- * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
- *
- * # Safety
- * - `ffi_program` must be a non-null pointer
- */
-enum WalletFfiError wallet_ffi_transfer_elf(struct FfiProgram *ffi_program);
 
 /**
  * Writes elf data of authenticated token program into buffer.

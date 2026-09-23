@@ -22,7 +22,6 @@ fn transition_from_privacy_preserving_transaction_shielded() {
     let recipient_keys = test_private_account_keys_1();
 
     let mut state = V03State::new().with_public_account_balances([(sender_keys.account_id(), 200)]);
-    state.insert_program(&crate::test_methods::simple_balance_transfer(), true);
 
     let balance_to_move = 37;
 
@@ -31,7 +30,9 @@ fn transition_from_privacy_preserving_transaction_shielded() {
 
     let expected_sender_post = {
         let mut this = state.get_account_by_id(sender_keys.account_id());
-        this.data.balance -= balance_to_move;
+        let post_balance = this.data.balance().unwrap() - balance_to_move;
+        this.data
+            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this.nonce.public_account_nonce_increment();
         this
     };
@@ -51,8 +52,8 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         state
             .get_account_by_id(sender_keys.account_id())
             .data
-            .balance,
-        200 - balance_to_move
+            .balance(),
+        Ok(200 - balance_to_move)
     );
 }
 
@@ -68,7 +69,6 @@ fn transition_from_privacy_preserving_transaction_private() {
     let recipient_keys = test_private_account_keys_2();
 
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.insert_program(&crate::test_methods::simple_balance_transfer(), true);
 
     let balance_to_move = 37;
 
@@ -88,7 +88,7 @@ fn transition_from_privacy_preserving_transaction_private() {
         &sender_account_id,
         &Account {
             nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
-            ..Account::funded(sender_private_account.data.balance - balance_to_move)
+            ..Account::funded(sender_private_account.data.balance().unwrap() - balance_to_move)
         },
     );
 
@@ -187,13 +187,14 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
     let mut state = V03State::new()
         .with_public_account_balances([(recipient_keys.account_id(), recipient_initial_balance)])
         .with_private_account(&sender_keys, &sender_private_account);
-    state.insert_program(&crate::test_methods::simple_balance_transfer(), true);
 
     let balance_to_move = 37;
 
     let expected_recipient_post = {
         let mut this = state.get_account_by_id(recipient_keys.account_id());
-        this.data.balance += balance_to_move;
+        let post_balance = this.data.balance().unwrap() + balance_to_move;
+        this.data
+            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this
     };
 
@@ -211,7 +212,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         &sender_account_id,
         &Account {
             nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
-            ..Account::funded(sender_private_account.data.balance - balance_to_move)
+            ..Account::funded(sender_private_account.data.balance().unwrap() - balance_to_move)
         },
     );
 
@@ -236,69 +237,45 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         state
             .get_account_by_id(recipient_keys.account_id())
             .data
-            .balance,
-        recipient_initial_balance + balance_to_move
+            .balance(),
+        Ok(recipient_initial_balance + balance_to_move)
     );
 }
 
 #[test]
-fn burner_program_should_fail_in_privacy_preserving_circuit() {
-    let program = crate::test_methods::burner();
-    let account_id = AccountId::new([0; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            signers: [account_id].into(),
-            public_accounts: [(account_id, Account::funded(100))].into(),
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
-
-    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
-}
-
-#[test]
-fn minter_program_should_fail_in_privacy_preserving_circuit() {
-    let program = crate::test_methods::minter();
-    let account_id = AccountId::new([0; 32]);
-
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            signers: [account_id].into(),
-            instruction_data: Program::serialize_instruction(()).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
-
-    assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
-}
-
-#[test]
-fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
-    let program = crate::test_methods::foreign_shard_writer();
+fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_in_the_circuit() {
+    let program = crate::test_methods::data_changer();
     let target_id = AccountId::new([0; 32]);
-    let other_id = AccountId::new([1; 32]);
     let foreign_program_account_id =
-        AccountId::from_builtin_program(crate::test_methods::data_changer().id());
+        AccountId::from_builtin_program(crate::test_methods::noop().id());
+    // Another program's shard and the native balance shard are both foreign to the executing
+    // program; the circuit refuses each for the same reason the public path does.
+    let cases = [
+        (
+            "another program's shard",
+            ProgramShardSelector::new(target_id, foreign_program_account_id),
+            vec![7_u8; 4],
+        ),
+        (
+            "the native balance shard",
+            ProgramShardSelector::balance(target_id),
+            encode_balance(500).to_vec(),
+        ),
+    ];
 
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::new(target_id, foreign_program_account_id),
-                ProgramShardSelector::balance(other_id),
-            ],
-            instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
-            ..Default::default()
-        },
-        &program.into(),
-    );
+    for (shard, selector, written) in cases {
+        let result = execute_and_prove(
+            ProvingInput {
+                shard_selectors: vec![selector],
+                instruction_data: Program::serialize_instruction(written).unwrap(),
+                ..Default::default()
+            },
+            &program.clone().into(),
+        );
 
-    assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+        assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
+        assert!(result.is_err(), "writing {shard} must be refused");
+    }
 }
 
 #[test]
@@ -330,7 +307,6 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 
 #[test]
 fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
-    let program = crate::test_methods::simple_balance_transfer();
     let sender_id = AccountId::new([0; 32]);
     let recipient_id = AccountId::new([1; 32]);
 
@@ -342,11 +318,25 @@ fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
             ],
             signers: [recipient_id].into(),
             public_accounts: [(sender_id, Account::funded(100))].into(),
-            instruction_data: Program::serialize_instruction(10_u128).unwrap(),
+            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::native(),
     );
 
-    assert_circuit_proving_failure(&result, "decrease balance of unauthorized account");
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { .. }
+                )
+            ))
+        ),
+        "refused for the wrong reason: {:?}",
+        result.err()
+    );
 }

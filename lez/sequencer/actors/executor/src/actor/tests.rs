@@ -13,6 +13,7 @@ use lee::{
     V03State,
     public_transaction::{Message, WitnessSet},
 };
+use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_core::{
@@ -69,15 +70,14 @@ fn test_transaction() -> LeeTransaction {
     let payer_key = accounts[0].pub_sign_key.clone();
 
     let nonces = vec![0_u128.into(), 0_u128.into()];
-    let instruction = 1337;
     let message = Message::try_new_with_fees(
-        AccountId::from_builtin_program(test_programs::simple_balance_transfer().id()),
+        NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(payer),
             ProgramShardSelector::balance(acc2),
         ],
         nonces,
-        instruction,
+        NativeInstruction::Transfer { amount: 1337 },
         common::test_utils::test_fee_declaration(payer),
     )
     .unwrap();
@@ -414,13 +414,13 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
-        AccountId::from_builtin_program(test_programs::simple_balance_transfer().id()),
+        NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(payer),
             ProgramShardSelector::balance(acc2),
         ],
         vec![0_u128.into(), 0_u128.into()],
-        1337,
+        NativeInstruction::Transfer { amount: 1337 },
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
     )
     .unwrap();

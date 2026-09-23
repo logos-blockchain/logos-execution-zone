@@ -791,23 +791,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "authenticated_transfer_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "build_utils",
- "lee_core",
-]
-
-[[package]]
-name = "authenticated_transfer_program"
-version = "0.1.0"
-dependencies = [
- "authenticated_transfer_core",
- "lee_core",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1278,7 +1261,6 @@ dependencies = [
 name = "bridge_lock_program"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "borsh",
  "bridge_lock_core",
  "cross_zone_outbox_core",
@@ -1291,7 +1273,6 @@ dependencies = [
 name = "bridge_program"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "bridge_core",
  "lee_core",
 ]
@@ -1812,7 +1793,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "authenticated_transfer_core",
  "base64 0.22.1",
  "borsh",
  "bridge_core",
@@ -2430,7 +2410,6 @@ dependencies = [
  "amm_core",
  "anyhow",
  "associated_token_account_core",
- "authenticated_transfer_core",
  "borsh",
  "clap",
  "clock_core",
@@ -2441,6 +2420,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
+ "test_guest_core",
  "test_programs",
  "token_core",
 ]
@@ -3255,7 +3235,6 @@ dependencies = [
  "env_logger",
  "indexer_service_protocol",
  "indexer_service_rpc",
- "itertools 0.14.0",
  "jsonrpsee",
  "leptos",
  "leptos_axum",
@@ -3329,7 +3308,6 @@ dependencies = [
 name = "fee_program"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "fee_core",
  "lee_core",
 ]
@@ -4835,7 +4813,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "authenticated_transfer_core",
  "borsh",
  "bridge_core",
  "bridge_lock_core",
@@ -4878,6 +4855,7 @@ dependencies = [
  "testing-framework-core",
  "testnet_initial_state",
  "thiserror 2.0.18",
+ "token_core",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -5673,6 +5651,7 @@ dependencies = [
  "serde_with",
  "sha2 0.10.9",
  "test-case",
+ "test_guest_core",
  "test_methods",
  "thiserror 2.0.18",
 ]
@@ -9524,7 +9503,6 @@ dependencies = [
  "amm_program",
  "associated_token_account_core",
  "associated_token_account_program",
- "authenticated_transfer_core",
  "borsh",
  "bridge_core",
  "bridge_lock_core",
@@ -11112,7 +11090,6 @@ name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "authenticated_transfer_core",
  "borsh",
  "bridge_core",
  "bytesize",
@@ -11196,7 +11173,6 @@ dependencies = [
  "sequencer_storage_actor",
  "system_accounts",
  "tempfile",
- "test_programs",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
@@ -11268,7 +11244,6 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "authenticated_transfer_core",
  "clap",
  "env_logger",
  "futures",
@@ -11348,7 +11323,6 @@ dependencies = [
 name = "sequencer_stake_program"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "lee_core",
  "sequencer_stake_core",
 ]
@@ -12412,6 +12386,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_guest_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+]
+
+[[package]]
 name = "test_methods"
 version = "0.1.0"
 dependencies = [
@@ -12425,17 +12407,18 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
+ "test_guest_core",
 ]
 
 [[package]]
 name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
- "authenticated_transfer_core",
  "borsh",
  "clock_core",
  "lee_core",
  "risc0-zkvm",
+ "test_guest_core",
 ]
 
 [[package]]
@@ -13726,7 +13709,6 @@ dependencies = [
  "anyhow",
  "associated_token_account_core",
  "async-stream",
- "authenticated_transfer_core",
  "bincode",
  "bip39",
  "bridge_core",

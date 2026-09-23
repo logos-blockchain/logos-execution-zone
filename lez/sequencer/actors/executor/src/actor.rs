@@ -14,7 +14,7 @@ use kameo::{
 };
 use lee_core::{
     BlockId,
-    account::{Account, Balance, Nonce, ProgramShardSelector},
+    account::{Balance, Nonce, ProgramShardSelector},
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
@@ -419,7 +419,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
-                    .map_or(0, |account| account.data.balance)
+                    .map_or(0, |account| account.data.balance().unwrap_or_default())
             })
             .await
     }
@@ -549,9 +549,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
-                    .map_or_else(Default::default, |account| Account {
-                        nonce: account.nonce,
-                        data: account.data.project(program_account_id),
+                    .map_or_else(Default::default, |account| {
+                        account.project([program_account_id])
                     })
             })
             .await;

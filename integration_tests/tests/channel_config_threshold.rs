@@ -138,7 +138,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let mover_instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
             amount: FUNDING_BALANCE,
         })
         .context("Failed to serialize mover instruction")?;
@@ -146,9 +146,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: joiner_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: AccountId::from_builtin_program(
-                programs::authenticated_transfer().id(),
-            ),
+            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;

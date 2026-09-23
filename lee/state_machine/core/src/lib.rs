@@ -28,6 +28,7 @@ mod commitment;
 mod encoding;
 pub mod encryption;
 mod frame;
+pub mod native_token;
 mod nullifier;
 pub mod program;
 

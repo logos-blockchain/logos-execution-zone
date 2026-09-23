@@ -47,7 +47,7 @@ fn new_includes_nullifiers_for_private_accounts() {
 #[test]
 fn insert_program() {
     let mut state = V03State::new();
-    let program_to_insert = crate::test_methods::simple_balance_transfer();
+    let program_to_insert = crate::test_methods::data_changer();
     let account_id = AccountId::from_builtin_program(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
@@ -64,10 +64,9 @@ fn insert_program() {
 
 #[test]
 fn genesis_immutable_program_lands_immutable_mirror_commitment() {
-    let state = V03State::new().with_test_programs();
-    let header_account_id = lee_core::account::AccountId::from_builtin_program(
-        crate::test_methods::simple_balance_transfer().id(),
-    );
+    let state = V03State::new().with_programs([crate::test_methods::noop()]);
+    let header_account_id =
+        lee_core::account::AccountId::from_builtin_program(crate::test_methods::noop().id());
     let program_header = lee_core::program::ProgramHeader::from_bytes(
         state.public_state[&header_account_id]
             .data
@@ -83,7 +82,8 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
 
 #[test]
 fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
-    let state = V03State::new().with_test_programs();
+    let state =
+        V03State::new().with_genesis_programs([(crate::test_methods::shard_forwarder(), false)]);
     let header_account_id = lee_core::account::AccountId::from_builtin_program(
         crate::test_methods::shard_forwarder().id(),
     );
@@ -136,7 +136,10 @@ fn state_serialization_roundtrip() {
     let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
     let state = V03State::new()
         .with_public_account_balances(initial_data)
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::data_changer(),
+            crate::test_methods::noop(),
+        ]);
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);

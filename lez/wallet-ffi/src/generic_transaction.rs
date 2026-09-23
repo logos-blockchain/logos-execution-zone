@@ -150,96 +150,54 @@ pub struct FfiDependency {
 }
 
 #[repr(C)]
+/// Every program an execution may dispatch, root included, each paired with the account it is
+/// deployed at, plus the address the top-level call is dispatched to.
+///
+/// The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
+/// address instead. `programs` is empty for native execution, which has no bytecode to supply.
+///
 /// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
-    pub program: FfiProgram,
-    /// Where `program` is actually deployed. Ignored for `ProgramShadow`, whose account id is
-    /// always derived from `program` instead — never a real header's address.
     pub self_account_id: FfiBytes32,
-    pub self_kind: FfiProgramKind,
-    pub self_program_header: FfiProgramHeader,
-    pub self_membership_proof: FfiMembershipProof,
-    pub deps: *const FfiDependency,
-    pub deps_size: usize,
+    pub programs: *const FfiDependency,
+    pub programs_size: usize,
 }
 
 impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
-        let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = ffi_account_id(&orig_program, value.self_kind, value.self_account_id);
-        let self_kind = match value.self_kind {
-            FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
-            FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
-            FfiProgramKind::ProgramUndisclosed => ProgramKind::Undisclosed {
-                program_header: (&value.self_program_header).into(),
-                membership_proof: (&value.self_membership_proof).try_into()?,
-            },
-        };
-
-        let mut dependencies = HashMap::new();
+        let supplied_root = AccountId::from(value.self_account_id);
+        let mut self_account_id = supplied_root;
+        let mut programs = HashMap::new();
 
         // Alignment will be different, we need to read elements one-by-one
-        for i in 0..value.deps_size {
-            let ffi_dep =
-                unsafe { value.deps.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
-            let program: Program = (&ffi_dep.program).try_into()?;
-            let account_id = ffi_account_id(&program, ffi_dep.kind, ffi_dep.account_id);
-            let kind = match ffi_dep.kind {
+        for i in 0..value.programs_size {
+            let entry =
+                unsafe { value.programs.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            let program: Program = (&entry.program).try_into()?;
+            let account_id = ffi_account_id(&program, entry.kind, entry.account_id);
+            if AccountId::from(entry.account_id) == supplied_root {
+                self_account_id = account_id;
+            }
+            let kind = match entry.kind {
                 FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
                 FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
                 FfiProgramKind::ProgramUndisclosed => ProgramKind::Undisclosed {
-                    program_header: (&ffi_dep.program_header).into(),
-                    membership_proof: (&ffi_dep.membership_proof).try_into()?,
+                    program_header: (&entry.program_header).into(),
+                    membership_proof: (&entry.membership_proof).try_into()?,
                 },
             };
 
-            dependencies.insert(account_id, Dependency { program, kind });
+            programs.insert(account_id, Dependency { program, kind });
         }
 
+        // Built field-wise rather than through `new`, which would insert a root program the
+        // native execution path must not be given.
         Ok(Self {
-            program: orig_program,
             self_account_id,
-            self_kind,
-            dependencies,
+            programs,
         })
-    }
-}
-
-impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
-    fn from(value: ProgramWithDependencies) -> Self {
-        let program = value.program.into();
-        let (self_kind, self_program_header, self_membership_proof) =
-            ffi_kind_parts(value.self_kind);
-
-        let ffi_deps: Vec<FfiDependency> = value
-            .dependencies
-            .into_iter()
-            .map(|(account_id, dependency)| {
-                let (kind, program_header, membership_proof) = ffi_kind_parts(dependency.kind);
-                FfiDependency {
-                    program: dependency.program.into(),
-                    account_id: account_id.into(),
-                    kind,
-                    program_header,
-                    membership_proof,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let deps_size = ffi_deps.len();
-        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiDependency;
-
-        Self {
-            program,
-            self_account_id: value.self_account_id.into(),
-            self_kind,
-            self_program_header,
-            self_membership_proof,
-            deps,
-            deps_size,
-        }
     }
 }
 
@@ -294,29 +252,6 @@ fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32)
     match kind {
         FfiProgramKind::ProgramShadow => AccountId::for_shadow_program(&program.id()),
         FfiProgramKind::ProgramDisclosed | FfiProgramKind::ProgramUndisclosed => supplied.into(),
-    }
-}
-
-fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMembershipProof) {
-    match kind {
-        ProgramKind::Disclosed => (
-            FfiProgramKind::ProgramDisclosed,
-            FfiProgramHeader::default(),
-            FfiMembershipProof::default(),
-        ),
-        ProgramKind::Shadow => (
-            FfiProgramKind::ProgramShadow,
-            FfiProgramHeader::default(),
-            FfiMembershipProof::default(),
-        ),
-        ProgramKind::Undisclosed {
-            program_header,
-            membership_proof,
-        } => (
-            FfiProgramKind::ProgramUndisclosed,
-            program_header.into(),
-            membership_proof.into(),
-        ),
     }
 }
 

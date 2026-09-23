@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 use token_core::TokenHolding;
 
@@ -11,7 +11,7 @@ pub fn burn_from_associated_token_account(
     self_account_id: AccountId,
     token_program_id: AccountId,
     amount: u128,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     assert!(owner.is_authorized, "Owner authorization is missing");
     let definition_id = TokenHolding::try_from(holder_ata.shard_of(token_program_id))
         .expect("Holder ATA must hold a valid token")
@@ -29,9 +29,9 @@ pub fn burn_from_associated_token_account(
         ProgramShardSelector::from(&holder_ata),
     ];
     let post_diffs = vec![
-        AccountStateDiff::unchanged(owner),
-        AccountStateDiff::unchanged(holder_ata),
-        AccountStateDiff::unchanged(token_definition),
+        ShardStateDiff::unchanged(owner),
+        ShardStateDiff::unchanged(holder_ata),
+        ShardStateDiff::unchanged(token_definition),
     ];
     let chained_call = ChainedCall::new(
         token_program_id,

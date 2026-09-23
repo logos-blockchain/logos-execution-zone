@@ -87,14 +87,17 @@ pub fn AccountPage() -> impl IntoView {
                         .map(|result| match result {
                             Ok(acc) => {
                                 let AccountSummary {
-                        nonce,
-                        balance,
-                        shards,
-                    } = acc;
+                                    nonce,
+                                    balance,
+                                    shards,
+                                } = acc;
+                                let balance_str = balance.map_or_else(
+                                    || "<malformed>".to_owned(),
+                                    |balance| balance.to_string(),
+                                );
 
                                 let acc_id = account_id().expect("Account ID should be set");
                                 let account_id_str = acc_id.to_string();
-                                let balance_str = balance.to_string();
                                 let nonce_str = nonce.to_string();
                                 view! {
                                     <div class="account-detail">

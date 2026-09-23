@@ -127,7 +127,12 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let escrow_id = bridge_lock_core::escrow_account_id(AccountId::from_builtin_program(
         programs::bridge_lock().id(),
     ));
-    let escrowed = seq_client_a.get_account(escrow_id).await?.data.balance;
+    let escrowed = seq_client_a
+        .get_account(escrow_id)
+        .await?
+        .data
+        .balance()
+        .unwrap();
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
@@ -139,7 +144,8 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         ))
         .await?
         .data
-        .balance;
+        .balance()
+        .unwrap();
     assert_eq!(
         remaining,
         u128::from(INITIAL_BALANCE) - LOCK_AMOUNT,
@@ -238,8 +244,8 @@ async fn wait_for_balance(
     let wait = async {
         loop {
             let held = indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            if held.data.balance == expected {
-                return Ok::<u128, anyhow::Error>(held.data.balance);
+            if held.data.balance() == Some(expected) {
+                return Ok::<u128, anyhow::Error>(held.data.balance().unwrap());
             }
             tokio::time::sleep(Duration::from_secs(3)).await;
         }

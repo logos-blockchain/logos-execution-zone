@@ -25,10 +25,10 @@
 //! if it needs to trust the context it is called from.
 
 use lee_core::{
-    account::ProgramShardSelector,
+    native_token::custody_transfer,
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
-        read_lee_call, respond_unsupported_call,
+        PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+        respond_unsupported_call,
     },
 };
 
@@ -37,7 +37,6 @@ pub struct CallbackInstruction {
     /// If true, return the borrowed funds to the vault (happy path).
     /// If false, keep the funds (simulates a malicious callback, triggers rollback).
     pub return_funds: bool,
-    pub token_program_id: lee_core::account::AccountId,
     pub amount: u128,
 }
 
@@ -66,18 +65,12 @@ fn main() {
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
         // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
-        let transfer_instruction =
-            borsh::to_vec(&instruction.amount).expect("transfer instruction serialization");
-
-        chained_calls.push(ChainedCall {
-            program_account_id: instruction.token_program_id,
-            shard_selectors: vec![
-                ProgramShardSelector::from(&receiver_pre),
-                ProgramShardSelector::from(&vault_pre),
-            ],
-            instruction_data: transfer_instruction,
-            pda_seeds: vec![PdaSeed::new([1_u8; 32])],
-        });
+        chained_calls.push(custody_transfer(
+            receiver_pre.account_id,
+            PdaSeed::new([1_u8; 32]),
+            vault_pre.account_id,
+            instruction.amount,
+        ));
     }
     // Malicious path (return_funds = false): emit no chained calls.
     // The vault balance will not be restored, so the invariant check in the initiator
@@ -90,8 +83,8 @@ fn main() {
         caller_account_id,
         instruction_data,
         vec![
-            AccountStateDiff::unchanged(vault_pre),
-            AccountStateDiff::unchanged(receiver_pre),
+            ShardStateDiff::unchanged(vault_pre),
+            ShardStateDiff::unchanged(receiver_pre),
         ],
     )
     .with_chained_calls(chained_calls)

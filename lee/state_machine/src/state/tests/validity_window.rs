@@ -20,7 +20,7 @@ fn validity_window_works_in_public_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let shard_selectors = vec![ProgramShardSelector::balance(account_keys.account_id())];
         let nonces = vec![];
@@ -70,7 +70,7 @@ fn timestamp_validity_window_works_in_public_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_public_account_keys_1();
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let shard_selectors = vec![ProgramShardSelector::balance(account_keys.account_id())];
         let nonces = vec![];
@@ -124,7 +124,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let account_id =
         AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let instruction = (
             block_validity_window,
@@ -183,7 +183,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let account_id =
         AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let instruction = (
             BlockValidityWindow::new_unbounded(),

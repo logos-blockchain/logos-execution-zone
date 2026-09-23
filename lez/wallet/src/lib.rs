@@ -98,6 +98,8 @@ pub enum ExecutionFailureKind {
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
+    #[error("Account {0} is mentioned with conflicting identities")]
+    ConflictingAccountIdentity(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
     #[error("Program bytecode is not a valid RISC0 program binary")]
@@ -599,7 +601,8 @@ impl WalletCore {
             .await?)
     }
 
-    /// Returns the account's nonce, balance, and optionally one program shard.
+    /// Returns the account's nonce and the selected shard; its balance is the shard at the
+    /// native token program.
     pub async fn get_account_view(&self, shard_selector: ProgramShardSelector) -> Result<Account> {
         let mut account = self
             .multi_sequencer_client
@@ -944,7 +947,7 @@ impl WalletCore {
             ));
         }
 
-        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+        let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.pre_states())?;
 
@@ -959,9 +962,12 @@ impl WalletCore {
         };
         let (payer, co_signer) = match payer {
             None => (
-                acc_manager.fee_payer_account_id().ok_or_else(|| {
-                    invalid_input("Public transaction has no signing account to pay its fees")
-                })?,
+                acc_manager
+                    .fee_payer_account_id(self)
+                    .await?
+                    .ok_or_else(|| {
+                        invalid_input("Public transaction has no signing account to pay its fees")
+                    })?,
                 None,
             ),
             Some(payer) if acc_manager.signs_for(payer) => (payer, None),

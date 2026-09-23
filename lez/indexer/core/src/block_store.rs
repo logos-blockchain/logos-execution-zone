@@ -358,13 +358,11 @@ impl IndexerStore {
 }
 
 fn project_account(state: &V03State, selector: ProgramShardSelector) -> Account {
-    let Some(account) = state.get_account_by_id_ref(selector.account_id) else {
-        return Account::default();
-    };
-    Account {
-        nonce: account.nonce,
-        data: account.data.project(selector.program_account_id),
-    }
+    state
+        .get_account_by_id_ref(selector.account_id)
+        .map_or_else(Account::default, |account| {
+            account.project([selector.program_account_id])
+        })
 }
 
 // A filter change takes effect at the next ingested block: rows up to the old
@@ -767,8 +765,8 @@ mod tests {
 
         // Genesis (block 1): fee/clock only.
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance;
-        let initial_to = build_state.get_account_by_id(to).data.balance;
+        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
+        let initial_to = build_state.get_account_by_id(to).data.balance().unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -796,11 +794,18 @@ mod tests {
                 .await
                 .unwrap()
                 .data
-                .balance
+                .balance()
+                .unwrap()
                 < initial_from - 100
         );
         assert_eq!(
-            store.account_current_state(&to).await.unwrap().data.balance,
+            store
+                .account_current_state(&to)
+                .await
+                .unwrap()
+                .data
+                .balance()
+                .unwrap(),
             initial_to + 100
         );
         // Tip advanced to the last applied block; a clean run leaves no stall.
@@ -819,8 +824,8 @@ mod tests {
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance;
-        let initial_to = build_state.get_account_by_id(to).data.balance;
+        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
+        let initial_to = build_state.get_account_by_id(to).data.balance().unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -837,24 +842,60 @@ mod tests {
         // State at block N is inclusive of block N.
         // Block 1 (genesis, clock-only): no transfers yet.
         assert_eq!(
-            store.account_state_at_block(&from, 1).unwrap().data.balance,
+            store
+                .account_state_at_block(&from, 1)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap(),
             initial_from
         );
         assert_eq!(
-            store.account_state_at_block(&to, 1).unwrap().data.balance,
+            store
+                .account_state_at_block(&to, 1)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap(),
             initial_to
         );
         // Through block 5: 4 transfers applied (blocks 2..=5); the sender also
         // pays a fee per charged transfer.
-        assert!(store.account_state_at_block(&from, 5).unwrap().data.balance < initial_from - 40);
+        assert!(
+            store
+                .account_state_at_block(&from, 5)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap()
+                < initial_from - 40
+        );
         assert_eq!(
-            store.account_state_at_block(&to, 5).unwrap().data.balance,
+            store
+                .account_state_at_block(&to, 5)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap(),
             initial_to + 40
         );
         // Through block 9: 8 transfers applied (blocks 2..=9).
-        assert!(store.account_state_at_block(&from, 9).unwrap().data.balance < initial_from - 80);
+        assert!(
+            store
+                .account_state_at_block(&from, 9)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap()
+                < initial_from - 80
+        );
         assert_eq!(
-            store.account_state_at_block(&to, 9).unwrap().data.balance,
+            store
+                .account_state_at_block(&to, 9)
+                .unwrap()
+                .data
+                .balance()
+                .unwrap(),
             initial_to + 80
         );
     }
@@ -1498,7 +1539,8 @@ mod accept_tests {
             .await
             .unwrap()
             .data
-            .balance;
+            .balance()
+            .unwrap();
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
         assert!(matches!(
@@ -1511,7 +1553,8 @@ mod accept_tests {
                 .await
                 .unwrap()
                 .data
-                .balance,
+                .balance()
+                .unwrap(),
             balance_after,
             "re-delivered block must not be applied twice"
         );
@@ -1581,7 +1624,8 @@ mod accept_tests {
             .await
             .unwrap()
             .data
-            .balance;
+            .balance()
+            .unwrap();
 
         // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
         assert!(matches!(
@@ -1594,7 +1638,8 @@ mod accept_tests {
                 .await
                 .unwrap()
                 .data
-                .balance,
+                .balance()
+                .unwrap(),
             balance_after,
             "re-delivered block below the tip must not be applied again"
         );
@@ -1622,7 +1667,7 @@ mod accept_tests {
         let sign_key = accounts[0].pub_sign_key.clone();
 
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance;
+        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -1658,7 +1703,7 @@ mod accept_tests {
         // Snapshot at block 100 = genesis + 99 transfers (plus their fees),
         // written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
-        assert!(bp1.get_account_by_id(from).data.balance < initial_from - 99);
+        assert!(bp1.get_account_by_id(from).data.balance().unwrap() < initial_from - 99);
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);

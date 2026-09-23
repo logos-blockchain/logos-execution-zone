@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -10,7 +10,7 @@ pub fn create_associated_token_account(
     ata_account: AccountInput,
     self_account_id: AccountId,
     token_program_id: AccountId,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let ata_seed = associated_token_account_core::verify_ata_and_get_seed(
         &ata_account,
         &owner,
@@ -46,9 +46,9 @@ pub fn create_associated_token_account(
     };
 
     let post_diffs = vec![
-        AccountStateDiff::unchanged(owner),
-        AccountStateDiff::unchanged(token_definition),
-        AccountStateDiff::unchanged(ata_account),
+        ShardStateDiff::unchanged(owner),
+        ShardStateDiff::unchanged(token_definition),
+        ShardStateDiff::unchanged(ata_account),
     ];
 
     (post_diffs, chained_calls)

@@ -81,7 +81,8 @@ pub trait Rpc {
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
-    /// Returns the account's nonce, balance, and optionally one program shard.
+    /// Returns the account's nonce and the selected shard; its balance is the shard at the
+    /// native token program.
     #[method(name = "getAccountView")]
     async fn get_account_view(
         &self,

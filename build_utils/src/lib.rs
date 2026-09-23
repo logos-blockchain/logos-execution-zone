@@ -79,30 +79,3 @@ pub fn include_artifacts(artifacts_sub_dir: &str) -> Result<()> {
 
     Ok(())
 }
-
-/// Emit `name`'s image id as `pub const <NAME>_IMAGE_ID: [u32; 8]` into
-/// `OUT_DIR/<name>_image_id.rs`, computed from `artifacts/<artifacts_sub_dir>/<name>.bin`; include
-/// it with `include!(concat!(env!("OUT_DIR"), "/<name>_image_id.rs"))`.
-pub fn include_image_id(artifacts_sub_dir: &str, name: &str) -> Result<()> {
-    let bin = artifacts_dir(artifacts_sub_dir)?.join(format!("{name}.bin"));
-    println!("cargo:rerun-if-changed={}", bin.display());
-    let bytecode = fs::read(&bin).with_context(|| {
-        format!(
-            "Failed to read {}: build that program's artifact first",
-            bin.display()
-        )
-    })?;
-    let image_id: [u32; 8] = risc0_binfmt::compute_image_id(&bytecode)
-        .with_context(|| format!("Failed to compute image ID for {}", bin.display()))?
-        .into();
-    let out_file = PathBuf::from(env::var("OUT_DIR")?).join(format!("{name}_image_id.rs"));
-    fs::write(
-        &out_file,
-        format!(
-            "#[expect(clippy::unreadable_literal, reason = \"Generated image IDs from risc0 are cryptographic hashes represented as u32 arrays\")]\n\
-             pub const {}_IMAGE_ID: [u32; 8] = {image_id:?};\n",
-            name.to_uppercase()
-        ),
-    )
-    .with_context(|| format!("Failed to write {}", out_file.display()))
-}
