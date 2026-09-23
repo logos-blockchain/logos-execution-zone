@@ -23,10 +23,7 @@ pub fn compute_circuit_output(
         mut accounts,
         claim_order,
     } = threaded;
-    // An account with no witness has no note, so the verifier must be able to check it against
-    // real chain state: expose it in the journal, in first-sight order. Keep the same shard keys
-    // in the pre- and post-states, so the journal never reveals a shard the transaction did not
-    // name.
+    // Public accounts are exposed in journal in appropriate order.
     let public_actions = claim_order
         .into_iter()
         .map(|account_id| {

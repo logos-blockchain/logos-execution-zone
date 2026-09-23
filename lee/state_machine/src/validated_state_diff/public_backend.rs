@@ -79,7 +79,7 @@ impl<'state> PublicBackend<'state> {
     }
 
     /// Resolve each named selector from tracked state, never from what the caller asserts, and
-    /// only if declared up front or already touched: existing in global state is not enough.
+    /// only if declared up front or already touched.
     fn resolve_pre_states(
         &self,
         call: &ChainedCall,
@@ -147,8 +147,6 @@ impl Backend for PublicBackend<'_> {
             self.new_commitments.extend(new_commitment);
             program_output
         } else {
-            // Through the in-flight diff first, so a program deployed by an earlier call in this
-            // transaction is callable immediately.
             let Some((program_id, user_elf)) = get_program_via(call.program_account_id, |id| {
                 accounts
                     .get(&id)

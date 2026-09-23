@@ -23,8 +23,7 @@ fn main() {
     let Some(first_output) = program_outputs.first() else {
         panic!("PrivacyPreservingCircuitInput::program_outputs is empty: nothing to validate");
     };
-    // Only bootstraps the loop's first iteration: the top-level call is reached through a proof
-    // rather than through a caller that named its shards, so it declares none of its own.
+    // Only bootstraps the loop's first iteration.
     let initial_call = ChainedCall {
         program_account_id,
         instruction_data: first_output.instruction_data.clone(),

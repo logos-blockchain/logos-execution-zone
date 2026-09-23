@@ -236,9 +236,6 @@ impl ValidatedStateDiff {
     /// (with its chained calls), producing a diff. `authorized` is the guest's
     /// `is_authorized` set; `nonce_bearers` become the diff's `signer_account_ids`
     /// (their nonces advance on apply).
-    ///
-    /// The walk itself lives in [`lee_core::validation`], shared with the privacy preserving
-    /// circuit; everything specific to executing rather than verifying is in [`PublicBackend`].
     #[expect(
         clippy::too_many_arguments,
         reason = "the execution core threads the full invocation context"
@@ -286,8 +283,7 @@ impl ValidatedStateDiff {
         );
         let result = validate_state_diff(&mut backend, initial_call, shard_selectors);
 
-        // Read back before propagating the failure: a chargeable revert still owes the cycles
-        // every call burned before the one that failed.
+        // Read back before propagating the failure for cycle count.
         *cycles_used = cycles_used
             .checked_add(backend.cycles_used())
             .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");

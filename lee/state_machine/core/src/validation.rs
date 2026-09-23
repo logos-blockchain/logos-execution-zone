@@ -42,8 +42,7 @@ pub enum AccountSource {
 
 pub struct TrackedAccount {
     pub current: AccountData,
-    /// The adopted claims, for an account that adopts them. Keeps empty shards: a named empty
-    /// shard differs from an unnamed one.
+    /// The adopted claims, for an account that adopts them.
     pub claimed_initial: Option<AccountData>,
     pub exported_authorization: bool,
 }
@@ -66,14 +65,11 @@ pub trait Backend {
         accounts: &HashMap<AccountId, TrackedAccount>,
     ) -> Result<ProgramOutput, Self::Error>;
 
-    /// Asked once per account, at its first sight: adoption is sound only because the source is
-    /// a property of the environment, not the moment.
+    /// Asked once per account, at its first sight.
     fn account_source(&self, account_id: AccountId) -> AccountSource;
 
     /// Judge one journalled `is_authorized` claim and return the value to export; `prior_export`
-    /// is what the account's first sight exported, `None` at first sight. The journalled flag,
-    /// not the export, extends the subtree set. An export may mask that flag but never exceed
-    /// it, because it is also what the account's later sightings are judged against.
+    /// is what the account's first sight exported, `None` at first sight.
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,

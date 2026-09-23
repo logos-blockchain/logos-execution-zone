@@ -21,15 +21,11 @@ use risc0_zkvm::guest::env;
 
 pub struct PrivateBackend<'input> {
     witnesses: &'input [PrivateWitness],
-    /// An account without a witness is public in-circuit: no note, so the journal exposes it.
     witness_by_account: HashMap<AccountId, usize>,
     remaining_outputs: VecDeque<ProgramOutput>,
     initial_shard_selectors: &'input [ProgramShardSelector],
-    /// Untrusted, prover-supplied: the sequencer checks `Disclosed` images against chain state,
-    /// `Undisclosed` ones are checked in-circuit when their claims are derived, and a shadow
-    /// program is bound by the address its image derives.
     image_id_by_account_id: HashMap<AccountId, ProgramId>,
-    /// One `(program, seed)` per account per transaction, else one seed authorizes a family.
+    /// One `(program, seed)` per account per transaction.
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
     block_bounds: (Option<BlockId>, Option<BlockId>),
     timestamp_bounds: (Option<Timestamp>, Option<Timestamp>),
@@ -225,7 +221,7 @@ impl Backend for PrivateBackend<'_> {
         if call.program_account_id == NATIVE_TOKEN_PROGRAM_ID {
             return Ok(self.native_output(call, ctx, program_output));
         }
-        // `env::verify` needs the invoked program's real image id, not its dispatch address.
+        // `env::verify` needs the invoked program's real image id.
         let image_id = self
             .image_id_by_account_id
             .get(&call.program_account_id)
@@ -238,8 +234,6 @@ impl Backend for PrivateBackend<'_> {
     }
 
     fn account_source(&self, account_id: AccountId) -> AccountSource {
-        // A witness binds its note's content; a public account has none, so its claim is
-        // adopted and the verifier checks it against real state.
         self.witness_for(account_id)
             .map_or(AccountSource::AdoptClaims, |witness| {
                 AccountSource::Authoritative(witness.account.data.clone())
@@ -283,7 +277,7 @@ impl Backend for PrivateBackend<'_> {
         }
 
         // At first sight a public account's claim stands, the verifier re-derives it from the
-        // signer set; afterwards it must stay consistent with this traversal.
+        // signer set.
         if let Some(prior) = prior_export {
             assert_eq!(
                 pre.is_authorized,
