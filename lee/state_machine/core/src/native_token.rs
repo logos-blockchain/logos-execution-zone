@@ -126,7 +126,7 @@ mod tests {
     use crate::program::CallKind;
 
     fn row(seed: u8, is_authorized: bool, balance: Balance) -> AccountInput {
-        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+        AccountInput::native_balance(AccountId::new([seed; 32]), is_authorized, balance)
     }
 
     fn transfer(amount: Balance) -> InstructionData {

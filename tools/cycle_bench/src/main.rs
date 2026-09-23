@@ -442,7 +442,7 @@ fn ata_create_pre_states() -> Vec<AccountInput> {
     let owner_id = AccountId::new([91; 32]);
     let definition_id = AccountId::new([15; 32]);
     let token_program_id = AccountId::from_builtin_program(programs::token().id());
-    let owner = AccountInput::balance(owner_id, true, 0);
+    let owner = AccountInput::native_balance(owner_id, true, 0);
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id, token_program_id);
     let ata_id = get_associated_token_account_id(

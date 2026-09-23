@@ -8,7 +8,7 @@ use std::{
 
 use lee_core::{
     BlockId, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness,
-    ProgramImageClaim, Timestamp, WitnessKind,
+    ProgramImageWitness, ShadowProgramWitness, Timestamp, WitnessKind,
     account::{AccountId, ProgramShardSelector},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -25,7 +25,9 @@ pub struct PrivateBackend<'input> {
     witness_by_account: HashMap<AccountId, usize>,
     remaining_outputs: VecDeque<ProgramOutput>,
     initial_shard_selectors: &'input [ProgramShardSelector],
-    /// Untrusted, prover-supplied; the sequencer checks these against chain state, not us.
+    /// Untrusted, prover-supplied: the sequencer checks `Disclosed` images against chain state,
+    /// `Undisclosed` ones are checked in-circuit when their claims are derived, and a shadow
+    /// program is bound by the address its image derives.
     image_id_by_account_id: HashMap<AccountId, ProgramId>,
     /// One `(program, seed)` per account per transaction, else one seed authorizes a family.
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
@@ -38,13 +40,14 @@ impl<'input> PrivateBackend<'input> {
     pub fn new(
         witnesses: &'input [PrivateWitness],
         program_outputs: Vec<ProgramOutput>,
-        program_image_claims: &[ProgramImageClaim],
+        program_image_witnesses: &[ProgramImageWitness],
+        shadow_program_witnesses: &[ShadowProgramWitness],
         initial_shard_selectors: &'input [ProgramShardSelector],
     ) -> Self {
         assert!(
-            !program_image_claims
+            !program_image_witnesses
                 .iter()
-                .any(|claim| claim.account_id == NATIVE_TOKEN_PROGRAM_ID),
+                .any(|witness| witness.account_id() == NATIVE_TOKEN_PROGRAM_ID),
             "The native token program has no deployable bytecode to claim"
         );
         assert_eq!(
@@ -52,15 +55,24 @@ impl<'input> PrivateBackend<'input> {
             initial_shard_selectors.len(),
             "An account may select several shards, but never the same one twice"
         );
+        let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
+            .iter()
+            .map(|witness| (witness.account_id(), witness.image_id()))
+            .collect();
+        for witness in shadow_program_witnesses {
+            let account_id = AccountId::for_shadow_program(&witness.image_id);
+            let previous = image_id_by_account_id.insert(account_id, witness.image_id);
+            assert!(
+                previous.is_none(),
+                "account {account_id} claimed by both a program-image claim and a shadow witness"
+            );
+        }
         let mut backend = Self {
             witnesses,
             witness_by_account: HashMap::new(),
             remaining_outputs: program_outputs.into(),
             initial_shard_selectors,
-            image_id_by_account_id: program_image_claims
-                .iter()
-                .map(|claim| (claim.account_id, claim.image_id))
-                .collect(),
+            image_id_by_account_id,
             pda_family_binding: HashMap::new(),
             block_bounds: (None, None),
             timestamp_bounds: (None, None),
@@ -373,7 +385,7 @@ mod tests {
     }
 
     fn native_row(seed: u8, is_authorized: bool, balance: u128) -> AccountInput {
-        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+        AccountInput::native_balance(AccountId::new([seed; 32]), is_authorized, balance)
     }
 
     fn native_selectors() -> Vec<ProgramShardSelector> {
@@ -416,7 +428,7 @@ mod tests {
         program_account_id: AccountId,
         report: ProgramOutput,
         selectors: &[ProgramShardSelector],
-        claims: &[ProgramImageClaim],
+        image_witnesses: &[ProgramImageWitness],
     ) -> (ThreadedDiff, (BlockValidityWindow, TimestampValidityWindow)) {
         let initial_call = ChainedCall {
             program_account_id,
@@ -424,7 +436,8 @@ mod tests {
             shard_selectors: Vec::new(),
             pda_seeds: Vec::new(),
         };
-        let mut backend = PrivateBackend::new(witnesses, vec![report], claims, selectors);
+        let mut backend =
+            PrivateBackend::new(witnesses, vec![report], image_witnesses, &[], selectors);
         let threaded = validate_state_diff(&mut backend, initial_call, selectors)
             .unwrap_or_else(|error| panic!("{error}"));
         (threaded, backend.into_windows())
@@ -471,8 +484,8 @@ mod tests {
         let sender = witness.account_id();
         let recipient = AccountId::new([2; 32]);
         let mut report = tampered_native_report(30);
-        report.state_diffs[0].pre_state = AccountInput::balance(sender, true, 100);
-        report.state_diffs[1].pre_state = AccountInput::balance(recipient, false, 0);
+        report.state_diffs[0].pre_state = AccountInput::native_balance(sender, true, 100);
+        report.state_diffs[1].pre_state = AccountInput::native_balance(recipient, false, 0);
 
         drop(derive(
             &[witness],
@@ -508,7 +521,7 @@ mod tests {
             NATIVE_TOKEN_PROGRAM_ID,
             tampered_native_report(30),
             &native_selectors(),
-            &[ProgramImageClaim {
+            &[ProgramImageWitness::Disclosed {
                 account_id: NATIVE_TOKEN_PROGRAM_ID,
                 image_id: [7; 8],
             }],

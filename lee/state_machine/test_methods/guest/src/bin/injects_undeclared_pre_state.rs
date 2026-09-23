@@ -29,7 +29,7 @@ fn main() {
         .map(ShardStateDiff::unchanged)
         .collect();
 
-    state_diffs.push(ShardStateDiff::unchanged(AccountInput::balance(
+    state_diffs.push(ShardStateDiff::unchanged(AccountInput::native_balance(
         fabricated_account_id,
         false,
         0,

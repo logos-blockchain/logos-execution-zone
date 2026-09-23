@@ -156,7 +156,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     };
 
     let proxy = test_programs::pda_spend_proxy();
-    let proxy_id = AccountId::from_builtin_program(proxy.id());
+    // `pda_spend_proxy` is deployed fresh below, so its header target must be a real key the
+    // wallet signs for — `program_loader` requires `is_authorized` for `CreateHeader`.
+    let proxy_key = PrivateKey::try_new([209; 32]).unwrap();
+    let proxy_id = AccountId::from(&PublicKey::new_from_private_key(&proxy_key));
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
@@ -228,15 +231,20 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
             .into_iter()
             .map(|id| ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
             .collect(),
-        vec![lee_core::account::Nonce(next_payer_nonce)],
+        vec![
+            lee_core::account::Nonce(0),
+            lee_core::account::Nonce(next_payer_nonce),
+        ],
         program_loader_core::Instruction::CreateHeader {
             first_segment: segment_ids[0],
             immutable: true,
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;
-    let header_witness_set =
-        lee::public_transaction::WitnessSet::for_message(&header_message, &[&payer.pub_sign_key]);
+    let header_witness_set = lee::public_transaction::WitnessSet::for_message(
+        &header_message,
+        &[&proxy_key, &payer.pub_sign_key],
+    );
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             header_message,

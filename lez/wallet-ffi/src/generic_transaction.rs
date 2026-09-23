@@ -5,8 +5,11 @@ use std::{
 
 use common::HashType;
 use lee::{
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program, AccountId,
+    privacy_preserving_transaction::circuit::{Dependency, ProgramKind, ProgramWithDependencies},
+    program::Program,
+    AccountId, ProgramId,
 };
+use lee_core::{program::ProgramHeader, MembershipProof};
 
 use crate::{
     block_on,
@@ -51,25 +54,112 @@ impl From<Program> for FfiProgram {
     }
 }
 
+/// Which of `Disclosed`/`Shadow`/`Undisclosed` a program (or dependency) is resolved as.
 #[repr(C)]
-/// A program paired with the account id it's deployed at.
-///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiProgramKind {
+    ProgramDisclosed = 0,
+    ProgramShadow = 1,
+    ProgramUndisclosed = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiProgramHeader {
+    pub image_id: FfiBytes32,
+    pub program_first_segment: FfiBytes32,
+    pub immutable: bool,
+}
+
+impl From<&FfiProgramHeader> for ProgramHeader {
+    fn from(value: &FfiProgramHeader) -> Self {
+        Self {
+            image_id: bytes_to_program_id(value.image_id.data),
+            program_first_segment: value.program_first_segment.into(),
+            immutable: value.immutable,
+        }
+    }
+}
+
+impl From<ProgramHeader> for FfiProgramHeader {
+    fn from(value: ProgramHeader) -> Self {
+        Self {
+            image_id: FfiBytes32::from_bytes(program_id_to_bytes(value.image_id)),
+            program_first_segment: value.program_first_segment.into(),
+            immutable: value.immutable,
+        }
+    }
+}
+
+#[repr(C)]
 /// Intended to be created manually.
-pub struct FfiProgramDependency {
+pub struct FfiMembershipProof {
+    pub index: usize,
+    pub path: *const FfiBytes32,
+    pub path_len: usize,
+}
+
+impl Default for FfiMembershipProof {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            path: std::ptr::null(),
+            path_len: 0,
+        }
+    }
+}
+
+impl TryFrom<&FfiMembershipProof> for MembershipProof {
+    type Error = WalletFfiError;
+
+    fn try_from(value: &FfiMembershipProof) -> Result<Self, Self::Error> {
+        let mut path = Vec::with_capacity(value.path_len);
+        for i in 0..value.path_len {
+            let hash = unsafe { value.path.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            path.push(hash.data);
+        }
+        Ok((value.index, path))
+    }
+}
+
+impl From<MembershipProof> for FfiMembershipProof {
+    fn from(value: MembershipProof) -> Self {
+        let (index, path) = value;
+        let ffi_path: Vec<FfiBytes32> = path.into_iter().map(FfiBytes32::from).collect();
+        let path_len = ffi_path.len();
+        let path_ptr = Box::into_raw(ffi_path.into_boxed_slice()) as *const FfiBytes32;
+
+        Self {
+            index,
+            path: path_ptr,
+            path_len,
+        }
+    }
+}
+
+#[repr(C)]
+/// Intended to be created manually.
+pub struct FfiDependency {
     pub program: FfiProgram,
+    /// Where `program` is actually deployed. Ignored for `ProgramShadow`, whose account id is
+    /// always derived from `program` instead — never a real header's address.
     pub account_id: FfiBytes32,
+    pub kind: FfiProgramKind,
+    pub program_header: FfiProgramHeader,
+    pub membership_proof: FfiMembershipProof,
 }
 
 #[repr(C)]
 /// Every program an execution may dispatch, root included, each paired with the account it is
 /// deployed at, plus the address the top-level call is dispatched to.
 ///
-/// `programs` is empty for native execution, which has no bytecode to supply.
+/// The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
+/// address instead. `programs` is empty for native execution, which has no bytecode to supply.
 ///
 /// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
     pub self_account_id: FfiBytes32,
-    pub programs: *const FfiProgramDependency,
+    pub programs: *const FfiDependency,
     pub programs_size: usize,
 }
 
@@ -77,6 +167,8 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
+        let supplied_root = AccountId::from(value.self_account_id);
+        let mut self_account_id = supplied_root;
         let mut programs = HashMap::new();
 
         // Alignment will be different, we need to read elements one-by-one
@@ -84,14 +176,26 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             let entry =
                 unsafe { value.programs.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
             let program: Program = (&entry.program).try_into()?;
+            let account_id = ffi_account_id(&program, entry.kind, entry.account_id);
+            if AccountId::from(entry.account_id) == supplied_root {
+                self_account_id = account_id;
+            }
+            let kind = match entry.kind {
+                FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
+                FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
+                FfiProgramKind::ProgramUndisclosed => ProgramKind::Undisclosed {
+                    program_header: (&entry.program_header).into(),
+                    membership_proof: (&entry.membership_proof).try_into()?,
+                },
+            };
 
-            programs.insert(AccountId::from(entry.account_id), program);
+            programs.insert(account_id, Dependency { program, kind });
         }
 
         // Built field-wise rather than through `new`, which would insert a root program the
         // native execution path must not be given.
         Ok(Self {
-            self_account_id: AccountId::from(value.self_account_id),
+            self_account_id,
             programs,
         })
     }
@@ -118,6 +222,36 @@ impl Default for FfiTransactionResult {
             secrets_data: std::ptr::null(),
             secrets_size: 0,
         }
+    }
+}
+
+/// Same little-endian word packing `AccountId::from_builtin_program` uses, so a header's
+/// `image_id` round-trips identically whichever type it's read back through.
+fn program_id_to_bytes(program_id: ProgramId) -> [u8; 32] {
+    let bytes: Vec<u8> = program_id
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    bytes.try_into().expect("8 u32 words are exactly 32 bytes")
+}
+
+fn bytes_to_program_id(bytes: [u8; 32]) -> ProgramId {
+    let mut program_id = [0_u32; 8];
+    for (word, chunk) in program_id.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*chunk);
+    }
+    program_id
+}
+
+/// For `ProgramShadow`, the account id is definitional — there's no real header to consult, so
+/// it's derived from `program` the same way the circuit itself derives it. For
+/// `ProgramDisclosed`/`ProgramUndisclosed`, the account id is wherever the caller's header
+/// actually lives — never assumed to be `program`'s bytecode-bijection address, since the same
+/// bytecode may be deployed more than once at different addresses — so `supplied` is used as-is.
+fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32) -> AccountId {
+    match kind {
+        FfiProgramKind::ProgramShadow => AccountId::for_shadow_program(&program.id()),
+        FfiProgramKind::ProgramDisclosed | FfiProgramKind::ProgramUndisclosed => supplied.into(),
     }
 }
 

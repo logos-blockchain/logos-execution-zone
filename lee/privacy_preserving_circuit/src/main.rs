@@ -1,5 +1,5 @@
 use lee_core::{
-    PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitInput, ProgramImageWitness,
     program::{ChainedCall, read_input_frame},
     validation::validate_state_diff,
 };
@@ -16,7 +16,8 @@ fn main() {
         dummy_inputs,
         ciphertext_padding,
         initial_shard_selectors,
-        program_image_claims,
+        program_image_witnesses,
+        shadow_program_witnesses,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let Some(first_output) = program_outputs.first() else {
@@ -33,13 +34,20 @@ fn main() {
     let mut backend = private_backend::PrivateBackend::new(
         &private_witnesses,
         program_outputs,
-        &program_image_claims,
+        &program_image_witnesses,
+        &shadow_program_witnesses,
         &initial_shard_selectors,
     );
     // Every rejection aborts here, before any output is built.
     let threaded = validate_state_diff(&mut backend, initial_call, &initial_shard_selectors)
         .unwrap_or_else(|error| panic!("{error}"));
     let (block_validity_window, timestamp_validity_window) = backend.into_windows();
+
+    let program_image_claims = program_image_witnesses
+        .iter()
+        .map(ProgramImageWitness::to_claim)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("every program image witness must produce a valid claim");
 
     let output = output::compute_circuit_output(
         threaded,

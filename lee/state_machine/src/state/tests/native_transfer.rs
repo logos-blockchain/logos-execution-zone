@@ -148,3 +148,50 @@ fn a_repeated_shard_selector_is_rejected() {
     };
     assert!(message.contains("Duplicate shard selectors"), "{message}");
 }
+
+#[test]
+fn a_transfer_that_overflows_the_recipient_is_rejected() {
+    let from_key = PrivateKey::try_new([1; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to_key = PrivateKey::try_new([2; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let mut state = V03State::new().with_public_accounts([
+        (from, Account::funded(1)),
+        (to, Account::funded(Balance::MAX)),
+    ]);
+
+    let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, 1);
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+        TransferError::BalanceOverflow { account_id },
+    ))) = result
+    else {
+        panic!("an overflowing credit was accepted: {result:?}");
+    };
+    assert_eq!(account_id, to);
+    assert_eq!(state.get_account_by_id(to).data.balance(), Ok(Balance::MAX));
+}
+
+#[test]
+fn a_transfer_from_a_non_canonical_balance_is_rejected() {
+    let from_key = PrivateKey::try_new([1; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to_key = PrivateKey::try_new([2; 32]).unwrap();
+    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let zero_padded = ShardData::try_from(vec![0; 16]).unwrap();
+    let mut state = V03State::new().with_public_accounts([(
+        from,
+        Account::default().with_shard(NATIVE_TOKEN_PROGRAM_ID, zero_padded),
+    )]);
+
+    let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, 1);
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+        TransferError::InvalidBalance(_),
+    ))) = result
+    else {
+        panic!("a non-canonical balance was spent: {result:?}");
+    };
+}

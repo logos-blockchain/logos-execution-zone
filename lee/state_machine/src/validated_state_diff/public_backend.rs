@@ -7,7 +7,7 @@ use std::{
 };
 
 use lee_core::{
-    BlockId, Timestamp,
+    BlockId, Commitment, Timestamp,
     account::{AccountData, AccountId, Cycles},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -36,6 +36,7 @@ pub struct PublicBackend<'state> {
     cycle_budget: Cycles,
     cycles_used: Cycles,
     events: Vec<TransactionEvent>,
+    new_commitments: Vec<Commitment>,
     /// Recomputed per call in `output_for_call`, which always runs before the per-account hooks.
     authorized_pdas: HashSet<AccountId>,
 }
@@ -58,6 +59,7 @@ impl<'state> PublicBackend<'state> {
             cycle_budget,
             cycles_used: 0,
             events: Vec::new(),
+            new_commitments: Vec::new(),
             authorized_pdas: HashSet::new(),
         }
     }
@@ -66,8 +68,8 @@ impl<'state> PublicBackend<'state> {
         self.cycles_used
     }
 
-    pub fn into_events(self) -> Vec<TransactionEvent> {
-        self.events
+    pub fn into_outputs(self) -> (Vec<TransactionEvent>, Vec<Commitment>) {
+        (self.events, self.new_commitments)
     }
 
     fn is_authorized(&self, ctx: &CallContext<'_>, account_id: AccountId) -> bool {
@@ -136,12 +138,14 @@ impl Backend for PublicBackend<'_> {
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
         } else if call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
-            execute_program_loader(
+            let (program_output, new_commitment) = execute_program_loader(
                 call.program_account_id,
                 ctx.caller_account_id,
                 &pre_states,
                 &call.instruction_data,
-            )?
+            )?;
+            self.new_commitments.extend(new_commitment);
+            program_output
         } else {
             // Through the in-flight diff first, so a program deployed by an earlier call in this
             // transaction is callable immediately.

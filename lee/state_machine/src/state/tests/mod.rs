@@ -17,8 +17,8 @@ use lee_core::{
     },
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow,
-        TransactionEvent,
+        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId,
+        ProgramSegment, TimestampValidityWindow, TransactionEvent,
     },
 };
 
@@ -183,6 +183,42 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
         d: [83; 32],
         z: [84; 32],
     }
+}
+
+/// Chains `elf` across as many force-inserted segments as it needs, returning every segment's
+/// `AccountId` in link order (`[0]` is the first segment, for `first_segment`).
+fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) -> Vec<AccountId> {
+    let user_elf = risc0_binfmt::ProgramBinary::decode(elf)
+        .expect("elf must be a valid ProgramBinary")
+        .user_elf
+        .to_vec();
+    let chunks: Vec<&[u8]> = user_elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_ids: Vec<AccountId> = (0..chunks.len())
+        .map(|i| {
+            let mut bytes = [key_seed; 32];
+            bytes[1] = u8::try_from(i).expect("chunk count fits in a u8");
+            AccountId::new(bytes)
+        })
+        .collect();
+    for i in (0..chunks.len()).rev() {
+        state.force_insert_account(
+            segment_ids[i],
+            Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ShardData::try_from(
+                    ProgramSegment {
+                        bytecode: chunks[i].to_vec(),
+                        next_segment: segment_ids.get(i + 1).copied(),
+                    }
+                    .to_bytes(),
+                )
+                .expect("segment must fit under DATA_MAX_LENGTH"),
+            ),
+        );
+    }
+    segment_ids
 }
 
 /// Init-lifecycle private-PDA witness for `keys`, the shape every PDA circuit test starts from.
