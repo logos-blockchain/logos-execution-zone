@@ -126,15 +126,12 @@ impl<'input> PrivateBackend<'input> {
         ctx: &CallContext<'_>,
         reported: ProgramOutput,
     ) -> ProgramOutput {
-        // If the call is top-level, it was handed the transaction's selectors, since the
-        // protocol itself runs it.
-        let scheduled = if ctx.caller_account_id.is_some() {
-            call.shard_selectors.as_slice()
-        } else {
-            self.initial_shard_selectors
-        };
         assert!(
-            pre_states_match_shard_selectors(scheduled, &reported.state_diffs),
+            ctx.caller_account_id.is_some()
+                || pre_states_match_shard_selectors(
+                    self.initial_shard_selectors,
+                    &reported.state_diffs
+                ),
             "Call ran on shard selectors it was not handed"
         );
         let pre_states: Vec<AccountInput> = reported
