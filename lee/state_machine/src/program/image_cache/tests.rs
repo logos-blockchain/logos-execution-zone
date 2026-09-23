@@ -31,8 +31,8 @@ fn data_changer_instruction() -> Vec<u8> {
 
 fn balance_pre_states() -> Vec<AccountInput> {
     vec![
-        AccountInput::balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
-        AccountInput::balance(AccountId::new([1; 32]), false, 0),
+        AccountInput::native_balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
+        AccountInput::native_balance(AccountId::new([1; 32]), false, 0),
     ]
 }
 

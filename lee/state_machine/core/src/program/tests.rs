@@ -177,7 +177,7 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected() {
         ),
         (
             "the native balance shard",
-            AccountInput::balance(account_id, true, 5),
+            AccountInput::native_balance(account_id, true, 5),
             crate::native_token::encode_balance(50),
         ),
     ];
@@ -228,7 +228,7 @@ fn two_shard_selectors_of_one_account_in_a_call_are_accepted() {
             executing_account_id,
             ShardData::empty(),
         )),
-        ShardStateDiff::unchanged(AccountInput::balance(account_id, true, 5)),
+        ShardStateDiff::unchanged(AccountInput::native_balance(account_id, true, 5)),
     ];
 
     assert!(validate_execution(&state_diffs, executing_account_id).is_ok());

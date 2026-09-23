@@ -674,7 +674,7 @@ mod tests {
     }
 
     fn native_row(seed: u8, is_authorized: bool, balance: u128) -> AccountInput {
-        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+        AccountInput::native_balance(AccountId::new([seed; 32]), is_authorized, balance)
     }
 
     fn native_selectors() -> Vec<ProgramShardSelector> {
@@ -758,8 +758,8 @@ mod tests {
         let sender = witness.account_id();
         let recipient = AccountId::new([2; 32]);
         let mut report = tampered_native_report(30);
-        report.state_diffs[0].pre_state = AccountInput::balance(sender, true, 100);
-        report.state_diffs[1].pre_state = AccountInput::balance(recipient, false, 0);
+        report.state_diffs[0].pre_state = AccountInput::native_balance(sender, true, 100);
+        report.state_diffs[1].pre_state = AccountInput::native_balance(recipient, false, 0);
 
         drop(ExecutionState::derive_from_outputs(
             &[witness],

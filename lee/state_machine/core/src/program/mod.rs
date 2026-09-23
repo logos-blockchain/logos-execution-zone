@@ -63,7 +63,7 @@ impl AccountInput {
     }
 
     #[must_use]
-    pub fn balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
+    pub fn native_balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
         Self::with_shard(
             account_id,
             is_authorized,
