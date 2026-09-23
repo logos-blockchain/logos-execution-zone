@@ -614,6 +614,10 @@ impl ZoneTestContextBuilder {
     }
 
     pub async fn build(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
+        Box::pin(self.build_inner(bedrock_addr)).await
+    }
+
+    async fn build_inner(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
         let Self {
             genesis_transactions,
             sequencer_partial_config,
@@ -818,32 +822,35 @@ pub struct MultiZoneTestContextBuilder {
 
 impl MultiZoneTestContextBuilder {
     pub async fn build(self) -> Result<TestContext> {
-        // Ensure logger is initialized only once
-        *LOGGER;
+        Box::pin(async move {
+            // Ensure logger is initialized only once
+            *LOGGER;
 
-        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
-            .await
-            .context("Failed to setup Bedrock node")?;
+            let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
+                .await
+                .context("Failed to setup Bedrock node")?;
 
-        let mut zones = HashMap::new();
+            let mut zones = HashMap::new();
 
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "Zones can be started in any order"
-        )]
-        for (channel_id, zone_builder) in self.zone_builders {
-            let zone_ctx = zone_builder.build(bedrock_addr).await?;
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "Zones can be started in any order"
+            )]
+            for (channel_id, zone_builder) in self.zone_builders {
+                let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
-            log::info!("Built context for {channel_id}");
+                log::info!("Built context for {channel_id}");
 
-            zones.insert(channel_id, zone_ctx);
-        }
+                zones.insert(channel_id, zone_ctx);
+            }
 
-        Ok(TestContext {
-            zones,
-            bedrock_compose,
-            bedrock_addr,
+            Ok(TestContext {
+                zones,
+                bedrock_compose,
+                bedrock_addr,
+            })
         })
+        .await
     }
 
     #[must_use]
