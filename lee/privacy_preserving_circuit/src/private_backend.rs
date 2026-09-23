@@ -369,6 +369,11 @@ mod tests {
 
     use super::*;
 
+    const PROGRAM: AccountId = AccountId::new([0xA0; 32]);
+    const OTHER_PROGRAM: AccountId = AccountId::new([0xA1; 32]);
+    const SEED: PdaSeed = PdaSeed::new([2; 32]);
+    const OTHER_SEED: PdaSeed = PdaSeed::new([3; 32]);
+
     fn witness_with(kind: WitnessKind) -> PrivateWitness {
         PrivateWitness {
             account: Account::default(),
@@ -381,6 +386,22 @@ mod tests {
                 commitment_root: [8; 32],
             },
         }
+    }
+
+    fn granted(
+        caller: Option<AccountId>,
+        seeds: &[PdaSeed],
+        witness: Option<&PrivateWitness>,
+        account_id: AccountId,
+    ) -> Option<(AccountId, PdaSeed)> {
+        let ctx = CallContext {
+            caller_account_id: caller,
+            program_account_id: AccountId::new([0xD0; 32]),
+            pda_seeds: seeds,
+            authorized_accounts: &HashSet::new(),
+            touched: &HashMap::new(),
+        };
+        PrivateBackend::seed_granted(&ctx, witness, account_id)
     }
 
     fn native_row(seed: u8, is_authorized: bool, balance: u128) -> AccountInput {
@@ -526,5 +547,44 @@ mod tests {
                 image_id: [7; 8],
             }],
         ));
+    }
+
+    #[test]
+    fn a_delegated_seed_grants_a_private_pda_only_to_its_bound_program() {
+        let pda = witness_with(WitnessKind::Pda {
+            binding: (PROGRAM, SEED),
+        });
+        let regular = witness_with(WitnessKind::Regular { ask: None });
+        let (pda_id, regular_id) = (pda.account_id(), regular.account_id());
+
+        assert_eq!(
+            granted(Some(PROGRAM), &[OTHER_SEED, SEED], Some(&pda), pda_id),
+            Some((PROGRAM, SEED))
+        );
+        assert_eq!(
+            granted(Some(OTHER_PROGRAM), &[SEED], Some(&pda), pda_id),
+            None
+        );
+        assert_eq!(
+            granted(Some(PROGRAM), &[OTHER_SEED], Some(&pda), pda_id),
+            None
+        );
+        assert_eq!(
+            granted(Some(PROGRAM), &[SEED], Some(&regular), regular_id),
+            None
+        );
+    }
+
+    #[test]
+    fn a_delegated_seed_grants_a_public_pda_only_the_account_it_derives() {
+        let pda = AccountId::for_public_pda(&PROGRAM, &SEED);
+
+        assert_eq!(
+            granted(Some(PROGRAM), &[OTHER_SEED, SEED], None, pda),
+            Some((PROGRAM, SEED))
+        );
+        assert_eq!(granted(Some(OTHER_PROGRAM), &[SEED], None, pda), None);
+        assert_eq!(granted(Some(PROGRAM), &[OTHER_SEED], None, pda), None);
+        assert_eq!(granted(None, &[SEED], None, pda), None);
     }
 }
