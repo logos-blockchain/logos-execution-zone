@@ -91,9 +91,7 @@ pub enum ProgramImageClaim {
         image_id: ProgramId,
     },
     /// Some immutable header's mirrored commitment is a member of `root`.
-    Undisclosed {
-        root: CommitmentSetDigest,
-    },
+    Undisclosed { root: CommitmentSetDigest },
 }
 
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]

@@ -64,36 +64,11 @@ pub enum FfiProgramKind {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct FfiProgramHeader {
     pub image_id: FfiBytes32,
     pub program_first_segment: FfiBytes32,
     pub immutable: bool,
-}
-
-impl Default for FfiProgramHeader {
-    fn default() -> Self {
-        Self {
-            image_id: FfiBytes32::default(),
-            program_first_segment: FfiBytes32::default(),
-            immutable: false,
-        }
-    }
-}
-
-/// Same little-endian word packing `AccountId::from_builtin_program` uses, so a header's
-/// `image_id` round-trips identically whichever type it's read back through.
-fn program_id_to_bytes(program_id: ProgramId) -> [u8; 32] {
-    let bytes: Vec<u8> = program_id.iter().flat_map(|word| word.to_le_bytes()).collect();
-    bytes.try_into().expect("8 u32 words are exactly 32 bytes")
-}
-
-fn bytes_to_program_id(bytes: [u8; 32]) -> ProgramId {
-    let mut program_id = [0_u32; 8];
-    for (word, chunk) in program_id.iter_mut().zip(bytes.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("chunk is exactly 4 bytes"));
-    }
-    program_id
 }
 
 impl From<&FfiProgramHeader> for ProgramHeader {
@@ -152,11 +127,11 @@ impl From<MembershipProof> for FfiMembershipProof {
         let (index, path) = value;
         let ffi_path: Vec<FfiBytes32> = path.into_iter().map(FfiBytes32::from).collect();
         let path_len = ffi_path.len();
-        let path = Box::into_raw(ffi_path.into_boxed_slice()) as *const FfiBytes32;
+        let path_ptr = Box::into_raw(ffi_path.into_boxed_slice()) as *const FfiBytes32;
 
         Self {
             index,
-            path,
+            path: path_ptr,
             path_len,
         }
     }
@@ -188,25 +163,12 @@ pub struct FfiProgramWithDependencies {
     pub deps_size: usize,
 }
 
-/// For `ProgramShadow`, the account id is definitional — there's no real header to consult, so
-/// it's derived from `program` the same way the circuit itself derives it. For
-/// `ProgramDisclosed`/`ProgramUndisclosed`, the account id is wherever the caller's header
-/// actually lives — never assumed to be `program`'s bytecode-bijection address, since the same
-/// bytecode may be deployed more than once at different addresses — so `supplied` is used as-is.
-fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32) -> AccountId {
-    match kind {
-        FfiProgramKind::ProgramShadow => AccountId::for_shadow_program(&program.id()),
-        FfiProgramKind::ProgramDisclosed | FfiProgramKind::ProgramUndisclosed => supplied.into(),
-    }
-}
-
 impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
         let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id =
-            ffi_account_id(&orig_program, value.self_kind, value.self_account_id);
+        let self_account_id = ffi_account_id(&orig_program, value.self_kind, value.self_account_id);
         let self_kind = match value.self_kind {
             FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
             FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
@@ -242,29 +204,6 @@ impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
             self_kind,
             dependencies,
         })
-    }
-}
-
-fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMembershipProof) {
-    match kind {
-        ProgramKind::Disclosed => (
-            FfiProgramKind::ProgramDisclosed,
-            FfiProgramHeader::default(),
-            FfiMembershipProof::default(),
-        ),
-        ProgramKind::Shadow => (
-            FfiProgramKind::ProgramShadow,
-            FfiProgramHeader::default(),
-            FfiMembershipProof::default(),
-        ),
-        ProgramKind::Undisclosed {
-            program_header,
-            membership_proof,
-        } => (
-            FfiProgramKind::ProgramUndisclosed,
-            program_header.into(),
-            membership_proof.into(),
-        ),
     }
 }
 
@@ -325,6 +264,59 @@ impl Default for FfiTransactionResult {
             secrets_data: std::ptr::null(),
             secrets_size: 0,
         }
+    }
+}
+
+/// Same little-endian word packing `AccountId::from_builtin_program` uses, so a header's
+/// `image_id` round-trips identically whichever type it's read back through.
+fn program_id_to_bytes(program_id: ProgramId) -> [u8; 32] {
+    let bytes: Vec<u8> = program_id
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    bytes.try_into().expect("8 u32 words are exactly 32 bytes")
+}
+
+fn bytes_to_program_id(bytes: [u8; 32]) -> ProgramId {
+    let mut program_id = [0_u32; 8];
+    for (word, chunk) in program_id.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*chunk);
+    }
+    program_id
+}
+
+/// For `ProgramShadow`, the account id is definitional — there's no real header to consult, so
+/// it's derived from `program` the same way the circuit itself derives it. For
+/// `ProgramDisclosed`/`ProgramUndisclosed`, the account id is wherever the caller's header
+/// actually lives — never assumed to be `program`'s bytecode-bijection address, since the same
+/// bytecode may be deployed more than once at different addresses — so `supplied` is used as-is.
+fn ffi_account_id(program: &Program, kind: FfiProgramKind, supplied: FfiBytes32) -> AccountId {
+    match kind {
+        FfiProgramKind::ProgramShadow => AccountId::for_shadow_program(&program.id()),
+        FfiProgramKind::ProgramDisclosed | FfiProgramKind::ProgramUndisclosed => supplied.into(),
+    }
+}
+
+fn ffi_kind_parts(kind: ProgramKind) -> (FfiProgramKind, FfiProgramHeader, FfiMembershipProof) {
+    match kind {
+        ProgramKind::Disclosed => (
+            FfiProgramKind::ProgramDisclosed,
+            FfiProgramHeader::default(),
+            FfiMembershipProof::default(),
+        ),
+        ProgramKind::Shadow => (
+            FfiProgramKind::ProgramShadow,
+            FfiProgramHeader::default(),
+            FfiMembershipProof::default(),
+        ),
+        ProgramKind::Undisclosed {
+            program_header,
+            membership_proof,
+        } => (
+            FfiProgramKind::ProgramUndisclosed,
+            program_header.into(),
+            membership_proof.into(),
+        ),
     }
 }
 

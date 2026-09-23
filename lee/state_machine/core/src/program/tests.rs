@@ -522,7 +522,7 @@ fn for_shadow_program_matches_pinned_value() {
 
 #[test]
 fn for_immutable_mirror_matches_pinned_value() {
-    let header_account_id: AccountId = AccountId::from([1; 8]);
+    let header_account_id = AccountId::from_builtin_program([1; 8]);
     let expected = AccountId::new([
         116, 27, 253, 19, 65, 119, 18, 71, 79, 6, 124, 144, 48, 90, 98, 120, 12, 117, 132, 161,
         100, 22, 44, 64, 106, 111, 10, 129, 4, 211, 48, 244,
@@ -532,8 +532,8 @@ fn for_immutable_mirror_matches_pinned_value() {
 
 #[test]
 fn for_immutable_mirror_differs_for_different_header() {
-    let header_a: AccountId = AccountId::from([1; 8]);
-    let header_b: AccountId = AccountId::from([9; 8]);
+    let header_a = AccountId::from_builtin_program([1; 8]);
+    let header_b = AccountId::from_builtin_program([9; 8]);
     assert_ne!(
         AccountId::for_immutable_mirror(header_a),
         AccountId::for_immutable_mirror(header_b),

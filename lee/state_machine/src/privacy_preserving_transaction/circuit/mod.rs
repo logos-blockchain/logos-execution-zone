@@ -88,11 +88,11 @@ impl ProgramWithDependencies {
     ) -> Self {
         let dependencies = dependencies
             .into_iter()
-            .map(|(account_id, program)| {
+            .map(|(account_id, dep_program)| {
                 (
                     account_id,
                     Dependency {
-                        program,
+                        program: dep_program,
                         kind: ProgramKind::Disclosed,
                     },
                 )

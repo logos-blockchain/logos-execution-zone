@@ -200,7 +200,8 @@ fn finalize_header(
     let mut diffs = vec![AccountStateDiff::new(
         pre_states[0].clone(),
         BalanceDiff::Add(0),
-        ShardData::try_from(header.to_bytes()).expect("program header must fit under DATA_MAX_LENGTH"),
+        ShardData::try_from(header.to_bytes())
+            .expect("program header must fit under DATA_MAX_LENGTH"),
     )];
     diffs.extend(
         pre_states[1..]

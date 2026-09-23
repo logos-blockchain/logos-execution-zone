@@ -217,7 +217,11 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
 /// Chains `elf` across as many force-inserted segments as it needs, returning every segment's
 /// `AccountId` in link order (`[0]` is the first segment, for `first_segment`).
 fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) -> Vec<AccountId> {
-    let chunks: Vec<&[u8]> = elf
+    let user_elf = risc0_binfmt::ProgramBinary::decode(elf)
+        .expect("elf must be a valid ProgramBinary")
+        .user_elf
+        .to_vec();
+    let chunks: Vec<&[u8]> = user_elf
         .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
         .collect();
     let segment_ids: Vec<AccountId> = (0..chunks.len())
