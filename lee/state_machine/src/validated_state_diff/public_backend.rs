@@ -100,9 +100,12 @@ impl<'state> PublicBackend<'state> {
             .iter()
             .map(|shard_selector| {
                 let account_id = shard_selector.account_id;
-                let data = match self.tracked_ref(ctx, account_id) {
+                let data = match ctx.touched.get(&account_id) {
                     Some(data) => data,
-                    None if self.declared_account_ids.contains(&account_id) => &absent,
+                    None if self.declared_account_ids.contains(&account_id) => self
+                        .state
+                        .get_account_by_id_ref(account_id)
+                        .map_or(&absent, |account| &account.data),
                     None => {
                         return Err(LeeError::from(
                             InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id },

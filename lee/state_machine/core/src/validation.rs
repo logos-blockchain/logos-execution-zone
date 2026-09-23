@@ -155,6 +155,7 @@ pub fn validate_state_diff<B: Backend>(
 
         // Captured before any backend rewrite: this is what extends the subtree set.
         let mut journalled_authorized: Vec<AccountId> = Vec::new();
+        let mut adopted = Vec::new();
 
         for diff in &program_output.state_diffs {
             let pre = &diff.pre_state;
@@ -197,6 +198,7 @@ pub fn validate_state_diff<B: Backend>(
                 // `insert`, not `set_shard`: an empty resolved shard must stay recorded.
                 pre_view.shards.insert(*program, data.clone());
                 base.set_shard(*program, data.clone());
+                adopted.push((account_id, *program, data.clone()));
             }
             let base = &base;
             if base.shard(*program) != data {
@@ -268,6 +270,13 @@ pub fn validate_state_diff<B: Backend>(
             program_output.block_validity_window,
             program_output.timestamp_validity_window,
         )?;
+
+        // An unchanged diff writes nothing, so a shard adopted after first sight lands here.
+        for (account_id, program, data) in adopted {
+            if let Some(running) = touched.get_mut(&account_id) {
+                running.set_shard(program, data);
+            }
+        }
 
         for diff in &program_output.state_diffs {
             let account_id = diff.pre_state.account_id;
