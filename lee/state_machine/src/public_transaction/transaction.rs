@@ -183,7 +183,7 @@ pub mod tests {
     }
 
     #[test]
-    fn witness_set_cant_have_duplicate_signers() {
+    fn witness_set_cannot_have_dulicate_signers() {
         let (key1, _, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         // both nonces match the current state, so only the repeat is at fault
