@@ -1,4 +1,9 @@
-use lee_core::account::{AccountId, Nonce, ProgramShardSelector};
+use lee_core::{
+    account::{AccountId, Nonce, ProgramShardSelector},
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+    program::InstructionData,
+};
+use test_guest_core::ChainCall;
 
 use crate::{
     PrivateKey, PublicKey, V03State,
@@ -6,6 +11,13 @@ use crate::{
     public_transaction::{Message, WitnessSet},
     validated_state_diff::ValidatedStateDiff,
 };
+
+const CHAINED_CALLS: usize = 3;
+
+type ForwarderInstruction = (
+    Option<(AccountId, Vec<u8>)>,
+    Vec<(AccountId, ProgramShardSelector, InstructionData)>,
+);
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -17,21 +29,15 @@ fn public_diff_reflects_a_successful_transfer() {
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+    let state = V03State::new().with_public_account_balances([(from, 100)]);
     let message = Message::try_new(
-        program_id,
+        NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(from),
             ProgramShardSelector::balance(to),
         ],
         vec![Nonce(0), Nonce(0)],
-        5_u128,
+        NativeInstruction::Transfer { amount: 5 },
     )
     .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -46,7 +52,8 @@ fn public_diff_reflects_a_successful_transfer() {
         "public_diff must contain the debited sender",
     );
     assert_eq!(
-        public_diff[&from].data.balance, 95,
+        public_diff[&from].data.balance(),
+        Ok(95),
         "sender balance in the diff must reflect the debit",
     );
 }
@@ -111,27 +118,25 @@ fn privacy_garbage_proof_is_rejected() {
     }
 }
 
-fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
+fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
+    let program = crate::test_methods::reordering_writer();
+    let program_id = AccountId::from_builtin_program(program.id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+        .with_programs(std::iter::once(program));
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance(from),
-            ProgramShardSelector::balance(to),
+            ProgramShardSelector::new(from, program_id),
+            ProgramShardSelector::new(to, program_id),
         ],
         vec![Nonce(0), Nonce(0)],
-        5_u128,
+        vec![7_u8; 4],
     )
     .unwrap();
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
@@ -141,7 +146,7 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
 #[test]
 fn budgeted_execution_reports_cycles_and_matching_diff() {
     // The same tx through both entry points: identical diff, nonzero cycles.
-    let (state, tx) = metering_transfer_fixture();
+    let (state, tx) = metering_write_fixture();
     let (diff, outcome) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
         &tx,
         &state,
@@ -159,7 +164,7 @@ fn budgeted_execution_reports_cycles_and_matching_diff() {
 
 #[test]
 fn exhausted_budget_surfaces_out_of_gas() {
-    let (state, tx) = metering_transfer_fixture();
+    let (state, tx) = metering_write_fixture();
     let result =
         ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, 1_024);
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
@@ -169,63 +174,59 @@ fn exhausted_budget_surfaces_out_of_gas() {
 fn chained_calls_share_one_budget() {
     // A chain-calling tx must exhaust when the budget covers less than the
     // whole chain, even though each individual call would fit.
-    let chain_caller = crate::test_methods::chain_caller();
+    let forwarder_id = AccountId::from_builtin_program(crate::test_methods::shard_forwarder().id());
+    let echo_id = AccountId::from_builtin_program(crate::test_methods::noop().id());
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to = AccountId::new([2_u8; 32]);
     let state = V03State::new()
-        .with_public_account_balances([(from, 1_000), (to, 0)])
-        .with_test_programs();
-    let instruction: (
-        u128,
-        lee_core::program::ProgramId,
-        u32,
-        Option<lee_core::program::PdaSeed>,
-    ) = (
-        37,
-        crate::test_methods::simple_balance_transfer().id(),
-        2,
-        None,
+        .with_public_account_balances([(from, 1_000)])
+        .with_programs([
+            crate::test_methods::noop(),
+            crate::test_methods::shard_forwarder(),
+        ]);
+    let callee = (
+        echo_id,
+        ProgramShardSelector::new(from, echo_id),
+        InstructionData::new(),
     );
-    // The chain_caller program permutes the account order in the chain call.
-    let message = Message::try_new(
-        AccountId::from_builtin_program(chain_caller.id()),
-        vec![
-            ProgramShardSelector::balance(to),
-            ProgramShardSelector::balance(from),
-        ],
-        vec![Nonce(0)],
-        instruction,
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-    let tx = crate::PublicTransaction::new(message, witness_set);
+    let forwarding = |callees: Vec<_>| {
+        let instruction: ForwarderInstruction = (None, callees);
+        let message = Message::try_new(
+            forwarder_id,
+            vec![ProgramShardSelector::new(from, forwarder_id)],
+            vec![Nonce(0)],
+            instruction,
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&from_key]);
+        crate::PublicTransaction::new(message, witness_set)
+    };
+    let one_callee = forwarding(vec![callee.clone()]);
+    let chain = forwarding(vec![callee; CHAINED_CALLS]);
+    let cycles_under = |tx, budget| {
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(tx, &state, 1, 0, budget)
+    };
+    let spent = |tx| {
+        cycles_under(tx, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
+            .expect("executes under the default budget")
+            .1
+            .cycles
+    };
 
-    let full_cycles = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &tx,
-        &state,
-        1,
-        0,
-        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-    )
-    .expect("executes under the default budget")
-    .1
-    .cycles;
+    let budget = spent(&one_callee);
 
-    // `cycles()` and the session limit gate the same unpadded user-cycle
-    // counter, but the limit is only checked before each instruction and one
-    // instruction (an ecall) can add up to MAX_INSN_CYCLES (~25k) at once, so a
-    // boundary budget (`full_cycles - 1`) can still complete. A quarter of the
-    // chain's total is decisively insufficient.
-    let starved_budget = full_cycles >> 2;
-    let starved = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &tx,
-        &state,
-        1,
-        0,
-        starved_budget,
+    assert!(
+        cycles_under(&one_callee, budget).is_ok(),
+        "the budget must cover the root call and a whole chained callee"
     );
-    assert!(matches!(starved, Err(LeeError::OutOfGas { .. })));
+    assert!(
+        budget < spent(&chain),
+        "the budget must not cover the whole chain"
+    );
+    assert!(matches!(
+        cycles_under(&chain, budget),
+        Err(LeeError::OutOfGas { budget: remaining }) if remaining < budget
+    ));
 }
 
 #[test]
@@ -235,31 +236,28 @@ fn free_outcome_is_zero_cycles() {
 
 #[test]
 fn metered_guest_panic_is_charged_the_full_budget() {
-    // A transfer beyond the sender's balance panics the guest mid-execution —
-    // a chargeable failure that is not OutOfGas. The panic drops the session
-    // and its count, so it pays the whole declared budget.
+    // An unauthorized pre_state panics the guest mid-execution — a chargeable
+    // failure that is not OutOfGas. It still pays the whole declared budget:
+    // metering written back on an error path must never undercharge.
+    let program_id =
+        AccountId::from_builtin_program(crate::test_methods::auth_asserting_noop().id());
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let unsigned = AccountId::new([2_u8; 32]);
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+        .with_programs([crate::test_methods::auth_asserting_noop()]);
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::balance(from),
-            ProgramShardSelector::balance(to),
+            ProgramShardSelector::new(from, program_id),
+            ProgramShardSelector::new(unsigned, program_id),
         ],
-        vec![Nonce(0), Nonce(0)],
-        1_000_u128,
+        vec![Nonce(0)],
+        (),
     )
     .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
+    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
@@ -317,20 +315,17 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     let to = AccountId::new([2_u8; 32]);
     let state = V03State::new()
         .with_public_account_balances([(from, 1_000), (to, 0)])
-        .with_test_programs();
+        .with_programs([
+            crate::test_methods::chain_caller(),
+            crate::test_methods::exits_nonzero(),
+        ]);
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let run = |num_chain_calls: u32| {
-        let instruction: (
-            u128,
-            lee_core::program::ProgramId,
-            u32,
-            Option<lee_core::program::PdaSeed>,
-        ) = (
-            0,
-            crate::test_methods::exits_nonzero().id(),
-            num_chain_calls,
-            None,
-        );
+        let instruction = ChainCall::new(
+            AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
+            Vec::new(),
+        )
+        .repeated(num_chain_calls);
         let message = Message::try_new(
             AccountId::from_builtin_program(chain_caller.id()),
             vec![
@@ -381,16 +376,16 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
 
 #[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
-    let (mut state, tx) = metering_transfer_fixture();
+    let (mut state, tx) = metering_write_fixture();
     let from = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([1_u8; 32]).unwrap(),
     ));
     let to = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([2_u8; 32]).unwrap(),
     ));
-    let from_before = state.get_account_by_id(from).data.balance;
+    let from_before = state.get_account_by_id(from);
 
-    // A budget too small to finish the transfer: the action runs out of gas.
+    // A budget too small to finish the write: the action runs out of gas.
     let (outcome, result) =
         ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, 1_024);
     assert_eq!(
@@ -403,13 +398,13 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let diff = result.expect("a reverted action still yields an applicable diff");
     assert!(
         diff.public_diff().is_empty(),
-        "a reverted action moves no balances"
+        "a reverted action writes no shard"
     );
     drop(state.apply_state_diff(diff));
     assert_eq!(
-        state.get_account_by_id(from).data.balance,
-        from_before,
-        "the transfer was reverted"
+        state.get_account_by_id(from).data,
+        from_before.data,
+        "the write was reverted"
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);

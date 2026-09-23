@@ -49,7 +49,7 @@ struct Cli {
     prove: bool,
 
     /// Also run privacy-preserving execution circuit (PPE) composition cases:
-    /// (a) single `auth_transfer` Transfer through `execute_and_prove`, (b) `chain_caller`
+    /// (a) single native Transfer through `execute_and_prove`, (b) `chain_caller`
     /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
     #[arg(long)]
     ppe: bool,
@@ -286,12 +286,6 @@ impl Case {
     }
 }
 
-fn authenticated_transfer_transfer() -> Vec<AccountInput> {
-    let sender = AccountInput::balance(AccountId::new([1; 32]), true, 1_000_000);
-    let recipient = AccountInput::balance(AccountId::new([2; 32]), false, 0);
-    vec![sender, recipient]
-}
-
 fn token_holding(
     definition_id: AccountId,
     account_id: AccountId,
@@ -301,7 +295,6 @@ fn token_holding(
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        0,
         AccountId::from_builtin_program(programs::token().id()),
         ShardData::from(&TokenHolding::Fungible {
             definition_id,
@@ -318,7 +311,6 @@ fn token_definition(
     AccountInput::with_shard(
         account_id,
         is_authorized,
-        0,
         AccountId::from_builtin_program(programs::token().id()),
         ShardData::from(&TokenDefinition::Fungible {
             name: String::from("test"),
@@ -346,7 +338,6 @@ fn clock_account(account_id: AccountId, block_id: u64) -> AccountInput {
     AccountInput::with_shard(
         account_id,
         false,
-        0,
         AccountId::from_builtin_program(programs::clock().id()),
         ClockAccountData {
             block_id,
@@ -409,7 +400,6 @@ fn amm_pool_account() -> AccountInput {
     AccountInput::with_shard(
         amm_pool_id(),
         true,
-        0,
         AccountId::from_builtin_program(programs::amm().id()),
         ShardData::from(&PoolDefinition {
             token_program_id: AccountId::from_builtin_program(programs::token().id()),
@@ -462,7 +452,6 @@ fn ata_create_pre_states() -> Vec<AccountInput> {
     let ata_account = AccountInput::with_shard(
         ata_id,
         false,
-        0,
         AccountId::from_builtin_program(programs::token().id()),
         ShardData::empty(),
     );
@@ -478,13 +467,6 @@ fn main() -> Result<()> {
     }
 
     let cases = [
-        Case::new(
-            "authenticated_transfer",
-            "Transfer",
-            programs::authenticated_transfer(),
-            authenticated_transfer_transfer(),
-            &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
-        )?,
         Case::new(
             "token",
             "Transfer",

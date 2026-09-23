@@ -22,6 +22,9 @@ pub enum Error {
         fee_reserve: u128,
     },
 
+    #[error("payer {payer:?} holds a native balance shard that is not canonically encoded")]
+    PayerBalanceMalformed { payer: AccountId },
+
     #[error("transaction fee classification failed")]
     Classification(#[from] ClassifyError),
 
@@ -64,7 +67,11 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     }
 
     let fee_reserve = fee_reserve(&view, &fee_state);
-    let balance = state.get_account_by_id(payer).data.balance;
+    let balance = state
+        .get_account_by_id(payer)
+        .data
+        .balance()
+        .or(Err(Error::PayerBalanceMalformed { payer }))?;
     if balance < fee_reserve {
         return Err(Error::PayerCannotFund {
             payer,

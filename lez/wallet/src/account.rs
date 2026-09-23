@@ -78,8 +78,8 @@ impl FromStr for AccountIdWithPrivacy {
 
 /// Human-readable representation of an account.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HumanReadableAccount {
-    balance: u128,
     shards: BTreeMap<String, String>,
     nonce: u128,
 }
@@ -102,7 +102,6 @@ impl std::fmt::Display for HumanReadableAccount {
 impl From<lee::Account> for HumanReadableAccount {
     fn from(account: lee::Account) -> Self {
         Self {
-            balance: account.data.balance,
             shards: account
                 .data
                 .shards
@@ -133,10 +132,7 @@ impl From<HumanReadableAccount> for lee::Account {
 
         Self {
             nonce: lee_core::account::Nonce(account.nonce),
-            data: lee_core::account::AccountData {
-                balance: account.balance,
-                shards,
-            },
+            data: lee_core::account::AccountData { shards },
         }
     }
 }

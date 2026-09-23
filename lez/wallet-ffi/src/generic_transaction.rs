@@ -61,62 +61,39 @@ pub struct FfiProgramDependency {
 }
 
 #[repr(C)]
+/// Every program an execution may dispatch, root included, each paired with the account it is
+/// deployed at, plus the address the top-level call is dispatched to.
+///
+/// `programs` is empty for native execution, which has no bytecode to supply.
+///
 /// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
-    pub program: FfiProgram,
     pub self_account_id: FfiBytes32,
-    pub deps: *const FfiProgramDependency,
-    pub deps_size: usize,
+    pub programs: *const FfiProgramDependency,
+    pub programs_size: usize,
 }
 
 impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
-        let mut program_map = HashMap::new();
-
-        let orig_program: Program = (&value.program).try_into()?;
-        let self_account_id = AccountId::from(value.self_account_id);
+        let mut programs = HashMap::new();
 
         // Alignment will be different, we need to read elements one-by-one
-        for i in 0..value.deps_size {
-            let dep = unsafe { value.deps.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
-            let program_dep: Program = (&dep.program).try_into()?;
+        for i in 0..value.programs_size {
+            let entry =
+                unsafe { value.programs.add(i).as_ref() }.ok_or(WalletFfiError::NullPointer)?;
+            let program: Program = (&entry.program).try_into()?;
 
-            program_map.insert(AccountId::from(dep.account_id), program_dep);
+            programs.insert(AccountId::from(entry.account_id), program);
         }
 
+        // Built field-wise rather than through `new`, which would insert a root program the
+        // native execution path must not be given.
         Ok(Self {
-            program: orig_program,
-            self_account_id,
-            dependencies: program_map,
+            self_account_id: AccountId::from(value.self_account_id),
+            programs,
         })
-    }
-}
-
-impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
-    fn from(value: ProgramWithDependencies) -> Self {
-        let ffi_program = value.program.into();
-        let self_account_id = value.self_account_id.into();
-
-        let ffi_deps: Vec<FfiProgramDependency> = value
-            .dependencies
-            .into_iter()
-            .map(|(account_id, program)| FfiProgramDependency {
-                program: program.into(),
-                account_id: account_id.into(),
-            })
-            .collect::<Vec<_>>();
-
-        let deps_size = ffi_deps.len();
-        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgramDependency;
-
-        Self {
-            program: ffi_program,
-            self_account_id,
-            deps,
-            deps_size,
-        }
     }
 }
 

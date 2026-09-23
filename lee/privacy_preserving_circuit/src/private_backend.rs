@@ -2,17 +2,18 @@
 //! each call, and its only independent view of an account is that account's witness.
 
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
 use lee_core::{
     BlockId, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness,
     ProgramImageClaim, Timestamp, WitnessKind,
-    account::{AccountData, AccountId},
+    account::{AccountData, AccountId, ProgramShardSelector},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountInput, BlockValidityWindow, ChainedCall, PdaSeed, ProgramId, ProgramOutput,
-        TimestampValidityWindow,
+        TimestampValidityWindow, pre_states_match_shard_selectors,
     },
     validation::{Backend, CallContext, ValidationError},
 };
@@ -37,6 +38,7 @@ pub struct PrivateBackend<'input> {
     /// An account without a witness is public in-circuit: no note, so the journal exposes it.
     witness_by_account: HashMap<AccountId, usize>,
     remaining_outputs: VecDeque<ProgramOutput>,
+    initial_shard_selectors: &'input [ProgramShardSelector],
     /// Untrusted, prover-supplied; the sequencer checks these against chain state, not us.
     image_id_by_account_id: HashMap<AccountId, ProgramId>,
     /// One `(program, seed)` per account per transaction, else one seed authorizes a family.
@@ -53,11 +55,24 @@ impl<'input> PrivateBackend<'input> {
         witnesses: &'input [PrivateWitness],
         program_outputs: Vec<ProgramOutput>,
         program_image_claims: &[ProgramImageClaim],
+        initial_shard_selectors: &'input [ProgramShardSelector],
     ) -> Self {
+        assert!(
+            !program_image_claims
+                .iter()
+                .any(|claim| claim.account_id == NATIVE_TOKEN_PROGRAM_ID),
+            "The native token program has no deployable bytecode to claim"
+        );
+        assert_eq!(
+            initial_shard_selectors.iter().collect::<HashSet<_>>().len(),
+            initial_shard_selectors.len(),
+            "An account may select several shards, but never the same one twice"
+        );
         let mut backend = Self {
             witnesses,
             witness_by_account: HashMap::new(),
             remaining_outputs: program_outputs.into(),
+            initial_shard_selectors,
             image_id_by_account_id: program_image_claims
                 .iter()
                 .map(|claim| (claim.account_id, claim.image_id))
@@ -120,6 +135,32 @@ impl<'input> PrivateBackend<'input> {
         self.witness_by_account
             .get(&account_id)
             .map(|&index| &self.witnesses[index])
+    }
+
+    fn native_output(
+        &self,
+        call: &ChainedCall,
+        ctx: &CallContext<'_>,
+        reported: ProgramOutput,
+    ) -> ProgramOutput {
+        // If the call is top-level, it was handed the transaction's selectors, since the
+        // protocol itself runs it.
+        let scheduled = if ctx.caller_account_id.is_some() {
+            call.shard_selectors.as_slice()
+        } else {
+            self.initial_shard_selectors
+        };
+        assert!(
+            pre_states_match_shard_selectors(scheduled, &reported.state_diffs),
+            "Call ran on shard selectors it was not handed"
+        );
+        let pre_states: Vec<AccountInput> = reported
+            .state_diffs
+            .into_iter()
+            .map(|diff| diff.pre_state)
+            .collect();
+        native_token::execute(ctx.caller_account_id, &pre_states, &call.instruction_data)
+            .unwrap_or_else(|err| panic!("Invalid native transfer: {err}"))
     }
 
     fn assert_family_binding(
@@ -188,11 +229,14 @@ impl Backend for PrivateBackend<'_> {
     fn output_for_call(
         &mut self,
         call: &ChainedCall,
-        _ctx: &CallContext<'_>,
+        ctx: &CallContext<'_>,
     ) -> Result<ProgramOutput, Fatal> {
         let Some(program_output) = self.remaining_outputs.pop_front() else {
             panic!("Insufficient program outputs for chained calls");
         };
+        if call.program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            return Ok(self.native_output(call, ctx, program_output));
+        }
         // `env::verify` needs the invoked program's real image id, not its dispatch address.
         let image_id = self
             .image_id_by_account_id
@@ -312,4 +356,175 @@ fn intersect<T: Copy + Ord>(
         (only, None) | (None, only) => only,
     };
     (lower, upper)
+}
+
+#[cfg(test)]
+mod tests {
+    use lee_core::{
+        account::Account,
+        encryption::ViewingPublicKey,
+        program::{CallKind, ProgramEvent, ShardStateDiff},
+        validation::{ThreadedDiff, validate_state_diff},
+    };
+
+    use super::*;
+
+    fn witness_with(kind: WitnessKind) -> PrivateWitness {
+        PrivateWitness {
+            account: Account::default(),
+            vpk: ViewingPublicKey::from_seed(&[4; 32], &[5; 32]),
+            random_seed: [6; 32],
+            identifier: 0,
+            kind,
+            nullifier: NullifierWitness::Init {
+                npk: NullifierPublicKey([7; 32]),
+                commitment_root: [8; 32],
+            },
+        }
+    }
+
+    fn native_row(seed: u8, is_authorized: bool, balance: u128) -> AccountInput {
+        AccountInput::balance(AccountId::new([seed; 32]), is_authorized, balance)
+    }
+
+    fn native_selectors() -> Vec<ProgramShardSelector> {
+        vec![
+            ProgramShardSelector::balance(AccountId::new([1; 32])),
+            ProgramShardSelector::balance(AccountId::new([2; 32])),
+        ]
+    }
+
+    fn tampered_native_report(amount: u128) -> ProgramOutput {
+        let instruction = borsh::to_vec(&native_token::Instruction::Transfer { amount })
+            .expect("the instruction serializes");
+        let forged_credit = native_token::encode_balance(9_999);
+        ProgramOutput {
+            self_account_id: AccountId::new([0xAA; 32]),
+            caller_account_id: Some(AccountId::new([0xBB; 32])),
+            call_kind: CallKind::Unknown(7),
+            instruction_data: instruction,
+            state_diffs: vec![
+                ShardStateDiff::new(native_row(1, true, 100), forged_credit.clone()),
+                ShardStateDiff::new(native_row(2, false, 0), forged_credit),
+            ],
+            chained_calls: vec![ChainedCall {
+                program_account_id: AccountId::new([0xCC; 32]),
+                shard_selectors: Vec::new(),
+                instruction_data: Vec::new(),
+                pda_seeds: Vec::new(),
+            }],
+            block_validity_window: (Some(1), Some(2)).try_into().expect("a valid window"),
+            timestamp_validity_window: (Some(3), Some(4)).try_into().expect("a valid window"),
+            events: vec![ProgramEvent {
+                selector: [1; 8],
+                data: vec![2; 4],
+            }],
+        }
+    }
+
+    fn derive(
+        witnesses: &[PrivateWitness],
+        program_account_id: AccountId,
+        report: ProgramOutput,
+        selectors: &[ProgramShardSelector],
+        claims: &[ProgramImageClaim],
+    ) -> (ThreadedDiff, (BlockValidityWindow, TimestampValidityWindow)) {
+        let initial_call = ChainedCall {
+            program_account_id,
+            instruction_data: report.instruction_data.clone(),
+            shard_selectors: Vec::new(),
+            pda_seeds: Vec::new(),
+        };
+        let mut backend = PrivateBackend::new(witnesses, vec![report], claims, selectors);
+        let threaded = match validate_state_diff(&mut backend, initial_call, selectors) {
+            Ok(threaded) => threaded,
+            Err(fatal) => match fatal {},
+        };
+        (threaded, backend.into_windows())
+    }
+
+    fn derive_native_root(
+        report: ProgramOutput,
+        selectors: &[ProgramShardSelector],
+    ) -> (ThreadedDiff, (BlockValidityWindow, TimestampValidityWindow)) {
+        derive(&[], NATIVE_TOKEN_PROGRAM_ID, report, selectors, &[])
+    }
+
+    #[test]
+    fn a_native_call_takes_only_its_rows_from_the_report() {
+        let (threaded, (block_window, timestamp_window)) =
+            derive_native_root(tampered_native_report(30), &native_selectors());
+
+        let balances: Vec<_> = threaded
+            .first_sight
+            .iter()
+            .map(|(account_id, _)| threaded.touched[account_id].balance())
+            .collect();
+        assert_eq!(balances, vec![Ok(70), Ok(30)]);
+        assert_eq!(block_window.start(), None);
+        assert_eq!(block_window.end(), None);
+        assert_eq!(timestamp_window.start(), None);
+        assert_eq!(timestamp_window.end(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Call ran on shard selectors it was not handed")]
+    fn a_native_root_must_report_the_scheduled_selectors_in_order() {
+        let mut selectors = native_selectors();
+        selectors.reverse();
+
+        drop(derive_native_root(tampered_native_report(30), &selectors));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be authorized exactly by its supplied credential")]
+    fn a_native_call_refuses_authorization_the_witness_does_not_carry() {
+        let mut witness = witness_with(WitnessKind::Regular { ask: None });
+        witness.account = Account::funded(100);
+        let sender = witness.account_id();
+        let recipient = AccountId::new([2; 32]);
+        let mut report = tampered_native_report(30);
+        report.state_diffs[0].pre_state = AccountInput::balance(sender, true, 100);
+        report.state_diffs[1].pre_state = AccountInput::balance(recipient, false, 0);
+
+        drop(derive(
+            &[witness],
+            NATIVE_TOKEN_PROGRAM_ID,
+            report,
+            &[
+                ProgramShardSelector::balance(sender),
+                ProgramShardSelector::balance(recipient),
+            ],
+            &[],
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "never the same one twice")]
+    fn a_root_may_not_be_handed_the_same_shard_twice() {
+        let selector = ProgramShardSelector::balance(AccountId::new([1; 32]));
+
+        drop(derive(
+            &[],
+            AccountId::new([0xD0; 32]),
+            tampered_native_report(30),
+            &[selector, selector],
+            &[],
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "The native token program has no deployable bytecode to claim")]
+    fn a_guest_image_claim_for_the_reserved_id_is_refused() {
+        drop(derive(
+            &[],
+            NATIVE_TOKEN_PROGRAM_ID,
+            tampered_native_report(30),
+            &native_selectors(),
+            &[ProgramImageClaim {
+                account_id: NATIVE_TOKEN_PROGRAM_ID,
+                image_id: [7; 8],
+            }],
+        ));
+    }
 }

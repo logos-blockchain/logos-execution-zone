@@ -4,7 +4,8 @@ use std::io;
 use thiserror::Error;
 
 use crate::{
-    account::{AccountId, BalanceDiffError},
+    account::AccountId,
+    native_token::TransferError,
     program::{AccountInput, ExecutionValidationError},
 };
 
@@ -91,6 +92,6 @@ pub enum InvalidProgramBehaviorError {
         account_id: AccountId,
     },
 
-    #[error(transparent)]
-    BalanceDiffFailed(#[from] BalanceDiffError),
+    #[error("Invalid native transfer: {0}")]
+    NativeTransferFailed(#[from] TransferError),
 }

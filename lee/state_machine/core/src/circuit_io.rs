@@ -218,7 +218,6 @@ mod tests {
                     account_id: AccountId::new([0; 32]),
                     is_authorized: true,
                     pre: AccountData {
-                        balance: 12_345_678_901_234_567_890,
                         shards: [
                             (touched, b"test data".to_vec().try_into().unwrap()),
                             (also_touched, ShardData::empty()),
@@ -226,7 +225,6 @@ mod tests {
                         .into(),
                     },
                     post: AccountData {
-                        balance: 100,
                         shards: [
                             (touched, b"post state data".to_vec().try_into().unwrap()),
                             (also_touched, b"fresh record".to_vec().try_into().unwrap()),
@@ -237,14 +235,8 @@ mod tests {
                 PublicAction {
                     account_id: AccountId::new([1; 32]),
                     is_authorized: false,
-                    pre: AccountData {
-                        balance: 123_123_123_456_456_567_112,
-                        ..AccountData::default()
-                    },
-                    post: AccountData {
-                        balance: 200,
-                        ..AccountData::default()
-                    },
+                    pre: Account::funded(123_123_123_456_456_567_112).data,
+                    post: Account::funded(200).data,
                 },
             ],
             private_actions: vec![PrivateAction {

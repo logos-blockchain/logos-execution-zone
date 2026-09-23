@@ -614,15 +614,39 @@ mod tests {
         assert_eq!(key_set, key_set_res);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].data.balance, 2);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)]
+                .data
+                .balance()
+                .unwrap(),
+            2
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].data.balance, 3);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)]
+                .data
+                .balance()
+                .unwrap(),
+            3
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].data.balance, 5);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)]
+                .data
+                .balance()
+                .unwrap(),
+            5
+        );
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
-        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].data.balance, 6);
+        assert_eq!(
+            acc.value.1[&PrivateAccountKind::Regular(0)]
+                .data
+                .balance()
+                .unwrap(),
+            6
+        );
     }
 }

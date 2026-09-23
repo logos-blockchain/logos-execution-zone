@@ -6,6 +6,7 @@ use lee_core::{
     ProgramImageClaim, WitnessKind,
     account::{Account, AccountData, AccountId, ProgramShardSelector, ShardData},
     from_frame,
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountInput, ChainedCall, InstructionData, ProgramOutput, compute_public_authorized_pdas,
     },
@@ -14,7 +15,7 @@ use lee_core::{
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{Program, check_exit_code},
     state::MAX_NUMBER_CHAINED_CALLS,
@@ -46,29 +47,40 @@ impl Proof {
 
 #[derive(Clone)]
 pub struct ProgramWithDependencies {
-    pub program: Program,
-    /// Where `program` is actually deployed — never assumed to be its bytecode's bijection
-    /// address, since the same bytecode may be deployed more than once at different addresses.
+    /// Where the top-level call is dispatched — never assumed to be the root bytecode's
+    /// bijection address, since the same bytecode may be deployed more than once at different
+    /// addresses.
     pub self_account_id: AccountId,
-    // TODO: avoid having a copy of the bytecode of each dependency.
-    /// Every program a chained call may target, keyed by the account address it's deployed at —
-    /// never its bytecode identity, for the same reason. The caller building this off-chain
-    /// (e.g. the wallet) already knows which program lives where; there's no live state to look
-    /// it up against inside a pure proving function.
-    pub dependencies: HashMap<AccountId, Program>,
+    // TODO: avoid having a copy of the bytecode of each program.
+    /// Every program this execution may dispatch, root included, keyed by the account address
+    /// it's deployed at — never its bytecode identity, for the same reason. The caller building
+    /// this off-chain (e.g. the wallet) already knows which program lives where; there's no live
+    /// state to look it up against inside a pure proving function.
+    pub programs: HashMap<AccountId, Program>,
 }
 
 impl ProgramWithDependencies {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         program: Program,
         self_account_id: AccountId,
         dependencies: HashMap<AccountId, Program>,
     ) -> Self {
+        let mut programs = dependencies;
+        programs.insert(self_account_id, program);
         Self {
-            program,
             self_account_id,
-            dependencies,
+            programs,
+        }
+    }
+}
+
+impl ProgramWithDependencies {
+    #[must_use]
+    pub fn native() -> Self {
+        Self {
+            self_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            programs: HashMap::new(),
         }
     }
 }
@@ -123,10 +135,19 @@ pub fn execute_and_prove_with(
         ciphertext_padding,
     } = input;
     let ProgramWithDependencies {
-        program: initial_program,
         self_account_id: initial_account_id,
-        dependencies,
+        programs,
     } = program_with_dependencies;
+    ensure!(
+        shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
+        LeeError::InvalidInput("Duplicate shard selectors found in the initial inputs".into())
+    );
+    ensure!(
+        !programs.contains_key(&NATIVE_TOKEN_PROGRAM_ID),
+        LeeError::InvalidInput(
+            "The native token program has no deployable bytecode to supply".into()
+        )
+    );
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
@@ -142,21 +163,22 @@ pub fn execute_and_prove_with(
             .map(|index| &private_witnesses[*index])
     };
 
-    let mut materialized: HashMap<AccountId, AccountData> = shard_selectors
-        .iter()
-        .map(|shard_selector| {
-            let account = witness_at(&shard_selector.account_id).map_or_else(
-                || {
-                    public_accounts
-                        .get(&shard_selector.account_id)
-                        .map(|account| account.data.clone())
-                        .unwrap_or_default()
-                },
-                |witness| witness.account.data.clone(),
-            );
-            (shard_selector.account_id, account)
-        })
-        .collect();
+    let mut materialized: HashMap<AccountId, AccountData> = HashMap::new();
+    for shard_selector in &shard_selectors {
+        materialized
+            .entry(shard_selector.account_id)
+            .or_insert_with(|| {
+                witness_at(&shard_selector.account_id).map_or_else(
+                    || {
+                        public_accounts
+                            .get(&shard_selector.account_id)
+                            .map(|account| account.data.clone())
+                            .unwrap_or_default()
+                    },
+                    |witness| witness.account.data.clone(),
+                )
+            });
+    }
 
     let is_authorized_top = |account_id: &AccountId| {
         signers.contains(account_id)
@@ -200,10 +222,9 @@ pub fn execute_and_prove_with(
         pda_seeds: vec![],
     };
 
-    let mut chained_calls =
-        VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
+    let mut chained_calls = VecDeque::from_iter([(initial_call, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_account_id, caller_authorized_accounts)) =
+    while let Some((chained_call, caller_account_id, caller_authorized_accounts)) =
         chained_calls.pop_front()
     {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
@@ -242,11 +263,10 @@ pub fn execute_and_prove_with(
 
                 // Fetch unseen public shards without overwriting earlier writes.
                 if !witnessed
-                    && let Some(program_account_id) = shard_selector.program_account_id
                     && covered.insert(*shard_selector)
                     && let Some(data) = resolve(*shard_selector)?
                 {
-                    account.set_shard(program_account_id, data);
+                    account.set_shard(shard_selector.program_account_id, data);
                 }
 
                 resolved.push(AccountInput::at(*shard_selector, is_authorized, account));
@@ -257,21 +277,38 @@ pub fn execute_and_prove_with(
             top_level_pre_states.clone()
         };
 
-        let inner_receipt = execute_and_prove_program(
-            program,
-            chained_call.program_account_id,
-            caller_account_id,
-            &real_pre_states,
-            &chained_call.instruction_data,
-        )?;
-
-        let program_output: ProgramOutput =
-            borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
-                LeeError::ProgramOutputDeserializationError(
-                    "malformed inner-receipt journal frame".to_owned(),
-                )
-            })?)
-            .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+        let program_output: ProgramOutput = if chained_call.program_account_id
+            == NATIVE_TOKEN_PROGRAM_ID
+        {
+            native_token::execute(
+                caller_account_id,
+                &real_pre_states,
+                &chained_call.instruction_data,
+            )
+            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
+        } else {
+            let program = programs.get(&chained_call.program_account_id).ok_or(
+                InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                    program_account_id: chained_call.program_account_id,
+                },
+            )?;
+            let inner_receipt = execute_and_prove_program(
+                program,
+                chained_call.program_account_id,
+                caller_account_id,
+                &real_pre_states,
+                &chained_call.instruction_data,
+            )?;
+            let output =
+                borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
+                    LeeError::ProgramOutputDeserializationError(
+                        "malformed inner-receipt journal frame".to_owned(),
+                    )
+                })?)
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            env_builder.add_assumption(inner_receipt);
+            output
+        };
 
         // Authorization scoped to this call's own subtree: starts from what this call itself
         // inherited from its caller, plus every account this call's own output reports
@@ -287,12 +324,12 @@ pub fn execute_and_prove_with(
             let pda_match =
                 authorized_pdas.contains(&account_id) || seed_derives_private_pda(&account_id);
 
-            materialized
-                .entry(account_id)
-                .or_default()
-                .apply_diff(diff)
-                .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            covered.insert(ProgramShardSelector::from(pre));
+            let account = materialized.entry(account_id).or_default();
+            if covered.insert(ProgramShardSelector::from(pre)) && witness_at(&account_id).is_none()
+            {
+                account.set_shard(pre.shard.0, pre.shard.1.clone());
+            }
+            account.apply_diff(diff);
 
             if pre.is_authorized {
                 authorized_output_accounts.insert(account_id);
@@ -307,18 +344,9 @@ pub fn execute_and_prove_with(
         let new_calls = program_output.chained_calls.clone();
         program_outputs.push(program_output);
 
-        // Prove circuit.
-        env_builder.add_assumption(inner_receipt);
-
         for new_call in new_calls.into_iter().rev() {
-            let next_program = dependencies.get(&new_call.program_account_id).ok_or(
-                InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_account_id: new_call.program_account_id,
-                },
-            )?;
             chained_calls.push_front((
                 new_call,
-                next_program,
                 Some(chained_call.program_account_id),
                 authorized_output_accounts.clone(),
             ));
@@ -333,18 +361,13 @@ pub fn execute_and_prove_with(
     // identity — the guest circuit uses these for `env::verify`, unchecked; the sequencer
     // verifies each one against real chain state before accepting the proof (see
     // `ProgramImageClaim`'s doc comment).
-    let program_image_claims: Vec<ProgramImageClaim> =
-        std::iter::once((*initial_account_id, initial_program.id()))
-            .chain(
-                dependencies
-                    .iter()
-                    .map(|(account_id, program)| (*account_id, program.id())),
-            )
-            .map(|(account_id, image_id)| ProgramImageClaim {
-                account_id,
-                image_id,
-            })
-            .collect();
+    let program_image_claims: Vec<ProgramImageClaim> = programs
+        .iter()
+        .map(|(account_id, program)| ProgramImageClaim {
+            account_id: *account_id,
+            image_id: program.id(),
+        })
+        .collect();
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,

@@ -1,8 +1,8 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
+    account::{AccountId, ProgramShardSelector, ShardData},
     program::{
-        AccountInput, AccountStateDiff, ChainedCall, InstructionData, ProgramCall, ProgramInput,
-        ProgramOutput, read_lee_call, respond_unsupported_call,
+        AccountInput, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
+        ShardStateDiff, read_lee_call, respond_unsupported_call,
     },
 };
 
@@ -30,11 +30,10 @@ fn main() {
         return;
     };
 
-    let mut state_diffs = vec![AccountStateDiff::unchanged(own)];
+    let mut state_diffs = vec![ShardStateDiff::unchanged(own)];
     if let Some((target, data)) = own_write {
-        state_diffs.push(AccountStateDiff::new(
-            AccountInput::with_shard(target, false, 0, self_account_id, ShardData::empty()),
-            BalanceDiff::Add(0),
+        state_diffs.push(ShardStateDiff::new(
+            AccountInput::with_shard(target, false, self_account_id, ShardData::empty()),
             data.try_into()
                 .expect("provided data should fit into data limit"),
         ));

@@ -184,32 +184,22 @@ pub fn validate_state_diff<B: Backend>(
             } else {
                 backend.value_at_first_sight(account_id, &ctx)?
             };
-            let pre_view = at_first_sight.entry(account_id).or_insert_with(|| {
-                first_sight_value.unwrap_or_else(|| AccountData {
-                    balance: pre.balance,
-                    ..AccountData::default()
-                })
-            });
+            let pre_view = at_first_sight
+                .entry(account_id)
+                .or_insert_with(|| first_sight_value.unwrap_or_default());
             let mut base = touched
                 .get(&account_id)
                 .cloned()
                 .unwrap_or_else(|| pre_view.clone());
 
-            if adopts_claims
-                && new_selector
-                && let Some((program, data)) = &pre.shard
-            {
+            let (program, data) = &pre.shard;
+            if adopts_claims && new_selector {
                 // `insert`, not `set_shard`: an empty resolved shard must stay recorded.
                 pre_view.shards.insert(*program, data.clone());
                 base.set_shard(*program, data.clone());
             }
             let base = &base;
-            let consistent = base.balance == pre.balance
-                && pre
-                    .shard
-                    .as_ref()
-                    .is_none_or(|(program, data)| base.shard(*program) == data);
-            if !consistent {
+            if base.shard(*program) != data {
                 return Err(ValidationError::ProgramBehavior(
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
                         account_id,
@@ -285,11 +275,7 @@ pub fn validate_state_diff<B: Backend>(
                 .remove(&account_id)
                 .or_else(|| at_first_sight.get(&account_id).cloned())
                 .unwrap_or_else(|| data_of(&diff.pre_state));
-            data.apply_diff(diff).map_err(|err| {
-                ValidationError::ProgramBehavior(InvalidProgramBehaviorError::BalanceDiffFailed(
-                    err,
-                ))
-            })?;
+            data.apply_diff(diff);
             touched.insert(account_id, data);
         }
 
@@ -336,13 +322,9 @@ pub fn validate_state_diff<B: Backend>(
 
 /// The `AccountData` an input describes. Used only where the environment has no view.
 fn data_of(pre: &AccountInput) -> AccountData {
-    let mut data = AccountData {
-        balance: pre.balance,
-        ..AccountData::default()
-    };
-    if let Some((program, shard)) = &pre.shard {
-        data.set_shard(*program, shard.clone());
-    }
+    let (program, shard) = &pre.shard;
+    let mut data = AccountData::default();
+    data.set_shard(*program, shard.clone());
     data
 }
 

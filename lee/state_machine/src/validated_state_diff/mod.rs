@@ -260,15 +260,15 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
+        // An account may select several shards, but never the same one twice.
+        ensure!(
+            shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
+            LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
+        );
         let declared: HashSet<AccountId> = shard_selectors
             .iter()
             .map(|shard_selector| shard_selector.account_id)
             .collect();
-        // All account_ids must be different
-        ensure!(
-            declared.len() == shard_selectors.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
-        );
 
         let initial_call = ChainedCall {
             program_account_id,

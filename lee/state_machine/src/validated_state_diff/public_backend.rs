@@ -6,6 +6,7 @@ use std::{borrow::Cow, collections::HashSet};
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountData, AccountId, Cycles},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountInput, BlockValidityWindow, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramEvent,
         ProgramOutput, TimestampValidityWindow, TransactionEvent, compute_public_authorized_pdas,
@@ -136,7 +137,10 @@ impl Backend for PublicBackend<'_> {
             call.program_account_id, pre_states, call.instruction_data
         );
 
-        let program_output = if call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+        let program_output = if call.program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            native_token::execute(ctx.caller_account_id, &pre_states, &call.instruction_data)
+                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
+        } else if call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
             execute_program_loader(
                 call.program_account_id,

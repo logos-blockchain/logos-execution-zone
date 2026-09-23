@@ -5,8 +5,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
-    program::{AccountInput, AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
+    account::{AccountId, ShardData},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{AccountInput, PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ShardStateDiff},
 };
 
 /// Recommended max bytes of bytecode per segment.
@@ -58,7 +59,7 @@ pub fn write_segment(
     pre_states: &[AccountInput],
     bytecode: Vec<u8>,
     next_segment: Option<AccountId>,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let expected_len = if next_segment.is_some() { 2 } else { 1 };
     assert_eq!(
         pre_states.len(),
@@ -77,9 +78,8 @@ pub fn write_segment(
         "segment target already deployed"
     );
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         target.clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramSegment {
                 bytecode,
@@ -99,10 +99,23 @@ pub fn write_segment(
             ProgramSegment::from_bytes(referenced.shard_of(PROGRAM_LOADER_ACCOUNT_ID)).is_some(),
             "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
-        diffs.push(AccountStateDiff::unchanged(referenced.clone()));
+        diffs.push(ShardStateDiff::unchanged(referenced.clone()));
     }
 
     diffs
+}
+
+fn reject_reserved_target(account_id: AccountId) {
+    assert_ne!(
+        account_id, NATIVE_TOKEN_PROGRAM_ID,
+        "the native token program has no deployable bytecode"
+    );
+    // A program at this address would run as the loader, and so could rewrite any program's
+    // header or segments.
+    assert_ne!(
+        account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
+    );
 }
 
 /// Executes `CreateHeader`.
@@ -111,15 +124,12 @@ pub fn create_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
     );
-    assert_ne!(
-        pre_states[0].account_id, PROGRAM_LOADER_ACCOUNT_ID,
-        "the loader's own dispatch address is not a deployable target"
-    );
+    reject_reserved_target(pre_states[0].account_id);
     assert!(
         pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "header target already deployed"
@@ -132,9 +142,8 @@ pub fn create_header(
 
     let image_id = compute_image_id(pre_states);
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         pre_states[0].clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramHeader {
                 image_id,
@@ -148,7 +157,7 @@ pub fn create_header(
     diffs.extend(
         pre_states[1..]
             .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
+            .map(|pre| ShardStateDiff::unchanged(pre.clone())),
     );
     diffs
 }
@@ -159,11 +168,12 @@ pub fn update_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
     );
+    reject_reserved_target(pre_states[0].account_id);
     let old_header =
         ProgramHeader::from_bytes(pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID)).expect(
         "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
@@ -184,9 +194,8 @@ pub fn update_header(
 
     let image_id = compute_image_id(pre_states);
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         pre_states[0].clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramHeader {
                 image_id,
@@ -200,7 +209,7 @@ pub fn update_header(
     diffs.extend(
         pre_states[1..]
             .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
+            .map(|pre| ShardStateDiff::unchanged(pre.clone())),
     );
     diffs
 }

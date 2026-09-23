@@ -28,6 +28,7 @@ mod encoding;
 pub mod encryption;
 pub mod error;
 mod frame;
+pub mod native_token;
 mod nullifier;
 pub mod program;
 pub mod validation;

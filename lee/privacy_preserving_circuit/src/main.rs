@@ -34,6 +34,7 @@ fn main() {
         &private_witnesses,
         program_outputs,
         &program_image_claims,
+        &initial_shard_selectors,
     );
     let threaded = match validate_state_diff(&mut backend, initial_call, &initial_shard_selectors) {
         Ok(threaded) => threaded,

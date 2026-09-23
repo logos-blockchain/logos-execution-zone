@@ -57,10 +57,9 @@ impl TryFrom<Account> for lee_core::account::Account {
 
 impl From<lee_core::account::AccountData> for AccountData {
     fn from(value: lee_core::account::AccountData) -> Self {
-        let lee_core::account::AccountData { balance, shards } = value;
+        let lee_core::account::AccountData { shards } = value;
 
         Self {
-            balance,
             shards: shards
                 .into_iter()
                 .map(|(program, data)| (program.into(), data.into()))
@@ -73,10 +72,9 @@ impl TryFrom<AccountData> for lee_core::account::AccountData {
     type Error = lee_core::account::data::DataTooBigError;
 
     fn try_from(value: AccountData) -> Result<Self, Self::Error> {
-        let AccountData { balance, shards } = value;
+        let AccountData { shards } = value;
 
         Ok(Self {
-            balance,
             shards: shards
                 .into_iter()
                 .map(|(program, data)| Ok((program.into(), data.try_into()?)))
@@ -94,7 +92,7 @@ impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
 
         Self {
             account_id: account_id.into(),
-            program_account_id: program_account_id.map(Into::into),
+            program_account_id: program_account_id.into(),
         }
     }
 }
@@ -108,7 +106,7 @@ impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
 
         Self {
             account_id: account_id.into(),
-            program_account_id: program_account_id.map(Into::into),
+            program_account_id: program_account_id.into(),
         }
     }
 }
@@ -989,11 +987,9 @@ mod tests {
         let program = lee_core::account::AccountId::new([3; 32]);
         let account = lee_core::account::Account {
             nonce: lee_core::account::Nonce(u128::MAX),
-            data: lee_core::account::AccountData {
-                balance: u128::MAX,
-                ..lee_core::account::AccountData::default()
-            }
-            .with_shard(program, b"record".to_vec().try_into().unwrap()),
+            data: lee_core::account::Account::funded(u128::MAX)
+                .data
+                .with_shard(program, b"record".to_vec().try_into().unwrap()),
         };
 
         let mirrored = Account::from(account.clone());
@@ -1001,7 +997,7 @@ mod tests {
         let restored: Account = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.nonce, u128::MAX);
-        assert_eq!(restored.data.balance, u128::MAX);
+        assert_eq!(restored.data.balance(), Some(u128::MAX));
         assert_eq!(
             lee_core::account::Account::try_from(restored).unwrap(),
             account

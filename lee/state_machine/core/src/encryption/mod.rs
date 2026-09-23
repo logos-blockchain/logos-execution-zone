@@ -316,8 +316,10 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let mut account = account_with_data(37);
-        account.data.balance = 42;
+        let account = account_with_data(37).with_shard(
+            crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
+            crate::native_token::encode_balance(42),
+        );
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([1_u8; 32]),
             seed: PdaSeed::new([2_u8; 32]),
@@ -387,7 +389,7 @@ mod tests {
         let wrong_ss = SharedSecretKey([0_u8; 32]);
         let bad_via_ss = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
         assert!(
-            bad_via_ss.is_none_or(|(_, a)| a.data.balance != 999),
+            bad_via_ss.is_none_or(|(_, a)| a.data.balance() != Ok(999)),
             "wrong shared secret must not produce the correct plaintext"
         );
 
@@ -395,7 +397,7 @@ mod tests {
         let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
-            bad_via_nlf.is_none_or(|(_, a)| a.data.balance != 999),
+            bad_via_nlf.is_none_or(|(_, a)| a.data.balance() != Ok(999)),
             "wrong nullifier must not produce the correct plaintext"
         );
     }

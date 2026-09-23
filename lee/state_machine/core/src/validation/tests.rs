@@ -2,10 +2,11 @@ use std::collections::{HashMap, VecDeque};
 
 use super::{Backend, CallContext, ThreadedDiff, ValidationError, validate_state_diff};
 use crate::{
-    account::{AccountData, AccountId, BalanceDiff, ProgramShardSelector, ShardData},
+    account::{AccountData, AccountId, ProgramShardSelector, ShardData},
     error::InvalidProgramBehaviorError,
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
     program::{
-        AccountInput, AccountStateDiff, BlockValidityWindow, ChainedCall, ProgramOutput,
+        AccountInput, BlockValidityWindow, ChainedCall, ProgramOutput, ShardStateDiff,
         TimestampValidityWindow,
     },
 };
@@ -118,8 +119,8 @@ fn input(tag: u8, is_authorized: bool) -> AccountInput {
     AccountInput::at(selector(tag), is_authorized, &AccountData::default())
 }
 
-fn unchanged(tag: u8) -> AccountStateDiff {
-    AccountStateDiff::unchanged(input(tag, false))
+fn unchanged(tag: u8) -> ShardStateDiff {
+    ShardStateDiff::unchanged(input(tag, false))
 }
 
 fn root_call(accounts: &[u8]) -> ChainedCall {
@@ -181,32 +182,27 @@ fn first_sight_order_survives_an_account_introduced_by_a_callee() {
 fn a_masked_export_does_not_weaken_what_the_program_was_judged_on() {
     // The call legitimately debits an authorized account while every first sight is exported as
     // unauthorized. Judging the exported flag would break every masked authorized spend.
-    let funded = AccountData {
-        balance: 5,
-        ..AccountData::default()
-    };
+    let funded = AccountData::default().with_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(5));
     let output = ProgramOutput::new(
-        id(ROOT_PROGRAM),
+        NATIVE_TOKEN_PROGRAM_ID,
         None,
         Vec::new(),
         vec![
-            AccountStateDiff {
-                pre_state: AccountInput::at(selector(ACCOUNT_A), true, &funded),
-                post_balance_diff: BalanceDiff::Sub(5),
-                post_data: None,
-            },
-            AccountStateDiff {
-                pre_state: input(ACCOUNT_B, false),
-                post_balance_diff: BalanceDiff::Add(5),
-                post_data: None,
-            },
+            ShardStateDiff::new(
+                AccountInput::at(selector(ACCOUNT_A), true, &funded),
+                encode_balance(0),
+            ),
+            ShardStateDiff::new(input(ACCOUNT_B, false), encode_balance(5)),
         ],
     );
     let declared = [selector(ACCOUNT_A), selector(ACCOUNT_B)];
 
     let diff = run(
         &mut Recorder::new(vec![output]).masking_first_sight(),
-        root_call(&[ACCOUNT_A, ACCOUNT_B]),
+        ChainedCall {
+            program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            ..root_call(&[ACCOUNT_A, ACCOUNT_B])
+        },
         &declared,
     )
     .expect("masking the exported flag must not retract the authorization the program relied on");
@@ -229,7 +225,7 @@ fn authorization_propagates_down_a_branch_but_not_across_siblings() {
         instruction_data: Vec::new(),
         pda_seeds: Vec::new(),
     };
-    let authorized = |tag: u8| AccountStateDiff::unchanged(input(tag, true));
+    let authorized = |tag: u8| ShardStateDiff::unchanged(input(tag, true));
 
     let root = ProgramOutput::new(
         id(ROOT_PROGRAM),
@@ -328,9 +324,7 @@ fn with_shard(
     is_authorized: bool,
 ) -> AccountInput {
     let mut account = AccountData::default();
-    if let Some(program) = selector.program_account_id {
-        account.shards.insert(program, data);
-    }
+    account.shards.insert(selector.program_account_id, data);
     AccountInput::at(selector, is_authorized, &account)
 }
 
@@ -342,7 +336,7 @@ fn an_unseen_shard_is_adopted_where_the_environment_has_no_view_of_it() {
         id(ROOT_PROGRAM),
         None,
         Vec::new(),
-        vec![AccountStateDiff::unchanged(with_shard(
+        vec![ShardStateDiff::unchanged(with_shard(
             shard_of(ACCOUNT_A, ROOT_PROGRAM),
             shard(b"first"),
             false,
@@ -358,7 +352,7 @@ fn an_unseen_shard_is_adopted_where_the_environment_has_no_view_of_it() {
         id(CALLEE_PROGRAM),
         Some(id(ROOT_PROGRAM)),
         Vec::new(),
-        vec![AccountStateDiff::unchanged(with_shard(
+        vec![ShardStateDiff::unchanged(with_shard(
             shard_of(ACCOUNT_A, CALLEE_PROGRAM),
             shard(b"second"),
             false,
@@ -394,7 +388,7 @@ fn an_adopted_empty_shard_still_counts_as_named() {
         id(ROOT_PROGRAM),
         None,
         Vec::new(),
-        vec![AccountStateDiff::unchanged(with_shard(
+        vec![ShardStateDiff::unchanged(with_shard(
             shard_of(ACCOUNT_A, CALLEE_PROGRAM),
             ShardData::empty(),
             false,
@@ -431,7 +425,7 @@ fn an_environment_with_its_own_view_checks_the_claim_rather_than_adopting_it() {
         id(ROOT_PROGRAM),
         None,
         Vec::new(),
-        vec![AccountStateDiff::unchanged(with_shard(
+        vec![ShardStateDiff::unchanged(with_shard(
             shard_of(ACCOUNT_A, ROOT_PROGRAM),
             shard(b"forged"),
             false,
@@ -461,46 +455,42 @@ fn an_environment_with_its_own_view_checks_the_claim_rather_than_adopting_it() {
 fn a_later_sighting_is_checked_against_the_running_value_not_the_first_one() {
     // A second call is judged on what the first left behind. Comparing against the environment's
     // original view would reject every legitimate chained spend.
-    let known = AccountData {
-        balance: 100,
-        ..AccountData::default()
-    };
-    let spend = AccountStateDiff::balance(
-        AccountInput::at(selector(ACCOUNT_A), true, &known),
-        BalanceDiff::Sub(40),
-    );
-    let credit = AccountStateDiff::balance(input(ACCOUNT_B, false), BalanceDiff::Add(40));
-    let root = ProgramOutput::new(id(ROOT_PROGRAM), None, Vec::new(), vec![spend, credit])
+    let ledger = shard_of(ACCOUNT_A, ROOT_PROGRAM);
+    let known = AccountData::default().with_shard(id(ROOT_PROGRAM), shard(b"100"));
+    let spend = ShardStateDiff::new(AccountInput::at(ledger, true, &known), shard(b"60"));
+    let root = ProgramOutput::new(id(ROOT_PROGRAM), None, Vec::new(), vec![spend])
         .with_chained_calls(vec![ChainedCall {
             program_account_id: id(CALLEE_PROGRAM),
-            shard_selectors: vec![selector(ACCOUNT_A)],
+            shard_selectors: vec![ledger],
             instruction_data: Vec::new(),
             pda_seeds: Vec::new(),
         }]);
     // The callee sees 60, the balance the root call left, not the 100 the environment knows.
-    let after = AccountData {
-        balance: 60,
-        ..AccountData::default()
-    };
     let callee = ProgramOutput::new(
         id(CALLEE_PROGRAM),
         Some(id(ROOT_PROGRAM)),
         Vec::new(),
-        vec![AccountStateDiff::unchanged(AccountInput::at(
-            selector(ACCOUNT_A),
+        vec![ShardStateDiff::unchanged(with_shard(
+            ledger,
+            shard(b"60"),
             false,
-            &after,
         ))],
     );
 
     let diff = run(
         &mut Recorder::new(vec![root, callee]).knowing(id(ACCOUNT_A), known),
-        root_call(&[ACCOUNT_A, ACCOUNT_B]),
-        &[selector(ACCOUNT_A), selector(ACCOUNT_B)],
+        ChainedCall {
+            shard_selectors: vec![ledger],
+            ..root_call(&[])
+        },
+        &[ledger],
     )
     .expect("a later sighting is checked against the running value");
 
-    assert_eq!(diff.touched[&id(ACCOUNT_A)].balance, 60);
+    assert_eq!(
+        diff.touched[&id(ACCOUNT_A)].shard(id(ROOT_PROGRAM)),
+        &shard(b"60")
+    );
 }
 
 #[test]
