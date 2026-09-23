@@ -1,6 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 
-use super::{Backend, CallContext, ThreadedDiff, ValidationError, validate_state_diff};
+use super::{
+    AccountSource, Backend, CallContext, ThreadedDiff, TrackedAccount, ValidationError,
+    validate_state_diff,
+};
 use crate::{
     account::{AccountData, AccountId, ProgramShardSelector, ShardData},
     error::InvalidProgramBehaviorError,
@@ -56,6 +59,7 @@ impl Backend for Recorder {
         &mut self,
         _call: &ChainedCall,
         ctx: &CallContext<'_>,
+        _accounts: &HashMap<AccountId, TrackedAccount>,
     ) -> Result<ProgramOutput, ValidationError> {
         let mut inherited: Vec<u8> = ctx
             .authorized_accounts
@@ -70,25 +74,21 @@ impl Backend for Recorder {
             .expect("the test supplies one output per call"))
     }
 
-    fn has_independent_view(&mut self, account_id: AccountId) -> bool {
-        self.known.contains_key(&account_id)
-    }
-
-    fn value_at_first_sight(
-        &mut self,
-        account_id: AccountId,
-        _ctx: &CallContext<'_>,
-    ) -> Result<Option<AccountData>, ValidationError> {
-        Ok(self.known.get(&account_id).cloned())
+    fn account_source(&self, account_id: AccountId) -> AccountSource {
+        self.known
+            .get(&account_id)
+            .map_or(AccountSource::AdoptClaims, |data| {
+                AccountSource::Authoritative(data.clone())
+            })
     }
 
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        first_sight: bool,
+        prior_export: Option<bool>,
         _ctx: &CallContext<'_>,
     ) -> Result<bool, ValidationError> {
-        Ok(pre.is_authorized && !(first_sight && self.mask_first_sight))
+        Ok(pre.is_authorized && !(prior_export.is_none() && self.mask_first_sight))
     }
 
     fn observe_windows(
@@ -136,18 +136,24 @@ fn output(program: u8, caller: Option<u8>, rows: Vec<ShardStateDiff>) -> Program
 }
 
 fn first_sights(diff: &ThreadedDiff) -> Vec<(u8, bool)> {
-    diff.first_sight
+    diff.claim_order
         .iter()
-        .map(|&(account_id, exported)| (account_id.value()[0], exported))
+        .map(|account_id| {
+            let exported = diff.accounts[account_id].exported_authorization;
+            (account_id.value()[0], exported)
+        })
         .collect()
 }
 
 fn initial(diff: &ThreadedDiff, account: u8) -> &AccountData {
-    &diff.at_first_sight[&id(account)]
+    diff.accounts[&id(account)]
+        .claimed_initial
+        .as_ref()
+        .expect("the account adopts claims")
 }
 
 fn running(diff: &ThreadedDiff, account: u8) -> &AccountData {
-    &diff.touched[&id(account)]
+    &diff.accounts[&id(account)].current
 }
 
 #[test]

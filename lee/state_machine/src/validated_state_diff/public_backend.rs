@@ -1,7 +1,10 @@
 //! The public environment's half of the shared traversal: it executes each program and
 //! resolves every shard from committed chain state, with the signer set as root authority.
 
-use std::{borrow::Cow, collections::HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use lee_core::{
     BlockId, Timestamp,
@@ -12,7 +15,7 @@ use lee_core::{
         ProgramOutput, TimestampValidityWindow, TransactionEvent, compute_public_authorized_pdas,
         get_program_via,
     },
-    validation::{Backend, CallContext},
+    validation::{AccountSource, Backend, CallContext, TrackedAccount},
 };
 use log::debug;
 
@@ -73,26 +76,13 @@ impl<'state> PublicBackend<'state> {
             || ctx.authorized_accounts.contains(&account_id)
     }
 
-    /// An earlier call's result if there is one, else committed state. Borrowed, so callers
-    /// clone only the shard they need.
-    fn tracked_ref<'call>(
-        &'call self,
-        ctx: &'call CallContext<'_>,
-        account_id: AccountId,
-    ) -> Option<&'call AccountData> {
-        ctx.touched.get(&account_id).or_else(|| {
-            self.state
-                .get_account_by_id_ref(account_id)
-                .map(|account| &account.data)
-        })
-    }
-
     /// Resolve each named selector from tracked state, never from what the caller asserts, and
     /// only if declared up front or already touched: existing in global state is not enough.
     fn resolve_pre_states(
         &self,
         call: &ChainedCall,
         ctx: &CallContext<'_>,
+        accounts: &HashMap<AccountId, TrackedAccount>,
     ) -> Result<Vec<AccountInput>, LeeError> {
         // One absent value to borrow for declared accounts that do not exist yet.
         let absent = AccountData::default();
@@ -100,8 +90,8 @@ impl<'state> PublicBackend<'state> {
             .iter()
             .map(|shard_selector| {
                 let account_id = shard_selector.account_id;
-                let data = match ctx.touched.get(&account_id) {
-                    Some(data) => data,
+                let data = match accounts.get(&account_id) {
+                    Some(account) => &account.current,
                     None if self.declared_account_ids.contains(&account_id) => self
                         .state
                         .get_account_by_id_ref(account_id)
@@ -129,11 +119,12 @@ impl Backend for PublicBackend<'_> {
         &mut self,
         call: &ChainedCall,
         ctx: &CallContext<'_>,
+        accounts: &HashMap<AccountId, TrackedAccount>,
     ) -> Result<ProgramOutput, LeeError> {
         self.authorized_pdas =
             compute_public_authorized_pdas(ctx.caller_account_id, &call.pda_seeds);
 
-        let pre_states = self.resolve_pre_states(call, ctx)?;
+        let pre_states = self.resolve_pre_states(call, ctx, accounts)?;
 
         debug!(
             "Program {:?} pre_states: {:?}, instruction_data: {:?}",
@@ -155,11 +146,14 @@ impl Backend for PublicBackend<'_> {
             // Through the in-flight diff first, so a program deployed by an earlier call in this
             // transaction is callable immediately.
             let Some((program_id, user_elf)) = get_program_via(call.program_account_id, |id| {
-                ctx.touched.get(&id).or_else(|| {
-                    self.state
-                        .get_account_by_id_ref(id)
-                        .map(|account| &account.data)
-                })
+                accounts
+                    .get(&id)
+                    .map(|account| &account.current)
+                    .or_else(|| {
+                        self.state
+                            .get_account_by_id_ref(id)
+                            .map(|account| &account.data)
+                    })
             }) else {
                 return Err(LeeError::UnknownProgram {
                     chained: ctx.caller_account_id.is_some(),
@@ -189,27 +183,20 @@ impl Backend for PublicBackend<'_> {
         Ok(program_output)
     }
 
-    fn has_independent_view(&mut self, _account_id: AccountId) -> bool {
+    fn account_source(&self, account_id: AccountId) -> AccountSource {
         // Chain state is always a view, even for an account that does not exist yet.
-        true
-    }
-
-    fn value_at_first_sight(
-        &mut self,
-        account_id: AccountId,
-        ctx: &CallContext<'_>,
-    ) -> Result<Option<AccountData>, LeeError> {
-        Ok(Some(
-            self.tracked_ref(ctx, account_id)
-                .cloned()
+        AccountSource::Authoritative(
+            self.state
+                .get_account_by_id_ref(account_id)
+                .map(|account| account.data.clone())
                 .unwrap_or_default(),
-        ))
+        )
     }
 
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        _first_sight: bool,
+        _prior_export: Option<bool>,
         ctx: &CallContext<'_>,
     ) -> Result<bool, LeeError> {
         let account_id = pre.account_id;

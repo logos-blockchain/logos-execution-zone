@@ -2,7 +2,7 @@
 //!
 //! Check order is contract: callers discriminate on which error surfaces first.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
 use thiserror::Error;
 
@@ -28,52 +28,56 @@ pub enum ValidationError {
 
 pub struct CallContext<'call> {
     pub caller_account_id: Option<AccountId>,
-    pub program_account_id: AccountId,
     pub pda_seeds: &'call [PdaSeed],
     /// Inherited, before this call's output extends it. Empty at the root, where an external
     /// root authority holds the set itself.
     pub authorized_accounts: &'call HashSet<AccountId>,
-    /// Every account written so far. A backend resolving values or programs reads this before
-    /// chain state, so an earlier call's result is seen immediately.
-    pub touched: &'call HashMap<AccountId, AccountData>,
+}
+
+pub enum AccountSource {
+    Authoritative(AccountData),
+    /// No view of its own: each shard's claim is adopted the first time it is named.
+    AdoptClaims,
+}
+
+pub struct TrackedAccount {
+    pub current: AccountData,
+    /// The adopted claims, for an account that adopts them. Keeps empty shards: a named empty
+    /// shard differs from an unnamed one.
+    pub claimed_initial: Option<AccountData>,
+    pub exported_authorization: bool,
 }
 
 pub struct ThreadedDiff {
-    pub touched: HashMap<AccountId, AccountData>,
-    pub first_sight: Vec<(AccountId, bool)>,
-    pub at_first_sight: HashMap<AccountId, AccountData>,
+    pub accounts: HashMap<AccountId, TrackedAccount>,
+    /// The accounts that adopt claims, in first-sight order.
+    pub claim_order: Vec<AccountId>,
 }
 
 pub trait Backend {
     type Error: From<ValidationError>;
 
-    /// Runs once per call, before every other hook, so it may set per-call scratch.
+    /// Runs once per call, before every other hook, so it may set per-call scratch. `accounts`
+    /// holds every earlier call's result, so it is read before chain state.
     fn output_for_call(
         &mut self,
         call: &ChainedCall,
         ctx: &CallContext<'_>,
+        accounts: &HashMap<AccountId, TrackedAccount>,
     ) -> Result<ProgramOutput, Self::Error>;
 
-    /// Whether this environment has its own view of `account_id`. `false` adopts each shard's
-    /// claim the first time it is named. Must answer the same for an account throughout:
-    /// adoption is sound only because this is a property of the environment, not the moment.
-    fn has_independent_view(&mut self, account_id: AccountId) -> bool;
+    /// Asked once per account, at its first sight: adoption is sound only because the source is
+    /// a property of the environment, not the moment.
+    fn account_source(&self, account_id: AccountId) -> AccountSource;
 
-    /// The account's state at first sight. Called once per account.
-    fn value_at_first_sight(
-        &mut self,
-        account_id: AccountId,
-        ctx: &CallContext<'_>,
-    ) -> Result<Option<AccountData>, Self::Error>;
-
-    /// Judge one journalled `is_authorized` claim and return the value to export. An export
-    /// that differs from `pre.is_authorized` reaches only [`ThreadedDiff`]: the journalled flag
-    /// is what extends the subtree set and what `validate_execution` judges, so a divergent
-    /// export can never widen what a program was allowed to do.
+    /// Judge one journalled `is_authorized` claim and return the value to export; `prior_export`
+    /// is what the account's first sight exported, `None` at first sight. The journalled flag,
+    /// not the export, extends the subtree set. An export may mask that flag but never exceed
+    /// it, because it is also what the account's later sightings are judged against.
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        first_sight: bool,
+        prior_export: Option<bool>,
         ctx: &CallContext<'_>,
     ) -> Result<bool, Self::Error>;
 
@@ -97,9 +101,8 @@ pub fn validate_state_diff<B: Backend>(
     initial_call: ChainedCall,
     declared: &[ProgramShardSelector],
 ) -> Result<ThreadedDiff, B::Error> {
-    let mut touched: HashMap<AccountId, AccountData> = HashMap::new();
-    let mut first_sight: Vec<(AccountId, bool)> = Vec::new();
-    let mut at_first_sight: HashMap<AccountId, AccountData> = HashMap::new();
+    let mut accounts: HashMap<AccountId, TrackedAccount> = HashMap::new();
+    let mut claim_order: Vec<AccountId> = Vec::new();
     let mut selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
 
     let mut chained_calls = VecDeque::from_iter([(initial_call, None, HashSet::new())]);
@@ -113,13 +116,11 @@ pub fn validate_state_diff<B: Backend>(
 
         let ctx = CallContext {
             caller_account_id,
-            program_account_id: chained_call.program_account_id,
             pda_seeds: &chained_call.pda_seeds,
             authorized_accounts: &caller_authorized,
-            touched: &touched,
         };
 
-        let program_output = backend.output_for_call(&chained_call, &ctx)?;
+        let program_output = backend.output_for_call(&chained_call, &ctx, &accounts)?;
 
         // Free where the program is executed; an environment verifying a prover-chosen proof
         // could otherwise answer with a proof of a different instruction.
@@ -155,7 +156,6 @@ pub fn validate_state_diff<B: Backend>(
 
         // Captured before any backend rewrite: this is what extends the subtree set.
         let mut journalled_authorized: Vec<AccountId> = Vec::new();
-        let mut adopted = Vec::new();
 
         for diff in &program_output.state_diffs {
             let pre = &diff.pre_state;
@@ -174,41 +174,45 @@ pub fn validate_state_diff<B: Backend>(
                 .into());
             }
 
-            // Keyed on the pre view: `touched` is not updated until this call's loop ends.
-            let seen_before = at_first_sight.contains_key(&account_id);
-
-            let adopts_claims = !backend.has_independent_view(account_id);
-            let new_selector = !selectors_seen.contains(&shard_selector);
-
-            let first_sight_value = if seen_before {
-                None
-            } else {
-                backend.value_at_first_sight(account_id, &ctx)?
+            let (account, prior_export) = match accounts.entry(account_id) {
+                Entry::Occupied(entry) => {
+                    let account = entry.into_mut();
+                    let prior_export = Some(account.exported_authorization);
+                    (account, prior_export)
+                }
+                Entry::Vacant(entry) => {
+                    let (current, claimed_initial) = match backend.account_source(account_id) {
+                        AccountSource::Authoritative(data) => (data, None),
+                        AccountSource::AdoptClaims => {
+                            claim_order.push(account_id);
+                            (AccountData::default(), Some(AccountData::default()))
+                        }
+                    };
+                    let account = entry.insert(TrackedAccount {
+                        current,
+                        claimed_initial,
+                        exported_authorization: false,
+                    });
+                    (account, None)
+                }
             };
-            let pre_view = at_first_sight
-                .entry(account_id)
-                .or_insert_with(|| first_sight_value.unwrap_or_default());
-            let mut base = touched
-                .get(&account_id)
-                .cloned()
-                .unwrap_or_else(|| pre_view.clone());
 
             let (program, data) = &pre.shard;
-            if adopts_claims && new_selector {
-                // `insert`, not `set_shard`: an empty resolved shard must stay recorded.
-                pre_view.shards.insert(*program, data.clone());
-                base.set_shard(*program, data.clone());
-                adopted.push((account_id, *program, data.clone()));
+            if selectors_seen.insert(shard_selector)
+                && let Some(claimed_initial) = &mut account.claimed_initial
+            {
+                // `insert`, not `set_shard`: an empty adopted shard must stay recorded.
+                claimed_initial.shards.insert(*program, data.clone());
+                account.current.set_shard(*program, data.clone());
             }
-            let base = &base;
-            if base.shard(*program) != data {
+            if account.current.shard(*program) != data {
                 return Err(ValidationError::ProgramBehavior(
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
                         account_id,
                         expected: Box::new(AccountInput::at(
                             shard_selector,
                             pre.is_authorized,
-                            base,
+                            &account.current,
                         )),
                         actual: Box::new(pre.clone()),
                     },
@@ -220,12 +224,10 @@ pub fn validate_state_diff<B: Backend>(
                 journalled_authorized.push(account_id);
             }
 
-            let exported = backend.judge_authorization(pre, !seen_before, &ctx)?;
-            if !seen_before {
-                first_sight.push((account_id, exported));
+            let exported = backend.judge_authorization(pre, prior_export, &ctx)?;
+            if prior_export.is_none() {
+                account.exported_authorization = exported;
             }
-
-            selectors_seen.insert(shard_selector);
         }
 
         if program_output.self_account_id != chained_call.program_account_id {
@@ -271,21 +273,12 @@ pub fn validate_state_diff<B: Backend>(
             program_output.timestamp_validity_window,
         )?;
 
-        // An unchanged diff writes nothing, so a shard adopted after first sight lands here.
-        for (account_id, program, data) in adopted {
-            if let Some(running) = touched.get_mut(&account_id) {
-                running.set_shard(program, data);
-            }
-        }
-
         for diff in &program_output.state_diffs {
-            let account_id = diff.pre_state.account_id;
-            let mut data = touched
-                .remove(&account_id)
-                .or_else(|| at_first_sight.get(&account_id).cloned())
-                .unwrap_or_else(|| data_of(&diff.pre_state));
-            data.apply_diff(diff);
-            touched.insert(account_id, data);
+            accounts
+                .get_mut(&diff.pre_state.account_id)
+                .expect("the pre-state loop tracks every account a row names")
+                .current
+                .apply_diff(diff);
         }
 
         backend.observe_events(chained_call.program_account_id, program_output.events);
@@ -323,18 +316,9 @@ pub fn validate_state_diff<B: Backend>(
     backend.finish()?;
 
     Ok(ThreadedDiff {
-        touched,
-        first_sight,
-        at_first_sight,
+        accounts,
+        claim_order,
     })
-}
-
-/// The `AccountData` an input describes. Used only where the environment has no view.
-fn data_of(pre: &AccountInput) -> AccountData {
-    let (program, shard) = &pre.shard;
-    let mut data = AccountData::default();
-    data.set_shard(*program, shard.clone());
-    data
 }
 
 #[cfg(test)]

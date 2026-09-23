@@ -297,10 +297,14 @@ impl ValidatedStateDiff {
         // The traversal tracks balances and shards; nonces are untouched by execution and
         // advance only at apply time, so re-attach each account's committed nonce.
         let public_diff = threaded
-            .touched
+            .accounts
             .into_iter()
-            .map(|(account_id, data)| {
-                let nonce = state.get_account_by_id(account_id).nonce;
+            .map(|(account_id, tracked)| {
+                let nonce = state
+                    .get_account_by_id_ref(account_id)
+                    .map(|account| account.nonce)
+                    .unwrap_or_default();
+                let data = tracked.current;
                 (account_id, Account { nonce, data })
             })
             .collect();

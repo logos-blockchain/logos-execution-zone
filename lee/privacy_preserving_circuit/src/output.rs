@@ -1,39 +1,45 @@
-use std::collections::HashMap;
-
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
     ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
-    account::{Account, AccountData, AccountId, Nonce},
+    account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, TimestampValidityWindow},
+    validation::ThreadedDiff,
 };
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the output stage threads the traversal's results plus the prover's own padding inputs"
-)]
 pub fn compute_circuit_output(
+    threaded: ThreadedDiff,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    public: Vec<(AccountId, bool, AccountData, AccountData)>,
-    mut private_final: HashMap<AccountId, AccountData>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    // Keep the same shard keys in the pre- and post-states, so the journal never reveals a
-    // shard the transaction did not name.
-    let public_actions = public
+    let ThreadedDiff {
+        mut accounts,
+        claim_order,
+    } = threaded;
+    // An account with no witness has no note, so the verifier must be able to check it against
+    // real chain state: expose it in the journal, in first-sight order. Keep the same shard keys
+    // in the pre- and post-states, so the journal never reveals a shard the transaction did not
+    // name.
+    let public_actions = claim_order
         .into_iter()
-        .map(|(account_id, is_authorized, pre, post)| {
-            let post = post.project(pre.shards.keys().copied());
+        .map(|account_id| {
+            let account = accounts
+                .remove(&account_id)
+                .expect("every claim-backed account is tracked");
+            let pre = account
+                .claimed_initial
+                .expect("a claim-backed account records its claims");
+            let post = account.current.project(pre.shards.keys().copied());
             PublicAction {
                 account_id,
-                is_authorized,
+                is_authorized: account.exported_authorization,
                 pre,
                 post,
             }
@@ -58,9 +64,12 @@ pub fn compute_circuit_output(
             nullifier,
         } = witness;
         let account_id = witness.account_id();
-        let post_data = private_final.remove(&account_id).unwrap_or_else(|| {
-            panic!("Every witness's account must be touched by the execution: {account_id}")
-        });
+        let post_data = accounts
+            .remove(&account_id)
+            .unwrap_or_else(|| {
+                panic!("Every witness's account must be touched by the execution: {account_id}")
+            })
+            .current;
 
         let (new_nullifier, new_nonce, view_tag) = match nullifier {
             NullifierWitness::Init {
@@ -240,6 +249,7 @@ mod tests {
     use lee_core::{
         DUMMY_COMMITMENT_HASH, EphemeralPublicKey, PublicAction,
         account::{AccountData, ShardData},
+        validation::TrackedAccount,
     };
 
     use super::*;
@@ -252,13 +262,22 @@ mod tests {
     }
 
     fn emit(
-        public: Vec<(AccountId, bool, AccountData, AccountData)>,
+        account_id: AccountId,
+        pre: AccountData,
+        current: AccountData,
     ) -> PrivacyPreservingCircuitOutput {
+        let account = TrackedAccount {
+            current,
+            claimed_initial: Some(pre),
+            exported_authorization: true,
+        };
         compute_circuit_output(
+            ThreadedDiff {
+                accounts: [(account_id, account)].into(),
+                claim_order: vec![account_id],
+            },
             BlockValidityWindow::new_unbounded(),
             TimestampValidityWindow::new_unbounded(),
-            public,
-            HashMap::new(),
             &[],
             Vec::new(),
             None,
@@ -277,7 +296,7 @@ mod tests {
             .with_shard(SHARD_C, data(b"c"))
             .data;
 
-        let output = emit(vec![(account_id, true, pre.clone(), post_state)]);
+        let output = emit(account_id, pre.clone(), post_state);
 
         assert_eq!(
             output.public_actions,

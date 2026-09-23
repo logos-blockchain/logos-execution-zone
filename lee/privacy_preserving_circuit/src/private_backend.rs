@@ -9,29 +9,15 @@ use std::{
 use lee_core::{
     BlockId, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness,
     ProgramImageClaim, Timestamp, WitnessKind,
-    account::{AccountData, AccountId, ProgramShardSelector},
+    account::{AccountId, ProgramShardSelector},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         AccountInput, BlockValidityWindow, ChainedCall, PdaSeed, ProgramId, ProgramOutput,
         TimestampValidityWindow, pre_states_match_shard_selectors,
     },
-    validation::{Backend, CallContext, ValidationError},
+    validation::{AccountSource, Backend, CallContext, TrackedAccount, ValidationError},
 };
 use risc0_zkvm::guest::env;
-
-/// SAFETY-CRITICAL, deliberately uninhabited: no `Err` can be constructed, so every `?` is a
-/// dead branch and a rejection can only be the panic below. Never make this inhabited.
-pub enum Fatal {}
-
-#[expect(
-    clippy::fallible_impl_from,
-    reason = "panicking is the point: `Fatal` is uninhabited, so this conversion is the only way a rejection can be expressed in-guest"
-)]
-impl From<ValidationError> for Fatal {
-    fn from(error: ValidationError) -> Self {
-        panic!("{error}")
-    }
-}
 
 pub struct PrivateBackend<'input> {
     witnesses: &'input [PrivateWitness],
@@ -43,8 +29,6 @@ pub struct PrivateBackend<'input> {
     image_id_by_account_id: HashMap<AccountId, ProgramId>,
     /// One `(program, seed)` per account per transaction, else one seed authorizes a family.
     pda_family_binding: HashMap<(AccountId, PdaSeed), AccountId>,
-    /// Masked journal authorization, so a later sighting is judged as the verifier will.
-    public_authorization: HashMap<AccountId, bool>,
     block_bounds: (Option<BlockId>, Option<BlockId>),
     timestamp_bounds: (Option<Timestamp>, Option<Timestamp>),
 }
@@ -78,7 +62,6 @@ impl<'input> PrivateBackend<'input> {
                 .map(|claim| (claim.account_id, claim.image_id))
                 .collect(),
             pda_family_binding: HashMap::new(),
-            public_authorization: HashMap::new(),
             block_bounds: (None, None),
             timestamp_bounds: (None, None),
         };
@@ -205,32 +188,28 @@ impl<'input> PrivateBackend<'input> {
 
     /// Authorized by its own credential or a grant inherited from an ancestor call.
     fn is_already_authorized(
-        &self,
         ctx: &CallContext<'_>,
         account_id: AccountId,
         witness: Option<&PrivateWitness>,
+        prior_export: Option<bool>,
     ) -> bool {
         ctx.authorized_accounts.contains(&account_id)
             || witness.map_or_else(
-                || {
-                    self.public_authorization
-                        .get(&account_id)
-                        .copied()
-                        .unwrap_or(false)
-                },
+                || prior_export == Some(true),
                 |witness| matches!(witness.kind, WitnessKind::Regular { ask: Some(_) }),
             )
     }
 }
 
 impl Backend for PrivateBackend<'_> {
-    type Error = Fatal;
+    type Error = ValidationError;
 
     fn output_for_call(
         &mut self,
         call: &ChainedCall,
         ctx: &CallContext<'_>,
-    ) -> Result<ProgramOutput, Fatal> {
+        _accounts: &HashMap<AccountId, TrackedAccount>,
+    ) -> Result<ProgramOutput, ValidationError> {
         let Some(program_output) = self.remaining_outputs.pop_front() else {
             panic!("Insufficient program outputs for chained calls");
         };
@@ -249,28 +228,21 @@ impl Backend for PrivateBackend<'_> {
         Ok(program_output)
     }
 
-    fn has_independent_view(&mut self, account_id: AccountId) -> bool {
+    fn account_source(&self, account_id: AccountId) -> AccountSource {
         // A witness binds its note's content; a public account has none, so its claim is
         // adopted and the verifier checks it against real state.
-        self.witness_for(account_id).is_some()
-    }
-
-    fn value_at_first_sight(
-        &mut self,
-        account_id: AccountId,
-        _ctx: &CallContext<'_>,
-    ) -> Result<Option<AccountData>, Fatal> {
-        Ok(self
-            .witness_for(account_id)
-            .map(|witness| witness.account.data.clone()))
+        self.witness_for(account_id)
+            .map_or(AccountSource::AdoptClaims, |witness| {
+                AccountSource::Authoritative(witness.account.data.clone())
+            })
     }
 
     fn judge_authorization(
         &mut self,
         pre: &AccountInput,
-        first_sight: bool,
+        prior_export: Option<bool>,
         ctx: &CallContext<'_>,
-    ) -> Result<bool, Fatal> {
+    ) -> Result<bool, ValidationError> {
         let account_id = pre.account_id;
         let witness = self.witness_for(account_id);
         let granted = Self::seed_granted(ctx, witness, account_id);
@@ -281,14 +253,20 @@ impl Backend for PrivateBackend<'_> {
 
         if let Some(witness) = witness {
             match &witness.kind {
-                WitnessKind::Regular { ask } if first_sight => assert_eq!(
+                WitnessKind::Regular { ask } if prior_export.is_none() => assert_eq!(
                     pre.is_authorized,
                     ask.is_some(),
                     "Regular private account {account_id} must be authorized exactly by its supplied credential"
                 ),
                 WitnessKind::Regular { .. } | WitnessKind::Pda { .. } => assert_eq!(
                     pre.is_authorized,
-                    granted.is_some() || self.is_already_authorized(ctx, account_id, Some(witness)),
+                    granted.is_some()
+                        || Self::is_already_authorized(
+                            ctx,
+                            account_id,
+                            Some(witness),
+                            prior_export
+                        ),
                     "Inconsistent authorization for account {account_id}"
                 ),
             }
@@ -297,17 +275,14 @@ impl Backend for PrivateBackend<'_> {
 
         // At first sight a public account's claim stands, the verifier re-derives it from the
         // signer set; afterwards it must stay consistent with this traversal.
-        if !first_sight {
+        if let Some(prior) = prior_export {
             assert_eq!(
                 pre.is_authorized,
-                granted.is_some() || self.is_already_authorized(ctx, account_id, None),
+                granted.is_some()
+                    || Self::is_already_authorized(ctx, account_id, None, prior_export),
                 "Inconsistent authorization for account {account_id}"
             );
-            return Ok(self
-                .public_authorization
-                .get(&account_id)
-                .copied()
-                .unwrap_or(false));
+            return Ok(prior);
         }
 
         if granted.is_some() {
@@ -316,24 +291,22 @@ impl Backend for PrivateBackend<'_> {
                 "Caller-seeded public PDA must be declared authorized at first sight: {account_id}"
             );
         }
-        // Public PDAs cannot sign, so export false and remember it for later sightings.
-        let exported = granted.is_none() && pre.is_authorized;
-        self.public_authorization.insert(account_id, exported);
-        Ok(exported)
+        // Public PDAs cannot sign, so export false.
+        Ok(granted.is_none() && pre.is_authorized)
     }
 
     fn observe_windows(
         &mut self,
         block: BlockValidityWindow,
         timestamp: TimestampValidityWindow,
-    ) -> Result<(), Fatal> {
+    ) -> Result<(), ValidationError> {
         self.block_bounds = intersect(self.block_bounds, block.start(), block.end());
         self.timestamp_bounds =
             intersect(self.timestamp_bounds, timestamp.start(), timestamp.end());
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<(), Fatal> {
+    fn finish(&mut self) -> Result<(), ValidationError> {
         assert!(
             self.remaining_outputs.is_empty(),
             "Inner call without a chained call found"
@@ -396,10 +369,8 @@ mod tests {
     ) -> Option<(AccountId, PdaSeed)> {
         let ctx = CallContext {
             caller_account_id: caller,
-            program_account_id: AccountId::new([0xD0; 32]),
             pda_seeds: seeds,
             authorized_accounts: &HashSet::new(),
-            touched: &HashMap::new(),
         };
         PrivateBackend::seed_granted(&ctx, witness, account_id)
     }
@@ -457,10 +428,8 @@ mod tests {
             pda_seeds: Vec::new(),
         };
         let mut backend = PrivateBackend::new(witnesses, vec![report], claims, selectors);
-        let threaded = match validate_state_diff(&mut backend, initial_call, selectors) {
-            Ok(threaded) => threaded,
-            Err(fatal) => match fatal {},
-        };
+        let threaded = validate_state_diff(&mut backend, initial_call, selectors)
+            .unwrap_or_else(|error| panic!("{error}"));
         (threaded, backend.into_windows())
     }
 
@@ -477,9 +446,9 @@ mod tests {
             derive_native_root(tampered_native_report(30), &native_selectors());
 
         let balances: Vec<_> = threaded
-            .first_sight
+            .claim_order
             .iter()
-            .map(|(account_id, _)| threaded.touched[account_id].balance())
+            .map(|account_id| threaded.accounts[account_id].current.balance())
             .collect();
         assert_eq!(balances, vec![Ok(70), Ok(30)]);
         assert_eq!(block_window.start(), None);
