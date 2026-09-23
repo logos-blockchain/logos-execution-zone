@@ -27,13 +27,12 @@ mod circuit_io;
 mod commitment;
 mod encoding;
 pub mod encryption;
+pub mod error;
 mod frame;
 pub mod native_token;
 mod nullifier;
 pub mod program;
-
-#[cfg(feature = "host")]
-pub mod error;
+pub mod validation;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;
 

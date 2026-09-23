@@ -1,10 +1,7 @@
 use std::io;
 
-use lee_core::{
-    account::{AccountId, Cycles},
-    native_token::TransferError,
-    program::AccountInput,
-};
+use lee_core::account::Cycles;
+pub use lee_core::error::InvalidProgramBehaviorError;
 use thiserror::Error;
 
 #[macro_export]
@@ -117,73 +114,14 @@ impl LeeError {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum InvalidProgramBehaviorError {
-    #[error(
-        "Inconsistent pre-state for account {account_id} : expected {expected:?}, actual {actual:?}"
-    )]
-    InconsistentAccountPreState {
-        account_id: AccountId,
-        // Boxed to reduce the size of the error type
-        expected: Box<AccountInput>,
-        actual: Box<AccountInput>,
-    },
-
-    #[error("Unauthorized account marked as authorized")]
-    InvalidAccountAuthorization { account_id: AccountId },
-
-    #[error("Authorized account marked as not authorized")]
-    AuthorizedAccountMarkedAsNotAuthorized { account_id: AccountId },
-
-    #[error("Program account ID mismatch: expected {expected}, actual {actual}")]
-    MismatchedProgramId {
-        expected: AccountId,
-        actual: AccountId,
-    },
-
-    #[error("Caller program account ID mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedCallerProgramId {
-        expected: Option<AccountId>,
-        actual: Option<AccountId>,
-    },
-
-    #[error("Chained call to {program_account_id} did not execute")]
-    ChainedCallDidNotExecute { program_account_id: AccountId },
-
-    #[error(transparent)]
-    ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
-
-    #[error("Called program {program_account_id} which is not listed in dependencies")]
-    UndeclaredProgramDependency { program_account_id: AccountId },
-
-    #[error(
-        "Account {account_id} was declared in the transaction but is missing from the program output"
-    )]
-    DeclaredAccountMissingFromOutput { account_id: AccountId },
-
-    #[error(
-        "Chained call named account {account_id}, but it isn't resolvable from the top-level \
-         pre_states or any earlier call's materialized diff in this transaction"
-    )]
-    UnknownChainedCallAccount { account_id: AccountId },
-
-    #[error(
-        "Program {program_account_id} ran on accounts its caller either did not name or did not \
-         name in appropriate order."
-    )]
-    ChainedCallAccountsMismatch { program_account_id: AccountId },
-
-    #[error(
-        "Program {program_account_id}'s own output reports account {account_id}, which the \
-         chained call that invoked it never named"
-    )]
-    UndeclaredAccountInProgramOutput {
-        program_account_id: AccountId,
-        account_id: AccountId,
-    },
-
-    #[error("Invalid native transfer: {0}")]
-    NativeTransferFailed(#[from] TransferError),
+impl From<lee_core::validation::ValidationError> for LeeError {
+    fn from(error: lee_core::validation::ValidationError) -> Self {
+        use lee_core::validation::ValidationError;
+        match error {
+            ValidationError::ProgramBehavior(error) => Self::InvalidProgramBehavior(error),
+            ValidationError::MaxChainedCallsDepthExceeded => Self::MaxChainedCallsDepthExceeded,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,23 +2,46 @@ use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
-    ProgramImageClaim, SharedSecretKey, WitnessKind,
+    ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
+    program::{BlockValidityWindow, TimestampValidityWindow},
+    validation::ThreadedDiff,
 };
 
-use crate::execution_state::ExecutionState;
-
 pub fn compute_circuit_output(
-    execution_state: ExecutionState,
+    threaded: ThreadedDiff,
+    block_validity_window: BlockValidityWindow,
+    timestamp_validity_window: TimestampValidityWindow,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, public_actions, mut private_final) =
-        execution_state.into_parts();
+    let ThreadedDiff {
+        mut accounts,
+        claim_order,
+    } = threaded;
+    // Public accounts are exposed in journal in appropriate order.
+    let public_actions = claim_order
+        .into_iter()
+        .map(|account_id| {
+            let account = accounts
+                .remove(&account_id)
+                .expect("every claim-backed account is tracked");
+            let pre = account
+                .claimed_initial
+                .expect("a claim-backed account records its claims");
+            let post = account.current.project(pre.shards.keys().copied());
+            PublicAction {
+                account_id,
+                is_authorized: account.exported_authorization,
+                pre,
+                post,
+            }
+        })
+        .collect();
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions,
         private_actions: Vec::new(),
@@ -38,9 +61,12 @@ pub fn compute_circuit_output(
             nullifier,
         } = witness;
         let account_id = witness.account_id();
-        let post_data = private_final.remove(&account_id).unwrap_or_else(|| {
-            panic!("Every witness's account must be touched by the execution: {account_id}")
-        });
+        let post_data = accounts
+            .remove(&account_id)
+            .unwrap_or_else(|| {
+                panic!("Every witness's account must be touched by the execution: {account_id}")
+            })
+            .current;
 
         let (new_nullifier, new_nonce, view_tag) = match nullifier {
             NullifierWitness::Init {
@@ -220,6 +246,7 @@ mod tests {
     use lee_core::{
         DUMMY_COMMITMENT_HASH, EphemeralPublicKey, PublicAction,
         account::{AccountData, ShardData},
+        validation::TrackedAccount,
     };
 
     use super::*;
@@ -232,10 +259,22 @@ mod tests {
     }
 
     fn emit(
-        public: Vec<(AccountId, bool, AccountData, AccountData)>,
+        account_id: AccountId,
+        pre: AccountData,
+        current: AccountData,
     ) -> PrivacyPreservingCircuitOutput {
+        let account = TrackedAccount {
+            current,
+            claimed_initial: Some(pre),
+            exported_authorization: true,
+        };
         compute_circuit_output(
-            ExecutionState::from_post_states(public),
+            ThreadedDiff {
+                accounts: [(account_id, account)].into(),
+                claim_order: vec![account_id],
+            },
+            BlockValidityWindow::new_unbounded(),
+            TimestampValidityWindow::new_unbounded(),
             &[],
             Vec::new(),
             None,
@@ -254,7 +293,7 @@ mod tests {
             .with_shard(SHARD_C, data(b"c"))
             .data;
 
-        let output = emit(vec![(account_id, true, pre.clone(), post_state)]);
+        let output = emit(account_id, pre.clone(), post_state);
 
         assert_eq!(
             output.public_actions,

@@ -356,9 +356,10 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
 
     // Deployed at an arbitrary key-derived address rather than its builtin address, so
     // resolution goes through `get_program_via` directly.
-    let (image_id, user_elf) =
-        lee_core::program::get_program_via(header_account_id, |id| state.get_account_by_id_ref(id))
-            .expect("the newly-deployed program must be resolvable by its header address");
+    let (image_id, user_elf) = lee_core::program::get_program_via(header_account_id, |id| {
+        state.get_account_by_id_ref(id).map(|account| &account.data)
+    })
+    .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(
         crate::program::attach_kernel(&user_elf),

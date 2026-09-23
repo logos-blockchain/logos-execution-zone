@@ -184,41 +184,48 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
 fn program_should_fail_if_it_references_an_undeclared_account() {
     let account_id = AccountId::new([1; 32]);
     let undeclared_account_id = AccountId::new([99; 32]);
-    let mut state = V03State::new()
-        .with_public_account_balances([(account_id, 0)])
-        .with_programs([
-            crate::test_methods::noop(),
-            crate::test_methods::references_undeclared_account(),
-        ]);
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::references_undeclared_account().id());
-    let callee_id = crate::test_methods::noop().id();
-    let instruction: (ProgramId, InstructionData, AccountId) = (
-        callee_id,
-        Program::serialize_instruction(()).unwrap(),
-        undeclared_account_id,
-    );
-    let message = public_transaction::Message::try_new(
-        program_id,
-        vec![ProgramShardSelector::balance(account_id)],
-        vec![],
-        instruction,
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    let tx = PublicTransaction::new(message, witness_set);
+    // Existing in global state does not make an undeclared account reachable.
+    for balances in [
+        vec![(account_id, 0)],
+        vec![(account_id, 0), (undeclared_account_id, 99)],
+    ] {
+        let mut state = V03State::new()
+            .with_public_account_balances(balances)
+            .with_programs([
+                crate::test_methods::noop(),
+                crate::test_methods::references_undeclared_account(),
+            ]);
+        let program_id = AccountId::from_builtin_program(
+            crate::test_methods::references_undeclared_account().id(),
+        );
+        let callee_id = crate::test_methods::noop().id();
+        let instruction: (ProgramId, InstructionData, AccountId) = (
+            callee_id,
+            Program::serialize_instruction(()).unwrap(),
+            undeclared_account_id,
+        );
+        let message = public_transaction::Message::try_new(
+            program_id,
+            vec![ProgramShardSelector::balance(account_id)],
+            vec![],
+            instruction,
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
 
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id: err_account_id }
-            )) if err_account_id == undeclared_account_id
-        ),
-        "expected UnknownChainedCallAccount for the undeclared account, got {result:?}"
-    );
+        assert!(
+            matches!(
+                result,
+                Err(LeeError::InvalidProgramBehavior(
+                    InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id: err_account_id }
+                )) if err_account_id == undeclared_account_id
+            ),
+            "expected UnknownChainedCallAccount for the undeclared account, got {result:?}"
+        );
+    }
 }
 
 /// Rejects a program output that includes an account absent from its inputs.

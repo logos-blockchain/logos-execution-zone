@@ -1,4 +1,5 @@
 use super::*;
+use crate::account::Account;
 
 #[test]
 fn unsupported_call_kind_selector_matches_its_derivation() {
@@ -307,7 +308,9 @@ fn get_program_via_reads_the_loader_shard() {
         next_segment: None,
     };
     let shard = |id: AccountId, bytes: Vec<u8>| {
-        Account::default().with_shard(id, bytes.try_into().unwrap())
+        Account::default()
+            .with_shard(id, bytes.try_into().unwrap())
+            .data
     };
 
     let program_shard = shard(PROGRAM_LOADER_ACCOUNT_ID, header.to_bytes());

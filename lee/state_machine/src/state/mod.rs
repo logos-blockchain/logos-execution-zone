@@ -318,6 +318,7 @@ impl V03State {
         let (image_id, user_elf) =
             get_program_via(AccountId::from_builtin_program(program_id), |account_id| {
                 self.get_account_by_id_ref(account_id)
+                    .map(|account| &account.data)
             })?;
         Some((image_id, crate::program::attach_kernel(&user_elf)))
     }
@@ -329,8 +330,10 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| self.get_account_by_id_ref(id))
-            .map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| {
+            self.get_account_by_id_ref(id).map(|account| &account.data)
+        })
+        .map(|(image_id, _)| image_id)
     }
 
     #[must_use]
