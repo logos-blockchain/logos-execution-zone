@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, ProgramImageClaim,
-    PublicAction, WitnessKind,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, ProgramImageWitness,
+    PublicAction, ShadowProgramWitness, WitnessKind,
     account::{AccountData, AccountId, ProgramShardSelector},
     program::{
         AccountInput, AccountStateDiff, BlockValidityWindow, CallKind, CallerData, ChainedCall,
@@ -40,17 +40,25 @@ impl ExecutionState {
         program_account_id: AccountId,
         program_outputs: Vec<ProgramOutput>,
         initial_shard_selectors: &[ProgramShardSelector],
-        program_image_claims: &[ProgramImageClaim],
+        program_image_witnesses: &[ProgramImageWitness],
+        shadow_program_witnesses: &[ShadowProgramWitness],
     ) -> Self {
-        // Untrusted claims supplied by the prover: `env::verify` needs a real image id, not an
-        // arbitrary dispatch address. The circuit does not check these against real chain state —
-        // the sequencer does that independently (`V03State::get_program_image_id`) before
-        // accepting the proof, which fails naturally if a claim is a lie (the receipt's actually
-        // committed bytes won't match the reconstructed output). See `ProgramImageClaim`.
-        let image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_claims
+        // Untrusted witnesses supplied by the prover: `env::verify` needs a real image id, not an
+        // arbitrary dispatch address. `Disclosed` is not checked against real chain state here —
+        // the sequencer does that independently before accepting the proof. `Undisclosed` is
+        // checked in-circuit instead, when deriving the published claim.
+        let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
             .iter()
-            .map(|claim| (claim.account_id, claim.image_id))
+            .map(|witness| (witness.account_id(), witness.image_id()))
             .collect();
+        for witness in shadow_program_witnesses {
+            let account_id = AccountId::for_shadow_program(&witness.image_id);
+            let previous = image_id_by_account_id.insert(account_id, witness.image_id);
+            assert!(
+                previous.is_none(),
+                "account {account_id} claimed by both a program-image claim and a shadow witness"
+            );
+        }
 
         let block_valid_from = program_outputs
             .iter()
@@ -184,8 +192,7 @@ impl ExecutionState {
 
             // Check that `program_output` is consistent with the execution of the corresponding
             // program. `env::verify` needs the invoked program's real image id, not its dispatch
-            // address — resolved from the prover-supplied (and independently, externally
-            // verified) claims. See `ProgramImageClaim`.
+            // address — resolved above, from the prover-supplied claims and shadow witnesses.
             let image_id = image_id_by_account_id
                 .get(&chained_call.program_account_id)
                 .copied()

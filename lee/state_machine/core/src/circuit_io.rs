@@ -4,23 +4,100 @@ use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountData, AccountId, ProgramShardSelector},
+    compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        BlockValidityWindow, PdaSeed, ProgramHeader, ProgramId, ProgramOutput,
+        TimestampValidityWindow, immutable_mirror_commitment,
+    },
 };
 
-/// A claim that `account_id`'s program account currently has `image_id`.
+/// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
+#[derive(Debug, thiserror::Error)]
+#[error("an undisclosed program claim requires an immutable header")]
+pub struct UndisclosedHeaderNotImmutable;
+
+/// Untrusted circuit input claiming a program's real `image_id`, used for `env::verify` in place
+/// of a header's address.
 ///
-/// Supplied by the prover as circuit input (untrusted). The circuit uses it for `env::verify` in
-/// place of a legacy-bijection lookup — an address-deployed program's account doesn't encode its
-/// image id — and echoes it unchanged into the circuit's output. The circuit itself does **not**
-/// check `image_id` against `account_id`; the sequencer does, independently, against real chain
-/// state (`V03State::get_program_image_id`) before accepting the proof. Side effect for now:
-/// every program invoked in a private transaction's call graph is publicly visible via this claim
-/// list.
+/// Both variants are publicly deployed; `Undisclosed` just doesn't reveal which one, proving
+/// membership in-circuit instead.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum ProgramImageWitness {
+    /// `image_id` is disclosed on the resulting claim.
+    Disclosed {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Deployed at an immutable header, not disclosed on the resulting claim.
+    Undisclosed {
+        account_id: AccountId,
+        program_header: ProgramHeader,
+        membership_proof: MembershipProof,
+    },
+}
+
+impl ProgramImageWitness {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Disclosed { account_id, .. } | Self::Undisclosed { account_id, .. } => {
+                *account_id
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn image_id(&self) -> ProgramId {
+        match self {
+            Self::Disclosed { image_id, .. } => *image_id,
+            Self::Undisclosed { program_header, .. } => program_header.image_id,
+        }
+    }
+
+    /// # Errors
+    /// Returns an error if `Self::Undisclosed`'s header isn't immutable.
+    pub fn to_claim(&self) -> Result<ProgramImageClaim, UndisclosedHeaderNotImmutable> {
+        Ok(match self {
+            Self::Disclosed {
+                account_id,
+                image_id,
+            } => ProgramImageClaim::Disclosed {
+                account_id: *account_id,
+                image_id: *image_id,
+            },
+            Self::Undisclosed {
+                account_id,
+                program_header,
+                membership_proof,
+            } => {
+                if !program_header.immutable {
+                    return Err(UndisclosedHeaderNotImmutable);
+                }
+                let commitment = immutable_mirror_commitment(*account_id, program_header);
+                ProgramImageClaim::Undisclosed {
+                    root: compute_digest_for_path(&commitment, membership_proof),
+                }
+            }
+        })
+    }
+}
+
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct ProgramImageClaim {
-    pub account_id: AccountId,
+pub enum ProgramImageClaim {
+    Disclosed {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Some immutable header's mirrored commitment is a member of `root`.
+    Undisclosed {
+        root: CommitmentSetDigest,
+    },
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+pub struct ShadowProgramWitness {
     pub image_id: ProgramId,
 }
 
@@ -39,8 +116,10 @@ pub struct PrivacyPreservingCircuitInput {
     /// Shard selectors passed to the initial call.
     pub initial_shard_selectors: Vec<ProgramShardSelector>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
-    /// account id. See [`ProgramImageClaim`].
-    pub program_image_claims: Vec<ProgramImageClaim>,
+    /// account id.
+    pub program_image_witnesses: Vec<ProgramImageWitness>,
+    /// Identities of every shadow program invoked in the call graph.
+    pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -262,7 +341,7 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![ProgramImageClaim {
+            program_image_claims: vec![ProgramImageClaim::Disclosed {
                 account_id: AccountId::new([3; 32]),
                 image_id: [4; 8],
             }],

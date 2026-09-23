@@ -1,4 +1,4 @@
-use lee_core::{PrivacyPreservingCircuitInput, program::read_input_frame};
+use lee_core::{PrivacyPreservingCircuitInput, ProgramImageWitness, program::read_input_frame};
 use risc0_zkvm::guest::env;
 
 mod execution_state;
@@ -12,7 +12,8 @@ fn main() {
         dummy_inputs,
         ciphertext_padding,
         initial_shard_selectors,
-        program_image_claims,
+        program_image_witnesses,
+        shadow_program_witnesses,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
@@ -20,8 +21,15 @@ fn main() {
         program_account_id,
         program_outputs,
         &initial_shard_selectors,
-        &program_image_claims,
+        &program_image_witnesses,
+        &shadow_program_witnesses,
     );
+
+    let program_image_claims = program_image_witnesses
+        .iter()
+        .map(ProgramImageWitness::to_claim)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("every program image witness must produce a valid claim");
 
     let output = output::compute_circuit_output(
         execution_state,
