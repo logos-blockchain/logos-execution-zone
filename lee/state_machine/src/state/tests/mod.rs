@@ -14,8 +14,8 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow,
-        TransactionEvent,
+        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId,
+        ProgramSegment, TimestampValidityWindow, TransactionEvent,
     },
 };
 
@@ -47,30 +47,33 @@ impl V03State {
     /// Include test programs in the builtin programs map.
     #[must_use]
     pub fn with_test_programs(mut self) -> Self {
-        self.insert_program(&crate::test_methods::simple_balance_transfer());
-        self.insert_program(&crate::test_methods::dropped_account());
-        self.insert_program(&crate::test_methods::data_changer());
-        self.insert_program(&crate::test_methods::foreign_shard_writer());
-        self.insert_program(&crate::test_methods::minter());
-        self.insert_program(&crate::test_methods::burner());
-        self.insert_program(&crate::test_methods::auth_asserting_noop());
-        self.insert_program(&crate::test_methods::private_pda_delegator());
-        self.insert_program(&crate::test_methods::noop());
-        self.insert_program(&crate::test_methods::chain_caller());
-        self.insert_program(&crate::test_methods::exits_nonzero());
-        self.insert_program(&crate::test_methods::non_delegating_forwarder());
-        self.insert_program(&crate::test_methods::event_emitter());
-        self.insert_program(&crate::test_methods::validity_window());
-        self.insert_program(&crate::test_methods::flash_swap_initiator());
-        self.insert_program(&crate::test_methods::flash_swap_callback());
-        self.insert_program(&crate::test_methods::malicious_self_program_id());
-        self.insert_program(&crate::test_methods::malicious_caller_program_id());
-        self.insert_program(&crate::test_methods::pda_spend_proxy());
-        self.insert_program(&crate::test_methods::validity_window_chain_caller());
-        self.insert_program(&crate::test_methods::simple_transfer_proxy());
-        self.insert_program(&crate::test_methods::references_undeclared_account());
-        self.insert_program(&crate::test_methods::injects_undeclared_pre_state());
-        self.insert_program(&crate::test_methods::reordering_transfer());
+        self.insert_program(&crate::test_methods::simple_balance_transfer(), true);
+        self.insert_program(&crate::test_methods::dropped_account(), true);
+        self.insert_program(&crate::test_methods::data_changer(), true);
+        self.insert_program(&crate::test_methods::foreign_shard_writer(), true);
+        self.insert_program(&crate::test_methods::minter(), true);
+        self.insert_program(&crate::test_methods::burner(), true);
+        // Deliberately mutable (unlike every other program here), so tests can exercise both
+        // sides of insert_program's immutable-mirror-commitment behavior against a shared fixture.
+        self.insert_program(&crate::test_methods::shard_forwarder(), false);
+        self.insert_program(&crate::test_methods::auth_asserting_noop(), true);
+        self.insert_program(&crate::test_methods::private_pda_delegator(), true);
+        self.insert_program(&crate::test_methods::noop(), true);
+        self.insert_program(&crate::test_methods::chain_caller(), true);
+        self.insert_program(&crate::test_methods::exits_nonzero(), true);
+        self.insert_program(&crate::test_methods::non_delegating_forwarder(), true);
+        self.insert_program(&crate::test_methods::event_emitter(), true);
+        self.insert_program(&crate::test_methods::validity_window(), true);
+        self.insert_program(&crate::test_methods::flash_swap_initiator(), true);
+        self.insert_program(&crate::test_methods::flash_swap_callback(), true);
+        self.insert_program(&crate::test_methods::malicious_self_program_id(), true);
+        self.insert_program(&crate::test_methods::malicious_caller_program_id(), true);
+        self.insert_program(&crate::test_methods::pda_spend_proxy(), true);
+        self.insert_program(&crate::test_methods::validity_window_chain_caller(), true);
+        self.insert_program(&crate::test_methods::simple_transfer_proxy(), true);
+        self.insert_program(&crate::test_methods::references_undeclared_account(), true);
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state(), true);
+        self.insert_program(&crate::test_methods::reordering_transfer(), true);
         self
     }
 
@@ -209,6 +212,42 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
         d: [83; 32],
         z: [84; 32],
     }
+}
+
+/// Chains `elf` across as many force-inserted segments as it needs, returning every segment's
+/// `AccountId` in link order (`[0]` is the first segment, for `first_segment`).
+fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) -> Vec<AccountId> {
+    let user_elf = risc0_binfmt::ProgramBinary::decode(elf)
+        .expect("elf must be a valid ProgramBinary")
+        .user_elf
+        .to_vec();
+    let chunks: Vec<&[u8]> = user_elf
+        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+        .collect();
+    let segment_ids: Vec<AccountId> = (0..chunks.len())
+        .map(|i| {
+            let mut bytes = [key_seed; 32];
+            bytes[1] = u8::try_from(i).expect("chunk count fits in a u8");
+            AccountId::new(bytes)
+        })
+        .collect();
+    for i in (0..chunks.len()).rev() {
+        state.force_insert_account(
+            segment_ids[i],
+            Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ShardData::try_from(
+                    ProgramSegment {
+                        bytecode: chunks[i].to_vec(),
+                        next_segment: segment_ids.get(i + 1).copied(),
+                    }
+                    .to_bytes(),
+                )
+                .expect("segment must fit under DATA_MAX_LENGTH"),
+            ),
+        );
+    }
+    segment_ids
 }
 
 /// Init-lifecycle private-PDA witness for `keys`, the shape every PDA circuit test starts from.
@@ -426,7 +465,7 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
     };
     let recipient_keys = test_private_account_keys_2();
     let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
-    state.insert_program(&crate::test_methods::simple_balance_transfer());
+    state.insert_program(&crate::test_methods::simple_balance_transfer(), true);
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

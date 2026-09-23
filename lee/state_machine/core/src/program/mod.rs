@@ -5,7 +5,7 @@ use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Identifier, NullifierPublicKey, Timestamp,
+    BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
     account::{
         Account, AccountData, AccountId, Balance, BalanceDiff, BalanceDiffError,
         ProgramShardSelector, ShardData, apply_balance_diff,
@@ -237,6 +237,41 @@ impl AccountId {
         )
     }
 
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone.
+    #[must_use]
+    pub fn for_shadow_program(image_id: &ProgramId) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const SHADOW_PROGRAM_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        bytes[32..64].copy_from_slice(Self::from_builtin_program(*image_id).value());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives the `AccountId` of the private commitment mirroring an immutable header's
+    /// `ProgramHeader`.
+    #[must_use]
+    pub fn for_immutable_mirror(header_account_id: Self) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const IMMUTABLE_MIRROR_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/ImmutMirror/";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(IMMUTABLE_MIRROR_PREFIX);
+        bytes[32..64].copy_from_slice(header_account_id.as_ref());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
     /// Derives an [`AccountId`] for a private PDA from the owning program's account ID, seed,
     /// nullifier public key, and identifier.
     ///
@@ -334,7 +369,11 @@ impl ChainedCall {
 }
 
 /// One deployed program's identity and entry point into its bytecode's segment chain.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+///
+/// Lives at whatever account address the deployer chose — never a fixed bijection of the
+/// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
+/// distinct instance for dispatch, PDA-derivation, and ownership purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     /// The bytecode's real `image_id`, always recomputed from the segment chain at
     /// deploy/update time — never trusted from a caller-supplied value.
@@ -988,5 +1027,20 @@ pub fn validate_execution(
     Ok(())
 }
 
+/// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
+/// state.
+#[must_use]
+pub fn immutable_mirror_commitment(
+    header_account_id: AccountId,
+    program_header: &ProgramHeader,
+) -> Commitment {
+    let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
+    let mirrored_account = Account::default().with_shard(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        ShardData::try_from(program_header.to_bytes())
+            .expect("program header must fit under DATA_MAX_LENGTH"),
+    );
+    Commitment::new(&mirror_account_id, &mirrored_account)
+}
 #[cfg(test)]
 mod tests;
