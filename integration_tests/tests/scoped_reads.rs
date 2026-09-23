@@ -129,21 +129,16 @@ async fn fresh_segments(ctx: &mut TestContext, program: &Program) -> Result<Vec<
     Ok(segments)
 }
 
-async fn deploy_at_bijection(
+async fn deploy_fresh_program(
     ctx: &mut TestContext,
     payer: AccountId,
     program: &Program,
 ) -> Result<AccountId> {
     let segments = fresh_segments(ctx, program).await?;
+    let header = new_account(ctx, false, None).await?;
 
     ProgramLoader(ctx.wallet())
-        .deploy(
-            AccountId::from_builtin_program(program.id()),
-            &segments,
-            program.elf().to_vec(),
-            true,
-            Some(payer),
-        )
+        .deploy(header, &segments, program.elf().to_vec(), true, Some(payer))
         .await
 }
 
@@ -503,8 +498,8 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         test_methods::SHARD_FORWARDER_ID,
         Cow::Borrowed(test_methods::SHARD_FORWARDER_ELF),
     );
-    let q_id = deploy_at_bijection(&mut ctx, payer.account_id, &q).await?;
-    let p_id = deploy_at_bijection(&mut ctx, payer.account_id, &p).await?;
+    let q_id = deploy_fresh_program(&mut ctx, payer.account_id, &q).await?;
+    let p_id = deploy_fresh_program(&mut ctx, payer.account_id, &p).await?;
 
     let existing = vec![0xAB_u8; 32];
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
