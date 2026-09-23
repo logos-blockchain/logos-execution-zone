@@ -39,6 +39,15 @@ impl From<entities::DeadLetterDispatch> for protocol::DeadLetterDispatch {
     }
 }
 
+impl From<protocol::ZoneCheckpointRecord> for entities::ZoneCheckpoint {
+    fn from(checkpoint: protocol::ZoneCheckpointRecord) -> Self {
+        Self {
+            bytes: checkpoint.bytes,
+            timestamp_micros: checkpoint.timestamp.timestamp_micros(),
+        }
+    }
+}
+
 impl From<protocol::ZoneAnchorRecord> for entities::ZoneAnchor {
     fn from(anchor: protocol::ZoneAnchorRecord) -> Self {
         Self {

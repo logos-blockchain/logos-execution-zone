@@ -1,5 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
+use chrono::{DateTime, Utc};
 use common::{
     HashType,
     block::{Block, BlockMeta, PeerChainTip},
@@ -46,9 +47,17 @@ pub struct GetLeeState;
 
 pub struct GetZoneCheckpointBytes;
 
-pub struct SetZoneCheckpointBytes {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneCheckpointRecord {
     // TODO: Consider `bytes` crate for all `Vec<u8>` in protocol.
     pub bytes: Vec<u8>,
+    /// Timestamp when this checkpoint was created.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Stores the checkpoint, keeping whichever of it and the stored one is newer.
+pub struct UpdateZoneCheckpoint {
+    pub checkpoint: ZoneCheckpointRecord,
 }
 
 pub struct DeleteZoneCheckpoint;
@@ -141,8 +150,9 @@ pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
 pub struct AtomicUpdate {
-    /// Serialized zone-sdk checkpoint for this event.
-    pub checkpoint: Option<Vec<u8>>,
+    /// Zone-sdk checkpoint for this event, kept only if it is newer than the
+    /// stored one. The rest of the update lands either way.
+    pub checkpoint: Option<ZoneCheckpointRecord>,
 
     /// Block payloads to write.
     pub blocks: Vec<Block>,

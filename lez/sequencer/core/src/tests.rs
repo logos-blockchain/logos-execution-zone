@@ -3,6 +3,7 @@
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
 use canned_channel::CannedChannel;
+use chrono::Utc;
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -157,6 +158,7 @@ async fn serve_channel(
 fn empty_channel_update() -> ChannelUpdate {
     ChannelUpdate {
         checkpoint: mock_checkpoint(),
+        checkpoint_timestamp: Utc::now(),
         adopted: Vec::new(),
         orphaned: Vec::new(),
         finalized: Vec::new(),
@@ -3886,6 +3888,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
             our_block.clone(),
             HashSet::new(),
             &mock_checkpoint(),
+            Utc::now(),
         )
         .await
         .unwrap();
@@ -3916,6 +3919,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
             stale.clone(),
             HashSet::new(),
             &mock_checkpoint(),
+            Utc::now(),
         )
         .await
         .unwrap();

@@ -517,6 +517,7 @@ async fn setup_bedrock_actor(
                 channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
             },
+            checkpoint_timestamp: chrono::Utc::now(),
             released_notes: Vec::new(),
         })
     });

@@ -19,9 +19,9 @@ use crate::{
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
         GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord,
     },
 };
 
@@ -38,7 +38,7 @@ pub trait StorageActorTrait:
     + Message<GetLeeState, Reply = Result<Option<V03State>>>
     + Message<GetFinalSnapshot, Reply = Result<Option<(V03State, BlockMeta)>>>
     + Message<GetZoneCheckpointBytes, Reply = Result<Option<Vec<u8>>>>
-    + Message<SetZoneCheckpointBytes, Reply = Result<()>>
+    + Message<UpdateZoneCheckpoint, Reply = Result<()>>
     + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutSlashRecordBytes, Reply = Result<()>>
     + Message<DeleteZoneCheckpoint, Reply = Result<()>>

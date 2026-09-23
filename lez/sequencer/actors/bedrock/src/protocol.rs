@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
@@ -39,6 +40,8 @@ pub struct ChannelUpdate {
     /// the view this update leaves behind — non-block entries and the rewind
     /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: Checkpoint,
+    /// When [`Self::checkpoint`] was minted.
+    pub checkpoint_timestamp: DateTime<Utc>,
     /// Blocks newly on the followed L1 branch, in channel order; they extend
     /// or replace part of the `head` tier. Non-block entries (garbage, a
     /// config op) surface only through the checkpoint's tip. No inscription
@@ -96,6 +99,8 @@ pub struct PublishOutcome {
     pub this_msg: MsgId,
     /// The checkpoint that now holds the inscription as pending.
     pub checkpoint: Checkpoint,
+    /// When [`Self::checkpoint`] was minted.
+    pub checkpoint_timestamp: DateTime<Utc>,
     /// Channel notes the bundled withdrawals release, empty for a plain
     /// publish.
     pub released_notes: Vec<NoteId>,

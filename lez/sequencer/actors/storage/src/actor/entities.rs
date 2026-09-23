@@ -116,6 +116,9 @@ impl db::Storable<ColumnFamily> for FinalSnapshot {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ZoneCheckpoint {
     pub bytes: Vec<u8>,
+    /// When this checkpoint was created, in microseconds since the Unix
+    /// epoch.
+    pub timestamp_micros: i64,
 }
 
 impl db::Storable<ColumnFamily> for ZoneCheckpoint {

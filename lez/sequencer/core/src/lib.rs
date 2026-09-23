@@ -13,6 +13,7 @@ use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
     FollowOutcome, Tip,
 };
+use chrono::{DateTime, Utc};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
@@ -53,8 +54,8 @@ use sequencer_storage_actor::{
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
         GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetZoneAnchor, SetZoneCheckpointBytes,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetZoneAnchor, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 use tokio::sync::Mutex;
@@ -537,7 +538,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     .lock()
                     .await
                     .record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
-                last_checkpoint = Some(outcome.checkpoint);
+                last_checkpoint = Some((outcome.checkpoint, outcome.checkpoint_timestamp));
                 storage_ref
                     .ask(RaisePublishedHighWater {
                         block_id: block.header.block_id,
@@ -549,11 +550,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // These blocks are already stored, so only the sdk's pending set
             // moved. Checkpoints are cumulative — persisting just the last one
             // is both sufficient and the only way to keep this loop linear.
-            if let Some(checkpoint) = last_checkpoint {
+            if let Some((checkpoint, timestamp)) = last_checkpoint {
                 let bytes =
                     checkpoint_bytes(&checkpoint).expect("Failed to serialize zone-sdk checkpoint");
                 storage_ref
-                    .ask(SetZoneCheckpointBytes { bytes })
+                    .ask(UpdateZoneCheckpoint {
+                        checkpoint: ZoneCheckpointRecord { bytes, timestamp },
+                    })
                     .await
                     .expect("Failed to persist checkpoint after republishing on fresh start");
             }
@@ -846,6 +849,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ) {
         let sequencer_bedrock_actor::protocol::ChannelUpdate {
             checkpoint,
+            checkpoint_timestamp,
             adopted,
             orphaned,
             finalized,
@@ -858,8 +862,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         let moved_head = !adopted.is_empty();
 
-        let checkpoint_bytes = checkpoint_bytes(checkpoint)
-            .unwrap_or_else(|err| panic!("Failed to serialize zone-sdk checkpoint: {err:#}"));
+        let checkpoint_record = ZoneCheckpointRecord {
+            bytes: checkpoint_bytes(checkpoint)
+                .unwrap_or_else(|err| panic!("Failed to serialize zone-sdk checkpoint: {err:#}")),
+            timestamp: *checkpoint_timestamp,
+        };
 
         // NOTE: Theoretically Zone SDK may re-deliver an already seen deposit or
         // finalization. Both are idempotent here: a deposit already on record is
@@ -1027,7 +1034,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let outcome = self
                 .storage_ref
                 .ask(AtomicUpdate {
-                    checkpoint: Some(checkpoint_bytes),
+                    checkpoint: Some(checkpoint_record),
                     blocks: to_persist,
                     channel_cursor: chain.channel_cursor().map(Into::into),
                     head_tip,
@@ -1148,6 +1155,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let sequencer_bedrock_actor::protocol::PublishOutcome {
             this_msg,
             checkpoint,
+            checkpoint_timestamp,
             released_notes,
         } = self
             .bedrock_ref
@@ -1178,8 +1186,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .collect();
 
         let block_id = block.header.block_id;
-        self.record_produced_block(this_msg, block, withdrawal_reconciliation_keys, &checkpoint)
-            .await?;
+        self.record_produced_block(
+            this_msg,
+            block,
+            withdrawal_reconciliation_keys,
+            &checkpoint,
+            checkpoint_timestamp,
+        )
+        .await?;
 
         Ok(block_id)
     }
@@ -1404,8 +1418,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         block: Block,
         withdrawal_reconciliation_keys: HashSet<WithdrawalReconciliationKey>,
         checkpoint: &sequencer_bedrock_actor::protocol::Checkpoint,
+        checkpoint_timestamp: DateTime<Utc>,
     ) -> Result<()> {
-        let checkpoint_bytes = checkpoint_bytes(checkpoint)?;
+        let checkpoint_record = ZoneCheckpointRecord {
+            bytes: checkpoint_bytes(checkpoint)?,
+            timestamp: checkpoint_timestamp,
+        };
 
         let mut chain = self.chain.lock().await;
         match chain.apply_produced(&block, this_msg) {
@@ -1414,7 +1432,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.storage_ref
                     .ask(AtomicUpdate {
                         new_withdraw_intents: withdrawal_reconciliation_keys,
-                        checkpoint: Some(checkpoint_bytes.clone()),
+                        checkpoint: Some(checkpoint_record),
                         channel_cursor: Some(this_msg.into()),
                         ..AtomicUpdate::from_block(block.clone(), chain.share_head_state())
                     })

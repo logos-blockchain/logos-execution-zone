@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use chrono::Utc;
 use common::block::Block;
 use futures::StreamExt as _;
 use kameo::{
@@ -215,6 +216,7 @@ impl BedrockActor {
                         topic: format!("channel/{}/update", self.config.channel_id),
                         message: ChannelEvent::Update(Arc::new(ChannelUpdate {
                             checkpoint,
+                            checkpoint_timestamp: Utc::now(),
                             adopted,
                             orphaned,
                             finalized: finalized_blocks,
@@ -285,6 +287,7 @@ impl BedrockActor {
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
             checkpoint,
+            checkpoint_timestamp: Utc::now(),
             released_notes: released_notes(&result.tx),
         })
     }
@@ -470,6 +473,7 @@ impl Message<PublishBlock> for BedrockActor {
             Ok(PublishOutcome {
                 this_msg: result.tx.inscription().this_msg,
                 checkpoint,
+                checkpoint_timestamp: Utc::now(),
                 released_notes: released_notes(&result.tx),
             })
         }
@@ -700,6 +704,7 @@ impl Message<PublishRawInscription> for BedrockActor {
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
             checkpoint,
+            checkpoint_timestamp: Utc::now(),
             released_notes: released_notes(&result.tx),
         })
     }

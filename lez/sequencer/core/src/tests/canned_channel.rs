@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use chrono::Utc;
 use common::block::Block;
 use logos_blockchain_core::mantle::{
     ledger::{NoteId, Utxo},
@@ -154,6 +155,7 @@ fn land(
     Ok(PublishOutcome {
         this_msg,
         checkpoint: checkpoint_at(this_msg),
+        checkpoint_timestamp: Utc::now(),
         released_notes,
     })
 }

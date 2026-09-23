@@ -11088,6 +11088,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "chrono",
  "common",
  "futures",
  "kameo",
@@ -11191,6 +11192,7 @@ dependencies = [
  "bridge_core",
  "bytesize",
  "chain_state",
+ "chrono",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -11311,6 +11313,7 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "env_logger",
  "futures",
@@ -11402,6 +11405,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "chrono",
  "common",
  "enum-iterator",
  "itertools 0.14.0",

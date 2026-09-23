@@ -35,6 +35,7 @@ system_accounts = { workspace = true, optional = true }
 logos-blockchain-zone-sdk.workspace = true
 logos-blockchain-core.workspace = true
 kameo.workspace = true
+chrono.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true

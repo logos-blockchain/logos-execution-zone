@@ -29,9 +29,9 @@ use crate::{
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
         GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord,
     },
 };
 
@@ -91,9 +91,9 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
         ) -> Result<Option<Vec<u8>>>;
 
-        pub fn handle_set_zone_checkpoint_bytes(
+        pub fn handle_update_zone_checkpoint(
             &mut self,
-            msg: SetZoneCheckpointBytes,
+            msg: UpdateZoneCheckpoint,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -395,15 +395,15 @@ impl Message<GetZoneCheckpointBytes> for MockStorageActor {
     }
 }
 
-impl Message<SetZoneCheckpointBytes> for MockStorageActor {
+impl Message<UpdateZoneCheckpoint> for MockStorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: SetZoneCheckpointBytes,
+        msg: UpdateZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_set_zone_checkpoint_bytes(msg, ctx)
+        self.handle_update_zone_checkpoint(msg, ctx)
     }
 }
 
