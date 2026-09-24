@@ -11,12 +11,11 @@ ARTIFACTS := "artifacts"
 # Linux/CI, which is unaffected.
 DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
 
-# Build risc0 program artifacts and test fixture. authenticated_transfer goes first: the custody guests embed its image id, read from its artifact by their build script.
+# Build risc0 program artifacts and test fixture.
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
     @just build-artifact lee/privacy_preserving_circuit
-    @just build-artifact lez/programs/authenticated_transfer "" lez/programs
     @just build-artifact lez/programs programs
 
     @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
@@ -27,7 +26,7 @@ build-artifacts:
 
 RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
 
-build-artifact methods_path features="" out_dir="":
+build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
     @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
     @if [ "{{features}}" = "" ]; then \
@@ -35,7 +34,8 @@ build-artifact methods_path features="" out_dir="":
     else \
         RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
-    @out="{{out_dir}}"; out="{{ARTIFACTS}}/${out:-{{methods_path}}}"; mkdir -p "$out" && cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin "$out"
+    @mkdir -p "{{ARTIFACTS}}/{{methods_path}}"
+    @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin "{{ARTIFACTS}}/{{methods_path}}"
 
 # Format codebase.
 fmt:

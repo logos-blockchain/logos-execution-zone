@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountStateDiff, BlockValidityWindow, ProgramCall, ProgramInput, ProgramOutput,
+    BlockValidityWindow, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
     TimestampValidityWindow, read_lee_call, respond_unsupported_call,
 };
 
@@ -28,7 +28,7 @@ fn main() {
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![AccountStateDiff::unchanged(pre)],
+        vec![ShardStateDiff::unchanged(pre)],
     )
     .with_block_validity_window(block_validity_window)
     .with_timestamp_validity_window(timestamp_validity_window)

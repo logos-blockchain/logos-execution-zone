@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{Account, AccountId, Cycles},
+    account::{AccountData, AccountId, Cycles},
     from_frame,
     program::{
         AccountInput, CallKind, InstructionData, ProgramId, ProgramInput, ProgramOutput,
@@ -225,7 +225,7 @@ pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
 /// then re-attaches the kernel.
 pub(crate) fn resolve_program<'state>(
     account_id: AccountId,
-    lookup: impl Fn(AccountId) -> Option<&'state Account>,
+    lookup: impl Fn(AccountId) -> Option<&'state AccountData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
     let (image_id, user_elf) = get_program_via(account_id, lookup)?;
     Some((image_id, attach_kernel(&user_elf)))

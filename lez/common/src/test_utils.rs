@@ -103,14 +103,14 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = programs::authenticated_transfer_account_id();
+    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
     let shard_selectors = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
         program_id,
         shard_selectors,
         nonces,
-        authenticated_transfer_core::Instruction::Transfer { amount: 0 },
+        lee_core::native_token::Instruction::Transfer { amount: 0 },
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -160,12 +160,12 @@ pub fn create_transaction_native_token_transfer_with_fees(
         ProgramShardSelector::balance(to),
     ];
     let nonces = vec![nonce.into()];
-    let program_id = programs::authenticated_transfer_account_id();
+    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
     let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
         shard_selectors,
         nonces,
-        authenticated_transfer_core::Instruction::Transfer {
+        lee_core::native_token::Instruction::Transfer {
             amount: balance_to_move,
         },
         fee_declaration,
@@ -191,13 +191,13 @@ pub fn create_transaction_native_token_transfer_without_fee(
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
-        programs::authenticated_transfer_account_id(),
+        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
             ProgramShardSelector::balance(from),
             ProgramShardSelector::balance(to),
         ],
         vec![nonce.into()],
-        authenticated_transfer_core::Instruction::Transfer {
+        lee_core::native_token::Instruction::Transfer {
             amount: balance_to_move,
         },
     )

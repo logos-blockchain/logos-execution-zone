@@ -232,14 +232,6 @@ pub async fn execute_subcommand(
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
-            let Some(authenticated_transfer_id) = remote_program_ids.get("authenticated_transfer")
-            else {
-                panic!("Missing authenticated transfer ID from remote");
-            };
-            assert!(
-                authenticated_transfer_id == &::programs::authenticated_transfer().id(),
-                "Local ID for authenticated transfer program is different from remote"
-            );
             let Some(token_id) = remote_program_ids.get("token") else {
                 panic!("Missing token program ID from remote");
             };

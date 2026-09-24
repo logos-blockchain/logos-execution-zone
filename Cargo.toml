@@ -22,6 +22,7 @@ members = [
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
+  "lez/sequencer/actors/channel_config",
   "lez/sequencer/actors/executor",
   "lez/sequencer/actors/executor/metrics",
   "lez/sequencer/actors/gossip",
@@ -29,6 +30,8 @@ members = [
   "lez/sequencer/actors/rpc_server/metrics",
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
+  "lez/sequencer/ffi",
+
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -44,7 +47,6 @@ members = [
   "lez/programs",
   "lez/programs/amm",
   "lez/programs/associated_token_account",
-  "lez/programs/authenticated_transfer",
   "lez/programs/bridge",
   "lez/programs/clock",
   "lez/programs/fee",
@@ -61,6 +63,7 @@ members = [
   "lez/programs/program_loader/core",
   "lez/cross_zone",
 
+  "test_guest_core",
   "test_programs",
   "test_programs/guest",
 
@@ -92,6 +95,7 @@ sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
+sequencer_channel_config_actor = { path = "lez/sequencer/actors/channel_config" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
 sequencer_gossip_actor = { path = "lez/sequencer/actors/gossip" }
@@ -100,6 +104,7 @@ sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/m
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_service = { path = "lez/sequencer/service" }
+sequencer_ffi = { path = "lez/sequencer/ffi" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
 indexer_service_protocol = { path = "lez/indexer/service/protocol" }
@@ -121,7 +126,6 @@ amm_core = { path = "lez/programs/amm/core" }
 amm_program = { path = "lez/programs/amm" }
 associated_token_account_core = { path = "lez/programs/associated_token_account/core" }
 ata_program = { path = "lez/programs/associated_token_account" }
-authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
@@ -132,6 +136,7 @@ sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
+test_guest_core = { path = "test_guest_core" }
 test_methods = { path = "lee/state_machine/test_methods" }
 test_programs = { path = "test_programs" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
@@ -220,15 +225,15 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
-logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "da7bd3792df481858400b322a257502f6c45e369" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
+logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6533aaa9895b7b74d37685312805c56e0adc2d8" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "db880d61155db3a4f32177ef16b0f1e4bf22b1f6" }
 
@@ -260,6 +265,7 @@ zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
 enum-iterator = "2.3.0"
+cbindgen = "0.29"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]
@@ -388,6 +394,12 @@ clippy.let-underscore-untyped = "allow"
 clippy.unneeded-field-pattern = "allow"
 # Reason: this lint makes no sense for us.
 clippy.error_impl_error = "allow"
+# Reason: inline `mod tests` is our convention.
+clippy.inline-modules = "allow"
+# Reason: we write short bounds inline.
+clippy.inline-trait-bounds = "allow"
+# Reason: actor message handlers are async by trait signature.
+clippy.unused-async-trait-impl = "allow"
 
 # Nursery
 clippy.nursery = { level = "deny", priority = -1 }

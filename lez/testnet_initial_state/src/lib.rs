@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
-use lee::{Account, AccountData, AccountId, PrivateKey, PublicKey, V03State, program::Program};
+use lee::{Account, AccountId, PrivateKey, PublicKey, V03State, program::Program};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -110,25 +110,13 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
 
     vec![
         PrivateAccountPrivateInitialData {
-            account: Account {
-                data: AccountData {
-                    balance: PRIV_ACC_A_INITIAL_BALANCE,
-                    ..AccountData::default()
-                },
-                ..Account::default()
-            },
+            account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
             key_chain: key_chain_1,
             chain_index: None,
             identifier: 0,
         },
         PrivateAccountPrivateInitialData {
-            account: Account {
-                data: AccountData {
-                    balance: PRIV_ACC_B_INITIAL_BALANCE,
-                    ..AccountData::default()
-                },
-                ..Account::default()
-            },
+            account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
             key_chain: key_chain_2,
             chain_index: None,
             identifier: 0,
@@ -185,18 +173,7 @@ pub fn initial_public_user_accounts() -> Vec<PublicAccountPublicInitialData> {
 fn initial_public_accounts() -> HashMap<AccountId, Account> {
     initial_public_user_accounts()
         .iter()
-        .map(|acc_data| {
-            (
-                acc_data.account_id,
-                Account {
-                    data: AccountData {
-                        balance: acc_data.balance,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )
-        })
+        .map(|acc_data| (acc_data.account_id, Account::funded(acc_data.balance)))
         .chain([(
             system_accounts::bridge_account_id(),
             system_accounts::bridge_account(),
@@ -223,10 +200,6 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
 
 fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
     let mut programs = vec![
-        (
-            programs::authenticated_transfer_account_id(),
-            programs::authenticated_transfer(),
-        ),
         (programs::token_account_id(), programs::token()),
         (programs::amm_account_id(), programs::amm()),
         (programs::clock_account_id(), programs::clock()),
@@ -424,7 +397,7 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.data.balance, 0);
+            assert_eq!(account.data.balance().unwrap(), 0);
         }
 
         // The fee-state account carries the genesis market state; escrow and
@@ -458,12 +431,13 @@ mod tests {
 
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
-            bridge.data.balance,
+            bridge.data.balance().unwrap(),
             u128::MAX,
             "the bridge holds the whole supply"
         );
-        assert!(
-            bridge.data.shards.is_empty(),
+        assert_eq!(
+            bridge.data.shards.keys().copied().collect::<Vec<_>>(),
+            vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
             "the bridge holds balance alone, no program's record"
         );
     }

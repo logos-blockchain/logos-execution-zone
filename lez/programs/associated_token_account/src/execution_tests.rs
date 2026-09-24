@@ -3,8 +3,8 @@
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use borsh::BorshSerialize;
 use lee::{
-    Account, AccountData, AccountId, PrivateKey, ProgramShardSelector, PublicKey,
-    PublicTransaction, ShardData, V03State, error::LeeError, public_transaction,
+    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, ShardData,
+    V03State, error::LeeError, public_transaction,
 };
 use lee_core::account::Nonce;
 use token_core::TokenHolding;
@@ -101,14 +101,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
         &compute_ata_seed(owner_id, INTENDED_DEFINITION_ID, token_program_id()),
     );
 
-    let noisy_ata = Account {
-        data: AccountData {
-            balance: 500,
-            ..AccountData::default()
-        },
-        ..Account::default()
-    }
-    .with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
+    let noisy_ata = Account::funded(500).with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
 
     let mut state = V03State::new()
         .with_named_programs([
@@ -155,7 +148,7 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
         "Only Uninitialized or authorized accounts can be initialized",
     );
 
-    let native_balance_before_repair = state.get_account_by_id(ata_id).data.balance;
+    let native_balance_before_repair = state.get_account_by_id(ata_id).data.balance().unwrap();
     let squatter_definition_before = state.get_account_by_id(SQUATTER_DEFINITION_ID);
     let intended_definition_before = state.get_account_by_id(INTENDED_DEFINITION_ID);
 
@@ -173,7 +166,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
             balance: 0,
         }
     );
-    assert_eq!(repaired.data.balance, native_balance_before_repair);
+    assert_eq!(
+        repaired.data.balance().unwrap(),
+        native_balance_before_repair
+    );
     assert_eq!(repaired.data.shard(FOREIGN_PROGRAM_ID), &foreign_shard);
     assert_eq!(
         state.get_account_by_id(SQUATTER_DEFINITION_ID),

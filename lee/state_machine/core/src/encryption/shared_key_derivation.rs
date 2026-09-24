@@ -136,8 +136,6 @@ impl SharedSecretKey {
 
 #[cfg(test)]
 mod tests {
-    use ml_kem::KeyExport as _;
-
     use super::*;
     use crate::ML_KEM_768_CIPHERTEXT_LEN;
 

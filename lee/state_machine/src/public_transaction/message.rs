@@ -135,12 +135,14 @@ mod tests {
     ];
     const POSITIONS_BYTES: &[u8] = &[
         1, 0, 0, 0, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
-        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 1, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
-        43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+        43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
     ];
-    const BALANCE_ONLY_POSITIONS_BYTES: &[u8] = &[
+    // The balance selector names the reserved native token program, not a tagged absence.
+    const BALANCE_POSITIONS_BYTES: &[u8] = &[
         1, 0, 0, 0, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42,
-        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 0,
+        42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     // nonces: u32 len=1, then Nonce(5) as LE u128
     const NONCES_BYTES: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -209,14 +211,14 @@ mod tests {
     }
 
     #[test]
-    fn hash_public_pinned_balance_only_shard_selector() {
+    fn hash_public_pinned_balance_shard_selector() {
         assert_hash_pinned(
             &pinned_message(
                 vec![ProgramShardSelector::balance(AccountId::new([42; 32]))],
                 vec![],
                 None,
             ),
-            BALANCE_ONLY_POSITIONS_BYTES,
+            BALANCE_POSITIONS_BYTES,
             &[0, 0, 0, 0],
             &[0],
         );

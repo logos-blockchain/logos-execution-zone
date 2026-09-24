@@ -7,7 +7,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
-use lee::{AccountId, program::Program};
+use lee::{AccountId, native_token, program::Program};
 use wallet::{AccountIdentity, WalletCore};
 
 #[derive(Debug, Parser)]
@@ -81,15 +81,14 @@ async fn main() -> Result<()> {
             amount,
         } => {
             let sequencer_key = parse_sequencer_key(&sequencer_key)?;
-            let mover_instruction_data = Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount },
-            )
-            .context("Failed to serialize mover instruction")?;
+            let mover_instruction_data =
+                Program::serialize_instruction(native_token::Instruction::Transfer { amount })
+                    .context("Failed to serialize mover instruction")?;
             let instruction_data =
                 Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
                     sequencer_key,
                     amount,
-                    mover_account_id: programs::authenticated_transfer_account_id(),
+                    mover_account_id: native_token::NATIVE_TOKEN_PROGRAM_ID,
                     mover_instruction_data,
                 })
                 .context("Failed to serialize Stake instruction")?;

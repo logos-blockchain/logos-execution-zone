@@ -61,7 +61,10 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use lee_core::account::ProgramShardSelector;
+    use lee_core::{
+        account::ProgramShardSelector,
+        native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+    };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -82,22 +85,15 @@ pub mod tests {
     fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
-        V03State::new()
-            .with_public_account_balances(initial_data)
-            .with_named_programs([(
-                AccountId::from_builtin_program(
-                    crate::test_methods::simple_balance_transfer().id(),
-                ),
-                crate::test_methods::simple_balance_transfer(),
-            )])
+        V03State::new().with_public_account_balances(initial_data)
     }
 
     fn transaction_for_tests() -> PublicTransaction {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -176,9 +172,9 @@ pub mod tests {
         let (key1, _, addr1, _) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr1),
@@ -195,13 +191,40 @@ pub mod tests {
     }
 
     #[test]
+    fn witness_set_cannot_have_dulicate_signers() {
+        let (key1, _, addr1, addr2) = keys_for_tests();
+        let state = state_for_tests();
+        // both nonces match the current state, so only the repeat is at fault
+        let nonces = vec![0_u128.into(), 0_u128.into()];
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
+        let message = Message::try_new(
+            NATIVE_TOKEN_PROGRAM_ID,
+            vec![
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
+            ],
+            nonces,
+            instruction,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
+        let tx = PublicTransaction::new(message, witness_set);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        assert!(matches!(
+            result,
+            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+        ));
+    }
+
+    #[test]
     fn number_of_nonces_must_match_number_of_signatures() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -222,9 +245,9 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -246,9 +269,9 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 1_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
+            NATIVE_TOKEN_PROGRAM_ID,
             vec![
                 ProgramShardSelector::balance(addr1),
                 ProgramShardSelector::balance(addr2),
@@ -267,13 +290,8 @@ pub mod tests {
     #[test]
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
-        let message = Message::new_preserialized(
-            AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id()),
-            vec![],
-            vec![],
-            vec![0; 4],
-            None,
-        );
+        let message =
+            Message::new_preserialized(NATIVE_TOKEN_PROGRAM_ID, vec![], vec![], vec![0; 4], None);
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);

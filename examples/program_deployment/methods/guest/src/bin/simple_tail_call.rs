@@ -1,7 +1,7 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
     program::{
-        AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -40,7 +40,7 @@ fn main() {
     let pre_state_account_id = pre_state.account_id;
 
     // Create the (unchanged) post state
-    let post_state = AccountStateDiff::unchanged(pre_state);
+    let post_state = ShardStateDiff::unchanged(pre_state);
 
     // Create the chained call
     let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();

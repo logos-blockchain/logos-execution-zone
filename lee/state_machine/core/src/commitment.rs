@@ -11,11 +11,11 @@ use crate::{
 /// ```python
 /// from hashlib import sha256
 /// prefix = b"/LEE/v0.3/Commitment/" + bytes(11)
-/// DUMMY_COMMITMENT = sha256(prefix + bytes(32) + sha256(bytes(36)).digest()).digest()
+/// DUMMY_COMMITMENT = sha256(prefix + bytes(32) + sha256(bytes(20)).digest()).digest()
 /// ```
 pub const DUMMY_COMMITMENT: Commitment = Commitment([
-    72, 211, 137, 183, 48, 13, 155, 70, 255, 224, 0, 129, 85, 237, 56, 154, 206, 234, 233, 73, 26,
-    54, 157, 85, 138, 140, 147, 77, 9, 105, 183, 166,
+    59, 125, 5, 88, 44, 25, 75, 87, 238, 148, 130, 173, 76, 217, 13, 136, 125, 198, 106, 114, 48,
+    245, 101, 6, 37, 70, 51, 208, 20, 5, 51, 18,
 ]);
 
 /// The hash of the dummy commitment.
@@ -26,8 +26,8 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
 /// DUMMY_COMMITMENT_HASH = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
-    158, 138, 10, 134, 23, 4, 169, 223, 141, 146, 190, 141, 69, 221, 237, 154, 56, 59, 247, 201,
-    229, 244, 112, 151, 12, 148, 144, 118, 203, 125, 9, 233,
+    107, 9, 131, 34, 17, 0, 16, 21, 11, 42, 160, 50, 189, 133, 209, 183, 60, 242, 84, 238, 254, 37,
+    123, 26, 90, 172, 192, 13, 95, 233, 84, 41,
 ];
 
 #[derive(Copy, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

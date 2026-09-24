@@ -1,7 +1,7 @@
 Feature: Authenticated transfers
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/public.rs::successful_transfer_to_existing_account.
+  # Mirrors integration_tests/tests/native_transfer/public.rs::successful_transfer_to_existing_account.
   # Coverage is equivalent for the transfer behavior and stronger for lifecycle coverage:
   # Cucumber also verifies indexer convergence and explicit runtime teardown. It uses balance
   # deltas instead of the legacy test's fixed 9900/20100 values.
@@ -16,7 +16,7 @@ Feature: Authenticated transfers
     Then I stop the runtime
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/public.rs::transfer_beyond_balance_is_refused_client_side.
+  # Mirrors integration_tests/tests/native_transfer/public.rs::transfer_beyond_balance_is_refused_client_side.
   # The attempted amount is more than the observed sender balance, so this remains factual if
   # the configured genesis balances or fee policy changes.
   Scenario: Reject a public transfer with insufficient sender balance
@@ -30,7 +30,7 @@ Feature: Authenticated transfers
     Then I stop the runtime
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/public.rs::two_consecutive_successful_transfers.
+  # Mirrors integration_tests/tests/native_transfer/public.rs::two_consecutive_successful_transfers.
   # Coverage is equivalent for the final balances and nonce progression, with additional checks
   # for both inclusions, sender-only signatures, indexer convergence, and runtime teardown. It
   # does not retain the legacy test's intermediate balance checkpoint after the first transfer.
@@ -49,7 +49,7 @@ Feature: Authenticated transfers
     Then I stop the runtime
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/public.rs::successful_transfer_to_new_account.
+  # Mirrors integration_tests/tests/native_transfer/public.rs::successful_transfer_to_new_account.
   # Coverage is equivalent for funding a previously absent public account. Cucumber additionally
   # verifies the recipient is absent before submission, transaction inclusion, both required
   # signatures, indexer convergence, and explicit runtime teardown.
@@ -65,7 +65,7 @@ Feature: Authenticated transfers
     Then I stop the runtime
 
   @auth_transfer_ci
-  # Mirrors integration_tests/tests/auth_transfer/private.rs::private_transfer_to_owned_account.
+  # Mirrors integration_tests/tests/native_transfer/private.rs::private_transfer_to_owned_account.
   # Coverage preserves the post-transfer commitment checks and additionally verifies private
   # balances, transaction inclusion, indexer convergence, and explicit runtime teardown.
   Scenario: Transfer funds between configured private accounts

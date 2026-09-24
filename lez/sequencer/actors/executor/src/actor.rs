@@ -14,12 +14,12 @@ use kameo::{
 };
 use lee_core::{
     BlockId,
-    account::{Account, Balance, Nonce, ProgramShardSelector},
+    account::{Balance, Nonce, ProgramShardSelector},
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    PinBehindTip, SequencerCore, TransactionOrigin,
+    PinBehindTip, SequencerCore, SubmitConfig, TransactionOrigin,
     block_publisher::{BlockPublisherTrait, MsgId},
     config::SequencerConfig,
     gossip::AccreditedKeysReceiver,
@@ -35,10 +35,10 @@ use crate::{
     error::Error,
     protocol::{
         FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetChannelIdReply,
-        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
-        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
+        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
+        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -140,6 +140,12 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + 'static> ExecutorAct
     pub fn accredited_keys_watch(&self) -> AccreditedKeysReceiver {
         self.sequencer.accredited_keys_watch()
     }
+
+    /// The staked keys the gossip mesh admits channel-config messages from.
+    #[must_use]
+    pub fn staked_keys_watch(&self) -> AccreditedKeysReceiver {
+        self.sequencer.staked_keys_watch()
+    }
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> ExecutorActorTrait
@@ -197,11 +203,31 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Acto
 }
 
 impl<S: StorageActorTrait, BP: BlockPublisherTrait> ExecutorActor<S, BP> {
+    /// Handle to the channel-config actor, for the service to wire gossip to.
+    #[must_use]
+    pub fn config_manager_ref(&self) -> ActorRef<sequencer_core::ChannelConfigActor> {
+        self.sequencer.config_manager_ref().clone()
+    }
+
     /// Ends a blocked run, reporting the drop to zero only if there was one.
     fn clear_blocked_attempts(&mut self) {
         if self.blocked_attempts.clear() {
             sequencer_executor_actor_metrics::record_publish_blocked_attempts(0);
         }
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<SubmitConfig>
+    for ExecutorActor<S, BP>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        SubmitConfig(submission): SubmitConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) {
+        self.sequencer.submit_signed_config(*submission).await;
     }
 }
 
@@ -393,7 +419,7 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
-                    .map_or(0, |account| account.data.balance)
+                    .map_or(0, |account| account.data.balance().unwrap_or_default())
             })
             .await
     }
@@ -523,9 +549,8 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Mess
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
-                    .map_or_else(Default::default, |account| Account {
-                        nonce: account.nonce,
-                        data: account.data.project(program_account_id),
+                    .map_or_else(Default::default, |account| {
+                        account.project([program_account_id])
                     })
             })
             .await;
@@ -587,5 +612,39 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .await
             .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
         Ok(RequeueCrossZoneDeadLetterReply { outcome })
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockByHash>
+    for ExecutorActor<S, BP>
+{
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetBlockByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask::<sequencer_storage_actor::protocol::GetBlockByHash>(msg.into())
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetAccountTransactions> for ExecutorActor<S, BP>
+{
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetAccountTransactions,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
+            .await
+            .map_err(Into::into)
     }
 }

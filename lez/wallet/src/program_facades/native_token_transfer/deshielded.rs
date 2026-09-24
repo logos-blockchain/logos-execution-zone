@@ -1,7 +1,7 @@
 use common::HashType;
-use lee::AccountId;
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies};
 
-use super::{NativeTokenTransfer, auth_transfer_preparation};
+use super::{NativeTokenTransfer, native_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
@@ -11,7 +11,7 @@ impl NativeTokenTransfer<'_> {
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, lee_core::SharedSecretKey), ExecutionFailureKind> {
-        let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
+        let (instruction_data, tx_pre_check) = native_transfer_preparation(balance_to_move);
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
@@ -23,7 +23,7 @@ impl NativeTokenTransfer<'_> {
                     AccountIdentity::PublicNoSign(to).balance(),
                 ],
                 instruction_data,
-                &program,
+                &ProgramWithDependencies::native(),
                 tx_pre_check,
             )
             .await

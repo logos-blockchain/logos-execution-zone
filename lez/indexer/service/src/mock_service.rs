@@ -116,7 +116,6 @@ impl MockIndexerService {
                 Account {
                     nonce: i as u128,
                     data: AccountData {
-                        balance: 1000 * (i as u128 + 1),
                         shards: BTreeMap::from([(
                             AccountId {
                                 value: [i as u8; 32],
@@ -287,7 +286,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
         let account = self.get_account(account_id).await?;
         Ok(AccountSummary {
             nonce: account.nonce,
-            balance: account.data.balance,
+            balance: account.data.balance(),
             shards: account
                 .data
                 .shards
@@ -472,30 +471,23 @@ fn project_account(account: Option<&Account>, selector: ProgramShardSelector) ->
         return Account {
             nonce: 0,
             data: AccountData {
-                balance: 0,
                 shards: BTreeMap::new(),
             },
         };
     };
-    let shards = selector
-        .program_account_id
-        .map_or_else(BTreeMap::new, |program| {
-            BTreeMap::from([(
-                program,
-                account
-                    .data
-                    .shards
-                    .get(&program)
-                    .cloned()
-                    .unwrap_or(ShardData(Vec::new())),
-            )])
-        });
+    let program = selector.program_account_id;
+    let shards = BTreeMap::from([(
+        program,
+        account
+            .data
+            .shards
+            .get(&program)
+            .cloned()
+            .unwrap_or(ShardData(Vec::new())),
+    )]);
     Account {
         nonce: account.nonce,
-        data: AccountData {
-            balance: account.data.balance,
-            shards,
-        },
+        data: AccountData { shards },
     }
 }
 
@@ -525,11 +517,11 @@ fn mock_public_tx(
             shard_selectors: vec![
                 ProgramShardSelector {
                     account_id: account_ids[tx_idx as usize % account_ids.len()],
-                    program_account_id: None,
+                    program_account_id: AccountId::native_token_program(),
                 },
                 ProgramShardSelector {
                     account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
-                    program_account_id: None,
+                    program_account_id: AccountId::native_token_program(),
                 },
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
@@ -555,7 +547,6 @@ fn mock_privacy_preserving_tx(
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
                 post: AccountData {
-                    balance: 500,
                     shards: BTreeMap::from([(
                         AccountId { value: [1_u8; 32] },
                         ShardData(vec![0xdd, 0xee]),

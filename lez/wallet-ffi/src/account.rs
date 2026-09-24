@@ -341,7 +341,13 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
-        account.data.balance
+        match account.data.balance() {
+            Ok(balance) => balance,
+            Err(error) => {
+                print_error(format!("Private account balance is malformed: {error}"));
+                return WalletFfiError::SerializationError;
+            }
+        }
     } else {
         print_error("Private account not found");
         return WalletFfiError::AccountNotFound;
@@ -499,14 +505,18 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let shard_selector = if program_account_id.is_null() {
-        ProgramShardSelector::balance(account_id)
-    } else {
-        ProgramShardSelector::new(
-            account_id,
-            AccountId::new(unsafe { (*program_account_id).data }),
-        )
-    };
+    if program_account_id.is_null() {
+        print_error(
+            "A shard selector must name a program account id; pass the native token program's \
+             id for the balance shard"
+                .to_owned(),
+        );
+        return WalletFfiError::NullPointer;
+    }
+    let shard_selector = ProgramShardSelector::new(
+        account_id,
+        AccountId::new(unsafe { (*program_account_id).data }),
+    );
 
     let account = match block_on(wallet.get_account_view(shard_selector)) {
         Ok(a) => a,

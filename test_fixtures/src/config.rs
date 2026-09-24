@@ -59,6 +59,10 @@ const DEFAULT_PRIVATE_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x33; 32], [0x44; 32]];
 // is funded by this account at genesis and when private accounts are initialized.
 const PRIVATE_FUNDER_ACCOUNT_SEED: [u8; 32] = [0x11; 32];
 
+/// Funding key of the Bedrock test node, matching `funding_pk` in `bedrock/node-config.yaml`.
+const BEDROCK_FUNDING_KEY_HEX: &str =
+    "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
+
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {
     pub key_chain: KeyChain,
@@ -428,13 +432,15 @@ pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
     ChannelId::from(channel_id)
 }
 
-/// Funding key of the Bedrock test node, matching `funding_pk` in `bedrock/node-config.yaml`.
 #[must_use]
 pub fn bedrock_funding_key() -> ZkPublicKey {
-    const PUBLIC_KEY_HEX: &str = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
-
-    let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
+    let bytes = hex::decode(BEDROCK_FUNDING_KEY_HEX).expect("Fixed funding key must be valid hex");
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+#[must_use]
+pub const fn bedrock_funding_key_id() -> &'static str {
+    BEDROCK_FUNDING_KEY_HEX
 }
 
 /// A source-only zone: programs registered, `InitConfig`s emitted, nobody watched.

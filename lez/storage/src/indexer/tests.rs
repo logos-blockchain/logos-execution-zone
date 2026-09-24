@@ -1,5 +1,5 @@
 use common::{test_utils::produce_dummy_block, transaction::TxEvents};
-use lee::{Account, AccountData, AccountId, PublicKey};
+use lee::{Account, AccountId, PublicKey};
 use tempfile::tempdir;
 
 use super::*;
@@ -74,18 +74,7 @@ fn initial_state() -> lee::V03State {
         (acc2(), INITIAL_ACC2_BALANCE),
     ]
     .into_iter()
-    .map(|(id, balance)| {
-        (
-            id,
-            Account {
-                data: AccountData {
-                    balance,
-                    ..AccountData::default()
-                },
-                ..Account::default()
-            },
-        )
-    })
+    .map(|(id, balance)| (id, Account::funded(balance)))
     .collect::<Vec<_>>();
 
     // push clock system accounts
@@ -112,10 +101,6 @@ fn initial_state() -> lee::V03State {
     lee::V03State::new()
         .with_public_accounts(public_accounts)
         .with_named_programs([
-            (
-                programs::authenticated_transfer_account_id(),
-                programs::authenticated_transfer(),
-            ),
             (programs::clock_account_id(), programs::clock()),
             (programs::fee_account_id(), programs::fee()),
         ])
@@ -199,13 +184,21 @@ fn one_block_insertion() {
     // The recipient gains exactly the transferred amount; the sender also
     // pays a real fee on top of it.
     assert_eq!(
-        final_state.get_account_by_id(acc2()).data.balance
-            - breakpoint.get_account_by_id(acc2()).data.balance,
+        final_state
+            .get_account_by_id(acc2())
+            .data
+            .balance()
+            .unwrap()
+            - breakpoint.get_account_by_id(acc2()).data.balance().unwrap(),
         1
     );
     assert!(
-        breakpoint.get_account_by_id(acc1()).data.balance
-            - final_state.get_account_by_id(acc1()).data.balance
+        breakpoint.get_account_by_id(acc1()).data.balance().unwrap()
+            - final_state
+                .get_account_by_id(acc1())
+                .data
+                .balance()
+                .unwrap()
             > 1
     );
 }
@@ -255,11 +248,11 @@ fn put_block_stores_breakpoint_in_same_batch() {
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
     assert_eq!(
-        bp1.get_account_by_id(acc1()).data.balance,
+        bp1.get_account_by_id(acc1()).data.balance().unwrap(),
         INITIAL_ACC1_BALANCE
     );
     assert_eq!(
-        bp1.get_account_by_id(acc2()).data.balance,
+        bp1.get_account_by_id(acc2()).data.balance().unwrap(),
         INITIAL_ACC2_BALANCE
     );
     // Only the boundary block schedules a write: breakpoint 0 must be the only other one.
@@ -268,7 +261,8 @@ fn put_block_stores_breakpoint_in_same_batch() {
             .unwrap()
             .get_account_by_id(acc1())
             .data
-            .balance,
+            .balance()
+            .unwrap(),
         INITIAL_ACC1_BALANCE
     );
 }
@@ -311,11 +305,21 @@ fn state_replay_falls_back_over_missing_breakpoints() {
     // pays a real fee per charged transfer (none in the genesis block, whose
     // transactions are exempt).
     assert_eq!(
-        final_state.get_account_by_id(acc2()).data.balance - INITIAL_ACC2_BALANCE,
+        final_state
+            .get_account_by_id(acc2())
+            .data
+            .balance()
+            .unwrap()
+            - INITIAL_ACC2_BALANCE,
         u128::from(BREAKPOINT_INTERVAL) + 1
     );
     assert!(
-        INITIAL_ACC1_BALANCE - final_state.get_account_by_id(acc1()).data.balance
+        INITIAL_ACC1_BALANCE
+            - final_state
+                .get_account_by_id(acc1())
+                .data
+                .balance()
+                .unwrap()
             > u128::from(BREAKPOINT_INTERVAL) + 1
     );
 }

@@ -153,11 +153,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             programs::bridge(),
             programs::bridge_account_id(),
-            [(
-                programs::authenticated_transfer_account_id(),
-                programs::authenticated_transfer(),
-            )]
-            .into(),
+            HashMap::new(),
         );
 
     // Serialize the bridge deposit instruction
@@ -419,7 +415,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //     let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 //     let recipient_id = ctx.existing_public_accounts()[0];
 //     let amount = 1_u64;
-//     let vault_program_id: AccountId = programs::vault().id().into();
+//     let vault_program_id = AccountId::from_builtin_program(programs::vault().id());
 //     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id,
 // recipient_id);
 

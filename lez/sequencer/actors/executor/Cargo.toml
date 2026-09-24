@@ -52,7 +52,6 @@ sequencer_storage_actor = { workspace = true, features = ["mock"] }
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
 programs.workspace = true
-test_programs.workspace = true
 testnet_initial_state.workspace = true
 
 env_logger.workspace = true

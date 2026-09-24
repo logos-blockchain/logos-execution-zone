@@ -7,7 +7,7 @@ use amm_core::{
 use lee::{PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use lee_core::{
     account::{Account, AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -504,20 +504,13 @@ impl IdForTests {
 
 impl InputsForTests {
     fn holding(account_id: AccountId, holding: &TokenHolding) -> AccountInput {
-        AccountInput::with_shard(
-            account_id,
-            true,
-            0,
-            TOKEN_PROGRAM_ID,
-            ShardData::from(holding),
-        )
+        AccountInput::with_shard(account_id, true, TOKEN_PROGRAM_ID, ShardData::from(holding))
     }
 
     fn pool(account_id: AccountId, definition: &PoolDefinition) -> AccountInput {
         AccountInput::with_shard(
             account_id,
             true,
-            0,
             AMM_PROGRAM_ID,
             ShardData::from(definition),
         )
@@ -643,7 +636,6 @@ impl InputsForTests {
         AccountInput::with_shard(
             IdForTests::token_lp_definition_id(),
             true,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -657,7 +649,6 @@ impl InputsForTests {
         AccountInput::with_shard(
             IdForTests::vault_a_id(),
             true,
-            0,
             TOKEN_PROGRAM_ID,
             ShardData::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -1535,25 +1526,22 @@ impl AccountsForExeTests {
 
 /// The diff's effective post-data: `post_data` if the program actually wrote new data, or the
 /// pre-state's data if it was left unchanged.
-fn effective_post_data(diff: &AccountStateDiff) -> ShardData {
-    diff.post_data.clone().unwrap_or_else(|| {
-        diff.pre_state
-            .shard
-            .clone()
-            .expect("named shard selector")
-            .1
-    })
+fn effective_post_data(diff: &ShardStateDiff) -> ShardData {
+    diff.post_data
+        .clone()
+        .unwrap_or_else(|| diff.pre_state.shard.1.clone())
 }
 
 #[test]
 fn pool_pda_produces_unique_id_for_token_pair() {
-    assert!(
+    assert_eq!(
         amm_core::compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_a_definition_id(),
             IdForTests::token_b_definition_id(),
             TOKEN_PROGRAM_ID
-        ) == compute_pool_pda(
+        ),
+        compute_pool_pda(
             AMM_PROGRAM_ID,
             IdForTests::token_b_definition_id(),
             IdForTests::token_a_definition_id(),
@@ -1798,19 +1786,16 @@ fn call_add_liquidity_chained_call_successsful() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_add_successful()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_add_successful().shard.1
     );
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_add_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_add_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_add_pool_lp());
+    assert_eq!(chained_call_a, ChainedCallForTests::cc_add_token_a());
+    assert_eq!(chained_call_b, ChainedCallForTests::cc_add_token_b());
+    assert_eq!(chained_call_lp, ChainedCallForTests::cc_add_pool_lp());
 }
 
 #[should_panic(expected = "Vault A was not provided")]
@@ -1983,19 +1968,16 @@ fn call_remove_liquidity_chained_call_successful() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_remove_successful()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_remove_successful().shard.1
     );
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_remove_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_remove_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_remove_pool_lp());
+    assert_eq!(chained_call_a, ChainedCallForTests::cc_remove_token_a());
+    assert_eq!(chained_call_b, ChainedCallForTests::cc_remove_token_b());
+    assert_eq!(chained_call_lp, ChainedCallForTests::cc_remove_pool_lp());
 }
 
 #[should_panic(expected = "Balances must be nonzero")]
@@ -2163,19 +2145,25 @@ fn call_new_definition_chained_call_successful() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_add_successful()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_add_successful().shard.1
     );
 
     let chained_call_lp = chained_calls[0].clone();
     let chained_call_b = chained_calls[1].clone();
     let chained_call_a = chained_calls[2].clone();
 
-    assert!(chained_call_a == ChainedCallForTests::cc_new_definition_token_a());
-    assert!(chained_call_b == ChainedCallForTests::cc_new_definition_token_b());
-    assert!(chained_call_lp == ChainedCallForTests::cc_new_definition_token_lp());
+    assert_eq!(
+        chained_call_a,
+        ChainedCallForTests::cc_new_definition_token_a()
+    );
+    assert_eq!(
+        chained_call_b,
+        ChainedCallForTests::cc_new_definition_token_b()
+    );
+    assert_eq!(
+        chained_call_lp,
+        ChainedCallForTests::cc_new_definition_token_lp()
+    );
 }
 
 #[should_panic(expected = "AccountId is not a token type for the pool")]
@@ -2308,10 +2296,7 @@ fn call_swap_chained_call_successful_1() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_swap_test_1()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_swap_test_1().shard.1
     );
 
     let chained_call_a = chained_calls[0].clone();
@@ -2345,10 +2330,7 @@ fn call_swap_chained_call_successful_2() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_swap_test_2()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_swap_test_2().shard.1
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2528,7 +2510,6 @@ fn call_swap_exact_output_chained_call_successful() {
         effective_post_data(&pool_post),
         InputsForTests::pool_definition_swap_exact_output_test_1()
             .shard
-            .expect("named shard selector")
             .1
     );
 
@@ -2563,10 +2544,7 @@ fn call_swap_exact_output_chained_call_successful_2() {
 
     assert_eq!(
         effective_post_data(&pool_post),
-        InputsForTests::pool_definition_swap_test_2()
-            .shard
-            .expect("named shard selector")
-            .1
+        InputsForTests::pool_definition_swap_test_2().shard.1
     );
 
     let chained_call_a = chained_calls[1].clone();
@@ -2596,7 +2574,6 @@ fn swap_exact_output_overflow_protection() {
     let pool = AccountInput::with_shard(
         IdForTests::pool_definition_id(),
         true,
-        0,
         AMM_PROGRAM_ID,
         ShardData::from(&PoolDefinition {
             token_program_id: TOKEN_PROGRAM_ID,
@@ -2616,7 +2593,6 @@ fn swap_exact_output_overflow_protection() {
     let vault_a = AccountInput::with_shard(
         IdForTests::vault_a_id(),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::from(&TokenHolding::Fungible {
             definition_id: IdForTests::token_a_definition_id(),
@@ -2627,7 +2603,6 @@ fn swap_exact_output_overflow_protection() {
     let vault_b = AccountInput::with_shard(
         IdForTests::vault_b_id(),
         true,
-        0,
         TOKEN_PROGRAM_ID,
         ShardData::from(&TokenHolding::Fungible {
             definition_id: IdForTests::token_b_definition_id(),
@@ -2674,7 +2649,10 @@ fn new_definition_lp_asymmetric_amounts() {
     );
 
     let chained_call_lp = chained_calls[0].clone();
-    assert!(chained_call_lp == ChainedCallForTests::cc_new_definition_token_lp());
+    assert_eq!(
+        chained_call_lp,
+        ChainedCallForTests::cc_new_definition_token_lp()
+    );
 }
 
 #[test]
