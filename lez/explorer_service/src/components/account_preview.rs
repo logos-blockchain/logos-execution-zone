@@ -22,13 +22,15 @@ pub fn AccountPreview(account_id: AccountId, account: AccountSummary) -> impl In
                         balance,
                         shards,
                     } = &account;
+                    let balance = balance
+                        .map_or_else(|| "<malformed>".to_owned(), |balance| balance.to_string());
                     let shards_len = shards.len();
                     let shards_bytes: u64 = shards.iter().map(|shard| shard.len).sum();
                     view! {
                         <div class="account-preview-body">
                             <div class="account-field">
                                 <span class="field-label">"Balance: "</span>
-                                <span class="field-value">{balance.to_string()}</span>
+                                <span class="field-value">{balance}</span>
                             </div>
                             <div class="account-field">
                                 <span class="field-label">"Nonce: "</span>

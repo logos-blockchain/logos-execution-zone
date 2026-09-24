@@ -39,8 +39,9 @@
 
 use lee_core::{
     account::ProgramShardSelector,
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{
-        AccountStateDiff, ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput,
+        ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -54,7 +55,6 @@ pub enum FlashSwapInstruction {
     /// 2. Callback (user logic, e.g. arbitrage)
     /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
     Initiate {
-        token_program_id: lee_core::account::AccountId,
         callback_program_id: lee_core::account::AccountId,
         amount_out: u128,
         callback_instruction_data: Vec<u8>,
@@ -85,7 +85,6 @@ fn main() {
 
     match instruction {
         FlashSwapInstruction::Initiate {
-            token_program_id,
             callback_program_id,
             amount_out,
             callback_instruction_data,
@@ -95,22 +94,18 @@ fn main() {
             };
 
             // Capture initial vault balance, the invariant check will verify it is restored.
-            let min_vault_balance = vault_pre.balance;
+            let min_vault_balance = decode_balance(vault_pre.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+                .expect("the vault selects its native balance shard");
 
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
             // the PDA seed to authorize the token program to debit the vault on our behalf.
-            let transfer_instruction =
-                borsh::to_vec(&amount_out).expect("transfer instruction serialization");
-            let call_1 = ChainedCall {
-                program_account_id: token_program_id,
-                shard_selectors: vec![
-                    ProgramShardSelector::from(&vault_pre),
-                    ProgramShardSelector::from(&receiver_pre),
-                ],
-                instruction_data: transfer_instruction,
-                pda_seeds: vec![PdaSeed::new([0_u8; 32])],
-            };
+            let call_1 = custody_transfer(
+                vault_pre.account_id,
+                PdaSeed::new([0_u8; 32]),
+                receiver_pre.account_id,
+                amount_out,
+            );
 
             // Chained call 2: User callback. The callback may run arbitrary logic (arbitrage,
             // etc.) and is expected to return funds to the vault.
@@ -147,8 +142,8 @@ fn main() {
                 caller_account_id,
                 instruction_data,
                 vec![
-                    AccountStateDiff::unchanged(vault_pre),
-                    AccountStateDiff::unchanged(receiver_pre),
+                    ShardStateDiff::unchanged(vault_pre),
+                    ShardStateDiff::unchanged(receiver_pre),
                 ],
             )
             .with_chained_calls(vec![call_1, call_2, call_3])
@@ -175,11 +170,12 @@ fn main() {
             // The core invariant: vault balance must not have decreased.
             // If the callback returned funds, this passes. If not, this panics and
             // the entire transaction (including the prior token transfer) rolls back.
+            let vault_balance = decode_balance(vault.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+                .expect("the vault selects its native balance shard");
             assert!(
-                vault.balance >= min_vault_balance,
-                "Flash swap invariant violated: vault balance {} < minimum {}",
-                vault.balance,
-                min_vault_balance
+                vault_balance >= min_vault_balance,
+                "Flash swap invariant violated: vault balance {vault_balance} < minimum \
+                 {min_vault_balance}"
             );
 
             // Pass-through: no state changes in the invariant check step.
@@ -187,7 +183,7 @@ fn main() {
                 self_account_id,
                 caller_account_id,
                 instruction_data,
-                vec![AccountStateDiff::unchanged(vault)],
+                vec![ShardStateDiff::unchanged(vault)],
             )
             .write();
         }

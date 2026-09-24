@@ -11,8 +11,10 @@ use kameo::{
     actor::{ActorRef, Spawn as _},
     message::{Context, Message},
 };
+use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use mempool::{MemPool, MemPoolHandle};
+use sequencer_channel_config_actor::{Signature, Wire};
 use sequencer_core::{TransactionOrigin, config::GossipConfig, gossip::accredited_keys_channel};
 use sequencer_slasher_actor::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
@@ -20,7 +22,7 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::sync::mpsc;
 
 use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519};
-use crate::protocol::{GetConnectedPeers, PublishTransaction};
+use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction};
 
 const CHANNEL: [u8; 32] = [1; 32];
 const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
@@ -32,10 +34,11 @@ struct TestNode {
     local_peer_id: libp2p::PeerId,
 }
 
-/// The mempool and the approval receiver a started node feeds.
+/// The mempool and the gossip receivers a started node feeds.
 struct NodeSinks {
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     approvals: mpsc::UnboundedReceiver<Approval>,
+    configs: mpsc::UnboundedReceiver<Wire>,
 }
 
 /// Forwards every approval the gossip actor delivers into a channel the
@@ -63,6 +66,27 @@ impl Message<Approval> for ApprovalSink {
     }
 }
 
+/// Forwards every channel-config message the gossip actor delivers into a
+/// channel the test can assert on; stands in for the channel-config actor.
+struct ConfigSink(mpsc::UnboundedSender<Wire>);
+
+impl Actor for ConfigSink {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        Ok(args)
+    }
+}
+
+impl Message<Wire> for ConfigSink {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: Wire, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        _ = self.0.send(msg);
+    }
+}
+
 impl TestNode {
     async fn connected_peers(&self) -> Vec<Ed25519PublicKey> {
         self.actor_ref
@@ -83,6 +107,13 @@ impl TestNode {
             .tell(approval)
             .try_send()
             .expect("gossip mailbox should accept the approval publish");
+    }
+
+    fn publish_config(&self, message: Wire) {
+        self.actor_ref
+            .tell(PublishConfig(message))
+            .try_send()
+            .expect("gossip mailbox should accept the channel-config publish");
     }
 }
 
@@ -144,6 +175,10 @@ fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
     ApprovalSink::spawn(ApprovalSink(mpsc::unbounded_channel().0)).recipient()
 }
 
+fn test_config_sink() -> kameo::actor::Recipient<Wire> {
+    ConfigSink::spawn(ConfigSink(mpsc::unbounded_channel().0)).recipient()
+}
+
 /// A real, validly-signed transfer, reusing the same helper the RPC-side
 /// admission tests use.
 fn valid_transaction() -> LeeTransaction {
@@ -176,7 +211,9 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
     };
     let (mempool, mempool_handle) = MemPool::new(1000);
     let (approval_tx, approvals) = mpsc::unbounded_channel();
+    let (config_tx, configs) = mpsc::unbounded_channel();
     let sink_ref = ApprovalSink::spawn(ApprovalSink(approval_tx));
+    let config_sink_ref = ConfigSink::spawn(ConfigSink(config_tx));
     let actor = GossipActor::new(
         config,
         CHANNEL,
@@ -185,6 +222,8 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(mempool_handle),
         accredited_keys_channel().1,
+        accredited_keys_channel().1,
+        config_sink_ref.recipient(),
     )
     .await
     .expect("node should start");
@@ -197,7 +236,11 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
             listen_addrs,
             local_peer_id,
         },
-        NodeSinks { mempool, approvals },
+        NodeSinks {
+            mempool,
+            approvals,
+            configs,
+        },
     )
 }
 
@@ -212,6 +255,21 @@ async fn wait_for(timeout: Duration, mut condition: impl AsyncFnMut() -> bool) -
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     false
+}
+
+#[test]
+fn a_peer_id_yields_the_bedrock_key_it_was_derived_from() {
+    let key = Ed25519Key::from_bytes(&[9; 32]);
+    let mut secret = key.clone().into_unsecured().to_bytes();
+    let peer_id = libp2p::identity::Keypair::ed25519_from_bytes(&mut *secret)
+        .unwrap()
+        .public()
+        .to_peer_id();
+
+    assert_eq!(
+        super::inlined_ed25519_key(&peer_id),
+        Some(key.public_key().to_bytes())
+    );
 }
 
 #[test]
@@ -238,6 +296,8 @@ async fn new_binds_and_reports_listen_addr() {
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
+        accredited_keys_channel().1,
+        test_config_sink(),
     )
     .await
     .unwrap();
@@ -257,6 +317,8 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
+        accredited_keys_channel().1,
+        test_config_sink(),
     )
     .await
     .unwrap();
@@ -282,6 +344,8 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         TEST_MAX_BLOCK_SIZE,
         unscreened_mempool_submit(test_mempool_handle()),
         accredited_keys_channel().1,
+        accredited_keys_channel().1,
+        test_config_sink(),
     )
     .await
     .expect("freed listen address should be rebindable");
@@ -447,4 +511,85 @@ async fn slash_approval_published_by_one_node_reaches_others() {
         "C never received the gossiped approval"
     );
     drop((node_a, node_b, node_c));
+}
+
+#[tokio::test]
+async fn a_channel_config_signature_reaches_the_other_nodes() {
+    let secrets = [[50; 32], [51; 32], [52; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let a_addr = node_a.listen_addrs[0].clone();
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    let (node_c, mut sinks_c) = start_node(secrets[2], vec![a_addr]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            let peers = node_a.connected_peers().await;
+            peers.contains(&pubkey(secrets[1])) && peers.contains(&pubkey(secrets[2]))
+        })
+        .await,
+        "A never connected to both B and C"
+    );
+
+    let key = Ed25519Key::from_bytes(&secrets[0]);
+    let sent = Wire::Signature(Signature {
+        tx_hash: [7; 32],
+        signature: IndexedSignature::new(0, key.sign_payload(&[7; 32])),
+    });
+    node_a.publish_config(sent.clone());
+
+    for (name, sink) in [("B", &mut sinks_b.configs), ("C", &mut sinks_c.configs)] {
+        assert!(
+            wait_for(Duration::from_secs(30), async || {
+                sink.try_recv()
+                    .is_ok_and(|got| got.encode() == sent.encode())
+            })
+            .await,
+            "{name} never received the gossiped channel-config message"
+        );
+    }
+    drop((node_a, node_b, node_c));
+}
+
+/// The channel-config actor re-announces the same draft byte-identically, so
+/// a verbatim re-announcement has to reach peers rather than count as a
+/// duplicate.
+#[tokio::test]
+async fn a_re_announced_channel_config_message_reaches_the_other_node_again() {
+    let secrets = [[60; 32], [61; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let a_addr = node_a.listen_addrs[0].clone();
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![a_addr]).await;
+
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            node_a.connected_peers().await.contains(&pubkey(secrets[1]))
+        })
+        .await,
+        "A never connected to B"
+    );
+
+    let key = Ed25519Key::from_bytes(&secrets[0]);
+    let sent = Wire::Signature(Signature {
+        tx_hash: [7; 32],
+        signature: IndexedSignature::new(0, key.sign_payload(&[7; 32])),
+    });
+
+    for attempt in 1..=2 {
+        node_a.publish_config(sent.clone());
+        assert!(
+            wait_for(Duration::from_secs(30), async || {
+                sinks_b
+                    .configs
+                    .try_recv()
+                    .is_ok_and(|got| got.encode() == sent.encode())
+            })
+            .await,
+            "B never received channel-config announcement {attempt}"
+        );
+    }
+    assert!(
+        sinks_b.configs.try_recv().is_err(),
+        "two publishes should deliver exactly twice"
+    );
+    drop((node_a, node_b));
 }

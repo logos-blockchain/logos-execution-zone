@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    account::{AccountId, ShardData},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -10,7 +10,7 @@ pub fn mint(
     user_holding_account: &AccountInput,
     self_account_id: AccountId,
     amount_to_mint: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         definition_account.is_authorized,
         "Definition authorization is missing"
@@ -60,17 +60,10 @@ pub fn mint(
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    let definition_diff = AccountStateDiff::new(
-        definition_account.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&definition),
-    );
+    let definition_diff =
+        ShardStateDiff::new(definition_account.clone(), ShardData::from(&definition));
 
-    let holding_diff = AccountStateDiff::new(
-        user_holding_account.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&holding),
-    );
+    let holding_diff = ShardStateDiff::new(user_holding_account.clone(), ShardData::from(&holding));
 
     vec![definition_diff, holding_diff]
 }

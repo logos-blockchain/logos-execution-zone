@@ -4,9 +4,9 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{BalanceDiff, ProgramShardSelector},
+    account::ProgramShardSelector,
     program::{
-        AccountInput, AccountStateDiff, ChainedCall, ProgramCall, ProgramInput, ProgramOutput,
+        AccountInput, ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
         read_lee_call, respond_unsupported_call,
     },
 };
@@ -133,12 +133,11 @@ fn dispatch(
 
     // On replay this is a no-op: the seen shard is untouched and no call is made.
     let (seen_post, chained_calls) = if already_seen {
-        (AccountStateDiff::unchanged(seen), vec![])
+        (ShardStateDiff::unchanged(seen), vec![])
     } else {
         shard.insert(msg.src_block_hash, msg.src_tx_index);
-        let seen_post = AccountStateDiff::new(
+        let seen_post = ShardStateDiff::new(
             seen,
-            BalanceDiff::Add(0),
             shard
                 .to_bytes()
                 .try_into()
@@ -161,11 +160,11 @@ fn dispatch(
     };
 
     let mut post_diffs = vec![
-        AccountStateDiff::unchanged(config),
+        ShardStateDiff::unchanged(config),
         seen_post,
-        AccountStateDiff::unchanged(marker),
+        ShardStateDiff::unchanged(marker),
     ];
-    post_diffs.extend(target_accounts.into_iter().map(AccountStateDiff::unchanged));
+    post_diffs.extend(target_accounts.into_iter().map(ShardStateDiff::unchanged));
 
     ProgramOutput::new(
         self_account_id,
@@ -205,9 +204,8 @@ fn init_config(
         );
     }
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config_meta,
-        BalanceDiff::Add(0),
         config
             .to_bytes()
             .try_into()

@@ -7,12 +7,11 @@ use lee_core::{
     account::{Account, AccountId, ShardData},
     program::{
         PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
-        get_program_via,
+        get_program_via, immutable_mirror_commitment,
     },
 };
 
 use crate::{
-    AccountData,
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -151,18 +150,9 @@ impl V03State {
         mut self,
         balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
-        let public_accounts = balances.into_iter().map(|(account_id, balance)| {
-            (
-                account_id,
-                Account {
-                    data: AccountData {
-                        balance,
-                        ..AccountData::default()
-                    },
-                    ..Account::default()
-                },
-            )
-        });
+        let public_accounts = balances
+            .into_iter()
+            .map(|(account_id, balance)| (account_id, Account::funded(balance)));
         self.public_state.extend(public_accounts);
         self
     }
@@ -190,18 +180,25 @@ impl V03State {
         self
     }
 
-    /// Initializes state with given builtin programs.
     #[must_use]
-    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
-        for program in programs {
-            self.insert_program(&program);
+    pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
+        self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
+    }
+
+    #[must_use]
+    pub fn with_genesis_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (Program, bool)>,
+    ) -> Self {
+        for (program, immutable) in programs {
+            self.insert_program(&program, immutable);
         }
         self
     }
 
     /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
     /// `user_elf`, chunked the same way a live `program_loader` deploy would.
-    pub(crate) fn insert_program(&mut self, program: &Program) {
+    pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
         let header_account_id = AccountId::from_builtin_program(program.id());
         let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
             .expect("builtin program must be a valid ProgramBinary")
@@ -230,19 +227,22 @@ impl V03State {
             self.public_state.insert(segment_account_ids[i], segment);
         }
 
+        let program_header = ProgramHeader {
+            image_id: program.id(),
+            program_first_segment: segment_account_ids[0],
+            immutable,
+        };
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(
-                ProgramHeader {
-                    image_id: program.id(),
-                    program_first_segment: segment_account_ids[0],
-                    immutable: true,
-                }
-                .to_bytes(),
-            )
-            .expect("program header fits under DATA_MAX_LENGTH"),
+            ShardData::try_from(program_header.to_bytes())
+                .expect("program header fits under DATA_MAX_LENGTH"),
         );
         self.public_state.insert(header_account_id, header);
+
+        if immutable {
+            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
+            self.private_state.0.extend(&[commitment]);
+        }
     }
 
     #[must_use]
@@ -318,6 +318,7 @@ impl V03State {
         let (image_id, user_elf) =
             get_program_via(AccountId::from_builtin_program(program_id), |account_id| {
                 self.get_account_by_id_ref(account_id)
+                    .map(|account| &account.data)
             })?;
         Some((image_id, crate::program::attach_kernel(&user_elf)))
     }
@@ -329,8 +330,10 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| self.get_account_by_id_ref(id))
-            .map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| {
+            self.get_account_by_id_ref(id).map(|account| &account.data)
+        })
+        .map(|(image_id, _)| image_id)
     }
 
     #[must_use]
@@ -403,13 +406,18 @@ impl V03State {
             if self.private_state.1.contains(nullifier) {
                 return Err(LeeError::InvalidInput("Nullifier already seen".to_owned()));
             }
-            if !self.private_state.0.root_history.contains(digest) {
+            if !self.is_known_commitment_root(digest) {
                 return Err(LeeError::InvalidInput(
                     "Unrecognized commitment set digest".to_owned(),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Whether `digest` is a root the commitment tree has actually had at some point.
+    pub(crate) fn is_known_commitment_root(&self, digest: &CommitmentSetDigest) -> bool {
+        self.private_state.0.root_history.contains(digest)
     }
 }
 

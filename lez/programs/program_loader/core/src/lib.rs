@@ -1,12 +1,18 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards. Creating a segment or header requires no
-//! authorization; updating a header requires an authorized account and a mutable header.
+//! Writing a fresh segment or header is permissionless — a still-empty loader shard has no prior
+//! claim to violate — but a header target must always be `is_authorized`, so a real header can't
+//! be squatted at an address some other account id (e.g. a shadow program's) will later resolve
+//! to. Checked here directly rather than through the diff-validation rules.
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment};
+pub use lee_core::program::{
+    MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+};
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
-    program::{AccountInput, AccountStateDiff, PROGRAM_LOADER_ACCOUNT_ID, ProgramId},
+    Commitment,
+    account::{AccountId, ShardData},
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{AccountInput, PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ShardStateDiff},
 };
 
 /// Recommended max bytes of bytecode per segment.
@@ -30,7 +36,8 @@ pub enum Instruction {
         bytecode: Vec<u8>,
         next_segment: Option<AccountId>,
     },
-    /// Creates a header in the empty loader shard of `pre_states[0]`, without authorization.
+    /// Creates a header in the empty loader shard of `pre_states[0]`, which must be
+    /// `is_authorized`.
     ///
     /// `pre_states[1..]` supplies the read-only segment chain from `first_segment`, in link order.
     /// The image ID is computed from that chain.
@@ -58,7 +65,7 @@ pub fn write_segment(
     pre_states: &[AccountInput],
     bytecode: Vec<u8>,
     next_segment: Option<AccountId>,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let expected_len = if next_segment.is_some() { 2 } else { 1 };
     assert_eq!(
         pre_states.len(),
@@ -77,9 +84,8 @@ pub fn write_segment(
         "segment target already deployed"
     );
 
-    let mut diffs = vec![AccountStateDiff::new(
+    let mut diffs = vec![ShardStateDiff::new(
         target.clone(),
-        BalanceDiff::Add(0),
         ShardData::try_from(
             ProgramSegment {
                 bytecode,
@@ -99,27 +105,39 @@ pub fn write_segment(
             ProgramSegment::from_bytes(referenced.shard_of(PROGRAM_LOADER_ACCOUNT_ID)).is_some(),
             "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
-        diffs.push(AccountStateDiff::unchanged(referenced.clone()));
+        diffs.push(ShardStateDiff::unchanged(referenced.clone()));
     }
 
     diffs
 }
 
+fn reject_reserved_target(account_id: AccountId) {
+    assert_ne!(
+        account_id, NATIVE_TOKEN_PROGRAM_ID,
+        "the native token program has no deployable bytecode"
+    );
+    // A program at this address would run as the loader, and so could rewrite any program's
+    // header or segments.
+    assert_ne!(
+        account_id, PROGRAM_LOADER_ACCOUNT_ID,
+        "the loader's own dispatch address is not a deployable target"
+    );
+}
+
 /// Executes `CreateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when `immutable` is set from birth.
 #[must_use]
 pub fn create_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<ShardStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "CreateHeader requires at least the header target account"
     );
-    assert_ne!(
-        pre_states[0].account_id, PROGRAM_LOADER_ACCOUNT_ID,
-        "the loader's own dispatch address is not a deployable target"
-    );
+    reject_reserved_target(pre_states[0].account_id);
     assert!(
         pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID).is_empty(),
         "header target already deployed"
@@ -130,40 +148,24 @@ pub fn create_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let image_id = compute_image_id(pre_states);
-
-    let mut diffs = vec![AccountStateDiff::new(
-        pre_states[0].clone(),
-        BalanceDiff::Add(0),
-        ShardData::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
-    )];
-    diffs.extend(
-        pre_states[1..]
-            .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
-    );
-    diffs
+    finalize_header(pre_states, first_segment, immutable)
 }
 
 /// Executes `UpdateHeader`.
+///
+/// Returns a private [`Commitment`] alongside the diffs when this call is what flips `immutable`
+/// to `true`.
 #[must_use]
 pub fn update_header(
     pre_states: &[AccountInput],
     first_segment: AccountId,
     immutable: bool,
-) -> Vec<AccountStateDiff> {
+) -> (Vec<ShardStateDiff>, Option<Commitment>) {
     assert!(
         !pre_states.is_empty(),
         "UpdateHeader requires at least the header target account"
     );
+    reject_reserved_target(pre_states[0].account_id);
     let old_header =
         ProgramHeader::from_bytes(pre_states[0].shard_of(PROGRAM_LOADER_ACCOUNT_ID)).expect(
         "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
@@ -182,27 +184,41 @@ pub fn update_header(
         "first_segment must match the first supplied segment account"
     );
 
-    let image_id = compute_image_id(pre_states);
+    finalize_header(pre_states, first_segment, immutable)
+}
 
-    let mut diffs = vec![AccountStateDiff::new(
+/// Shared tail of `create_header`/`update_header`, once each has run its own distinct validation:
+/// recomputes the real `image_id` from the segment chain, builds the finalized `ProgramHeader`,
+/// emits its mirror commitment if `immutable` is set, and diffs the header account.
+fn finalize_header(
+    pre_states: &[AccountInput],
+    first_segment: AccountId,
+    immutable: bool,
+) -> (Vec<ShardStateDiff>, Option<Commitment>) {
+    assert!(
+        pre_states[0].is_authorized,
+        "header target must be an authorized account"
+    );
+    let header_account_id = pre_states[0].account_id;
+    let image_id = compute_image_id(pre_states);
+    let header = ProgramHeader {
+        image_id,
+        program_first_segment: first_segment,
+        immutable,
+    };
+    let new_commitment = immutable.then(|| immutable_mirror_commitment(header_account_id, &header));
+
+    let mut diffs = vec![ShardStateDiff::new(
         pre_states[0].clone(),
-        BalanceDiff::Add(0),
-        ShardData::try_from(
-            ProgramHeader {
-                image_id,
-                program_first_segment: first_segment,
-                immutable,
-            }
-            .to_bytes(),
-        )
-        .expect("program header must fit under DATA_MAX_LENGTH"),
+        ShardData::try_from(header.to_bytes())
+            .expect("program header must fit under DATA_MAX_LENGTH"),
     )];
     diffs.extend(
         pre_states[1..]
             .iter()
-            .map(|pre| AccountStateDiff::unchanged(pre.clone())),
+            .map(|pre| ShardStateDiff::unchanged(pre.clone())),
     );
-    diffs
+    (diffs, new_commitment)
 }
 
 /// `segments_with_header[0]` is the header account, not part of the chain. Walks

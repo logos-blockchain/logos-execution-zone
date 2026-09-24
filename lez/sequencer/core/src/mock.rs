@@ -170,10 +170,17 @@ impl BlockPublisherTrait for MockBlockPublisher {
         Ok(self.tip_slot.map(|_| (Vec::new(), MsgId::root())))
     }
 
+    async fn prepare_channel_config(
+        &self,
+        _target: &sequencer_channel_config_actor::ConfigTarget,
+    ) -> Result<logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig> {
+        anyhow::bail!("MockBlockPublisher does not prepare channel configs")
+    }
+
     async fn submit_channel_config(
         &self,
-        _new_keys: Vec<Ed25519PublicKey>,
-        _channel_params: crate::config::ChannelParams,
+        _prepared: logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig,
+        _signatures: Vec<logos_blockchain_zone_sdk::sequencer::IndexedSignature>,
     ) -> Result<()> {
         Ok(())
     }

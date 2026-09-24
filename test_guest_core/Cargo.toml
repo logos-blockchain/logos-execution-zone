@@ -1,5 +1,5 @@
 [package]
-name = "authenticated_transfer_core"
+name = "test_guest_core"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -7,12 +7,6 @@ license = { workspace = true }
 [lints]
 workspace = true
 
-[features]
-image_id = ["dep:build_utils"]
-
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
-
-[build-dependencies]
-build_utils = { workspace = true, optional = true }

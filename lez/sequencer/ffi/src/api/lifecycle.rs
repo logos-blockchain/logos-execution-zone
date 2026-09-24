@@ -3,7 +3,8 @@ use std::{ffi::c_char, path::PathBuf};
 use anyhow::Context as _;
 use kameo::actor::{ActorRef, Spawn as _};
 use kameo_actors::scheduler::{Scheduler, SetInterval};
-use sequencer_core::{block_publisher::BlockPublisherTrait, config::SequencerConfig};
+use sequencer_channel_config_actor::SetSubmitter;
+use sequencer_core::{SubmitConfig, block_publisher::BlockPublisherTrait, config::SequencerConfig};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_service::{Gossip, setup_gossip};
 use sequencer_slasher_actor::SlasherActor;
@@ -76,10 +77,25 @@ async fn make_sequencer_compoments(
 
     let executor = ExecutorActor::new(config, storage_ref.clone()).await;
     let slasher_ref = executor.slasher_ref();
+    let config_manager_ref = executor.config_manager_ref();
     // The core has already read a committee by the time this returns.
     let accredited_keys_rx = executor.accredited_keys_watch();
+    let staked_keys_rx = executor.staked_keys_watch();
     let executor_ref = ExecutorActor::spawn(executor);
     log::info!("Executor Actor spawned");
+
+    // A config needs no turn, so the actor tells the executor to submit it
+    // the moment the signatures are in. Weak, because the executor owns
+    // the actor that holds this.
+    config_manager_ref
+        .tell(SetSubmitter(
+            executor_ref.clone().recipient::<SubmitConfig>().downgrade(),
+        ))
+        .await
+        .map_err(|e| {
+            log::error!("Could not start config manager actor: {e}");
+            OperationStatus::InitializationError
+        })?;
 
     let scheduler_ref = Scheduler::spawn(Scheduler::new());
     scheduler_ref
@@ -108,8 +124,10 @@ async fn make_sequencer_compoments(
                 &sequencer_home,
                 max_block_size.as_u64(),
                 accredited_keys_rx,
+                staked_keys_rx,
                 &executor_ref,
                 &slasher_ref,
+                &config_manager_ref,
                 &scheduler_ref,
             )
             .await

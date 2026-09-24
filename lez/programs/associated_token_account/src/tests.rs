@@ -30,15 +30,15 @@ fn ata_id() -> AccountId {
 }
 
 fn token_input(account_id: AccountId, shard: ShardData) -> AccountInput {
-    AccountInput::with_shard(account_id, false, 0, TOKEN_PROGRAM_ID, shard)
+    AccountInput::with_shard(account_id, false, TOKEN_PROGRAM_ID, shard)
 }
 
 fn owner_account() -> AccountInput {
-    AccountInput::balance(owner_id(), true, 0)
+    AccountInput::native_balance(owner_id(), true, 0)
 }
 
 fn unauthorized_owner_account() -> AccountInput {
-    AccountInput::balance(owner_id(), false, 0)
+    AccountInput::native_balance(owner_id(), false, 0)
 }
 
 fn definition_account() -> AccountInput {
@@ -152,7 +152,7 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
     crate::create::create_associated_token_account(
         owner_account(),
         definition_account(),
-        AccountInput::with_shard(ata_id(), false, 0, stranger, ShardData::empty()),
+        AccountInput::with_shard(ata_id(), false, stranger, ShardData::empty()),
         ATA_PROGRAM_ID,
         stranger,
     );
@@ -246,7 +246,7 @@ fn create_rejects_unauthorized_repair() {
     crate::create::create_associated_token_account(
         unauthorized_owner_account(),
         definition_account(),
-        AccountInput::with_shard(ata_id(), true, 0, TOKEN_PROGRAM_ID, foreign_holding()),
+        AccountInput::with_shard(ata_id(), true, TOKEN_PROGRAM_ID, foreign_holding()),
         ATA_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
     );

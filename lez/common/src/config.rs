@@ -43,7 +43,7 @@ impl FromStr for BasicAuth {
 
         Ok(Self {
             username: username.to_owned(),
-            password: password.map(std::string::ToString::to_string),
+            password: password.map(str::to_owned),
         })
     }
 }

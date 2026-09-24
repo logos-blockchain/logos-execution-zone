@@ -7,7 +7,7 @@ use common::{
     transaction::clock_invocation,
 };
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{Account, AccountData, AccountId, V03State};
+use lee::{Account, AccountId, V03State};
 
 use crate::{
     StorageActor,
@@ -108,16 +108,7 @@ fn marker_id() -> AccountId {
 /// A state told apart by the marker account's balance, so a test can say which
 /// of them a write persisted.
 fn state_with_balance(balance: u128) -> Arc<V03State> {
-    Arc::new(V03State::new().with_public_accounts([(
-        marker_id(),
-        Account {
-            data: AccountData {
-                balance,
-                ..AccountData::default()
-            },
-            ..Account::default()
-        },
-    )]))
+    Arc::new(V03State::new().with_public_accounts([(marker_id(), Account::funded(balance))]))
 }
 
 /// A distinct message key per index, for filling the pending list.
@@ -144,7 +135,8 @@ async fn stored_balance(storage_ref: &ActorRef<StorageActor>) -> u128 {
         .expect("The store holds a chain")
         .get_account_by_id(marker_id())
         .data
-        .balance
+        .balance()
+        .expect("The marker balance is canonical")
 }
 
 /// The stored block at `block_id`, which has to be there.
@@ -965,7 +957,14 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .expect("The final snapshot is stored");
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
-    assert_eq!(final_state.get_account_by_id(marker_id()).data.balance, 200);
+    assert_eq!(
+        final_state
+            .get_account_by_id(marker_id())
+            .data
+            .balance()
+            .unwrap(),
+        200
+    );
     assert_eq!(stored_balance(&storage_ref).await, 300);
 }
 

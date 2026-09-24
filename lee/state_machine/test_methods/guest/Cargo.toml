@@ -10,5 +10,6 @@ workspace = true
 [dependencies]
 borsh.workspace = true
 lee_core.workspace = true
+test_guest_core.workspace = true
 
 risc0-zkvm.workspace = true

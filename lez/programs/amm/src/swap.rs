@@ -1,7 +1,7 @@
 pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    account::{AccountId, ProgramShardSelector, ShardData},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 
 /// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
@@ -76,7 +76,7 @@ fn create_swap_post_diffs(
     withdraw_a: u128,
     deposit_b: u128,
     withdraw_b: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
         reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
@@ -84,15 +84,11 @@ fn create_swap_post_diffs(
     };
 
     vec![
-        AccountStateDiff::new(
-            pool,
-            BalanceDiff::Add(0),
-            ShardData::from(&pool_post_definition),
-        ),
-        AccountStateDiff::unchanged(vault_a),
-        AccountStateDiff::unchanged(vault_b),
-        AccountStateDiff::unchanged(user_holding_a),
-        AccountStateDiff::unchanged(user_holding_b),
+        ShardStateDiff::new(pool, ShardData::from(&pool_post_definition)),
+        ShardStateDiff::unchanged(vault_a),
+        ShardStateDiff::unchanged(vault_b),
+        ShardStateDiff::unchanged(user_holding_a),
+        ShardStateDiff::unchanged(user_holding_b),
     ]
 }
 
@@ -108,7 +104,7 @@ pub fn swap_exact_input(
     min_amount_out: u128,
     token_in_id: AccountId,
     self_account_id: AccountId,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_account_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
@@ -238,7 +234,7 @@ pub fn swap_exact_output(
     max_amount_in: u128,
     token_in_id: AccountId,
     self_account_id: AccountId,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_account_id);
 
     let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
