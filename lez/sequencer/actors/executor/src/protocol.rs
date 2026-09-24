@@ -6,6 +6,7 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId, ProgramShardSelector},
 };
+use sequencer_core::StallReason;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
@@ -155,4 +156,14 @@ pub struct GetAccountTransactions {
     pub account_id: AccountId,
     pub offset: u64,
     pub limit: u64,
+}
+
+pub struct GetStatus;
+
+pub struct GetStatusReply {
+    pub chain_height: BlockId,
+    pub failed_attempts: u32,
+    pub blocked_attempts_count: u32,
+    pub blocked_attempts_behind: Option<[u8; 32]>,
+    pub stall_reason: Option<StallReason>,
 }

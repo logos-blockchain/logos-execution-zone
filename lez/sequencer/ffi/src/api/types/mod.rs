@@ -1,13 +1,81 @@
+use std::ffi::{CString, c_char};
+
 use common::HashType;
 use lee::{AccountId, ProgramId, PublicKey, Signature};
 use lee_core::account::Nonce;
+use sequencer_executor_actor::protocol::GetStatusReply;
 use sequencer_storage_actor::actor::event_filter::Selector;
+
+use crate::OperationStatus;
 
 pub mod account;
 pub mod block;
 pub mod event;
 pub mod transaction;
 pub mod vectors;
+
+/// Enum which represents current sequencer state
+#[repr(C)]
+pub enum FfiSequencerSyncStatus {
+    Synced = 0x0,
+}
+
+/// Struct which represents sequencer status on the moment of a call
+#[repr(C)]
+pub struct FfiSequencerStatus {
+    pub sync_status: FfiSequencerSyncStatus,
+    pub chain_height: u64,
+    pub failed_attempts: u32,
+    pub blocked_attempts_count: u32,
+    pub blocked_attempts_behind: FfiOption<[u8; 32]>,
+    /// Complex structure which contains error object.
+    /// No reason to keep in non-serialized state.
+    pub stall_reason: *mut c_char,
+}
+
+impl TryFrom<GetStatusReply> for FfiSequencerStatus {
+    type Error = OperationStatus;
+
+    fn try_from(value: GetStatusReply) -> Result<Self, Self::Error> {
+        let json = match serde_json::to_string(&value.stall_reason) {
+            Ok(json) => json,
+            Err(e) => {
+                log::error!("Failed to serialize stall reason: {e}");
+                return Err(OperationStatus::CastError);
+            }
+        };
+
+        let stall_reason = match CString::new(json) {
+            Ok(c_string) => CString::into_raw(c_string),
+            Err(e) => {
+                log::error!("Stall reason JSON contained an interior nul byte: {e}");
+                return Err(OperationStatus::CastError);
+            }
+        };
+
+        Ok(Self {
+            // TODO: Figure out how to represent sequencer sync status.
+            // The main issue is that running sequencer service already passed
+            // the moment of syncing up and in case if it fetching published non-finalized blocks,
+            // then it is not actually representing for catching up, because blocks can be dropped
+            // on a chain rearrangement.
+            sync_status: FfiSequencerSyncStatus::Synced,
+            chain_height: value.chain_height,
+            failed_attempts: value.failed_attempts,
+            blocked_attempts_count: value.blocked_attempts_count,
+            blocked_attempts_behind: value.blocked_attempts_behind.into(),
+            stall_reason,
+        })
+    }
+}
+
+// impl TryFrom<FfiSequencerStatus> for GetStatusReply {
+//     type Error = OperationStatus;
+
+//     fn try_from(value: FfiSequencerStatus) -> Result<Self, Self::Error> {
+        
+//     }
+// }
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]

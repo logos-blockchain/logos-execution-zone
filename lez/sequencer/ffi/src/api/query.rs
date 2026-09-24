@@ -1,8 +1,6 @@
-use std::ffi::{CString, c_char};
-
 use sequencer_executor_actor::protocol::{
     BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
-    GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
+    GetBlockRange, GetLastBlockId, GetStatus, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
     TransactionOrigin,
 };
 use sequencer_storage_actor::{
@@ -15,7 +13,8 @@ use crate::{
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiSequencerStatus,
+            FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
             event::FfiEventRecord,
@@ -109,19 +108,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     )
 }
 
-/// Query the sequencer's current sync status as a JSON C-string.
-///
-/// The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
-/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
-/// `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
-/// `cross_zone_peers`. Each peer entry's `health` is one of
-/// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
-/// know as not known healthy. Lets a client distinguish "still catching up"
-/// from "something went wrong".
-///
-/// Not supporded yet.
-///
-/// TODO: Add support. Needs database modifications.
+/// Query the sequencer's current sync status.
 ///
 /// # Arguments
 ///
@@ -129,9 +116,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
 ///
 /// # Returns
 ///
-/// A heap-allocated, null-terminated JSON string that the caller MUST free with
-/// `free_cstring`. Returns null on error (null `sequencer` pointer or a
-/// serialization failure).
+/// A `PointerResult<FfiSequencerStatus, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -140,28 +125,30 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_query_status(
     sequencer: *const SequencerServiceFFI,
-) -> *mut c_char {
+) -> PointerResult<FfiSequencerStatus, OperationStatus> {
     if sequencer.is_null() {
-        log::error!(
-            "Attempted to query status on a null sequencer pointer. This is a bug. Aborting."
-        );
-        return std::ptr::null_mut();
+        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
-    let json = match serde_json::to_string("Not yet supported") {
-        Ok(json) => json,
-        Err(e) => {
-            log::error!("Failed to serialize sequencer status: {e}");
-            return std::ptr::null_mut();
-        }
-    };
+    let sequencer = unsafe { &*sequencer };
 
-    CString::new(json).map_or_else(
+    let status_reply = sequencer
+        .runtime()
+        .block_on(sequencer.executor_ref().ask(GetStatus).send());
+
+    status_reply.map_or_else(
         |e| {
-            log::error!("Sequencer status JSON contained an interior nul byte: {e}");
-            std::ptr::null_mut()
+            log::error!("Failed to get status from sequencer: {e:?}");
+            PointerResult::from_error(OperationStatus::ClientError)
         },
-        CString::into_raw,
+        |reply| {
+            let reply_res = reply.try_into();
+            reply_res.map_or_else(
+                |_| PointerResult::from_error(OperationStatus::ClientError),
+                PointerResult::from_value,
+            )
+        },
     )
 }
 

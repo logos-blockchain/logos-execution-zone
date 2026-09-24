@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
+pub use chain_state::StallReason;
 use chain_state::{
     AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState,
     FollowOutcome, Tip,
@@ -1718,6 +1719,10 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .await
             .head_tip()
             .map_or(0, |tip| tip.block_id)
+    }
+
+    pub async fn stall_reason(&self) -> Option<StallReason> {
+        self.chain.lock().await.final_stall().cloned()
     }
 
     pub const fn sequencer_config(&self) -> &SequencerConfig {

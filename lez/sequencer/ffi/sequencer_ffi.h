@@ -15,6 +15,13 @@ typedef enum OperationStatus {
   InvalidArgument = 6,
 } OperationStatus;
 
+/**
+ * Enum which represents current sequencer state
+ */
+typedef enum FfiSequencerSyncStatus {
+  Synced = 0,
+} FfiSequencerSyncStatus;
+
 typedef enum FfiProgramImageClaimKind {
   Disclosed = 0,
   Undisclosed,
@@ -109,6 +116,38 @@ typedef struct LastBlockIdResult {
   bool is_some;
   enum OperationStatus error;
 } LastBlockIdResult;
+
+typedef struct FfiOption__________u8__________32 {
+  uint8_t (*value)[32];
+  bool is_some;
+} FfiOption__________u8__________32;
+
+/**
+ * Struct which represents sequencer status on the moment of a call
+ */
+typedef struct FfiSequencerStatus {
+  enum FfiSequencerSyncStatus sync_status;
+  uint64_t chain_height;
+  uint32_t failed_attempts;
+  uint32_t blocked_attempts_count;
+  struct FfiOption__________u8__________32 blocked_attempts_behind;
+  /**
+   * Complex structure which contains error object.
+   * No reason to keep in non-serialized state.
+   */
+  char *stall_reason;
+} FfiSequencerStatus;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiSequencerStatus__OperationStatus {
+  struct FfiSequencerStatus *value;
+  enum OperationStatus error;
+} PointerResult_FfiSequencerStatus__OperationStatus;
 
 typedef uint64_t FfiBlockId;
 
@@ -578,19 +617,7 @@ void sequencer_ffi_free_cstring(char *block);
 struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerServiceFFI *sequencer);
 
 /**
- * Query the sequencer's current sync status as a JSON C-string.
- *
- * The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
- *
- * Not supporded yet.
- *
- * TODO: Add support. Needs database modifications.
+ * Query the sequencer's current sync status.
  *
  * # Arguments
  *
@@ -598,16 +625,14 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
  *
  * # Returns
  *
- * A heap-allocated, null-terminated JSON string that the caller MUST free with
- * `free_cstring`. Returns null on error (null `sequencer` pointer or a
- * serialization failure).
+ * A `PointerResult<FfiSequencerStatus, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
+struct PointerResult_FfiSequencerStatus__OperationStatus sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the block by id from sequencer.

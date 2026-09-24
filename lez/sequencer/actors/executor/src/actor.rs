@@ -37,8 +37,8 @@ use crate::{
         FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
-        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
+        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetStatus, GetStatusReply, GetTransaction,
+        ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -75,15 +75,15 @@ pub struct ExecutorActor<S: StorageActorTrait, BP: BlockPublisherTrait> {
 /// Consecutive production attempts skipped because the pin trailed the tip.
 /// The run restarts on a new tip, so its length separates catching up from
 /// being stuck.
-#[derive(Default)]
-pub(crate) struct BlockedAttempts {
-    count: u32,
-    behind: Option<MsgId>,
+#[derive(Default, Clone)]
+pub struct BlockedAttempts {
+    pub count: u32,
+    pub behind: Option<MsgId>,
 }
 
 impl BlockedAttempts {
     /// Counts a skipped attempt and returns the run's new length.
-    pub(crate) fn record(&mut self, tip: MsgId) -> u32 {
+    pub fn record(&mut self, tip: MsgId) -> u32 {
         if self.behind == Some(tip) {
             self.count = self.count.saturating_add(1);
         } else {
@@ -94,7 +94,7 @@ impl BlockedAttempts {
     }
 
     /// Ends the run, reporting whether there was one to end.
-    pub(crate) fn clear(&mut self) -> bool {
+    pub fn clear(&mut self) -> bool {
         let blocked = self.behind.is_some();
         *self = Self::default();
         blocked
@@ -646,5 +646,30 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
             .await
             .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetStatus>
+    for ExecutorActor<S, BP>
+{
+    type Reply = Result<GetStatusReply>;
+
+    async fn handle(
+        &mut self,
+        _msg: GetStatus,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let failed_attempts = self.failed_attempts;
+        let blocked_attempts = self.blocked_attempts.clone();
+        let stall_reason = self.sequencer.stall_reason().await;
+        let chain_height = self.sequencer.chain_height().await;
+
+        Ok(GetStatusReply {
+            chain_height,
+            failed_attempts,
+            blocked_attempts_count: blocked_attempts.count,
+            blocked_attempts_behind: blocked_attempts.behind.map(|msg| *msg.as_ref()),
+            stall_reason,
+        })
     }
 }

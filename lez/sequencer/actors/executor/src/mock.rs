@@ -118,6 +118,12 @@ mockall::mock! {
             msg: GetFeeQuote,
             ctx: &mut Context<Self, FeeStateQuote>
         ) -> FeeStateQuote;
+
+        pub fn handle_get_status(
+            &mut self,
+            msg: GetStatus,
+            ctx: &mut Context<Self, GetStatusReply>
+        ) -> GetStatusReply;
     }
 }
 
@@ -345,5 +351,17 @@ impl Message<GetFeeQuote> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_fee_quote(msg, ctx)
+    }
+}
+
+impl Message<GetStatus> for MockExecutorActor {
+    type Reply = GetStatusReply;
+
+    async fn handle(
+        &mut self,
+        msg: GetStatus,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_status(msg, ctx)
     }
 }
