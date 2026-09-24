@@ -18,6 +18,7 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     config::{SequencerPartialConfig, UrlProtocol, addr_to_url},
     indexer_client::IndexerClient,
+    init_logger,
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use tokio::test;
@@ -138,6 +139,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// its own genesis to open the channel, and starts producing.
 #[test]
 async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
@@ -155,7 +158,10 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
 
     // Fresh store + empty channel: startup bootstrapped genesis state directly.
     assert_eq!(
-        client.get_account_balance(supplied_id).await?,
+        client
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         12_345,
         "genesis-supplied balance must be present after bootstrap"
     );
@@ -179,6 +185,8 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
 #[test]
 async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     const PRODUCED_TARGET: u64 = 3;
+
+    init_logger();
 
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
@@ -234,7 +242,10 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Reconstruction ran synchronously during B's startup: even though its local
     // store was empty, its tip is past genesis, matching the finalized channel.
-    let tip_b = client_b.get_last_block_id().await?;
+    let tip_b = client_b
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip_b >= finalized,
         "B should reconstruct at least the finalized blocks; tip_b={tip_b}, finalized={finalized}"
@@ -246,7 +257,10 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Genesis state was rebuilt as part of the reconstruction.
     assert_eq!(
-        client_b.get_account_balance(supplied_id).await?,
+        client_b
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         7_777,
         "reconstructed genesis balance must be present"
     );
@@ -268,6 +282,8 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 #[test]
 async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
     const PRODUCED_TARGET: u64 = 3;
+
+    init_logger();
 
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
@@ -338,6 +354,8 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
 async fn local_ahead_of_channel_resumes() -> Result<()> {
     const FINALIZED_TARGET: u64 = 2;
 
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
@@ -367,7 +385,10 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .context("Failed to start sequencer A")?;
     let client_a = sequencer_client(handle_a.addr())?;
     let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, FINALIZE_TIMEOUT).await?;
-    let tip_before = client_a.get_last_block_id().await?;
+    let tip_before = client_a
+        .get_last_block_id()
+        .await
+        .context("Failed to read sequencer A's last block id")?;
     assert!(
         tip_before > finalized,
         "local tip {tip_before} should lead the finalized tip {finalized}"
@@ -384,13 +405,19 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
     let client_b = sequencer_client(handle_b.addr())?;
 
     // Reconstruction verified the finalized prefix and preserved the extra blocks.
-    let tip_b = client_b.get_last_block_id().await?;
+    let tip_b = client_b
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip_b >= tip_before,
         "restart must not lose locally-produced blocks; tip_b={tip_b}, before={tip_before}"
     );
     assert_eq!(
-        client_b.get_account_balance(supplied_id).await?,
+        client_b
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         4_242,
         "genesis state must survive the restart"
     );
@@ -414,6 +441,8 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
 async fn local_behind_channel_reconstructs_forward() -> Result<()> {
     const SNAPSHOT_TIP: u64 = 2;
     const FINALIZED_TARGET: u64 = 4;
+
+    init_logger();
 
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
@@ -486,7 +515,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .await
         .context("Failed to restart sequencer from a lagging store")?;
     let client = sequencer_client(handle.addr())?;
-    let tip = client.get_last_block_id().await?;
+    let tip = client
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip >= finalized,
         "lagging store must reconstruct forward to the finalized tip; tip={tip}, finalized={finalized}"
@@ -496,7 +528,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         "reconstruction must advance beyond the snapshot tip; tip={tip}"
     );
     assert_eq!(
-        client.get_account_balance(supplied_id).await?,
+        client
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         5_005,
         "genesis state must be intact after reconstruction"
     );

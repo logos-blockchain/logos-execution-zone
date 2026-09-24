@@ -4,6 +4,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::OnceLock,
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -28,6 +29,12 @@ use crate::{
     indexer_client::IndexerClient,
     private_mention, public_mention,
 };
+
+/// How long a test's RPC call waits for an answer. Well above jsonrpsee's 60s
+/// default, which a just-restarted sequencer on a loaded CI runner has been
+/// observed to blow through on the first read: tests bound their own waiting,
+/// and one slow answer should not be the thing that fails them.
+const RPC_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 pub struct SequencerSetup {
@@ -248,6 +255,7 @@ pub fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
     let url = config::addr_to_url(config::UrlProtocol::Http, addr)
         .context("Failed to build sequencer URL")?;
     SequencerClientBuilder::default()
+        .request_timeout(RPC_REQUEST_TIMEOUT)
         .build(url)
         .context("Failed to build sequencer client")
 }
