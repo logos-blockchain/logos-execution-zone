@@ -14,13 +14,13 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use integration_tests::{get_account};
+use integration_tests::get_account;
 use log::info;
 use logos_blockchain_zone_sdk::adapter::Node as _;
 use sequencer_core::block_publisher::Ed25519Key;
 use sequencer_ffi::api::types::{FfiOption, transaction::FfiTransactionKind};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{config::bedrock_channel_id};
+use test_fixtures::config::bedrock_channel_id;
 
 #[path = "sequencer_ffi_helpers/mod.rs"]
 mod sequencer_ffi_helpers;
@@ -398,7 +398,7 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
 }
 
 #[test]
-fn sequencer_ffi_events_produced_correctly() -> Result<()> {
+fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
     let (ctx, node, _, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
 
     let sequencer_ffi =
@@ -446,33 +446,57 @@ fn sequencer_ffi_events_produced_correctly() -> Result<()> {
             unsafe {
                 sequencer_ffi_helpers::sequencer_ffi_query_last_block(std::ptr::from_ref(sequencer_ffi))
             };
-            let last_common_block = if res.error.is_ok() && res.is_some {
-                res.block_id
-            } else {
-                return Err(anyhow::anyhow!("Failed to get last block id from FFI"));
-            };
+    let last_common_block = if res.error.is_ok() && res.is_some {
+        res.block_id
+    } else {
+        return Err(anyhow::anyhow!("Failed to get last block id from FFI"));
+    };
 
-    // We already produce events on a first couple of blocks 
-    // so there should be some
-    let events_res = unsafe{
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    let events_res = unsafe {
         sequencer_ffi_helpers::sequencer_ffi_query_events(
-        sequencer_ffi,
-        1,
-        FfiOption::from_value(last_common_block),
-        std::ptr::null(),
-        std::ptr::null(),
-        std::ptr::null(),
+            sequencer_ffi,
+            1,
+            FfiOption::from_value(last_common_block),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
         )
     };
+
+    // We already produce events on a first couple of blocks
+    // so there should be some
 
     assert!(events_res.error.is_ok(), "FFI must fetch events");
 
     // SAFETY: ensured by FFI.
-    let events_vec = unsafe{ events_res.value.read() };
-    // SAFETY: ensured by FFI.
-    let event_1 = unsafe{ events_vec.get(0) };
+    let events_vec = unsafe { events_res.value.read() };
 
-    log::info!("EVENT PRODUCED {event_1:#?}");
+    // Sanity checks: there is exactly 4 events in first block
+    // All produced by the same transaction.
+    assert_eq!(events_vec.len, 4);
+
+    // SAFETY: ensured by FFI.
+    let event_1 = unsafe { events_vec.get(0) };
+
+    let producer_id = event_1.program_account_id;
+
+    assert_eq!(event_1.block_id, 1);
+
+    // SAFETY: ensured by FFI.
+    let event_2 = unsafe { events_vec.get(1) };
+    // SAFETY: ensured by FFI.
+    let event_3 = unsafe { events_vec.get(2) };
+    // SAFETY: ensured by FFI.
+    let event_4 = unsafe { events_vec.get(3) };
+
+    assert_eq!(event_2.block_id, 1);
+    assert_eq!(event_3.block_id, 1);
+    assert_eq!(event_4.block_id, 1);
+
+    assert_eq!(event_2.program_account_id.data, producer_id.data);
+    assert_eq!(event_3.program_account_id.data, producer_id.data);
+    assert_eq!(event_4.program_account_id.data, producer_id.data);
 
     // SAFETY: events_res created by FFI, it is valid.
     unsafe {

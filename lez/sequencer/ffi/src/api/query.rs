@@ -607,19 +607,54 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
             log::error!("Failed to query block by id: {e:#}");
         });
 
-    if let Ok(map_opt) = map_resp {
-        if let Some(block_id) = map_opt {
-            PointerResult::from_value(block_id)
-        } else {
-            log::error!("query_block_by_tx_hash: block for this block id does not exist");
+    map_resp.map_or_else(
+        |_| {
+            log::error!("query_block_by_tx_hash: db failure");
             PointerResult::from_error(OperationStatus::ClientError)
-        }
-    } else {
-        log::error!("query_block_by_tx_hash: db failure");
-        PointerResult::from_error(OperationStatus::ClientError)
-    }
+        },
+        |map_opt| {
+            map_opt.map_or_else(
+                || {
+                    log::error!("query_block_by_tx_hash: block for this block id does not exist");
+                    PointerResult::from_error(OperationStatus::ClientError)
+                },
+                PointerResult::from_value,
+            )
+        },
+    )
 }
 
+/// Query events emitted by programs, optionally filtered.
+///
+/// Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
+/// lookup and the block range is ignored; otherwise the range from `from_block` to
+/// `to_block` (defaulting to the current tip when none) is read, capped at
+/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
+/// past the indexed tip and queries outside the sequencer's event-filter history.
+/// `program_account_id` and `selector` are exact-match filters applied to the result.
+///
+/// # Arguments
+///
+/// - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+/// - `from_block`: Inclusive range start, ignored when `tx_hash` is non-null.
+/// - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
+///   `tx_hash` is non-null.
+/// - `tx_hash`: Optional transaction hash; null means absent.
+/// - `program_account_id`: Optional emitting-program filter; null means absent.
+/// - `selector`: Optional event-selector filter; null means absent.
+///
+/// # Returns
+///
+/// A [`PointerResult`] holding an `FfiVec<FfiEventRecord>` that the caller MUST free
+/// with `free_ffi_event_record_vec`, or an error status.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+/// - if `to_block.is_some`, its `value` points to a valid `u64`.
+/// - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
+///   its respective type.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_query_events(
     sequencer: *const SequencerServiceFFI,
@@ -645,9 +680,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             log::error!("Failed to query block by id: {e:#}");
         });
 
-    let event_filter = if let Ok(event_filter) = event_filter_res {
-        event_filter
-    } else {
+    let Ok(event_filter) = event_filter_res else {
         log::error!("GetEventFilter: query failed");
         return PointerResult::from_error(OperationStatus::ClientError);
     };
@@ -747,7 +780,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         let mut events_range = vec![];
 
         for block_id in from_block..=to_block {
-            let block_events = if let Ok(block_events) = sequencer
+            let Ok(block_events) = sequencer
                 .runtime()
                 .block_on(
                     sequencer
@@ -765,12 +798,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
                             EventRecord::from_tx_events(block_id, group_events)
                         })
                         .collect::<Vec<_>>()
-                }) {
-                block_events
-            } else {
+                })
+            else {
                 return PointerResult::from_error(OperationStatus::ClientError);
             };
-            events_range.extend(block_events.into_iter());
+            events_range.extend(block_events);
         }
 
         events_range

@@ -79,36 +79,6 @@ impl EventFilter {
     }
 }
 
-/// Whether every event in the requested `(program, selector)` domain over
-/// blocks `from..=to` was stored.
-///
-/// Each filter segment whose span intersects the range must cover the domain,
-/// and the range must not precede the first segment.
-#[must_use]
-pub fn covered_over_range(
-    segments: &[(EventFilter, BlockId)],
-    from: BlockId,
-    to: BlockId,
-    program_id: Option<AccountId>,
-    selector: Option<[u8; 8]>,
-) -> bool {
-    if to < from {
-        return true;
-    }
-    let Some((_, first_from)) = segments.first() else {
-        return false;
-    };
-    if from < *first_from {
-        return false;
-    }
-    segments.iter().enumerate().all(|(i, (filter, seg_from))| {
-        let seg_to = segments
-            .get(i.saturating_add(1))
-            .map_or(u64::MAX, |(_, next_from)| next_from.saturating_sub(1));
-        *seg_from > to || seg_to < from || filter.covers(program_id, selector)
-    })
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Selector(pub [u8; 8]);
 
@@ -159,8 +129,8 @@ impl EventRecord {
             .map(|event| Self {
                 block_id,
                 tx_index,
-                tx_hash: tx_hash.into(),
-                program_account_id: event.account_id.into(),
+                tx_hash,
+                program_account_id: event.account_id,
                 selector: event.event.selector.into(),
                 data: event.event.data,
             })
@@ -174,6 +144,36 @@ pub enum EventRangeError {
     ToPastTip { to: BlockId, tip: BlockId },
     Inverted { from: BlockId, to: BlockId },
     SpanExceeded { span: u64 },
+}
+
+/// Whether every event in the requested `(program, selector)` domain over
+/// blocks `from..=to` was stored.
+///
+/// Each filter segment whose span intersects the range must cover the domain,
+/// and the range must not precede the first segment.
+#[must_use]
+pub fn covered_over_range(
+    segments: &[(EventFilter, BlockId)],
+    from: BlockId,
+    to: BlockId,
+    program_id: Option<AccountId>,
+    selector: Option<[u8; 8]>,
+) -> bool {
+    if to < from {
+        return true;
+    }
+    let Some((_, first_from)) = segments.first() else {
+        return false;
+    };
+    if from < *first_from {
+        return false;
+    }
+    segments.iter().enumerate().all(|(i, (filter, seg_from))| {
+        let seg_to = segments
+            .get(i.saturating_add(1))
+            .map_or(u64::MAX, |(_, next_from)| next_from.saturating_sub(1));
+        *seg_from > to || seg_to < from || filter.covers(program_id, selector)
+    })
 }
 
 pub fn resolve_event_block_range(

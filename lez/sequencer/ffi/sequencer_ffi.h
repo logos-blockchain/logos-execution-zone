@@ -775,6 +775,39 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
 struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
                                                                                FfiHashType tx_hash);
 
+/**
+ * Query events emitted by programs, optionally filtered.
+ *
+ * Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
+ * lookup and the block range is ignored; otherwise the range from `from_block` to
+ * `to_block` (defaulting to the current tip when none) is read, capped at
+ * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
+ * past the indexed tip and queries outside the sequencer's event-filter history.
+ * `program_account_id` and `selector` are exact-match filters applied to the result.
+ *
+ * # Arguments
+ *
+ * - `sequencer`: A pointer to the [`SequencerServiceFFI`] instance to be queried.
+ * - `from_block`: Inclusive range start, ignored when `tx_hash` is non-null.
+ * - `to_block`: `FfiOption<u64>` - inclusive range end; none means the current tip. Ignored when
+ *   `tx_hash` is non-null.
+ * - `tx_hash`: Optional transaction hash; null means absent.
+ * - `program_account_id`: Optional emitting-program filter; null means absent.
+ * - `selector`: Optional event-selector filter; null means absent.
+ *
+ * # Returns
+ *
+ * A [`PointerResult`] holding an `FfiVec<FfiEventRecord>` that the caller MUST free
+ * with `free_ffi_event_record_vec`, or an error status.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
+ * - if `to_block.is_some`, its `value` points to a valid `u64`.
+ * - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
+ *   its respective type.
+ */
 struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
                                                                                           uint64_t from_block,
                                                                                           struct FfiOption_u64 to_block,
