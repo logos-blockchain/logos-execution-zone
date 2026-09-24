@@ -16,7 +16,7 @@ typedef enum OperationStatus {
 } OperationStatus;
 
 /**
- * Enum which represents current sequencer state
+ * Enum which represents current sequencer state.
  */
 typedef enum FfiSequencerSyncStatus {
   Synced = 0,
@@ -123,7 +123,7 @@ typedef struct FfiOption__________u8__________32 {
 } FfiOption__________u8__________32;
 
 /**
- * Struct which represents sequencer status on the moment of a call
+ * Struct which represents sequencer status on the moment of a call.
  */
 typedef struct FfiSequencerStatus {
   enum FfiSequencerSyncStatus sync_status;
@@ -839,6 +839,27 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_que
                                                                                           const FfiHashType *tx_hash,
                                                                                           const FfiAccountId *program_account_id,
                                                                                           const FfiSelector *selector);
+
+/**
+ * Frees the resources associated with the given sequencer status object.
+ *
+ * Takes ownership of the whole allocation produced by `sequencer_ffi_query_status`: the outer
+ * `Box<FfiSequencerStatus>` (the `PointerResult.value` pointer), and inner object.
+ *
+ * # Arguments
+ *
+ * - `val`: The `*mut FfiSequencerStatus` returned in `PointerResult.value`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a pointer to an `FfiSequencerStatus` produced by this library and not yet freed.
+ */
+void free_ffi_sequencer_status(struct FfiSequencerStatus *val);
 
 /**
  * Frees the resources associated with the given ffi account.

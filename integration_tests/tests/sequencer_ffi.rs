@@ -510,3 +510,88 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn sequencer_ffi_check_status_correctness() -> Result<()> {
+    let (ctx, node, _, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
+
+    let sequencer_ffi =
+    // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
+    unsafe {&*sequencer_ffi_res.value} ;
+
+    let joining_sequencer_key =
+        Ed25519Key::from_bytes(&sequencer_ffi_helpers::JOINER_SIGNING_KEY).public_key();
+
+    let joined_at = ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())?;
+    sequencer_ffi_helpers::wait_for_sequencer_ffi_block(sequencer_ffi, joined_at)?;
+    info!("Joining sequencer synced to block {joined_at}");
+
+    // A tip past `joined_at` under the joining key is a block this node built.
+    let mut poll_flag = false;
+    for _ in 0..180 {
+        let state = ctx
+            .runtime()
+            .block_on(node.channel_state(bedrock_channel_id()))
+            .context("Failed to read Bedrock channel state")?
+            .context("Bedrock channel does not exist")?;
+
+        let turn = state
+            .accredited_keys
+            .get(usize::from(state.tip_sequencer))
+            .copied();
+
+        if turn == Some(joining_sequencer_key)
+            && ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())? > joined_at
+        {
+            poll_flag = true;
+            break;
+        }
+
+        std::thread::sleep(Duration::from_secs(1));
+    }
+
+    if !poll_flag {
+        anyhow::bail!("The joining sequencer failed to build a block on its turn");
+    }
+    info!("Joining sequencer produced a block on its round-robin turn");
+
+    let res =
+            // SAFETY: sequencer_ffi created by FFI, it is valid.
+            unsafe {
+                sequencer_ffi_helpers::sequencer_ffi_query_last_block(std::ptr::from_ref(sequencer_ffi))
+            };
+    let last_common_block = if res.error.is_ok() && res.is_some {
+        res.block_id
+    } else {
+        return Err(anyhow::anyhow!("Failed to get last block id from FFI"));
+    };
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    let ffi_status_res =
+        unsafe { sequencer_ffi_helpers::sequencer_ffi_query_status(sequencer_ffi) };
+
+    assert!(ffi_status_res.error.is_ok(), "FFI must fetch status");
+
+    // SAFETY: produced by FFI, is valid.
+    let ffi_status = unsafe { ffi_status_res.value.read() };
+
+    // Sanity checks
+    assert_eq!(ffi_status.blocked_attempts_count, 0);
+    assert_eq!(ffi_status.failed_attempts, 0);
+    assert!(
+        ffi_status.chain_height >= last_common_block,
+        "Chain height must progress"
+    );
+
+    // SAFETY: produced by FFI, is valid.
+    unsafe {
+        sequencer_ffi_helpers::free_ffi_sequencer_status(ffi_status_res.value);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}

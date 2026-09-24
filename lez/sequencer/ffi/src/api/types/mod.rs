@@ -14,13 +14,13 @@ pub mod event;
 pub mod transaction;
 pub mod vectors;
 
-/// Enum which represents current sequencer state
+/// Enum which represents current sequencer state.
 #[repr(C)]
 pub enum FfiSequencerSyncStatus {
     Synced = 0x0,
 }
 
-/// Struct which represents sequencer status on the moment of a call
+/// Struct which represents sequencer status on the moment of a call.
 #[repr(C)]
 pub struct FfiSequencerStatus {
     pub sync_status: FfiSequencerSyncStatus,
@@ -69,13 +69,37 @@ impl TryFrom<GetStatusReply> for FfiSequencerStatus {
     }
 }
 
-// impl TryFrom<FfiSequencerStatus> for GetStatusReply {
-//     type Error = OperationStatus;
+impl TryFrom<FfiSequencerStatus> for GetStatusReply {
+    type Error = OperationStatus;
 
-//     fn try_from(value: FfiSequencerStatus) -> Result<Self, Self::Error> {
-        
-//     }
-// }
+    fn try_from(value: FfiSequencerStatus) -> Result<Self, Self::Error> {
+        if value.stall_reason.is_null() {
+            return Err(OperationStatus::CastError);
+        }
+
+        let c_string = unsafe { CString::from_raw(value.stall_reason) };
+
+        let json = c_string.to_str().map_err(|e| {
+            log::error!("Stall reason is not valid UTF-8: {e}");
+            OperationStatus::CastError
+        })?;
+
+        let stall_reason = serde_json::from_str(json).map_err(|e| {
+            log::error!("Failed to deserialize stall reason: {e}");
+            OperationStatus::CastError
+        })?;
+
+        let blocked_attempts_behind: Option<[u8; 32]> = value.blocked_attempts_behind.into();
+
+        Ok(Self {
+            chain_height: value.chain_height,
+            failed_attempts: value.failed_attempts,
+            blocked_attempts_count: value.blocked_attempts_count,
+            blocked_attempts_behind,
+            stall_reason,
+        })
+    }
+}
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
@@ -288,4 +312,36 @@ impl<T> From<FfiOption<T>> for Option<T> {
     fn from(value: FfiOption<T>) -> Self {
         value.is_some.then(|| unsafe { value.value.read() })
     }
+}
+
+/// Frees the resources associated with the given sequencer status object.
+///
+/// Takes ownership of the whole allocation produced by `sequencer_ffi_query_status`: the outer
+/// `Box<FfiSequencerStatus>` (the `PointerResult.value` pointer), and inner object.
+///
+/// # Arguments
+///
+/// - `val`: The `*mut FfiSequencerStatus` returned in `PointerResult.value`.
+///
+/// # Returns
+///
+/// void.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `val` is a pointer to an `FfiSequencerStatus` produced by this library and not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_ffi_sequencer_status(val: *mut FfiSequencerStatus) {
+    if val.is_null() {
+        log::error!("Trying to free a null pointer. Exiting");
+        return;
+    }
+
+    let ffi_status = unsafe { Box::from_raw(val) };
+    let status: Result<GetStatusReply, OperationStatus> = (*ffi_status)
+        .try_into()
+        .inspect_err(|err| log::error!("Failed to drop FfiSequencerStatus: {err:?}"));
+
+    drop(status);
 }
