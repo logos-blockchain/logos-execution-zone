@@ -46,6 +46,8 @@ pub struct MockBlockPublisher {
     /// When set, fails every publish, as zone-sdk does for an atomic withdraw
     /// at this revision.
     publish_fails: Arc<AtomicBool>,
+    /// When set, a channel read ends on a failure instead of at the channel's end.
+    read_truncates: Arc<AtomicBool>,
 }
 
 impl MockBlockPublisher {
@@ -66,7 +68,12 @@ impl MockBlockPublisher {
             channel_tip: Arc::new(Mutex::new(None)),
             stale_tip_read: Arc::new(Mutex::new(None)),
             publish_fails: Arc::new(AtomicBool::new(false)),
+            read_truncates: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn truncate_channel_reads(&self) {
+        self.read_truncates.store(true, Ordering::Relaxed);
     }
 
     /// Makes every later publish fail.
@@ -125,6 +132,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
             messages: Vec::new(),
             channel_tip: Arc::new(Mutex::new(None)),
             stale_tip_read: Arc::new(Mutex::new(None)),
+            read_truncates: Arc::new(AtomicBool::new(false)),
             publish_fails: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -212,14 +220,18 @@ impl BlockPublisherTrait for MockBlockPublisher {
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>> + Send + '_> {
         // Mirror `next_messages`: `after_slot` is exclusive.
         let messages = self
             .messages
             .iter()
             .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
             .cloned();
-        Ok(futures::stream::iter(messages))
+        let mut items: Vec<Result<_>> = messages.map(Ok).collect();
+        if self.read_truncates.load(Ordering::Relaxed) {
+            items.push(Err(anyhow::anyhow!("channel read failed")));
+        }
+        Ok(futures::stream::iter(items))
     }
 }
 

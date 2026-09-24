@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, ensure};
 use chain_state::zone_indexer::ZoneIndexer;
 use common::block::Block;
-use futures::{Stream, future::BoxFuture};
+use futures::{Stream, StreamExt as _, future::BoxFuture};
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
     ledger::NoteId,
@@ -256,10 +256,12 @@ pub trait LocalBlockPublisherTrait: Sized + Sync {
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
     /// from the channel's genesis.
+    ///
+    /// A failed read is an `Err` item, never the end of the stream.
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_>;
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>> + Send + '_>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -592,6 +594,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         parent: MsgId,
     ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
+        let data_byte_size = data.len();
         let inscription: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
@@ -627,8 +630,15 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             SignedOps::from_parts(mantle_tx, ops_proofs)
                 .map_err(|err| anyhow!("Failed to assemble channel transaction: {err}"))?,
         );
-        self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
-            .await
+        let published = self
+            .dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
+            .await;
+        // Every block produced after bootstrap takes this path, so without this the
+        // only sizes ever logged are the republished ones.
+        if published.is_ok() {
+            info!("Published block with the size of {data_byte_size} bytes");
+        }
+        published
     }
 
     async fn publish_genesis_creating_channel(
@@ -771,13 +781,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     async fn read_channel_after(
         &self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + '_> {
+    ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>> + Send + '_> {
         let stream = self
             .indexer
             .next_messages(after_slot)
             .await
             .context("Failed to start channel read stream")?;
-        Ok(stream)
+        Ok(stream.map(|item| item.map_err(anyhow::Error::from)))
     }
 }
 

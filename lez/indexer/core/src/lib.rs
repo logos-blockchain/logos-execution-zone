@@ -392,7 +392,6 @@ impl IndexerCore {
                 };
                 let mut stream = std::pin::pin!(stream);
 
-                let mut announced_syncing = false;
                 let mut had_cycle_error = false;
                 // The slot being consumed: every message of it seen so far is
                 // handled, but another may follow, so the cursor may not move
@@ -402,15 +401,23 @@ impl IndexerCore {
                 // for ever if this pass ends early.
                 let mut in_progress = SlotProgress::default();
 
-                while let Some((msg, slot)) = stream.next().await {
+                while let Some(item) = stream.next().await {
+                    // A failed read must not be mistaken for reaching LIB.
+                    let (msg, slot) = match item {
+                        Ok(message) => message,
+                        Err(err) => {
+                            error!("Channel read failed, holding the cursor: {err}");
+                            self.set_status(IndexerSyncStatus::error(format!(
+                                "cannot read channel: {err}"
+                            )));
+                            had_cycle_error = true;
+                            break;
+                        }
+                    };
+
                     // A message from a later slot means the previous one is complete.
                     if let Some(done) = in_progress.enter(slot) {
                         self.advance_cursor(&mut cursor, done);
-                    }
-
-                    if !announced_syncing {
-                        self.set_status(IndexerSyncStatus::syncing());
-                        announced_syncing = true;
                     }
 
                     let zone_block = match msg {

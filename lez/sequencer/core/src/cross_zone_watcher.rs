@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use chain_state::zone_indexer::ZoneIndexer;
+use chain_state::zone_indexer::{ZoneIndexer, stop_at_read_error};
 use common::{
     HashType,
     block::{Block, PeerChainTip},
@@ -342,6 +342,10 @@ async fn watch_peer<S: StorageActorTrait>(
                 continue;
             }
         };
+        let stream = stop_at_read_error(
+            stream,
+            format!("Watcher channel read for peer {}", hex::encode(peer_zone)),
+        );
         let outcome = consume_peer_stream(stream, &peer, &storage_ref, &mut cursor, &mut tip).await;
 
         report_pass_alerts(&mut state, outcome, cursor, tip, peer_zone, &storage_ref).await;

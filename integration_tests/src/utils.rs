@@ -252,7 +252,10 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 
     let block_id_to_catch_up =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
-    let mut last_ind: u64 = 1;
+    let mut last_ind: u64 = 0;
+    // Slow or stuck: the timeout message cannot tell them apart without this.
+    let mut first_ind: Option<u64> = None;
+    let mut last_moved = std::time::Instant::now();
     let inner = async {
         loop {
             let ind = ctx
@@ -260,6 +263,11 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                 .get_last_finalized_block_id()
                 .await?
                 .unwrap_or(0);
+            match first_ind {
+                None => first_ind = Some(ind),
+                Some(_) if ind > last_ind => last_moved = std::time::Instant::now(),
+                Some(_) => {}
+            }
             last_ind = ind;
             if ind >= block_id_to_catch_up {
                 let last_seq =
@@ -268,16 +276,42 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                 info!(
                     "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
                 );
-                return Ok(ind);
+                return anyhow::Ok(ind);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     };
-    tokio::time::timeout(L2_TO_L1_TIMEOUT, inner)
-        .await
-        .with_context(|| {
-            format!(
-                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
+    match tokio::time::timeout(L2_TO_L1_TIMEOUT, inner).await {
+        Ok(Ok(reached)) => Ok(reached),
+        // A failing poll is as likely to be a wedged indexer as an elapsed
+        // deadline, so it earns the same diagnosis.
+        Ok(Err(err)) => Err(err.context(format!(
+            "Indexer polling failed before catching up. Last indexer block id observed: {last_ind}, needed at least {block_id_to_catch_up}. {}",
+            indexer_diagnosis(ctx).await
+        ))),
+        Err(_elapsed) => {
+            let started_at = first_ind.unwrap_or(last_ind);
+            let unchanged_for = last_moved.elapsed();
+            let diagnosis = indexer_diagnosis(ctx).await;
+            anyhow::bail!(
+                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}. \
+                 Height when the wait began: {started_at}, unchanged over the last {unchanged_for:?} of the wait. {diagnosis}"
             )
-        })?
+        }
+    }
+}
+
+/// The indexer's own account of ingestion, for a wait that did not finish. Bounded
+/// because a snapshot that takes a minute to arrive is already stale.
+async fn indexer_diagnosis(ctx: &TestContext) -> String {
+    use indexer_service_rpc::RpcClient as _;
+
+    match tokio::time::timeout(Duration::from_secs(5), ctx.indexer_client().get_status()).await {
+        Ok(Ok(status)) => format!(
+            "Indexer state {:?}, last error {:?}, stall reason {:?}, cross-zone halt {:?}",
+            status.state, status.last_error, status.stall_reason, status.cross_zone_halt
+        ),
+        Ok(Err(err)) => format!("Indexer status unavailable: {err}"),
+        Err(_elapsed) => "Indexer status did not answer within 5s".to_owned(),
+    }
 }

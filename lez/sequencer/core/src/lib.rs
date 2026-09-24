@@ -661,7 +661,11 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait> SequencerCore<S, BP> {
             .await
             .context("Failed to read channel history for reconstruction")?;
         let mut messages = std::pin::pin!(messages);
-        while let Some((message, slot)) = messages.next().await {
+        while let Some(message) = messages.next().await {
+            // A failed read must not be read as a complete scan.
+            let (message, slot) = message.context(
+                "Channel history read failed part way, so reconstruction would be incomplete",
+            )?;
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
                     check.observe(&message, slot)

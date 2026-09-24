@@ -243,6 +243,42 @@ async fn fails_when_channel_serves_a_divergent_block() {
 }
 
 #[tokio::test]
+async fn fails_when_the_channel_read_ends_early() {
+    let config = setup_sequencer_config();
+    let (store, chain) = fresh_store_and_chain(&config).await;
+
+    let genesis_id = store.genesis_id();
+    let genesis = store.block_at_id(genesis_id).await.unwrap().unwrap();
+    let anchor_slot = 100_u64;
+    store
+        .set_zone_anchor(ZoneAnchorRecord {
+            slot: anchor_slot,
+            block_id: genesis_id,
+            hash: genesis.header.hash,
+        })
+        .await
+        .unwrap();
+
+    // The channel agrees with the store, so only the truncation can fail this.
+    let messages = vec![block_to_channel_message(&genesis, anchor_slot)];
+    let mock = MockBlockPublisher::with_canned_channel(
+        config.bedrock_config.channel_id,
+        Some(Slot::from(anchor_slot)),
+        messages,
+    );
+    mock.truncate_channel_reads();
+
+    let result = SequencerCore::<StorageActor, MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &store, &chain, true,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a truncated channel read must abort startup, not read as a complete scan"
+    );
+}
+
+#[tokio::test]
 async fn fails_when_channel_is_missing() {
     let config = setup_sequencer_config();
     let (store, chain) = fresh_store_and_chain(&config).await;
