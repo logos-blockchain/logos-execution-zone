@@ -1,9 +1,10 @@
 //! Core data structures for the Authenticated Transfer Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::account::AccountId;
 #[cfg(feature = "image_id")]
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::ProgramShardSelector,
     program::{ChainedCall, PdaSeed},
 };
 
@@ -24,7 +25,6 @@ pub enum Instruction {
     Transfer { amount: u128 },
 }
 
-#[cfg(feature = "image_id")]
 #[must_use]
 pub fn authenticated_transfer_account_id() -> AccountId {
     AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)

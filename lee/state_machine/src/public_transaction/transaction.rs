@@ -84,7 +84,12 @@ pub mod tests {
         let initial_data = [(addr1, 10000), (addr2, 20000)];
         V03State::new()
             .with_public_account_balances(initial_data)
-            .with_programs([crate::test_methods::simple_balance_transfer()])
+            .with_named_programs([(
+                AccountId::from_builtin_program(
+                    crate::test_methods::simple_balance_transfer().id(),
+                ),
+                crate::test_methods::simple_balance_transfer(),
+            )])
     }
 
     fn transaction_for_tests() -> PublicTransaction {

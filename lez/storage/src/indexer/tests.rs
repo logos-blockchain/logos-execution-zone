@@ -111,10 +111,13 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_programs([
-            programs::authenticated_transfer(),
-            programs::clock(),
-            programs::fee(),
+        .with_named_programs([
+            (
+                programs::authenticated_transfer_account_id(),
+                programs::authenticated_transfer(),
+            ),
+            (programs::clock_account_id(), programs::clock()),
+            (programs::fee_account_id(), programs::fee()),
         ])
 }
 

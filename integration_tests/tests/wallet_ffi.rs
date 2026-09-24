@@ -12,7 +12,7 @@
 )]
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_char},
     io::Write as _,
     path::Path,
@@ -1749,7 +1749,11 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let instruction_data_size = instruction_data.len();
     let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program: ProgramWithDependencies = programs::authenticated_transfer().into();
+    let program = ProgramWithDependencies::new(
+        programs::authenticated_transfer(),
+        programs::authenticated_transfer_account_id(),
+        HashMap::new(),
+    );
     let program_with_dependencies: FfiProgramWithDependencies = program.into();
 
     unsafe {

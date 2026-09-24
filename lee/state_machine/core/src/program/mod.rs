@@ -25,9 +25,8 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 pub type ProgramId = [u32; 8];
 
 impl AccountId {
-    /// The default `AccountId` a builtin program is deployed at — not a live address once
-    /// redeployed via `program_loader`. A byte reinterpretation, not a hash, since `ProgramId`
-    /// is already content-derived.
+    /// Derives a synthetic `AccountId` for seeding a test program in state. A byte
+    /// reinterpretation, not a hash, since `ProgramId` is already content-derived.
     #[must_use]
     pub fn from_builtin_program(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id

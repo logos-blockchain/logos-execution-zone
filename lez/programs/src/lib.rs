@@ -16,20 +16,15 @@ mod inner {
         PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, SEQUENCER_STAKE_ELF,
         SEQUENCER_STAKE_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
-    use lee::{AccountId, program::Program};
+    use lee::program::Program;
 
     mod guests {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
 
-    // `authenticated_transfer_core` is duplicated here rather than re-exported: unlike the
-    // other builtins' `*_core` crates, it isn't a dependency of this `artifacts` build (only
-    // of `programs`, which builds its guest binary), so it can't be depended on here.
-    // `authenticated_transfer_name_matches_core` below guards the two copies against drift.
-    pub const AUTHENTICATED_TRANSFER_NAME: [u8; 22] = *b"authenticated_transfer";
-
     pub use amm_core::AMM_NAME;
     pub use associated_token_account_core::ASSOCIATED_TOKEN_ACCOUNT_NAME;
+    pub use authenticated_transfer_core::AUTHENTICATED_TRANSFER_NAME;
     pub use bridge_core::BRIDGE_NAME;
     pub use bridge_lock_core::BRIDGE_LOCK_NAME;
     pub use clock_core::CLOCK_NAME;
@@ -50,11 +45,7 @@ mod inner {
         )
     }
 
-    #[must_use]
-    #[inline]
-    pub fn authenticated_transfer_account_id() -> AccountId {
-        AccountId::from_builtin_program_name(&AUTHENTICATED_TRANSFER_NAME)
-    }
+    pub use authenticated_transfer_core::authenticated_transfer_account_id;
 
     #[must_use]
     #[inline]
@@ -171,15 +162,6 @@ mod inner {
         };
 
         use super::*;
-
-        #[test]
-        fn authenticated_transfer_name_matches_core() {
-            assert_eq!(
-                AUTHENTICATED_TRANSFER_NAME,
-                authenticated_transfer_core::AUTHENTICATED_TRANSFER_NAME,
-                "this crate's copy must track authenticated_transfer_core's"
-            );
-        }
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(

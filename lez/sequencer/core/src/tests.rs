@@ -2120,7 +2120,11 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 /// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
 /// `CLOCK_01` account observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
-    let mut state = V03State::new().with_programs([programs::clock(), program]);
+    let program_id = AccountId::from_builtin_program(program.id());
+    let mut state = V03State::new().with_named_programs([
+        (programs::clock_account_id(), programs::clock()),
+        (program_id, program),
+    ]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
     }
@@ -3816,9 +3820,15 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let mut state = V03State::new()
-        .with_programs([
-            programs::authenticated_transfer(),
-            programs::sequencer_stake(),
+        .with_named_programs([
+            (
+                programs::authenticated_transfer_account_id(),
+                programs::authenticated_transfer(),
+            ),
+            (
+                programs::sequencer_stake_account_id(),
+                programs::sequencer_stake(),
+            ),
         ])
         .with_public_accounts([
             (
@@ -3966,9 +3976,15 @@ fn stake_entry(
 /// holding `funding_balance`.
 fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
     V03State::new()
-        .with_programs([
-            programs::authenticated_transfer(),
-            programs::sequencer_stake(),
+        .with_named_programs([
+            (
+                programs::authenticated_transfer_account_id(),
+                programs::authenticated_transfer(),
+            ),
+            (
+                programs::sequencer_stake_account_id(),
+                programs::sequencer_stake(),
+            ),
         ])
         .with_public_accounts([
             (
@@ -4211,9 +4227,15 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let sequencer_key = test_sequencer_key(0x42);
 
     let mut state = V03State::new()
-        .with_programs([
-            programs::authenticated_transfer(),
-            programs::sequencer_stake(),
+        .with_named_programs([
+            (
+                programs::authenticated_transfer_account_id(),
+                programs::authenticated_transfer(),
+            ),
+            (
+                programs::sequencer_stake_account_id(),
+                programs::sequencer_stake(),
+            ),
         ])
         .with_public_accounts([
             (
@@ -4431,8 +4453,11 @@ fn a_mover_cannot_take_the_stake_funds_it_is_handed() {
     let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let mut state =
-        stake_test_state(funding_id, amount).with_programs([test_programs::reverse_transfer()]);
+    let reverse_transfer = test_programs::reverse_transfer();
+    let mut state = stake_test_state(funding_id, amount).with_named_programs([(
+        AccountId::from_builtin_program(reverse_transfer.id()),
+        reverse_transfer,
+    )]);
 
     // Seed the custody account so there is something worth taking.
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);

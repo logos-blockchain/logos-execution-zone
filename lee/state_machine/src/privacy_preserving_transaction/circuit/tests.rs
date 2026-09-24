@@ -16,7 +16,7 @@ use crate::{
     state::{
         CommitmentSet,
         tests::{
-            init_pda_witness, init_witness, test_private_account_keys_1,
+            init_pda_witness, init_witness, synthetic_program, test_private_account_keys_1,
             test_private_account_keys_2, update_pda_witness, update_witness,
         },
     },
@@ -89,7 +89,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -188,7 +188,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -252,7 +252,7 @@ fn init_note_view_tag_is_derived_from_account_keys() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -299,7 +299,7 @@ fn update_note_view_tag_is_the_supplied_value() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -350,7 +350,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
             ciphertext_padding: Some(PAD),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -451,7 +451,7 @@ fn private_pda_with_custom_identifier_encrypts_correct_kind() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.clone().into(),
+        &synthetic_program(program.clone()),
     )
     .unwrap();
 
@@ -608,7 +608,7 @@ fn shared_account_receives_via_simple_transfer() {
             instruction_data: instruction,
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     let (output, _proof) = result.expect("shared account receive should succeed");
@@ -639,7 +639,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -672,7 +672,7 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -713,7 +713,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -764,7 +764,7 @@ fn private_regular_update_without_ask_is_spendable() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 }
@@ -794,7 +794,7 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -828,7 +828,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -861,7 +861,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -893,7 +893,7 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
@@ -1027,7 +1027,7 @@ fn private_pda_init_identifier_mismatch_fails() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1061,7 +1061,7 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));

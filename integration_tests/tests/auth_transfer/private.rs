@@ -7,7 +7,10 @@ use integration_tests::{
     utils::{account_balance, assert_private_commitment_in_state, new_account, send, sync_private},
     verify_commitment_is_in_state,
 };
-use lee::{AccountId, ProgramShardSelector, ProvingInput, execute_and_prove, program::Program};
+use lee::{
+    AccountId, ProgramShardSelector, ProvingInput, execute_and_prove,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateWitness,
     WitnessKind, account::Account, encryption::ViewingPublicKey,
@@ -502,7 +505,6 @@ async fn prove_init_with_commitment_root(
     ctx: &TestContext,
     commitment_root: lee_core::CommitmentSetDigest,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
-    let program = programs::authenticated_transfer();
     let sender_id = ctx.existing_public_accounts()[0];
     let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
 
@@ -536,7 +538,11 @@ async fn prove_init_with_commitment_root(
             )?,
             ..Default::default()
         },
-        &program.into(),
+        &ProgramWithDependencies::new(
+            programs::authenticated_transfer(),
+            programs::authenticated_transfer_account_id(),
+            HashMap::new(),
+        ),
     )?;
 
     Ok(output)

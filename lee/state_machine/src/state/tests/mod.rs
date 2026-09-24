@@ -141,6 +141,11 @@ struct EmitterInstruction {
     chain: Vec<(AccountId, InstructionData)>,
 }
 
+pub fn synthetic_program(program: Program) -> ProgramWithDependencies {
+    let self_account_id = AccountId::from_builtin_program(program.id());
+    ProgramWithDependencies::new(program, self_account_id, HashMap::new())
+}
+
 fn transfer_transaction(
     from: AccountId,
     from_key: &PrivateKey,
@@ -318,7 +323,7 @@ fn shielded_balance_transfer_for_tests(
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
             ..Default::default()
         },
-        &crate::test_methods::simple_balance_transfer().into(),
+        &synthetic_program(crate::test_methods::simple_balance_transfer()),
     )
     .unwrap();
 
@@ -362,7 +367,7 @@ fn private_balance_transfer_for_tests(
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -407,7 +412,7 @@ fn deshielded_balance_transfer_for_tests(
             instruction_data: Program::serialize_instruction(balance_to_move).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 

@@ -254,7 +254,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
@@ -272,7 +272,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_circuit_proving_failure(&result, "Total balance across accounts is not preserved");
@@ -295,7 +295,7 @@ fn a_data_write_on_a_foreign_shard_is_rejected_in_the_circuit() {
             instruction_data: Program::serialize_instruction(vec![7_u8; 4]).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
@@ -322,7 +322,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
             instruction_data: Program::serialize_instruction(large_data).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_program_prove_failure(&result, "provided data should fit into data limit");
@@ -345,7 +345,7 @@ fn unauthorized_debit_should_fail_in_privacy_preserving_circuit() {
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_circuit_proving_failure(&result, "decrease balance of unauthorized account");

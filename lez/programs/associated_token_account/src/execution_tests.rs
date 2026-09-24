@@ -111,7 +111,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     .with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
 
     let mut state = V03State::new()
-        .with_programs([programs::token(), programs::ata()])
+        .with_named_programs([
+            (programs::token_account_id(), programs::token()),
+            (programs::ata_account_id(), programs::ata()),
+        ])
         .with_public_accounts([(ata_id, noisy_ata)])
         .with_public_account_balances([(owner_id, 100)]);
 

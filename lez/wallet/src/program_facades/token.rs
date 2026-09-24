@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::{
+    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
     encryption::ViewingPublicKey,
@@ -58,7 +62,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -93,7 +97,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -130,7 +134,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -192,7 +196,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -233,7 +237,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -268,7 +272,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -302,7 +306,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -340,7 +344,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -404,7 +408,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -439,7 +443,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -475,7 +479,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -538,7 +542,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -579,7 +583,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -614,7 +618,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -650,7 +654,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -690,7 +694,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {

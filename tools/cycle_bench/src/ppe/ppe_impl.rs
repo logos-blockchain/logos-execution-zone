@@ -42,8 +42,11 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
 }
 
 pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let auth_transfer = programs::authenticated_transfer();
-    let pwd = ProgramWithDependencies::from(auth_transfer);
+    let pwd = ProgramWithDependencies::new(
+        programs::authenticated_transfer(),
+        programs::authenticated_transfer_account_id(),
+        HashMap::new(),
+    );
 
     let sender_id = AccountId::new([1; 32]);
     let recipient_id = AccountId::new([2; 32]);

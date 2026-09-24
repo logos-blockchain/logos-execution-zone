@@ -105,10 +105,6 @@ async fn fund_private_pda(
 /// Spends from an owned private PDA to a fresh private-foreign recipient.
 ///
 /// Alice must own the PDA in the wallet (i.e. it must have been synced after a receive).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test helper — grouping args would obscure intent"
-)]
 async fn spend_private_pda(
     wallet: &WalletCore,
     pda_account_id: AccountId,

@@ -285,7 +285,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
             .unwrap(),
             ..Default::default()
         },
-        &emitter.clone().into(),
+        &synthetic_program(emitter.clone()),
     )
     .expect("emitting guest must prove on the private path");
 

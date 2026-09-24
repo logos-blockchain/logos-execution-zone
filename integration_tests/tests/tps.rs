@@ -9,7 +9,10 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
@@ -238,7 +241,6 @@ pub async fn tps_test() -> Result<()> {
 /// multiple times with the purpose of testing the node's processing performance.
 #[expect(dead_code, reason = "No idea if we need this, should we remove it?")]
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
-    let program = programs::authenticated_transfer();
     let sender_ask = AuthorizationSecretKey([1; 32]);
     let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
@@ -305,7 +307,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             .unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &circuit::ProgramWithDependencies::new(
+            programs::authenticated_transfer(),
+            programs::authenticated_transfer_account_id(),
+            HashMap::new(),
+        ),
     )
     .unwrap();
     let message = pptx::message::Message::from_circuit_output(vec![], output);

@@ -17,13 +17,14 @@ fn public_diff_reflects_a_successful_transfer() {
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
     let program_id =
         AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_named_programs(std::iter::once((
+            program_id,
+            crate::test_methods::simple_balance_transfer(),
+        )));
     let message = Message::try_new(
         program_id,
         vec![
@@ -117,13 +118,14 @@ fn metering_transfer_fixture() -> (V03State, crate::PublicTransaction) {
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
     let program_id =
         AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_named_programs(std::iter::once((
+            program_id,
+            crate::test_methods::simple_balance_transfer(),
+        )));
     let message = Message::try_new(
         program_id,
         vec![
@@ -242,13 +244,14 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(
-            crate::test_methods::simple_balance_transfer(),
-        ));
     let program_id =
         AccountId::from_builtin_program(crate::test_methods::simple_balance_transfer().id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_named_programs(std::iter::once((
+            program_id,
+            crate::test_methods::simple_balance_transfer(),
+        )));
     let message = Message::try_new(
         program_id,
         vec![
@@ -278,10 +281,13 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
     // it actually ran rather than the whole budget.
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(crate::test_methods::exits_nonzero()));
-    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
+        .with_named_programs(std::iter::once((
+            program_id,
+            crate::test_methods::exits_nonzero(),
+        )));
     let message = Message::try_new(
         program_id,
         vec![ProgramShardSelector::balance(from)],

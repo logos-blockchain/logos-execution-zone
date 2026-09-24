@@ -2763,7 +2763,10 @@ fn state_for_amm_tests() -> V03State {
 
     V03State::new()
         .with_public_accounts(public_state)
-        .with_programs([programs::amm(), programs::token()])
+        .with_named_programs([
+            (programs::amm_account_id(), programs::amm()),
+            (programs::token_account_id(), programs::token()),
+        ])
 }
 
 fn state_for_amm_tests_with_new_def() -> V03State {
@@ -2788,7 +2791,10 @@ fn state_for_amm_tests_with_new_def() -> V03State {
 
     V03State::new()
         .with_public_accounts(public_state)
-        .with_programs([programs::amm(), programs::token()])
+        .with_named_programs([
+            (programs::amm_account_id(), programs::amm()),
+            (programs::token_account_id(), programs::token()),
+        ])
 }
 
 #[test]

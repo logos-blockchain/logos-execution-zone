@@ -20,7 +20,7 @@ fn an_unused_private_witness_is_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(
@@ -67,7 +67,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
             instruction_data: Program::serialize_instruction(written.clone()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -132,7 +132,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -161,7 +161,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -197,7 +197,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -233,7 +233,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -268,7 +268,7 @@ fn private_pda_witness_binding_succeeds() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .expect("witness-bound private PDA should succeed");
 
@@ -303,7 +303,7 @@ fn private_pda_npk_mismatch_fails() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -914,7 +914,7 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -990,7 +990,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
             instruction_data: Program::serialize_instruction(100_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1015,7 +1015,7 @@ fn private_authorized_uninitialized_account() {
             instruction_data: Program::serialize_instruction(0_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -1052,7 +1052,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             instruction_data: Program::serialize_instruction(written.clone()).unwrap(),
             ..Default::default()
         },
-        &writer_program.into(),
+        &synthetic_program(writer_program),
     )
     .unwrap();
 
@@ -1085,7 +1085,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &noop_program.into(),
+        &synthetic_program(noop_program),
     );
 
     assert!(matches!(res, Err(LeeError::CircuitProvingError(_))));
@@ -1151,7 +1151,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 instruction_data: Program::serialize_instruction(amount).unwrap(),
                 ..Default::default()
             },
-            &simple_transfer.clone().into(),
+            &synthetic_program(simple_transfer.clone()),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1186,7 +1186,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 instruction_data: Program::serialize_instruction(amount).unwrap(),
                 ..Default::default()
             },
-            &simple_transfer.into(),
+            &synthetic_program(simple_transfer),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1326,7 +1326,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 instruction_data: Program::serialize_instruction(amount).unwrap(),
                 ..Default::default()
             },
-            &crate::test_methods::simple_balance_transfer().into(),
+            &synthetic_program(crate::test_methods::simple_balance_transfer()),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![recipient_nonce], output);
@@ -1393,7 +1393,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_in_the_circuit()
             instruction_data: Program::serialize_instruction(10_u128).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     let Err(err) = result else {
@@ -1423,7 +1423,7 @@ fn dropped_public_account_through_the_privacy_circuit_is_caught() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(

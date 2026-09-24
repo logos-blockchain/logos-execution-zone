@@ -190,15 +190,6 @@ impl V03State {
         self
     }
 
-    /// Initializes state with given builtin programs.
-    #[must_use]
-    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
-        for program in programs {
-            self.insert_program(&program);
-        }
-        self
-    }
-
     #[must_use]
     pub fn with_named_programs(
         mut self,
@@ -212,6 +203,7 @@ impl V03State {
 
     /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
     /// `user_elf`, chunked the same way a live `program_loader` deploy would.
+    #[cfg(test)]
     pub(crate) fn insert_program(&mut self, program: &Program) {
         self.insert_program_at(AccountId::from_builtin_program(program.id()), program);
     }
