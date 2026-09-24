@@ -196,10 +196,13 @@ pub mod tests {
         let state = state_for_tests();
         // both nonces match the current state, so only the repeat is at fault
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = 1337;
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            crate::test_methods::simple_balance_transfer().id().into(),
-            vec![addr1, addr2],
+            NATIVE_TOKEN_PROGRAM_ID,
+            vec![
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
+            ],
             nonces,
             instruction,
         )
