@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use integration_tests::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
+use lee::{AccountId, PrivateKey, PublicKey, native_token, program::Program};
 use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -157,7 +157,7 @@ pub fn joining_setup() -> Result<(
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let mover_instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+        Program::serialize_instruction(native_token::Instruction::Transfer {
             amount: FUNDING_BALANCE,
         })
         .context("Failed to serialize mover instruction")?;
@@ -165,9 +165,7 @@ pub fn joining_setup() -> Result<(
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: joining_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: AccountId::from_builtin_program(
-                programs::authenticated_transfer().id(),
-            ),
+            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
             mover_instruction_data,
         })
         .context("Failed to serialize Stake instruction")?;

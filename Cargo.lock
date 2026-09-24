@@ -11200,6 +11200,7 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
+ "sequencer_channel_config_actor",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_service",
