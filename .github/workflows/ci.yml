@@ -212,7 +212,14 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info,kameo=warn"
-        run: cargo nextest run --profile ci --workspace --exclude integration_tests --exclude test_fixtures --all-features
+        # The indexer's `backend-module` feature links logos-protocol symbols that only a
+        # module host provides, so the indexer crates are tested without `--all-features`.
+        run: |
+          cargo nextest run --profile ci --workspace --exclude integration_tests --exclude test_fixtures \
+            --exclude indexer_core --exclude indexer_ffi --exclude indexer_service --exclude indexer_service_protocol --exclude lez \
+            --all-features
+          cargo nextest run --profile ci -p indexer_core -p indexer_ffi -p indexer_service -p indexer_service_protocol -p lez \
+            --features indexer_core/prove
 
   # Not a `container:` job: the tests drive the host's Docker daemon through
   # testcontainers, so they run in the CI image via `run-in-ci-image` instead.

@@ -20,6 +20,15 @@ pub struct ClientConfig {
     pub addr: Url,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<BasicAuth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_name: Option<String>,
+}
+
+impl ClientConfig {
+    #[must_use]
+    pub fn module_name(&self) -> &str {
+        self.module_name.as_deref().unwrap_or("blockchain_module")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

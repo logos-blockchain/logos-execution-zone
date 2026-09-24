@@ -322,6 +322,7 @@ pub fn indexer_config(
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
+            module_name: None,
         },
         channel_id,
         cross_zone,
