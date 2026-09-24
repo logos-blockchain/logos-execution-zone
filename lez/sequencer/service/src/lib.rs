@@ -51,7 +51,7 @@ pub struct SequencerHandle {
 }
 
 /// The gossip actor and its companions.
-struct Gossip {
+pub struct Gossip {
     actor: ActorHandle<sequencer_gossip_actor::GossipActor>,
     bootstrap_addrs: Vec<sequencer_gossip_actor::Multiaddr>,
     /// Aborts the gossip outage warner when the handle is dropped.
@@ -290,7 +290,7 @@ pub fn run(
               executor's admission door, the slasher's approval flow, the channel-config \
               actor's signature collection, and the scheduler"
 )]
-async fn setup_gossip(
+pub async fn setup_gossip(
     gossip_config: GossipConfig,
     channel_id: [u8; 32],
     sequencer_home: &Path,
