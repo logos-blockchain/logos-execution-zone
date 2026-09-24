@@ -5,8 +5,8 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{AccountId, BalanceDiff, ProgramShardSelector, ShardData},
-    program::{AccountInput, AccountStateDiff, ChainedCall},
+    account::{AccountId, ProgramShardSelector, ShardData},
+    program::{AccountInput, ChainedCall, ShardStateDiff},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -23,7 +23,7 @@ pub fn new_definition(
     token_b_amount: NonZeroU128,
     self_account_id: AccountId,
     token_program_id: AccountId,
-) -> (Vec<AccountStateDiff>, Vec<ChainedCall>) {
+) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
     // Verify token_a and token_b are different
     let definition_token_a_id =
         token_core::TokenHolding::try_from(user_holding_a.shard_of(token_program_id))
@@ -108,11 +108,7 @@ pub fn new_definition(
         active: true,
     };
 
-    let pool_post = AccountStateDiff::new(
-        pool.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&pool_post_definition),
-    );
+    let pool_post = ShardStateDiff::new(pool.clone(), ShardData::from(&pool_post_definition));
 
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
@@ -157,12 +153,12 @@ pub fn new_definition(
 
     let post_diffs = vec![
         pool_post,
-        AccountStateDiff::unchanged(vault_a.clone()),
-        AccountStateDiff::unchanged(vault_b.clone()),
-        AccountStateDiff::unchanged(pool_definition_lp.clone()),
-        AccountStateDiff::unchanged(user_holding_a.clone()),
-        AccountStateDiff::unchanged(user_holding_b.clone()),
-        AccountStateDiff::unchanged(user_holding_lp.clone()),
+        ShardStateDiff::unchanged(vault_a.clone()),
+        ShardStateDiff::unchanged(vault_b.clone()),
+        ShardStateDiff::unchanged(pool_definition_lp.clone()),
+        ShardStateDiff::unchanged(user_holding_a.clone()),
+        ShardStateDiff::unchanged(user_holding_b.clone()),
+        ShardStateDiff::unchanged(user_holding_lp.clone()),
     ];
 
     (post_diffs, chained_calls)

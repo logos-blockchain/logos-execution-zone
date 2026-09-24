@@ -1,6 +1,5 @@
 use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
 };
@@ -9,25 +8,21 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
     account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector},
-    program::{
-        AccountInput, CallKind, CallerData, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramOutput,
-        TransactionEvent, compute_public_authorized_pdas, get_program_via,
-        pre_states_match_shard_selectors, validate_execution,
-    },
+    program::{AccountInput, ChainedCall, ProgramOutput, TransactionEvent},
+    validation::validate_state_diff,
 };
-use log::debug;
 use program_loader_core::Instruction as ProgramLoaderInstruction;
 
 use crate::{
     V03State, ensure,
-    error::{InvalidProgramBehaviorError, LeeError},
+    error::LeeError,
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
-    program::Program,
     public_transaction::PublicTransaction,
-    state::MAX_NUMBER_CHAINED_CALLS,
+    validated_state_diff::public_backend::PublicBackend,
 };
+mod public_backend;
 
 pub struct StateDiff {
     pub signer_account_ids: Vec<AccountId>,
@@ -262,25 +257,15 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
-        // All account_ids must be different
+        // An account may select several shards, but never the same one twice.
         ensure!(
-            shard_selectors
-                .iter()
-                .map(|shard_selector| shard_selector.account_id)
-                .collect::<HashSet<_>>()
-                .len()
-                == shard_selectors.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
+            shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
+            LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
         );
-
-        let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
         let declared: HashSet<AccountId> = shard_selectors
             .iter()
             .map(|shard_selector| shard_selector.account_id)
             .collect();
-        // Shard selectors seen in program outputs.
-        let mut shard_selectors_seen: HashSet<ProgramShardSelector> = HashSet::new();
-        let mut events: Vec<TransactionEvent> = Vec::new();
 
         let initial_call = ChainedCall {
             program_account_id,
@@ -288,297 +273,43 @@ impl ValidatedStateDiff {
             shard_selectors: shard_selectors.to_vec(),
             pda_seeds: vec![],
         };
+        let mut backend = PublicBackend::new(
+            state,
+            block_id,
+            timestamp,
+            declared,
+            authorized,
+            cycle_budget.saturating_sub(*cycles_used),
+        );
+        let result = validate_state_diff(&mut backend, initial_call, shard_selectors);
 
-        let initial_caller_data = CallerData {
-            account_id: None,
-            authorized_accounts: authorized.clone(),
-        };
+        // Read back before propagating the failure for cycle count.
+        *cycles_used = cycles_used
+            .checked_add(backend.cycles_used())
+            .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
 
-        let mut chained_calls =
-            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
-        let mut chain_calls_counter = 0;
+        let threaded = result?;
 
-        while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
-            ensure!(
-                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
-                LeeError::MaxChainedCallsDepthExceeded
-            );
+        // The traversal tracks balances and shards; nonces are untouched by execution and
+        // advance only at apply time, so re-attach each account's committed nonce.
+        let public_diff = threaded
+            .accounts
+            .into_iter()
+            .map(|(account_id, tracked)| {
+                let nonce = state
+                    .get_account_by_id_ref(account_id)
+                    .map(|account| account.nonce)
+                    .unwrap_or_default();
+                let data = tracked.current;
+                (account_id, Account { nonce, data })
+            })
+            .collect();
 
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.account_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
-
-            // The caller only names shard selectors; resolve each one's actual value from the
-            // protocol's own tracked state, not from anything it asserts. Resolvable only if
-            // declared up front or already touched in this transaction — never merely because
-            // it exists somewhere in global state.
-            let absent = Account::default();
-            let real_pre_states: Vec<AccountInput> = chained_call
-                .shard_selectors
-                .iter()
-                .map(|shard_selector| {
-                    let account_id = shard_selector.account_id;
-                    let account = match state_diff.get(&account_id) {
-                        Some(account) => account,
-                        None if declared.contains(&account_id) => {
-                            state.get_account_by_id_ref(account_id).unwrap_or(&absent)
-                        }
-                        None => {
-                            return Err(LeeError::from(
-                                InvalidProgramBehaviorError::UnknownChainedCallAccount {
-                                    account_id,
-                                },
-                            ));
-                        }
-                    };
-                    Ok(AccountInput::at(
-                        *shard_selector,
-                        is_authorized(&account_id),
-                        &account.data,
-                    ))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            debug!(
-                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_account_id, real_pre_states, chained_call.instruction_data
-            );
-            let program_output = if chained_call.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-                // Native dispatch: `program_loader` is a pseudo-program run as Rust rather than a
-                // guest ELF, so there is no zkVM session to charge cycles against.
-                execute_program_loader(
-                    chained_call.program_account_id,
-                    caller_data.account_id,
-                    &real_pre_states,
-                    &chained_call.instruction_data,
-                )?
-            } else {
-                // Looks through `state_diff` first, falling back to `state` — so an earlier
-                // chained call in this same transaction that deployed this program is seen
-                // immediately, rather than only on the next transaction.
-                let Some((program_id, user_elf)) =
-                    get_program_via(chained_call.program_account_id, |id| {
-                        state_diff
-                            .get(&id)
-                            .or_else(|| state.get_account_by_id_ref(id))
-                    })
-                else {
-                    return Err(LeeError::UnknownProgram {
-                        chained: caller_data.account_id.is_some(),
-                    });
-                };
-                let elf = crate::program::attach_kernel(&user_elf);
-                let program = Program::new_unchecked(program_id, Cow::Owned(elf));
-                let (program_output, call_cycles) = program.execute(
-                    chained_call.program_account_id,
-                    caller_data.account_id,
-                    &real_pre_states,
-                    &chained_call.instruction_data,
-                    cycle_budget.saturating_sub(*cycles_used),
-                )?;
-                *cycles_used = cycles_used
-                    .checked_add(call_cycles)
-                    .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
-                program_output
-            };
-            debug!(
-                "Program {:?} output: {:?}",
-                chained_call.program_account_id, program_output
-            );
-
-            // A chained callee must account for exactly the shard selectors its caller named, in
-            // order. The top-level call has no caller, so it's exempt here.
-            ensure!(
-                caller_data.account_id.is_none()
-                    || pre_states_match_shard_selectors(
-                        &chained_call.shard_selectors,
-                        &program_output.state_diffs
-                    ),
-                InvalidProgramBehaviorError::ChainedCallAccountsMismatch {
-                    program_account_id: chained_call.program_account_id
-                }
-            );
-
-            let named_accounts: HashSet<AccountId> = chained_call
-                .shard_selectors
-                .iter()
-                .map(|shard_selector| shard_selector.account_id)
-                .collect();
-
-            for pre in program_output
-                .state_diffs
-                .iter()
-                .map(|diff| &diff.pre_state)
-            {
-                let account_id = pre.account_id;
-                ensure!(
-                    named_accounts.contains(&account_id),
-                    InvalidProgramBehaviorError::UndeclaredAccountInProgramOutput {
-                        program_account_id: chained_call.program_account_id,
-                        account_id
-                    }
-                );
-
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let shard_selector = ProgramShardSelector::from(pre);
-                let expected = state_diff
-                    .get(&account_id)
-                    .or_else(|| state.get_account_by_id_ref(account_id))
-                    .unwrap_or(&absent);
-                let consistent = expected.data.balance == pre.balance
-                    && pre
-                        .shard
-                        .as_ref()
-                        .is_none_or(|(program, data)| expected.data.shard(*program) == data);
-                ensure!(
-                    consistent,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(AccountInput::at(
-                            shard_selector,
-                            pre.is_authorized,
-                            &expected.data
-                        )),
-                        actual: Box::new(pre.clone())
-                    }
-                );
-
-                // Check that the program output pre_states marked as authorized are indeed
-                // authorized, and vice-versa.
-                let is_indeed_authorized = is_authorized(&account_id);
-                ensure!(
-                    !pre.is_authorized || is_indeed_authorized,
-                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
-                );
-                ensure!(
-                    pre.is_authorized || !is_indeed_authorized,
-                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
-                        account_id
-                    }
-                );
-
-                shard_selectors_seen.insert(shard_selector);
-            }
-
-            // Verify that the program output's self_account_id matches the expected address.
-            ensure!(
-                program_output.self_account_id == chained_call.program_account_id,
-                InvalidProgramBehaviorError::MismatchedProgramId {
-                    expected: chained_call.program_account_id,
-                    actual: program_output.self_account_id
-                }
-            );
-
-            // Verify that the program output's caller_account_id matches the actual caller.
-            ensure!(
-                program_output.caller_account_id == caller_data.account_id,
-                InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.account_id,
-                    actual: program_output.caller_account_id,
-                }
-            );
-
-            // Only a top-level call may legitimately be a no-op; a chained call must execute.
-            if caller_data.account_id.is_some() {
-                ensure!(
-                    program_output.call_kind == CallKind::Execute,
-                    InvalidProgramBehaviorError::ChainedCallDidNotExecute {
-                        program_account_id: chained_call.program_account_id
-                    }
-                );
-            }
-
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(&program_output.state_diffs, chained_call.program_account_id)
-                .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
-
-            // Verify validity window
-            ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
-                    && program_output
-                        .timestamp_validity_window
-                        .is_valid_for(timestamp),
-                LeeError::OutOfValidityWindow
-            );
-
-            // Apply balance and shard changes, preserving all other shards.
-            for diff in &program_output.state_diffs {
-                let account_id = diff.pre_state.account_id;
-                state_diff
-                    .entry(account_id)
-                    .or_insert_with(|| state.get_account_by_id(account_id))
-                    .data
-                    .apply_diff(diff)
-                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-            }
-
-            // Write all the output event data into a proper event struct,
-            // marking its emitter program.
-            events.extend(
-                program_output
-                    .events
-                    .into_iter()
-                    .map(|event| TransactionEvent {
-                        account_id: chained_call.program_account_id,
-                        event,
-                    }),
-            );
-
-            // Source from `program_output.state_diffs` (the callee's own checked echo), not
-            // `chained_call.shard_selectors` (bare shard selectors the caller supplied, carrying no
-            // authorization claim at all and forgeable, audit-issue 91) — the loop above
-            // already gates program_output's `is_authorized` via the `!pre.is_authorized ||
-            // is_indeed_authorized` check.
-            //
-            // Union with the caller's authorized set so that authorization is monotonically
-            // growing: once an account is authorized at any point in the chain it remains
-            // authorized for all subsequent calls.
-            let mut authorized_accounts = caller_data.authorized_accounts;
-            authorized_accounts.extend(
-                program_output
-                    .state_diffs
-                    .iter()
-                    .map(|diff| &diff.pre_state)
-                    .filter(|pre| pre.is_authorized)
-                    .map(|pre| pre.account_id),
-            );
-            for new_call in program_output.chained_calls.into_iter().rev() {
-                chained_calls.push_front((
-                    new_call,
-                    CallerData {
-                        account_id: Some(chained_call.program_account_id),
-                        authorized_accounts: authorized_accounts.clone(),
-                    },
-                ));
-            }
-
-            chain_calls_counter = chain_calls_counter
-                .checked_add(1)
-                .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Every initial shard selector must appear in a program output.
-        for shard_selector in shard_selectors {
-            ensure!(
-                shard_selectors_seen.contains(shard_selector),
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: shard_selector.account_id
-                }
-            );
-        }
-
+        let (events, new_commitments) = backend.into_outputs();
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
-            public_diff: state_diff,
-            new_commitments: vec![],
+            public_diff,
+            new_commitments,
             new_nullifiers: vec![],
             events,
         }))
@@ -734,15 +465,20 @@ fn execute_program_loader(
     caller_account_id: Option<AccountId>,
     pre_states: &[AccountInput],
     instruction_data: &[u8],
-) -> Result<ProgramOutput, LeeError> {
+) -> Result<(ProgramOutput, Option<Commitment>), LeeError> {
     let instruction: ProgramLoaderInstruction = borsh::from_slice(instruction_data)
         .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
-    let state_diffs = catch_unwind(AssertUnwindSafe(|| match instruction {
+    // WriteSegment never emits a commitment; CreateHeader/UpdateHeader emit one only when this
+    // call is what makes the header immutable.
+    let (state_diffs, new_commitment) = catch_unwind(AssertUnwindSafe(|| match instruction {
         ProgramLoaderInstruction::WriteSegment {
             bytecode,
             next_segment,
-        } => program_loader_core::write_segment(pre_states, bytecode, next_segment),
+        } => (
+            program_loader_core::write_segment(pre_states, bytecode, next_segment),
+            None,
+        ),
         ProgramLoaderInstruction::CreateHeader {
             first_segment,
             immutable,
@@ -761,11 +497,14 @@ fn execute_program_loader(
         LeeError::ProgramExecutionFailed(message)
     })?;
 
-    Ok(ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data.to_vec(),
-        state_diffs,
+    Ok((
+        ProgramOutput::new(
+            self_account_id,
+            caller_account_id,
+            instruction_data.to_vec(),
+            state_diffs,
+        ),
+        new_commitment,
     ))
 }
 
@@ -810,24 +549,31 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     public_actions: Vec<PublicAction>,
     message: &Message,
 ) -> Result<(), LeeError> {
-    // Anchor each claimed image_id to real chain state: reconstruct the claims using the
-    // program's *actual* current image_id (via `get_program_image_id`), not the message's own
-    // claim. If the claim was wrong, the reconstructed journal won't match what the receipt
-    // actually committed to, and `proof.is_valid_for` below fails — the same mechanism
-    // `public_actions` already relies on for authenticating account content against real state.
+    // Anchor each `Disclosed` claim to real chain state, reconstructing it independently rather
+    // than trusting the message's own claim — a wrong claim means the reconstructed journal won't
+    // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
+    // `Undisclosed`'s membership check already happened in-circuit; the one thing left to check
+    // here is that its `root` is one the commitment tree has actually had.
     let program_image_claims = message
         .program_image_claims
         .iter()
-        .map(|claim| {
-            let image_id = state
-                .get_program_image_id(claim.account_id)
-                .ok_or_else(|| {
-                    LeeError::InvalidInput(format!("Unknown program {}", claim.account_id))
+        .map(|claim| match claim {
+            ProgramImageClaim::Disclosed { account_id, .. } => {
+                let image_id = state.get_program_image_id(*account_id).ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {account_id}"))
                 })?;
-            Ok(ProgramImageClaim {
-                account_id: claim.account_id,
-                image_id,
-            })
+                Ok(ProgramImageClaim::Disclosed {
+                    account_id: *account_id,
+                    image_id,
+                })
+            }
+            ProgramImageClaim::Undisclosed { root } => {
+                ensure!(
+                    state.is_known_commitment_root(root),
+                    LeeError::InvalidInput("Unrecognized commitment set digest".to_owned())
+                );
+                Ok(*claim)
+            }
         })
         .collect::<Result<Vec<_>, LeeError>>()?;
 

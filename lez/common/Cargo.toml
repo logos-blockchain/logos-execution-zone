@@ -10,7 +10,6 @@ workspace = true
 [dependencies]
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
-authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 fee_core.workspace = true
 bridge_core.workspace = true

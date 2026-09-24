@@ -142,10 +142,10 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(expected_cc == keys.cc);
-        assert!(expected_ssk == keys.ssk);
-        assert!(expected_sk == keys.sk);
-        assert!(expected_pk == keys.pk);
+        assert_eq!(expected_cc, keys.cc);
+        assert_eq!(expected_ssk, keys.ssk);
+        assert_eq!(expected_sk, keys.sk);
+        assert_eq!(expected_pk, keys.pk);
     }
 
     #[test]
@@ -177,9 +177,9 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(expected_cc == child_keys.cc);
-        assert!(expected_ssk == child_keys.ssk);
-        assert!(expected_sk == child_keys.sk);
-        assert!(expected_pk == child_keys.pk);
+        assert_eq!(expected_cc, child_keys.cc);
+        assert_eq!(expected_ssk, child_keys.ssk);
+        assert_eq!(expected_sk, child_keys.sk);
+        assert_eq!(expected_pk, child_keys.pk);
     }
 }

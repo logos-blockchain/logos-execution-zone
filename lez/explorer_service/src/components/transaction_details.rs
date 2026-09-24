@@ -4,7 +4,7 @@ use indexer_service_protocol::{
 };
 use leptos::prelude::*;
 
-use super::AccountNonceList;
+use super::ShardSelectorList;
 
 /// Public transaction details component
 #[component]
@@ -29,6 +29,11 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     let program_id_str = program_account_id.to_string();
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
+    let signer_nonces_str = nonces
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
         || ("None (exempt)".to_owned(), "None (exempt)".to_owned()),
         |fee| {
@@ -69,10 +74,14 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                     <span class="info-label">"Gas Limit / Tip / Max Fee:"</span>
                     <span class="info-value">{fee_amounts_str}</span>
                 </div>
+                <div class="info-row">
+                    <span class="info-label">"Signer Nonces:"</span>
+                    <span class="info-value">{signer_nonces_str}</span>
+                </div>
             </div>
 
             <h3>"Accounts"</h3>
-            <AccountNonceList shard_selectors=shard_selectors nonces=nonces />
+            <ShardSelectorList shard_selectors=shard_selectors />
         </div>
     }
 }
@@ -93,15 +102,25 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         timestamp_validity_window,
     } = message;
     let private_action_count = private_actions.len();
-    // List public accounts without a program label; an action may include several shards.
+    let public_account_count = public_actions.len();
     let public_shard_selectors: Vec<_> = public_actions
         .into_iter()
-        .map(|action| ProgramShardSelector {
-            account_id: action.account_id,
-            program_account_id: None,
+        .flat_map(|action| {
+            action
+                .post
+                .shards
+                .into_keys()
+                .map(move |program_account_id| ProgramShardSelector {
+                    account_id: action.account_id,
+                    program_account_id,
+                })
         })
         .collect();
-    let public_account_count = public_shard_selectors.len();
+    let signer_nonces_str = nonces
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -134,10 +153,14 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                     <span class="info-label">"Timestamp Validity Window:"</span>
                     <span class="info-value">{timestamp_validity_window.to_string()}</span>
                 </div>
+                <div class="info-row">
+                    <span class="info-label">"Signer Nonces:"</span>
+                    <span class="info-value">{signer_nonces_str}</span>
+                </div>
             </div>
 
             <h3>"Public Accounts"</h3>
-            <AccountNonceList shard_selectors=public_shard_selectors nonces=nonces />
+            <ShardSelectorList shard_selectors=public_shard_selectors />
         </div>
     }
 }

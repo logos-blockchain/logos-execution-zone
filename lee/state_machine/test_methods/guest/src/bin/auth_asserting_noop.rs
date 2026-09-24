@@ -1,5 +1,5 @@
 use lee_core::program::{
-    AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+    ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
     respond_unsupported_call,
 };
 
@@ -34,7 +34,7 @@ fn main() {
 
     let state_diffs = pre_states
         .iter()
-        .map(|account| AccountStateDiff::unchanged(account.clone()))
+        .map(|account| ShardStateDiff::unchanged(account.clone()))
         .collect();
     ProgramOutput::new(
         self_account_id,

@@ -4,7 +4,6 @@ use super::*;
 fn flash_swap_successful() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id = AccountId::for_public_pda(
         &AccountId::from_builtin_program(initiator.id()),
@@ -21,20 +20,21 @@ fn flash_swap_successful() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
     // Callback instruction: return funds
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: AccountId::from_builtin_program(token.id()),
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
         callback_instruction_data: cb_data,
@@ -46,17 +46,16 @@ fn flash_swap_successful() {
 
     // Vault balance restored, receiver back to 0
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance,
-        initial_balance
+        state.get_account_by_id(vault_id).data.balance(),
+        Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance, 0);
+    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
 }
 
 #[test]
 fn flash_swap_callback_keeps_funds_rollback() {
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id = AccountId::for_public_pda(
         &AccountId::from_builtin_program(initiator.id()),
@@ -73,20 +72,21 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
     // Callback instruction: do NOT return funds
     let cb_instruction = CallbackInstruction {
         return_funds: false,
-        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: amount_out,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: AccountId::from_builtin_program(token.id()),
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
         callback_instruction_data: cb_data,
@@ -103,10 +103,10 @@ fn flash_swap_callback_keeps_funds_rollback() {
 
     // State unchanged (rollback)
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance,
-        initial_balance
+        state.get_account_by_id(vault_id).data.balance(),
+        Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance, 0);
+    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
 }
 
 #[test]
@@ -115,7 +115,6 @@ fn flash_swap_self_call_targets_correct_program() {
     // because vault balance doesn't decrease.
     let initiator = crate::test_methods::flash_swap_initiator();
     let callback = crate::test_methods::flash_swap_callback();
-    let token = crate::test_methods::simple_balance_transfer();
 
     let vault_id = AccountId::for_public_pda(
         &AccountId::from_builtin_program(initiator.id()),
@@ -131,19 +130,20 @@ fn flash_swap_self_call_targets_correct_program() {
     let vault_account = Account::funded(initial_balance);
     let receiver_account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
     state.force_insert_account(vault_id, vault_account);
     state.force_insert_account(receiver_id, receiver_account);
 
     let cb_instruction = CallbackInstruction {
         return_funds: true,
-        token_program_id: AccountId::from_builtin_program(token.id()),
         amount: 0,
     };
     let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
     let instruction = FlashSwapInstruction::Initiate {
-        token_program_id: AccountId::from_builtin_program(token.id()),
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out: 0,
         callback_instruction_data: cb_data,
@@ -170,7 +170,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let vault_account = Account::funded(1000);
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state = V03State::new().with_programs([crate::test_methods::flash_swap_initiator()]);
     state.force_insert_account(vault_id, vault_account);
 
     let instruction = FlashSwapInstruction::InvariantCheck {
@@ -200,7 +200,8 @@ fn malicious_self_program_id_rejected_in_public_execution() {
     let acc_id = AccountId::new([99; 32]);
     let account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state =
+        V03State::new().with_programs([crate::test_methods::malicious_self_program_id()]);
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(
@@ -226,7 +227,8 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
     let acc_id = AccountId::new([99; 32]);
     let account = Account::default();
 
-    let mut state = V03State::new().with_test_programs();
+    let mut state =
+        V03State::new().with_programs([crate::test_methods::malicious_caller_program_id()]);
     state.force_insert_account(acc_id, account);
 
     let message = public_transaction::Message::try_new(

@@ -135,9 +135,8 @@ RISC0_DEV_MODE=1 cargo test --release
 
 ```bash
 export LEE_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
-cd integration_tests
 # RISC0_DEV_MODE=1 skips proof generation; RUST_LOG=info enables runtime logs
-RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all
+RUST_LOG=info RISC0_DEV_MODE=1 cargo test -p integration_tests --release -- --nocapture
 ```
 
 # Run the sequencer and node
@@ -210,7 +209,7 @@ This will use a wallet binary built from this repo and not the one installed in 
 ### Standalone mode
 The sequencer can be run in standalone mode with:
 ```bash
-RUST_LOG=info cargo run --features standalone -p sequencer_service lez/sequencer/service/configs/debug
+RUST_LOG=info cargo run --features standalone -p sequencer_service -- lez/sequencer/service/configs/debug/sequencer_config.json
 ```
 
 ## Running with Docker

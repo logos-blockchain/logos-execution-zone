@@ -29,6 +29,7 @@ log.workspace = true
 build_utils.workspace = true
 
 [dev-dependencies]
+test_guest_core.workspace = true
 lee_core = { workspace = true, features = ["test_utils"] }
 test_methods = { path = "test_methods" }
 

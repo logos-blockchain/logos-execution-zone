@@ -1,11 +1,13 @@
 use lee_core::{
-    account::BalanceDiff,
+    account::ShardData,
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
 
+/// Writes its own shard on both accounts, but reports its two diffs in the opposite order from
+/// `pre_states`.
 type Instruction = Vec<u8>;
 
 fn main() {
@@ -23,22 +25,20 @@ fn main() {
         respond_unsupported_call(call);
     };
 
-    let Ok([target, other]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([first_pre, second_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;
     };
 
-    let target_diff = AccountStateDiff::new(
-        target,
-        BalanceDiff::Add(0),
-        data.try_into()
-            .expect("provided data should fit into data limit"),
-    );
+    let written = data.try_into().expect("written data fits the data limit");
+    let first_diff = ShardStateDiff::new(first_pre, written);
+    let second_diff = ShardStateDiff::new(second_pre, ShardData::empty());
 
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![target_diff, AccountStateDiff::unchanged(other)],
+        // Swapped.
+        vec![second_diff, first_diff],
     )
     .write();
 }

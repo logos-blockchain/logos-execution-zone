@@ -172,8 +172,16 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let state_a = seq_a.chain().lock().await.head_state().clone();
     for account in initial_public_user_accounts() {
         assert_eq!(
-            state_b.get_account_by_id(account.account_id).data.balance,
-            state_a.get_account_by_id(account.account_id).data.balance,
+            state_b
+                .get_account_by_id(account.account_id)
+                .data
+                .balance()
+                .unwrap(),
+            state_a
+                .get_account_by_id(account.account_id)
+                .data
+                .balance()
+                .unwrap(),
         );
     }
 

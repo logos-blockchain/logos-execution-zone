@@ -1,7 +1,8 @@
 use lee_core::{
-    account::BalanceDiff,
+    account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
         respond_unsupported_call,
     },
 };
@@ -10,6 +11,11 @@ type Instruction = u128;
 
 /// Moves balance out of the SECOND account into the first — the direction a
 /// callee handed someone else's account would take to help itself.
+///
+/// Emits its diffs in `pre_states` order, which is what makes it usable as a chained CALLEE:
+/// a callee must account for its caller's shard selectors in order. `chain_caller` cannot
+/// stand in here — it emits its diffs reversed, which only passes because the top-level call
+/// is exempt from that rule.
 fn main() {
     let call = read_lee_call::<Instruction>();
     let ProgramCall::Execute(
@@ -29,14 +35,24 @@ fn main() {
         return;
     };
 
-    let recipient_diff = AccountStateDiff::balance(recipient, BalanceDiff::Add(amount));
-    let source_diff = AccountStateDiff::balance(source, BalanceDiff::Sub(amount));
+    let transfer = ChainedCall::new(
+        NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::from(&source),
+            ProgramShardSelector::from(&recipient),
+        ],
+        &NativeInstruction::Transfer { amount },
+    );
 
     ProgramOutput::new(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![recipient_diff, source_diff],
+        vec![
+            ShardStateDiff::unchanged(recipient),
+            ShardStateDiff::unchanged(source),
+        ],
     )
+    .with_chained_calls(vec![transfer])
     .write();
 }

@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    account::{AccountId, ShardData},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -13,7 +13,7 @@ pub fn new_fungible_definition(
     self_account_id: AccountId,
     name: String,
     total_supply: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         definition_target_account
             .shard_of(self_account_id)
@@ -36,15 +36,13 @@ pub fn new_fungible_definition(
         balance: total_supply,
     };
 
-    let definition_diff = AccountStateDiff::new(
+    let definition_diff = ShardStateDiff::new(
         definition_target_account.clone(),
-        BalanceDiff::Add(0),
         ShardData::from(&token_definition),
     );
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         holding_target_account.clone(),
-        BalanceDiff::Add(0),
         ShardData::from(&token_holding),
     );
 
@@ -59,7 +57,7 @@ pub fn new_definition_with_metadata(
     self_account_id: AccountId,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(
         definition_target_account
             .shard_of(self_account_id)
@@ -113,21 +111,18 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let definition_diff = AccountStateDiff::new(
+    let definition_diff = ShardStateDiff::new(
         definition_target_account.clone(),
-        BalanceDiff::Add(0),
         ShardData::from(&token_definition),
     );
 
-    let holding_diff = AccountStateDiff::new(
+    let holding_diff = ShardStateDiff::new(
         holding_target_account.clone(),
-        BalanceDiff::Add(0),
         ShardData::from(&token_holding),
     );
 
-    let metadata_diff = AccountStateDiff::new(
+    let metadata_diff = ShardStateDiff::new(
         metadata_target_account.clone(),
-        BalanceDiff::Add(0),
         ShardData::from(&token_metadata),
     );
 
