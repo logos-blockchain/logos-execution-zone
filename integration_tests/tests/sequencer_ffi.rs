@@ -16,8 +16,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::get_account;
 use log::info;
+use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
-use sequencer_core::block_publisher::Ed25519Key;
 use sequencer_ffi::api::types::{FfiOption, transaction::FfiTransactionKind};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
@@ -27,7 +27,13 @@ mod sequencer_ffi_helpers;
 
 #[test]
 fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
-    let (ctx, node, ownership_id, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node,
+        ownership_id,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home: _sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup()?;
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -175,7 +181,13 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
 
 #[test]
 fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
-    let (ctx, node, owner_id, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node,
+        ownership_id: owner_id,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home: _sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup()?;
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.

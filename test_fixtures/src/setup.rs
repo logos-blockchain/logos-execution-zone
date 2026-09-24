@@ -156,7 +156,7 @@ impl SequencerSetup {
 
         debug!("Using sequencer home at {}", home.display());
 
-        let bedrock_signing_key = bedrock_signing_key.clone().or_else(|| {
+        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
             genesis_transactions
                 .is_none()
                 .then_some(UnsecuredEd25519Key::from_bytes(

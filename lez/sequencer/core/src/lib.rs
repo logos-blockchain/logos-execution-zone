@@ -263,19 +263,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         for block in head_blocks {
             let block_id = block.header.block_id;
             chain.restore_head_block(block).unwrap_or_else(|err| {
-                panic!("Stored block {block_id} does not replay while restoring chain state (does the config cross_zone presence still match the chain genesis?): {err}")
+                panic!("Stored block {block_id} does not replay while restoring chain state (does the config cross_zone presence still match the chain genesis?): {:#}", anyhow!(err))
             });
         }
         if let Some(cursor) = storage_ref
             .ask(GetChannelCursor)
             .await
-            .unwrap_or_else(|err| panic!("Failed to read the stored channel cursor: {err:#}"))
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to read the stored channel cursor: {:#}",
+                    anyhow!(err)
+                )
+            })
         {
             chain.restore_cursor(MsgId::from(cursor));
-        } else if let Some(checkpoint) = zone_checkpoint(storage_ref)
-            .await
-            .unwrap_or_else(|err| panic!("Failed to read the stored zone checkpoint: {err:#}"))
-        {
+        } else if let Some(checkpoint) = zone_checkpoint(storage_ref).await.unwrap_or_else(|err| {
+            panic!(
+                "Failed to read the stored zone checkpoint: {:#}",
+                anyhow!(err)
+            )
+        }) {
             // A store from before the cursor cell existed still pins: the sdk
             // checkpoint carries the channel tip it was built on.
             chain.restore_cursor(checkpoint.last_msg_id);
@@ -362,6 +369,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             bedrock_ref
                 .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
                 .await
+                .map_err(|err| anyhow!(err))
                 .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
         })
         .await
@@ -516,7 +524,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         })
                         .await
                         .unwrap_or_else(|err| {
-                            panic!("Failed to create channel with genesis: {err:#}")
+                            panic!("Failed to create channel with genesis: {:#}", anyhow!(err))
                         }),
                     _ => bedrock_ref
                         .ask(sequencer_bedrock_actor::protocol::PublishBlock {
@@ -528,8 +536,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         .await
                         .unwrap_or_else(|err| {
                             panic!(
-                                "Failed to publish block {} on fresh start: {err:#}",
-                                block.header.block_id
+                                "Failed to publish block {} on fresh start: {:#}",
+                                block.header.block_id,
+                                anyhow!(err)
                             )
                         }),
                 };
@@ -793,8 +802,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 return Err(anyhow!(
-                    "Channel block {block_id} does not extend local tip {:?}: {err}",
-                    tip.map(|tip| tip.id)
+                    "Channel block {block_id} does not extend local tip {:?}: {:#}",
+                    tip.map(|tip| tip.id),
+                    anyhow!(err)
                 ));
             }
         }
@@ -869,8 +879,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let moved_head = !adopted.is_empty();
 
         let checkpoint_record = ZoneCheckpointRecord {
-            bytes: checkpoint_bytes(checkpoint)
-                .unwrap_or_else(|err| panic!("Failed to serialize zone-sdk checkpoint: {err:#}")),
+            bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to serialize zone-sdk checkpoint: {:#}",
+                    anyhow!(err)
+                )
+            }),
             seq: seq.into_inner(),
         };
         self.applied_seq = Some(*seq);
@@ -933,7 +947,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // or dropping its deposit records would lose them for good.
             let mut irreversible: Vec<&Block> = Vec::new();
             let mut final_advanced = false;
-            for ((block, _), outcome) in finalized.iter().zip(&finalized_outcomes) {
+            for ((block, _), outcome) in finalized.iter().zip(finalized_outcomes) {
                 match outcome {
                     AcceptOutcome::Applied => {
                         to_persist.push(block.clone());
@@ -948,9 +962,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     // nothing else reports it.
                     AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                         warn!(
-                            "Finalized block {} did not apply, the final tier stays at {:?}: {err}",
+                            "Finalized block {} did not apply, the final tier stays at {:?}: {:#}",
                             block.header.block_id,
                             chain.final_tip().map(|tip| tip.block_id),
+                            anyhow!(err),
                         );
                     }
                 }
@@ -1057,7 +1072,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     lower_published_high_water,
                 })
                 .await
-                .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
+                .unwrap_or_else(|err| {
+                    panic!("Failed to persist follow update: {:#}", anyhow!(err))
+                });
 
             (resubmit_txs, outcome, head_tip_id)
         };
@@ -1088,7 +1105,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         for tx in resubmit_txs {
             let tx_hash = tx.hash();
             if let Err(err) = self.mempool_handle.try_push((TransactionOrigin::User, tx)) {
-                warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
+                warn!(
+                    "Dropping orphaned transaction {tx_hash} on resubmit: {:#}",
+                    anyhow!(err)
+                );
             }
         }
 
@@ -1120,7 +1140,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             target,
         };
         if let Err(err) = self.config_manager.tell(view).await {
-            warn!("Failed to refresh the channel-config actor: {err}");
+            warn!(
+                "Failed to refresh the channel-config actor: {:#}",
+                anyhow!(err)
+            );
         }
     }
 
@@ -1260,7 +1283,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
-                     this round: {err:#}"
+                     this round: {:#}",
+                    anyhow!(err)
                 );
                 None
             }
@@ -1285,7 +1309,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let action = match self.config_manager.ask(channel_config::Propose).await {
             Ok(action) => action,
             Err(err) => {
-                warn!("Failed to ask the channel-config actor what to do: {err}");
+                warn!(
+                    "Failed to ask the channel-config actor what to do: {:#}",
+                    anyhow!(err)
+                );
                 return;
             }
         };
@@ -1312,7 +1339,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             Ok(prepared) => prepared,
             Err(err) => {
-                warn!("Failed to fund a channel-config draft: {err:#}");
+                warn!("Failed to fund a channel-config draft: {:#}", anyhow!(err));
                 return;
             }
         };
@@ -1338,7 +1365,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.submit_config(*submission).await;
             }
             Ok(_) => {}
-            Err(err) => warn!("The channel-config actor is gone; dropping the draft: {err}"),
+            Err(err) => warn!(
+                "The channel-config actor is gone; dropping the draft: {:#}",
+                anyhow!(err)
+            ),
         }
     }
 
@@ -1366,7 +1396,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             Ok(tip_slot) => tip_slot,
             Err(err) => {
-                warn!("Failed to read the channel tip slot: {err:#}");
+                warn!("Failed to read the channel tip slot: {:#}", anyhow!(err));
                 None
             }
         };
@@ -1399,7 +1429,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         {
             // Left unsubmitted: zone-sdk never took it, so the next turn
             // discards it and funds another.
-            warn!("Failed to submit the committee channel-config update: {err:#}");
+            warn!(
+                "Failed to submit the committee channel-config update: {:#}",
+                anyhow!(err)
+            );
             return;
         }
         if let Some(in_flight) = self.config_draft.as_mut() {
@@ -1414,7 +1447,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     async fn discard_config_draft(&mut self) {
         self.config_draft = None;
         if let Err(err) = self.config_manager.tell(channel_config::Reset).await {
-            warn!("Failed to reset the channel-config actor: {err}");
+            warn!(
+                "Failed to reset the channel-config actor: {:#}",
+                anyhow!(err)
+            );
         }
     }
 
@@ -1477,8 +1513,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                 warn!(
-                    "Produced block {} no longer chains on the head, skipping persistence: {err}",
-                    block.header.block_id
+                    "Produced block {} no longer chains on the head, skipping persistence: {:#}",
+                    block.header.block_id,
+                    anyhow!(err)
                 );
             }
         }
@@ -1513,7 +1550,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // candidate is dropped before paying for the scratch clone and
                 // the settlement's guest executions.
                 if let Err(rejection) = fees::screen(tx, state) {
-                    log::debug!("Dropping candidate {tx_hash:?} at the fee screen: {rejection}");
+                    log::debug!(
+                        "Dropping candidate {tx_hash:?} at the fee screen: {:#}",
+                        anyhow!(rejection)
+                    );
                     return false;
                 }
 
@@ -1559,11 +1599,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         // User-submitted failures still warrant `error!`.
                         if matches!(origin, TransactionOrigin::Gossip) {
                             debug!(
-                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
+                                anyhow!(err)
                             );
                         } else {
                             error!(
-                                "Transaction with hash {tx_hash} failed settlement: {err:#?}, skipping it",
+                                "Transaction with hash {tx_hash} failed settlement: {:#}, skipping it",
+                                anyhow!(err)
                             );
                         }
                         return false;
@@ -1590,7 +1632,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     state.transition_from_public_transaction(public_tx, block_height, timestamp)
                 {
                     error!(
-                        "Sequencer-generated transaction {tx_hash} failed execution: {err:#?}, skipping it",
+                        "Sequencer-generated transaction {tx_hash} failed execution: {:#}, skipping it",
+                        anyhow!(err)
                     );
                     return false;
                 }
@@ -1630,8 +1673,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                     Err(err) => {
                         warn!(
-                            "Dropping pending cross-zone dispatch {} that does not decode: {err:#}",
-                            hex::encode(record.message_key)
+                            "Dropping pending cross-zone dispatch {} that does not decode: {:#}",
+                            hex::encode(record.message_key),
+                            anyhow!(err)
                         );
                         settled.push(record.message_key);
                         None
@@ -1700,7 +1744,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .ask(Propose { config })
                 .await
                 .unwrap_or_else(|err| {
-                    warn!("Proposing no slashes this turn: {err}");
+                    warn!("Proposing no slashes this turn: {:#}", anyhow!(err));
                     Vec::new()
                 }),
             None => Vec::new(),
@@ -1710,7 +1754,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // flight: its config entry is the one the checkpoint reports finalized.
         let finalized_config = zone_checkpoint(&self.storage_ref)
             .await
-            .inspect_err(|err| warn!("Failed to read the zone checkpoint: {err:#}"))
+            .map_err(|err| warn!("Failed to read the zone checkpoint: {:#}", anyhow!(err)))
             .ok()
             .flatten()
             .map(|checkpoint| checkpoint.finalized_config);
@@ -1729,8 +1773,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Only bookkeeping: the deliveries themselves are irreversible,
                 // and the next turn tries again.
                 warn!(
-                    "Failed to drop {} settled delivery record(s): {err:#}",
-                    settled.len()
+                    "Failed to drop {} settled delivery record(s): {:#}",
+                    settled.len(),
+                    anyhow!(err)
                 );
             }
             // A settled delivery may be one this node had given up on, which
@@ -1757,10 +1802,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
             .filter_map(|record| {
                 build_bridge_deposit_tx_from_event(&record)
-                    .inspect_err(|err| {
+                    .map_err(|err| {
                         warn!(
-                            "Skipping pending deposit event {} due to tx build failure: {err:#}",
-                            hex::encode(record.deposit_op_id)
+                            "Skipping pending deposit event {} due to tx build failure: {:#}",
+                            hex::encode(record.deposit_op_id),
+                            anyhow!(err)
                         );
                     })
                     .ok()
@@ -2161,8 +2207,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 hex::encode(key)
             ),
             Err(err) => error!(
-                "Failed to count the failed attempt for cross-zone delivery {}: {err:#}",
-                hex::encode(key)
+                "Failed to count the failed attempt for cross-zone delivery {}: {:#}",
+                hex::encode(key),
+                anyhow!(err)
             ),
         }
     }
@@ -2245,7 +2292,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Ok(_) => None,
             Err(err) => {
                 warn!(
-                    "Failed to read the channel tip, leaving the refusal to the publish: {err:#}"
+                    "Failed to read the channel tip, leaving the refusal to the publish: {:#}",
+                    anyhow!(err)
                 );
                 None
             }
@@ -2270,7 +2318,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
             }
             Err(err) => {
-                warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
+                warn!(
+                    "Failed to read the cross-zone dead letter for its gauge: {:#}",
+                    anyhow!(err)
+                );
             }
         }
     }
@@ -2291,7 +2342,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.slasher
             .ask(Report { offences })
             .await
-            .unwrap_or_else(|err| panic!("Failed to persist the slash record: {err}"));
+            .unwrap_or_else(|err| panic!("Failed to persist the slash record: {:#}", anyhow!(err)));
     }
 }
 
@@ -2481,7 +2532,10 @@ async fn refresh_committee<S: StorageActorTrait>(
             .collect(),
     );
     if let Err(err) = slasher.tell(SetCommittee(config)).await {
-        warn!("Failed to refresh the slasher committee: {err}");
+        warn!(
+            "Failed to refresh the slasher committee: {:#}",
+            anyhow!(err)
+        );
     }
 }
 
@@ -3030,7 +3084,7 @@ fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction>
         .into_iter()
         .filter_map(|(ownership_id, pending)| {
             build_finalize_unstake_tx(ownership_id, pending)
-                .inspect_err(|err| warn!("Failed to build FinalizeUnstake tx: {err:#}"))
+                .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
                 .ok()
         })
         .collect()
@@ -3193,7 +3247,10 @@ async fn settle_reconstructed_deliveries<S: StorageActorTrait>(
         .ask(DropSettledCrossZoneDispatches { message_keys: keys })
         .await
     {
-        warn!("Failed to settle reconstructed delivery records: {err:#}");
+        warn!(
+            "Failed to settle reconstructed delivery records: {:#}",
+            anyhow!(err)
+        );
     }
 }
 

@@ -9,8 +9,9 @@ lee.workspace = true
 lee_core.workspace = true
 sequencer_core = { workspace = true }
 sequencer_service.workspace = true
-sequencer_storage_actor.workspace = true
-sequencer_executor_actor.workspace = true
+sequencer_storage_actor = { workspace = true, features = ["actor"] }
+sequencer_executor_actor = { workspace = true, features = ["actor"] }
+sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_channel_config_actor.workspace = true
 common.workspace = true
@@ -22,6 +23,7 @@ serde_json.workspace = true
 kameo.workspace = true
 kameo_actors.workspace = true
 anyhow.workspace = true
+glob.workspace = true
 
 [build-dependencies]
 cbindgen.workspace = true

@@ -1,10 +1,16 @@
 use std::{ffi::c_char, path::PathBuf};
 
 use anyhow::Context as _;
+use glob::Pattern;
 use kameo::actor::{ActorRef, Spawn as _};
-use kameo_actors::scheduler::{Scheduler, SetInterval};
+use kameo_actors::{
+    DeliveryStrategy,
+    broker::{Broker, Subscribe},
+    scheduler::{Scheduler, SetInterval},
+};
+use sequencer_bedrock_actor::{BedrockActor, protocol::ChannelEvent};
 use sequencer_channel_config_actor::SetSubmitter;
-use sequencer_core::{SubmitConfig, block_publisher::BlockPublisherTrait, config::SequencerConfig};
+use sequencer_core::{SubmitConfig, config::SequencerConfig, load_or_create_signing_key};
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_service::{Gossip, setup_gossip};
 use sequencer_slasher_actor::SlasherActor;
@@ -54,7 +60,9 @@ async fn make_sequencer_compoments(
     (
         ActorRef<StorageActor>,
         ActorRef<SlasherActor>,
-        ActorRef<ExecutorActor<StorageActor, impl BlockPublisherTrait>>,
+        ActorRef<BedrockActor>,
+        ActorRef<Broker<ChannelEvent>>,
+        ActorRef<ExecutorActor<StorageActor, BedrockActor>>,
         ActorRef<Scheduler>,
         Option<Gossip>,
     ),
@@ -75,13 +83,47 @@ async fn make_sequencer_compoments(
     let storage_ref = StorageActor::spawn(storage);
     log::info!("Storage Actor spawned");
 
-    let executor = ExecutorActor::new(config, storage_ref.clone()).await;
+    // Prepared up front so the broker has a subscriber before the bedrock actor
+    // starts publishing channel events.
+    let executor_prepared = ExecutorActor::prepare_with_mailbox(kameo::mailbox::unbounded());
+
+    let bedrock_broker_ref = Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed));
+    let topic =
+        Pattern::new(&format!("channel/{}/*", bedrock_config.channel_id)).expect("Valid pattern");
+    bedrock_broker_ref
+        .tell(Subscribe {
+            topic,
+            recipient: executor_prepared.actor_ref().clone().recipient(),
+        })
+        .await
+        .map_err(|e| {
+            log::error!("Could not subscribe executor to the bedrock broker: {e}");
+            OperationStatus::InitializationError
+        })?;
+    log::info!("Bedrock Broker Actor spawned");
+
+    let bedrock = setup_bedrock_actor(&config, storage_ref.clone(), bedrock_broker_ref.clone())
+        .await
+        .map_err(|e| {
+            log::error!("Could not create bedrock actor: {e}");
+            OperationStatus::InitializationError
+        })?;
+    let bedrock_ref = BedrockActor::spawn(bedrock);
+    log::info!("Bedrock Actor spawned");
+
+    let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
+        .await
+        .map_err(|e| {
+            log::error!("Could not create executor actor: {e}");
+            OperationStatus::InitializationError
+        })?;
     let slasher_ref = executor.slasher_ref();
     let config_manager_ref = executor.config_manager_ref();
     // The core has already read a committee by the time this returns.
     let accredited_keys_rx = executor.accredited_keys_watch();
     let staked_keys_rx = executor.staked_keys_watch();
-    let executor_ref = ExecutorActor::spawn(executor);
+    let executor_ref = executor_prepared.actor_ref().clone();
+    executor_prepared.spawn(executor);
     log::info!("Executor Actor spawned");
 
     // A config needs no turn, so the actor tells the executor to submit it
@@ -142,10 +184,34 @@ async fn make_sequencer_compoments(
     Ok((
         storage_ref,
         slasher_ref,
+        bedrock_ref,
+        bedrock_broker_ref,
         executor_ref,
         scheduler_ref,
         gossip,
     ))
+}
+
+/// Builds the actor that talks to bedrock, loading (or creating) the key it signs with.
+async fn setup_bedrock_actor(
+    config: &SequencerConfig,
+    storage_ref: ActorRef<StorageActor>,
+    bedrock_broker_ref: ActorRef<Broker<ChannelEvent>>,
+) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    let bedrock_signing_key = load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+        .expect("Failed to load or create bedrock signing key");
+
+    let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
+        node_url: config.bedrock_config.node_url.clone(),
+        basic_auth: config.bedrock_config.auth.clone().map(Into::into),
+        channel_id: config.bedrock_config.channel_id,
+        bedrock_signing_key,
+        funding_pk: config.bedrock_config.funding_key,
+        priority_fee_percent: config.bedrock_config.priority_fee_percent,
+        resubmit_interval: config.retry_pending_blocks_timeout,
+    };
+
+    BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
 }
 
 /// Initializes and starts an sequencer based on the provided
@@ -201,12 +267,21 @@ unsafe fn setup_sequencer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let (storage_ref, slasher_ref, executor_ref, scheduler_ref, gossip) =
-        runtime.block_on(make_sequencer_compoments(config))?;
+    let (
+        storage_ref,
+        slasher_ref,
+        bedrock_ref,
+        bedrock_broker_ref,
+        executor_ref,
+        scheduler_ref,
+        gossip,
+    ) = runtime.block_on(make_sequencer_compoments(config))?;
 
     Ok(SequencerServiceFFI::new(
         storage_ref,
         slasher_ref,
+        bedrock_ref,
+        bedrock_broker_ref,
         executor_ref,
         scheduler_ref,
         gossip,
