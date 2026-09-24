@@ -4799,6 +4799,7 @@ dependencies = [
  "indexer_service_rpc",
  "jsonrpsee",
  "lee",
+ "lee_core",
  "sequencer_service_rpc",
  "serde",
  "serde_json",

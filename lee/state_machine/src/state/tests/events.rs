@@ -270,12 +270,12 @@ fn events_are_filterable_by_selector_and_decodable() {
 fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let keys = test_private_account_keys_1();
     let emitter = crate::test_methods::event_emitter();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), (0, 0));
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::from_parts(0, 0));
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(&keys, (0, 0), Account::default())],
+            private_witnesses: vec![init_witness(&keys, Identifier::from_parts(0, 0), Account::default())],
             instruction_data: Program::serialize_instruction(EmitterInstruction {
                 events: vec![emitted(0), emitted(1)],
                 chain: vec![],

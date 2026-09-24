@@ -120,7 +120,7 @@ async fn spend_private_pda(
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
-                    kind: PrivateAccountKind::Regular((0, 0)),
+                    kind: PrivateAccountKind::Regular(Identifier::from_parts(0, 0)),
                 }
                 .balance(),
             ],
@@ -256,8 +256,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let spend_program = ProgramWithDependencies::new(proxy, proxy_id, HashMap::new());
 
-    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, (0, 0));
-    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, (0, 1));
+    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, Identifier::from_parts(0, 0));
+    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, Identifier::from_parts(0, 1));
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();
@@ -272,7 +272,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         sender_0,
         alice_npk,
         alice_vpk.clone(),
-        (0, 0),
+        Identifier::from_parts(0, 0),
         seed,
         proxy_id,
         amount,
@@ -285,7 +285,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         sender_1,
         alice_npk,
         alice_vpk.clone(),
-        (0, 1),
+        Identifier::from_parts(0, 1),
         seed,
         proxy_id,
         amount,

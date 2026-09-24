@@ -1,29 +1,108 @@
+use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
-/// 256 bits of identifier entropy as `(high, low)`, so tuple `Ord` matches numeric order.
-pub type Identifier = (u128, u128);
-
-/// Little-endian byte encoding of `identifier` (low half first, then high half).
-#[must_use]
-pub fn identifier_to_le_bytes((high, low): Identifier) -> [u8; 32] {
-    let mut bytes = [0_u8; 32];
-    bytes[..16].copy_from_slice(&low.to_le_bytes());
-    bytes[16..].copy_from_slice(&high.to_le_bytes());
-    bytes
+/// 256 bits of identifier entropy, big-endian so byte order matches numeric order.
+#[derive(
+    Default,
+    Copy,
+    Clone,
+    SerializeDisplay,
+    DeserializeFromStr,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct Identifier {
+    value: [u8; 32],
 }
 
-/// Inverse of [`identifier_to_le_bytes`].
-#[must_use]
-pub fn identifier_from_le_bytes(bytes: [u8; 32]) -> Identifier {
-    let low = u128::from_le_bytes(bytes[..16].try_into().expect("slice is 16 bytes"));
-    let high = u128::from_le_bytes(bytes[16..].try_into().expect("slice is 16 bytes"));
-    (high, low)
+impl std::fmt::Debug for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.to_base58())
+    }
+}
+
+impl Identifier {
+    #[must_use]
+    pub const fn new(value: [u8; 32]) -> Self {
+        Self { value }
+    }
+
+    /// Builds an identifier from `(high, low)` 128-bit halves, big-endian.
+    #[must_use]
+    pub const fn from_parts(high: u128, low: u128) -> Self {
+        let high = high.to_be_bytes();
+        let low = low.to_be_bytes();
+        let mut value = [0_u8; 32];
+        let mut i = 0;
+        while i < 16 {
+            value[i] = high[i];
+            value[16 + i] = low[i];
+            i += 1;
+        }
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &[u8; 32] {
+        &self.value
+    }
+
+    #[must_use]
+    pub const fn into_value(self) -> [u8; 32] {
+        self.value
+    }
+}
+
+impl From<(u128, u128)> for Identifier {
+    fn from((high, low): (u128, u128)) -> Self {
+        Self::from_parts(high, low)
+    }
+}
+
+impl AsRef<[u8]> for Identifier {
+    fn as_ref(&self) -> &[u8] {
+        &self.value
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IdentifierError {
+    #[error("invalid base58: {0:?}")]
+    InvalidBase58(base58::FromBase58Error),
+    #[error("invalid length: expected 32 bytes, got {0}")]
+    InvalidLength(usize),
+}
+
+impl std::str::FromStr for Identifier {
+    type Err = IdentifierError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = s.from_base58().map_err(IdentifierError::InvalidBase58)?;
+        if bytes.len() != 32 {
+            return Err(IdentifierError::InvalidLength(bytes.len()));
+        }
+        let mut value = [0_u8; 32];
+        value.copy_from_slice(&bytes);
+        Ok(Self { value })
+    }
+}
+
+impl std::fmt::Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.to_base58())
+    }
 }
 
 #[derive(
@@ -55,7 +134,7 @@ impl AccountId {
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
         bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier_to_le_bytes(identifier));
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -247,7 +326,8 @@ mod tests {
             118, 187, 238, 65, 251, 54, 229, 89, 151, 17, 104, 62, 240,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, (0, 0));
+        let account_id =
+            AccountId::for_regular_private_account(&npk, &vpk, Identifier::from_parts(0, 0));
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -261,11 +341,12 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            102, 89, 46, 127, 4, 8, 19, 206, 59, 72, 107, 7, 93, 218, 64, 3, 30, 142, 224, 191, 97,
-            158, 166, 161, 16, 4, 6, 192, 226, 63, 161, 18,
+            248, 127, 237, 114, 29, 50, 62, 39, 47, 51, 122, 55, 34, 41, 29, 46, 200, 124, 190, 36,
+            6, 169, 81, 230, 64, 198, 122, 118, 16, 19, 132, 107,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, (0, 1));
+        let account_id =
+            AccountId::for_regular_private_account(&npk, &vpk, Identifier::from_parts(0, 1));
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -273,7 +354,7 @@ mod tests {
     #[test]
     fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
         // Every byte position distinct, to catch a byte-order bug anywhere in the width.
-        let identifier: Identifier = (
+        let identifier = Identifier::from_parts(
             0x0001_0203_0405_0607_0809_0A0B_0C0D_0E0F_u128,
             0x1011_1213_1415_1617_1819_1A1B_1C1D_1E1F_u128,
         );
@@ -284,8 +365,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            85, 181, 131, 200, 165, 119, 91, 82, 130, 15, 231, 74, 219, 76, 145, 214, 128, 129,
-            247, 25, 184, 193, 113, 92, 74, 237, 68, 200, 106, 85, 34, 163,
+            223, 65, 35, 211, 3, 244, 181, 174, 35, 212, 132, 168, 231, 60, 74, 241, 60, 71, 246,
+            117, 97, 139, 50, 168, 136, 239, 94, 200, 165, 223, 250, 92,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);

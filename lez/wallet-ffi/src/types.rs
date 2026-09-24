@@ -75,14 +75,14 @@ pub type FfiIdentifier = FfiBytes32;
 impl From<lee_core::Identifier> for FfiIdentifier {
     fn from(value: lee_core::Identifier) -> Self {
         Self {
-            data: lee_core::identifier_to_le_bytes(value),
+            data: value.into_value(),
         }
     }
 }
 
 impl From<FfiIdentifier> for lee_core::Identifier {
     fn from(value: FfiIdentifier) -> Self {
-        lee_core::identifier_from_le_bytes(value.data)
+        Self::new(value.data)
     }
 }
 
@@ -748,8 +748,8 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierPublicKey,
-        NullifierSecretKey, PrivateAccountKind,
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, Identifier,
+        NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
     };
     use wallet::AccountIdentity;
 
@@ -765,7 +765,7 @@ mod tests {
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
-        let identifier = (0, u128::from_le_bytes([45; 16]));
+        let identifier = lee_core::Identifier::from_parts(0, u128::from_le_bytes([45; 16]));
 
         let private_reg_acc_id =
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
@@ -900,7 +900,7 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([46; 32]),
             seed: PdaSeed::new([47; 32]),
-            identifier: (0, 5),
+            identifier: Identifier::from_parts(0, 5),
         };
         let derived = AccountId::for_private_account(&npk, &vpk, &kind);
 
@@ -929,7 +929,7 @@ mod tests {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
-        let identifier = (0, u128::from_le_bytes([45; 16]));
+        let identifier = lee_core::Identifier::from_parts(0, u128::from_le_bytes([45; 16]));
 
         let shared = AccountIdentity::PrivateShared {
             ask,

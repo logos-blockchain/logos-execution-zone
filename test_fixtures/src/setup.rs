@@ -567,10 +567,7 @@ pub async fn fund_private_accounts(
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(vec![
-                    private_account.identifier.0,
-                    private_account.identifier.1,
-                ]),
+                to_identifier: Some(private_account.identifier),
                 amount: private_account.balance,
             }),
         )

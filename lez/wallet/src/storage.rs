@@ -21,33 +21,6 @@ use crate::{
 pub mod key_chain;
 mod persistent;
 
-/// Migrates on-disk wallet files predating the 32-byte `Identifier` widening: an `identifier`
-/// field or a `PrivateAccountKind::Regular` payload holding a bare JSON number (the old 16-byte
-/// `u128` encoding) becomes `[0, <value>]`, zero-extending it into the new `(high, low)` tuple
-/// encoding. Already-migrated files (where these hold a 2-element array) are left untouched.
-fn migrate_identifiers_to_32_bytes(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, entry) in map.iter_mut() {
-                if (key == "identifier" || key == "Regular") && entry.is_number() {
-                    *entry = serde_json::Value::Array(vec![
-                        serde_json::Value::Number(0.into()),
-                        entry.clone(),
-                    ]);
-                } else {
-                    migrate_identifiers_to_32_bytes(entry);
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                migrate_identifiers_to_32_bytes(item);
-            }
-        }
-        _ => {}
-    }
-}
-
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Storage {
     key_chain: UserKeyChain,
@@ -82,11 +55,9 @@ impl Storage {
         match std::fs::File::open(path) {
             Ok(file) => {
                 let storage_content = BufReader::new(file);
-                let mut raw: serde_json::Value = serde_json::from_reader(storage_content)
-                    .context("Failed to parse storage file")?;
-                migrate_identifiers_to_32_bytes(&mut raw);
-                let persistent: persistent::PersistentStorage = serde_json::from_value(raw)
-                    .context("Failed to parse storage file")?;
+                let persistent: persistent::PersistentStorage =
+                    serde_json::from_reader(storage_content)
+                        .context("Failed to parse storage file")?;
                 Self::from_persistent(persistent)
             }
             Err(err) => match err.kind() {
@@ -215,32 +186,9 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::Identifier;
 
     use super::*;
-
-    #[test]
-    fn migrate_identifiers_to_32_bytes_zero_extends_old_shapes() {
-        let mut value = serde_json::json!({
-            "identifier": 42,
-            "Regular": 7,
-            "already_migrated_identifier": [1, 2],
-            "unrelated_regular_shape": {"Regular": {"ask": null}},
-            "nested": [{"identifier": 5}, {"Pda": {"identifier": 9}}],
-        });
-
-        migrate_identifiers_to_32_bytes(&mut value);
-
-        assert_eq!(
-            value,
-            serde_json::json!({
-                "identifier": [0, 42],
-                "Regular": [0, 7],
-                "already_migrated_identifier": [1, 2],
-                "unrelated_regular_shape": {"Regular": {"ask": null}},
-                "nested": [{"identifier": [0, 5]}, {"Pda": {"identifier": [0, 9]}}],
-            })
-        );
-    }
 
     #[test]
     fn save_load_roundtrip() {
@@ -268,7 +216,7 @@ mod tests {
         let account = lee::Account::default();
         storage
             .key_chain_mut()
-            .add_imported_private_account(key_chain, None, (0, 0), account);
+            .add_imported_private_account(key_chain, None, Identifier::from_parts(0, 0), account);
 
         storage.set_last_synced_block(42);
 

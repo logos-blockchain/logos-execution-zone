@@ -198,8 +198,8 @@ fn private_chained_call(number_of_calls: u32) {
     let to_pre = Account::default();
 
     let from_account_id =
-        AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), (0, 0));
-    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), (0, 0));
+        AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), Identifier::from_parts(0, 0));
+    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), Identifier::from_parts(0, 0));
     let from_commitment = Commitment::new(&from_account_id, &from_pre);
     let to_commitment = Commitment::new(&to_account_id, &to_pre);
     let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
@@ -248,7 +248,7 @@ fn private_chained_call(number_of_calls: u32) {
             private_witnesses: vec![
                 update_witness(
                     &from_keys,
-                    (0, 0),
+                    Identifier::from_parts(0, 0),
                     from_pre,
                     state
                         .get_proof_for_commitment(&from_commitment)
@@ -256,7 +256,7 @@ fn private_chained_call(number_of_calls: u32) {
                 ),
                 update_witness(
                     &to_keys,
-                    (0, 0),
+                    Identifier::from_parts(0, 0),
                     to_pre,
                     state
                         .get_proof_for_commitment(&to_commitment)

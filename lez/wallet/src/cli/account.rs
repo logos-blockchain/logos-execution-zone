@@ -138,11 +138,11 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
-        /// Identifier selecting the shared account, as two u128 values.
+        #[arg(long)]
+        /// Identifier selecting the shared account.
         /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
-        identifier: Option<Vec<u128>>,
+        identifier: Option<lee_core::Identifier>,
     },
     /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
     /// registering any account.
@@ -231,7 +231,7 @@ impl NewSubcommand {
         pda: bool,
         seed: Option<String>,
         program_id: Option<String>,
-        identifier: Option<Vec<u128>>,
+        identifier: Option<lee_core::Identifier>,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
@@ -637,9 +637,9 @@ pub enum ImportSubcommand {
         /// Chain index.
         #[arg(long)]
         chain_index: Option<ChainIndex>,
-        /// Identifier, as two u128 values. Defaults to (0, 0) if not specified.
-        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
-        identifier: Option<Vec<u128>>,
+        /// Identifier. Defaults to zero if not specified.
+        #[arg(long)]
+        identifier: Option<lee_core::Identifier>,
     },
 }
 

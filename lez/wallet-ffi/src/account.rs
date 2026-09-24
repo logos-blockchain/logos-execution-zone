@@ -710,7 +710,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Some(parsed_chain_index)
     };
 
-    let identifier = lee_core::identifier_from_le_bytes(unsafe { (*identifier).data });
+    let identifier = lee_core::Identifier::new(unsafe { (*identifier).data });
 
     wallet
         .storage_mut()

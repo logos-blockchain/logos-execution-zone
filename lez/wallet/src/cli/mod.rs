@@ -320,21 +320,16 @@ pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> 
     }
 }
 
-fn identifier_parts_to_tuple(parts: Vec<u128>) -> lee_core::Identifier {
-    let [high, low]: [u128; 2] = parts
-        .try_into()
-        .unwrap_or_else(|_| unreachable!("clap enforces exactly 2 values"));
-    (high, low)
+#[must_use]
+pub fn identifier_from_parts(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
+    identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
 }
 
 #[must_use]
-pub fn identifier_from_parts(parts: Option<Vec<u128>>) -> lee_core::Identifier {
-    parts.map(identifier_parts_to_tuple).unwrap_or_else(rand::random)
-}
-
-#[must_use]
-pub fn identifier_from_parts_or_zero(parts: Option<Vec<u128>>) -> lee_core::Identifier {
-    parts.map(identifier_parts_to_tuple).unwrap_or((0, 0))
+pub fn identifier_from_parts_or_zero(
+    identifier: Option<lee_core::Identifier>,
+) -> lee_core::Identifier {
+    identifier.unwrap_or_default()
 }
 
 pub fn read_password_from_stdin() -> Result<String> {

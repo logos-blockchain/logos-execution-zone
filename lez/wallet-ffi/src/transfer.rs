@@ -183,7 +183,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             return e;
         }
     };
-    let to_identifier = lee_core::identifier_from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let from_mention = optional_c_str(key_path).map_or_else(
         || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             return e;
         }
     };
-    let to_identifier = lee_core::identifier_from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 

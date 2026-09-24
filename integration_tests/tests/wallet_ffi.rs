@@ -27,10 +27,7 @@ use integration_tests::{
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::{
-    identifier_to_le_bytes, native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::PROGRAM_LOADER_ACCOUNT_ID,
-};
+use lee_core::{Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID};
 use token_core::{TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
@@ -351,7 +348,7 @@ fn new_wallet_ffi_with_test_context_config(
             .as_ref()
             .map_or(std::ptr::null(), |value| value.as_ptr());
         let identifier = FfiIdentifier {
-            data: identifier_to_le_bytes(account.kind.identifier()),
+            data: account.kind.identifier().into_value(),
         };
 
         unsafe {
@@ -1034,7 +1031,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            (0, 0_u128),
+            Identifier::from_parts(0, 0),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1178,7 +1175,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            (0, 0_u128),
+            Identifier::from_parts(0, 0),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1261,7 +1258,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            (0, 0_u128),
+            Identifier::from_parts(0, 0),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1273,7 +1270,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            (0, 0_u128),
+            Identifier::from_parts(0, 0),
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)

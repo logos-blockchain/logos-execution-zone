@@ -345,7 +345,7 @@ fn for_private_pda_matches_pinned_value() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let identifier: Identifier = (u128::MAX, u128::MAX);
+    let identifier = Identifier::from_parts(u128::MAX, u128::MAX);
     let expected = AccountId::new([
         188, 37, 183, 176, 226, 199, 53, 66, 190, 178, 237, 19, 231, 11, 203, 112, 68, 22, 164, 23,
         49, 187, 19, 207, 190, 52, 66, 80, 94, 84, 125, 167,
@@ -363,8 +363,8 @@ fn for_private_pda_differs_for_different_npk() {
     let npk_b = NullifierPublicKey([4; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk_a, &vpk, (u128::MAX, u128::MAX)),
-        AccountId::for_private_pda(&program_id, &seed, &npk_b, &vpk, (u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id, &seed, &npk_a, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id, &seed, &npk_b, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
     );
 }
 
@@ -377,8 +377,8 @@ fn for_private_pda_differs_for_different_seed() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed_a, &npk, &vpk, (u128::MAX, u128::MAX)),
-        AccountId::for_private_pda(&program_id, &seed_b, &npk, &vpk, (u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id, &seed_a, &npk, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id, &seed_b, &npk, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
     );
 }
 
@@ -391,8 +391,8 @@ fn for_private_pda_differs_for_different_program_id() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id_a, &seed, &npk, &vpk, (u128::MAX, u128::MAX)),
-        AccountId::for_private_pda(&program_id_b, &seed, &npk, &vpk, (u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id_a, &seed, &npk, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id_b, &seed, &npk, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
     );
 }
 
@@ -405,12 +405,12 @@ fn for_private_pda_differs_for_different_identifier() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, (0, 0)),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, (0, 1)),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::from_parts(0, 0)),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::from_parts(0, 1)),
     );
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, (0, 0)),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, (u128::MAX, u128::MAX)),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::from_parts(0, 0)),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::from_parts(u128::MAX, u128::MAX)),
     );
 }
 
@@ -422,7 +422,13 @@ fn for_private_pda_differs_from_public_pda() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, (u128::MAX, u128::MAX));
+    let private_id = AccountId::for_private_pda(
+        &program_id,
+        &seed,
+        &npk,
+        &vpk,
+        Identifier::from_parts(u128::MAX, u128::MAX),
+    );
     let public_id = AccountId::for_public_pda(&program_id, &seed);
     assert_ne!(private_id, public_id);
 }
@@ -464,11 +470,11 @@ fn for_immutable_mirror_differs_for_different_header() {
 #[cfg(feature = "host")]
 #[test]
 fn private_account_kind_header_round_trips() {
-    let regular = PrivateAccountKind::Regular((0, 42));
+    let regular = PrivateAccountKind::Regular(Identifier::from_parts(0, 42));
     let pda = PrivateAccountKind::Pda {
         account_id: AccountId::new([1; 32]),
         seed: PdaSeed::new([2_u8; 32]),
-        identifier: (u128::MAX, u128::MAX),
+        identifier: Identifier::from_parts(u128::MAX, u128::MAX),
     };
     assert_eq!(
         PrivateAccountKind::from_header_bytes(&regular.to_header_bytes()),
@@ -494,7 +500,7 @@ fn for_private_account_dispatches_correctly() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let identifier: Identifier = (0, 77);
+    let identifier = Identifier::from_parts(0, 77);
 
     assert_eq!(
         AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier)),

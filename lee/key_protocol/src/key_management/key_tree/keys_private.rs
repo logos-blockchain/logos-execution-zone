@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use lee_core::{
-    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, encryption::ViewingPublicKey,
+    Identifier, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+    encryption::ViewingPublicKey,
 };
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -79,7 +80,7 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                BTreeMap::from_iter([(PrivateAccountKind::Regular((0, 0)), lee::Account::default())]),
+                BTreeMap::from_iter([(PrivateAccountKind::Regular(Identifier::from_parts(0, 0)), lee::Account::default())]),
             ),
             ccc,
             cci,

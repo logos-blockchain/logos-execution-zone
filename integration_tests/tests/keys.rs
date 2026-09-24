@@ -52,10 +52,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
             to_account.key_chain.viewing_public_key.to_bytes(),
         )),
         to_keys: None,
-        to_identifier: Some(vec![
-            to_account.kind.identifier().0,
-            to_account.kind.identifier().1,
-        ]),
+        to_identifier: Some(to_account.kind.identifier()),
         amount: 100,
     });
 

@@ -176,11 +176,12 @@ pub enum PrivateAccountKind {
 }
 
 impl PrivateAccountKind {
-    /// Borsh layout (all integers little-endian, variant index is u8):
+    /// Borsh layout (integers little-endian, variant index is u8; `ident` is `Identifier`'s
+    /// opaque 32-byte encoding):
     ///
     /// ```text
-    /// Regular(ident):                 0x00 || ident (32 LE) || [0u8; 48]
-    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32 LE)
+    /// Regular(ident):                 0x00 || ident (32) || [0u8; 48]
+    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32)
     /// ```
     ///
     /// Both variants are zero-padded to the same length so all ciphertexts are the same size,
@@ -290,7 +291,7 @@ impl AccountId {
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
         bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
         bytes[128 + ViewingPublicKey::LEN..]
-            .copy_from_slice(&crate::nullifier::identifier_to_le_bytes(identifier));
+            .copy_from_slice(identifier.value());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()

@@ -181,7 +181,7 @@ async fn timed_token_send(
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_identifier: Some(vec![0, 0]),
+                    to_identifier: Some(lee_core::Identifier::default()),
                     amount,
                 }),
             )

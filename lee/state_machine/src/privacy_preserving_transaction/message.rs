@@ -125,8 +125,8 @@ impl Message {
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
-        NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
+        Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
         account::{Account, AccountData, AccountId, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -149,10 +149,10 @@ pub mod tests {
 
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
-        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, (0, 0));
+        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, Identifier::from_parts(0, 0));
         let commitment = Commitment::new(&account_id2, &account2);
 
-        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, (0, 0));
+        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, Identifier::from_parts(0, 0));
         let old_commitment = Commitment::new(&account_id1, &account1);
         let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
@@ -231,13 +231,13 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
-        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, (0, 0));
+        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, Identifier::from_parts(0, 0));
         let nullifier = Nullifier::for_account_initialization(&account_id);
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));
         let ciphertext = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular((0, 0)),
+            &PrivateAccountKind::Regular(Identifier::from_parts(0, 0)),
             &shared_secret,
             &nullifier,
             None,
