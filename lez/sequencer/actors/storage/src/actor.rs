@@ -34,7 +34,7 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        GetZoneAnchor, GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
@@ -446,12 +446,12 @@ impl StorageActor {
             .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?;
 
         if let Some(stored) = stored
-            && stored.timestamp_micros >= checkpoint.timestamp.timestamp_micros()
+            && stored.seq >= checkpoint.seq
         {
             log::debug!(
-                "Dropping a zone checkpoint minted at {} for the stored one from {}",
-                checkpoint.timestamp,
-                stored.timestamp_micros,
+                "Dropping a zone checkpoint at sequence {} for the stored one at {}",
+                checkpoint.seq,
+                stored.seq,
             );
             return Ok(());
         }
@@ -835,18 +835,18 @@ impl Message<GetLeeState> for StorageActor {
     }
 }
 
-impl Message<GetZoneCheckpointBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl Message<GetZoneCheckpoint> for StorageActor {
+    type Reply = Result<Option<ZoneCheckpointRecord>>;
 
     async fn handle(
         &mut self,
-        GetZoneCheckpointBytes: GetZoneCheckpointBytes,
+        GetZoneCheckpoint: GetZoneCheckpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self
             .db()
             .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?
-            .map(|checkpoint| checkpoint.bytes))
+            .map(Into::into))
     }
 }
 

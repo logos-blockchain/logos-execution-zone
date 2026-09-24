@@ -43,7 +43,16 @@ impl From<protocol::ZoneCheckpointRecord> for entities::ZoneCheckpoint {
     fn from(checkpoint: protocol::ZoneCheckpointRecord) -> Self {
         Self {
             bytes: checkpoint.bytes,
-            timestamp_micros: checkpoint.timestamp.timestamp_micros(),
+            seq: checkpoint.seq,
+        }
+    }
+}
+
+impl From<entities::ZoneCheckpoint> for protocol::ZoneCheckpointRecord {
+    fn from(checkpoint: entities::ZoneCheckpoint) -> Self {
+        Self {
+            bytes: checkpoint.bytes,
+            seq: checkpoint.seq,
         }
     }
 }

@@ -63,7 +63,6 @@ programs.workspace = true
 testnet_initial_state.workspace = true
 
 env_logger.workspace = true
-chrono.workspace = true
 mockall.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true

@@ -35,7 +35,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 glob.workspace = true
-chrono = { workspace = true, optional = true }
 
 [[bin]]
 name = "inscribe_garbage"
@@ -52,7 +51,7 @@ default = []
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["sequencer_core/prove"]
 # Runs the sequencer in standalone mode without depending on Bedrock.
-standalone = ["sequencer_bedrock_actor/mock", "dep:chrono"]
+standalone = ["sequencer_bedrock_actor/mock"]
 # Enable mDNS-based local peer discovery for gossip.
 mdns = ["sequencer_gossip_actor/mdns"]
 # Needed only by the inscribe_garbage bin. Never in a release build.

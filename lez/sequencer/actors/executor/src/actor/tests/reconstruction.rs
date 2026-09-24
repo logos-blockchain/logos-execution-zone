@@ -29,7 +29,10 @@ use sequencer_bedrock_actor::{
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_storage_actor::{
     mock::{Checkpoint as MockCheckpoint, MockStorageActor},
-    protocol::{GetBlock, PendingCrossZoneDispatchRecord, StoreUpdateOutcome, ZoneAnchorRecord},
+    protocol::{
+        GetBlock, PendingCrossZoneDispatchRecord, StoreUpdateOutcome, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
+    },
 };
 use tokio::test;
 
@@ -188,8 +191,12 @@ impl StoredChain {
             });
         mock.expect_handle_get_zone_anchor()
             .returning(move |_msg, _ctx| Ok(anchor));
-        mock.expect_handle_get_zone_checkpoint_bytes()
-            .returning(move |_msg, _ctx| Ok(checkpoint.clone()));
+        mock.expect_handle_get_zone_checkpoint()
+            .returning(move |_msg, _ctx| {
+                Ok(checkpoint
+                    .clone()
+                    .map(|bytes| ZoneCheckpointRecord { bytes, seq: 0 }))
+            });
         mock.expect_handle_get_channel_cursor()
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_slash_record_bytes()

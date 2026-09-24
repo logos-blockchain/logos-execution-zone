@@ -3,7 +3,6 @@
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
 use canned_channel::CannedChannel;
-use chrono::Utc;
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -31,7 +30,7 @@ use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{MockBedrockActor, Replace},
-    protocol::{ChannelUpdate, Checkpoint, LiveChannelConfig},
+    protocol::{ChannelSeq, ChannelUpdate, Checkpoint, LiveChannelConfig},
 };
 use sequencer_storage_actor::{
     StorageActor,
@@ -153,12 +152,23 @@ async fn serve_channel(
     assert!(replaced.is_ok(), "the Bedrock mock must still be running");
 }
 
+/// The next channel sequence, shared by the follow updates a test feeds in and
+/// the publishes [`canned_channel`] serves, so both rise in the order the test
+/// makes them happen — as they do behind the one real actor.
+fn next_channel_seq() -> ChannelSeq {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    ChannelSeq::mocked(
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .saturating_add(1),
+    )
+}
+
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_channel_update()`.
 fn empty_channel_update() -> ChannelUpdate {
     ChannelUpdate {
         checkpoint: mock_checkpoint(),
-        checkpoint_timestamp: Utc::now(),
+        seq: next_channel_seq(),
         adopted: Vec::new(),
         orphaned: Vec::new(),
         finalized: Vec::new(),
@@ -3888,7 +3898,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
             our_block.clone(),
             HashSet::new(),
             &mock_checkpoint(),
-            Utc::now(),
+            next_channel_seq(),
         )
         .await
         .unwrap();
@@ -3919,7 +3929,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
             stale.clone(),
             HashSet::new(),
             &mock_checkpoint(),
-            Utc::now(),
+            next_channel_seq(),
         )
         .await
         .unwrap();

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
@@ -17,6 +16,47 @@ pub use sequencer_stake_core::ChannelParams;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = std::pin::Pin<Box<dyn futures::Stream<Item = T> + Send>>;
+
+/// Version of the channel view the actor holds, bumped by everything that mints
+/// a checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reply)]
+pub struct ChannelSeq(u64);
+
+impl ChannelSeq {
+    /// The sequence a channel nothing has been read from yet sits at.
+    #[cfg(feature = "actor")]
+    pub(crate) const ZERO: Self = Self(0);
+
+    /// Resumes at `raw`, which only a sequence this actor persisted can be.
+    #[cfg(feature = "actor")]
+    pub(crate) const fn resumed(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// The next one along.
+    #[cfg(feature = "actor")]
+    pub(crate) const fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> u64 {
+        self.0
+    }
+
+    /// A sequence conjured outside the actor, for a mocked channel to serve.
+    #[cfg(feature = "mock")]
+    #[must_use]
+    pub const fn mocked(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+impl std::fmt::Display for ChannelSeq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Event happened on configured chain.
 #[derive(Debug, Clone)]
@@ -40,8 +80,10 @@ pub struct ChannelUpdate {
     /// the view this update leaves behind — non-block entries and the rewind
     /// after an orphan included — and is what the next publish pins on.
     pub checkpoint: Checkpoint,
-    /// When [`Self::checkpoint`] was minted.
-    pub checkpoint_timestamp: DateTime<Utc>,
+    /// The channel sequence this update leaves the actor at. A consumer that
+    /// wants to publish echoes the last one it applied back in
+    /// [`PublishBlock::expected_seq`].
+    pub seq: ChannelSeq,
     /// Blocks newly on the followed L1 branch, in channel order; they extend
     /// or replace part of the `head` tier. Non-block entries (garbage, a
     /// config op) surface only through the checkpoint's tip. No inscription
@@ -91,6 +133,12 @@ pub struct PublishBlock {
     /// Parent message ID to inscribe the block on.
     /// If [`None`] then the block is inscribed on top of channel tip.
     pub parent: Option<MsgId>,
+    /// The channel sequence the caller built this block on. The publish is
+    /// refused when it is not the actor's current one, which means an update
+    /// the caller has not applied yet moved the channel under it.
+    ///
+    /// [`None`] will omit the check.
+    pub expected_seq: Option<ChannelSeq>,
 }
 
 /// Outcome of a publish operation.
@@ -99,8 +147,8 @@ pub struct PublishOutcome {
     pub this_msg: MsgId,
     /// The checkpoint that now holds the inscription as pending.
     pub checkpoint: Checkpoint,
-    /// When [`Self::checkpoint`] was minted.
-    pub checkpoint_timestamp: DateTime<Utc>,
+    /// The channel sequence this publish leaves the actor at.
+    pub seq: ChannelSeq,
     /// Channel notes the bundled withdrawals release, empty for a plain
     /// publish.
     pub released_notes: Vec<NoteId>,

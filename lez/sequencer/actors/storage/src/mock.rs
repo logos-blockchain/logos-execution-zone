@@ -27,11 +27,11 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        GetZoneAnchor, GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        ZoneAnchorRecord,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -85,11 +85,11 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<V03State>>>
         ) -> Result<Option<V03State>>;
 
-        pub fn handle_get_zone_checkpoint_bytes(
+        pub fn handle_get_zone_checkpoint(
             &mut self,
-            msg: GetZoneCheckpointBytes,
-            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
-        ) -> Result<Option<Vec<u8>>>;
+            msg: GetZoneCheckpoint,
+            ctx: &mut Context<Self, Result<Option<ZoneCheckpointRecord>>>
+        ) -> Result<Option<ZoneCheckpointRecord>>;
 
         pub fn handle_update_zone_checkpoint(
             &mut self,
@@ -383,15 +383,15 @@ impl Message<GetLeeState> for MockStorageActor {
     }
 }
 
-impl Message<GetZoneCheckpointBytes> for MockStorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl Message<GetZoneCheckpoint> for MockStorageActor {
+    type Reply = Result<Option<ZoneCheckpointRecord>>;
 
     async fn handle(
         &mut self,
-        msg: GetZoneCheckpointBytes,
+        msg: GetZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_zone_checkpoint_bytes(msg, ctx)
+        self.handle_get_zone_checkpoint(msg, ctx)
     }
 }
 

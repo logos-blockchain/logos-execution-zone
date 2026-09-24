@@ -3,7 +3,6 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use chrono::Utc;
 use common::block::Block;
 use logos_blockchain_core::mantle::{
     ledger::{NoteId, Utxo},
@@ -19,7 +18,7 @@ use sequencer_bedrock_actor::{
     },
 };
 
-use super::{checkpoint_at, mock_msg_of};
+use super::{checkpoint_at, mock_msg_of, next_channel_seq};
 
 /// What the mocked channel holds. A running sequencer sees it change when its
 /// mock is replaced with one built from a different [`CannedChannel`].
@@ -101,6 +100,7 @@ impl CannedChannel {
                       block,
                       withdrawals,
                       parent,
+                      expected_seq: _,
                   },
                   _ctx| {
                 let current = *tip.lock().expect("channel tip lock poisoned");
@@ -155,7 +155,7 @@ fn land(
     Ok(PublishOutcome {
         this_msg,
         checkpoint: checkpoint_at(this_msg),
-        checkpoint_timestamp: Utc::now(),
+        seq: next_channel_seq(),
         released_notes,
     })
 }

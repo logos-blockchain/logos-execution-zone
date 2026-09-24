@@ -474,7 +474,7 @@ async fn setup_bedrock_actor(
     _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
 ) -> sequencer_bedrock_actor::Result<BedrockActor> {
     use sequencer_bedrock_actor::protocol::{
-        AccreditedKeys, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
+        AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
     };
 
     let mut mock = BedrockActor::default();
@@ -505,22 +505,27 @@ async fn setup_bedrock_actor(
             }))
         });
 
-    mock.expect_handle_publish_block().returning(|msg, _ctx| {
-        let msg_id = MsgId::from(msg.block.header.hash.0);
-        Ok(PublishOutcome {
-            this_msg: msg_id,
-            checkpoint: Checkpoint {
-                last_msg_id: msg_id,
-                pending_txs: Vec::new(),
-                lib: HeaderId::from([0; 32]),
-                lib_slot: Slot::from(0),
-                channel_notes: Vec::new(),
-                finalized_config: MsgId::root(),
-            },
-            checkpoint_timestamp: chrono::Utc::now(),
-            released_notes: Vec::new(),
-        })
-    });
+    let seq = std::sync::atomic::AtomicU64::new(0);
+    mock.expect_handle_publish_block()
+        .returning(move |msg, _ctx| {
+            let msg_id = MsgId::from(msg.block.header.hash.0);
+            Ok(PublishOutcome {
+                this_msg: msg_id,
+                checkpoint: Checkpoint {
+                    last_msg_id: msg_id,
+                    pending_txs: Vec::new(),
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::from(0),
+                    channel_notes: Vec::new(),
+                    finalized_config: MsgId::root(),
+                },
+                seq: ChannelSeq::mocked(
+                    seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        .saturating_add(1),
+                ),
+                released_notes: Vec::new(),
+            })
+        });
 
     Ok(mock)
 }

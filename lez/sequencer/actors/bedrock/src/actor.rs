@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use chrono::Utc;
 use common::block::Block;
 use futures::StreamExt as _;
 use kameo::{
@@ -37,7 +36,7 @@ use logos_blockchain_zone_sdk::{
     },
 };
 use sequencer_actors_common::EraseMessage as _;
-use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpointBytes};
+use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
 use tokio::{select, sync::watch};
 
 #[cfg(feature = "test-utils")]
@@ -48,10 +47,10 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelParams,
-        ChannelUpdate, CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys,
-        GetChannelId, GetChannelIdReply, GetChannelTipMessageId, GetChannelTipSlot,
-        LiveChannelConfig, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
-        PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn, CreateChannel,
+        GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
+        GetChannelTipSlot, LiveChannelConfig, MsgId, PrepareConfig, PreparedChannelConfig,
+        PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
     },
 };
 
@@ -71,6 +70,9 @@ pub struct BedrockActor {
     sequencer: ZoneSequencer<NodeHttpClient>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
+    /// Version of the channel view this actor holds, bumped by everything that
+    /// mints a checkpoint.
+    seq: ChannelSeq,
 }
 
 impl BedrockActor {
@@ -79,11 +81,13 @@ impl BedrockActor {
         storage_ref: ActorRef<S>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
     ) -> Result<Self> {
-        let initial_checkpoint = storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await?
-            .as_deref()
-            .map(SequencerCheckpoint::from_bytes)
+        let stored_checkpoint = storage_ref.ask(GetZoneCheckpoint).await?;
+        let seq = stored_checkpoint
+            .as_ref()
+            .map_or(ChannelSeq::ZERO, |stored| ChannelSeq::resumed(stored.seq));
+        let initial_checkpoint = stored_checkpoint
+            .as_ref()
+            .map(|stored| SequencerCheckpoint::from_bytes(&stored.bytes))
             .transpose()?;
 
         let Config {
@@ -136,6 +140,7 @@ impl BedrockActor {
             sequencer,
             channel_view_rx,
             broker_ref,
+            seq,
         };
 
         // Wait for cold-start backfill to complete before returning so callers
@@ -149,10 +154,6 @@ impl BedrockActor {
         Ok(bedrock)
     }
 
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "Helps to make returned future Send"
-    )]
     async fn on_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::BlocksProcessed {
@@ -211,12 +212,13 @@ impl BedrockActor {
                     }
                 }
 
+                let seq = self.next_seq();
                 self.broker_ref
                     .tell(kameo_actors::broker::Publish {
                         topic: format!("channel/{}/update", self.config.channel_id),
                         message: ChannelEvent::Update(Arc::new(ChannelUpdate {
                             checkpoint,
-                            checkpoint_timestamp: Utc::now(),
+                            seq,
                             adopted,
                             orphaned,
                             finalized: finalized_blocks,
@@ -287,9 +289,15 @@ impl BedrockActor {
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
             checkpoint,
-            checkpoint_timestamp: Utc::now(),
+            seq: self.next_seq(),
             released_notes: released_notes(&result.tx),
         })
+    }
+
+    /// Bumps the channel sequence and hands back the new one.
+    const fn next_seq(&mut self) -> ChannelSeq {
+        self.seq = self.seq.next();
+        self.seq
     }
 }
 
@@ -411,9 +419,19 @@ impl Message<PublishBlock> for BedrockActor {
             block,
             withdrawals,
             parent,
+            expected_seq,
         }: PublishBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if let Some(expected) = expected_seq
+            && expected != self.seq
+        {
+            return Err(Error::ChannelMoved {
+                provided: expected,
+                current: self.seq,
+            });
+        }
+
         let data = borsh::to_vec(&block).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_err| Error::BlockTooLarge)?;
 
@@ -466,7 +484,7 @@ impl Message<PublishBlock> for BedrockActor {
             Ok(PublishOutcome {
                 this_msg: result.tx.inscription().this_msg,
                 checkpoint,
-                checkpoint_timestamp: Utc::now(),
+                seq: self.next_seq(),
                 released_notes: released_notes(&result.tx),
             })
         }
@@ -697,7 +715,7 @@ impl Message<PublishRawInscription> for BedrockActor {
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
             checkpoint,
-            checkpoint_timestamp: Utc::now(),
+            seq: self.next_seq(),
             released_notes: released_notes(&result.tx),
         })
     }

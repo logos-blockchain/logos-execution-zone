@@ -1,6 +1,5 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use chrono::DateTime;
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
@@ -23,7 +22,7 @@ use crate::{
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, UpdateZoneCheckpoint, WithdrawalReconciliationKey,
@@ -51,20 +50,21 @@ fn bookkeeping_update() -> AtomicUpdate {
     }
 }
 
-/// A checkpoint of `bytes` minted `secs` seconds into the epoch.
-fn checkpoint_record(bytes: &[u8], secs: i64) -> ZoneCheckpointRecord {
+/// A checkpoint of `bytes` minted at channel sequence `seq`.
+fn checkpoint_record(bytes: &[u8], seq: u64) -> ZoneCheckpointRecord {
     ZoneCheckpointRecord {
         bytes: bytes.to_vec(),
-        timestamp: DateTime::from_timestamp(secs, 0).expect("a valid timestamp"),
+        seq,
     }
 }
 
 /// The checkpoint bytes the store holds, or [`None`] when it holds none.
 async fn stored_checkpoint(storage_ref: &ActorRef<StorageActor>) -> Option<Vec<u8>> {
     storage_ref
-        .ask(GetZoneCheckpointBytes)
+        .ask(GetZoneCheckpoint)
         .await
         .expect("Failed to read the checkpoint")
+        .map(|checkpoint| checkpoint.bytes)
 }
 
 fn withdrawal_key(byte: u8) -> WithdrawalReconciliationKey {
@@ -939,10 +939,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .expect("Failed to apply the checkpoint-only update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint"),
+        stored_checkpoint(&storage_ref).await,
         Some(b"cp-idle".to_vec()),
         "The checkpoint still has to land"
     );
@@ -1003,17 +1000,13 @@ async fn checkpoint_lands_with_an_update_carrying_no_block() {
         .expect("Failed to apply the update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint")
-            .as_deref(),
+        stored_checkpoint(&storage_ref).await.as_deref(),
         Some(b"cp-orphan".as_slice())
     );
 }
 
 #[tokio::test]
-async fn a_checkpoint_older_than_the_stored_one_is_dropped() {
+async fn a_checkpoint_behind_the_stored_one_is_dropped() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
 
@@ -1038,7 +1031,7 @@ async fn a_checkpoint_older_than_the_stored_one_is_dropped() {
         "The newer checkpoint has to survive the stale one"
     );
 
-    // Same timestamp, different bytes: nothing says the newcomer is the later
+    // Same sequence, different bytes: nothing says the newcomer is the later
     // view, so the store keeps what it has.
     storage_ref
         .ask(UpdateZoneCheckpoint {

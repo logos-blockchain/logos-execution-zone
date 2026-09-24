@@ -30,7 +30,6 @@ common.workspace = true
 sequencer_actors_common.workspace = true
 
 kameo.workspace = true
-chrono.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 rocksdb = { workspace = true, optional = true }

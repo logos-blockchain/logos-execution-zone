@@ -10,18 +10,21 @@ use common::{
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
     Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, Signature,
-    V03State,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
-use sequencer_bedrock_actor::{mock::MockBedrockActor, protocol::Slot};
+use sequencer_bedrock_actor::{
+    mock::MockBedrockActor,
+    protocol::{ChannelSeq, Checkpoint, HeaderId, PublishOutcome, Slot},
+};
 use sequencer_core::{
     MsgId,
     config::{BedrockConfig, SequencerConfig},
 };
-use sequencer_storage_actor::mock::MockStorageActor;
+use sequencer_stake_core::{SequencerEntry, SequencerKey};
+use sequencer_storage_actor::{mock::MockStorageActor, protocol::StoreUpdateOutcome};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
@@ -106,7 +109,46 @@ fn prepare_mock_bedrock_with_empty_channel() -> MockBedrockActor {
     mock_bedrock
 }
 
+/// A config whose home already holds a known Bedrock signing key, so the stake
+/// config can name this node before the sequencer ever reads the key.
+fn staked_sequencer_config() -> (SequencerConfig, TempDir, SequencerKey) {
+    const BEDROCK_KEY: [u8; 32] = [0x5e; 32];
+
+    let (config, home) = sequencer_config();
+    std::fs::write(config.home.join("bedrock_signing_key"), BEDROCK_KEY)
+        .expect("Failed to seed the Bedrock signing key");
+    let sequencer_key = SequencerKey::new(
+        sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+            .expect("the seeded key loads")
+            .public_key()
+            .to_bytes(),
+    )
+    .expect("the seeded key is a valid Ed25519 public key");
+
+    (config, home, sequencer_key)
+}
+
+/// The stake config naming `sequencer_key` as a staked sequencer, which block
+/// production needs to find itself in before it will build anything.
+fn stake_entries(sequencer_key: SequencerKey) -> BTreeMap<SequencerKey, SequencerEntry> {
+    [(
+        sequencer_key,
+        SequencerEntry {
+            account_id: testnet_initial_state::initial_public_user_accounts()[0].account_id,
+            total_staked: 1,
+            total_pending_unstake: 0,
+        },
+    )]
+    .into()
+}
+
 fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
+    prepare_mock_storage_with_stake(BTreeMap::new())
+}
+
+fn prepare_mock_storage_with_stake(
+    entries: BTreeMap<SequencerKey, SequencerEntry>,
+) -> MockStorageActor {
     let genesis_block_meta = BlockMeta {
         id: 1,
         hash: HashType::default(),
@@ -127,46 +169,26 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         },
         bedrock_status: BedrockStatus::Pending,
     };
-    let state = V03State::new().with_public_accounts(
-        [
-            (
-                system_accounts::sequencer_stake_config_account_id(),
-                Account::default().with_shard(
-                    AccountId::from_builtin_program(programs::sequencer_stake().id()),
-                    sequencer_stake_core::SequencerStakeConfig {
-                        channel_params: Some(sequencer_stake_core::ChannelParams {
-                            minimum_sequencer_stake: 0,
-                            posting_timeframe:
-                                system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                            posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                        }),
-                        channel_id: Some([0xC1; 32]),
-                        entries: BTreeMap::new(),
-                    }
-                    .to_bytes()
-                    .try_into()
-                    .expect("Sequencer stake config must fit into ShardData"),
-                ),
-            ),
-            (
-                system_accounts::fee_state_account_id(),
-                system_accounts::fee_state_account(),
-            ),
-        ]
-        .into_iter()
-        // Fund the initial user accounts so a self-pay fee reserve clears
-        // admission (only the balance is read here; no action executes).
-        .chain(
-            testnet_initial_state::initial_public_user_accounts()
-                .into_iter()
-                .map(|acc| {
-                    (
-                        acc.account_id,
-                        Account::funded(acc.balance),
-                    )
+    // The real genesis state, so programs are loaded and a transaction can
+    // actually settle; only the stake config is layered on, to name this node.
+    let state = testnet_initial_state::initial_state(false).with_public_accounts([(
+        system_accounts::sequencer_stake_config_account_id(),
+        Account::default().with_shard(
+            AccountId::from_builtin_program(programs::sequencer_stake().id()),
+            sequencer_stake_core::SequencerStakeConfig {
+                channel_params: Some(sequencer_stake_core::ChannelParams {
+                    minimum_sequencer_stake: 0,
+                    posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                    posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                 }),
+                channel_id: Some([0xC1; 32]),
+                entries,
+            }
+            .to_bytes()
+            .try_into()
+            .expect("Sequencer stake config must fit into ShardData"),
         ),
-    );
+    )]);
 
     let mut mock_storage = MockStorageActor::new();
 
@@ -202,7 +224,7 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(move |_, _| Ok(vec![genesis_block.clone()]));
 
     mock_storage
-        .expect_handle_get_zone_checkpoint_bytes()
+        .expect_handle_get_zone_checkpoint()
         .returning(|_, _| Ok(None));
 
     mock_storage
@@ -230,6 +252,124 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(|_, _| Ok(vec![]));
 
     mock_storage
+}
+
+/// A publish refused because the channel moved under the block costs nothing
+/// but the turn: the transactions go back to the mempool, and the next turn
+/// builds a fresh block from them against the state the updates left behind.
+/// The refusal is an ordinary outcome, so it must not count as a production
+/// failure either.
+#[test]
+async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home, sequencer_key) = staked_sequencer_config();
+    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
+    // Startup published genesis, so the turn is not a rewind.
+    mock_storage
+        .expect_handle_get_published_high_water()
+        .returning(|_msg, _ctx| Ok(Some(1)));
+    mock_storage
+        .expect_handle_get_pending_cross_zone_dispatches()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
+    mock_storage
+        .expect_handle_get_pending_deposit_events()
+        .returning(|_msg, _ctx| Ok(Vec::new()));
+    mock_storage
+        .expect_handle_apply_store_update()
+        .returning(|_msg, _ctx| Ok(StoreUpdateOutcome::default()));
+
+    let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel();
+    mock_bedrock
+        .expect_handle_get_accredited_keys()
+        .returning(|_msg, _ctx| Ok(None));
+    mock_bedrock
+        .expect_handle_get_channel_tip_message_id()
+        .returning(|_msg, _ctx| Ok(None));
+
+    // The first publish loses the race; the second is served and its block
+    // recorded, so the test can see what the retry carried.
+    let (published_tx, mut published_rx) = mpsc::unbounded_channel();
+    let refused_first = std::sync::atomic::AtomicBool::new(false);
+    mock_bedrock
+        .expect_handle_publish_block()
+        .returning(move |msg, _ctx| {
+            if !refused_first.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                return Err(sequencer_bedrock_actor::error::Error::ChannelMoved {
+                    provided: msg.expected_seq.unwrap_or(ChannelSeq::mocked(0)),
+                    current: ChannelSeq::mocked(7),
+                });
+            }
+            let msg_id = MsgId::from(msg.block.header.hash.0);
+            published_tx
+                .send(msg.block)
+                .expect("the test still listens");
+            Ok(PublishOutcome {
+                this_msg: msg_id,
+                checkpoint: Checkpoint {
+                    last_msg_id: msg_id,
+                    pending_txs: Vec::new(),
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::from(0),
+                    channel_notes: Vec::new(),
+                    finalized_config: MsgId::root(),
+                },
+                seq: ChannelSeq::mocked(8),
+                released_notes: Vec::new(),
+            })
+        });
+
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::new(
+            config,
+            MockStorageActor::spawn(mock_storage),
+            MockBedrockActor::spawn(mock_bedrock),
+        )
+        .await?,
+    );
+
+    let transaction = test_transaction();
+    let transaction_hash = transaction.hash();
+    executor
+        .ask(protocol::Transaction {
+            transaction,
+            origin: TransactionOrigin::User,
+        })
+        .await
+        .expect("the mempool takes the transaction");
+
+    // The refused turn inscribes nothing and leaves the actor healthy.
+    executor
+        .ask(protocol::ProduceBlock)
+        .await
+        .expect("a refused turn must still reply Ok");
+    assert!(
+        executor.is_alive(),
+        "a refused publish is not a reason to stop producing"
+    );
+    assert!(
+        published_rx.try_recv().is_err(),
+        "nothing reached L1 on the refused turn"
+    );
+
+    // The next turn rebuilds from the requeued transaction and lands it.
+    executor
+        .ask(protocol::ProduceBlock)
+        .await
+        .expect("the retried turn must reply Ok");
+    let published = published_rx
+        .try_recv()
+        .expect("the retried turn publishes a block");
+    assert!(
+        published
+            .body
+            .transactions
+            .iter()
+            .any(|tx| tx.hash() == transaction_hash),
+        "the refused turn's transaction has to come back on the next one"
+    );
+
+    Ok(())
 }
 
 /// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.

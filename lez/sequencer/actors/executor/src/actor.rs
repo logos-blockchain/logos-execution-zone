@@ -272,6 +272,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                     self.sequencer.bedrock_public_key_hex()
                 );
             }
+            Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
+                // Skipping turn until next time hoping to catch up all missed updates
+                warn!("Skipping turn: {err}");
+            }
             Err(err) => {
                 self.failed_attempts = self.failed_attempts.saturating_add(1);
                 sequencer_executor_actor_metrics::record_production_failed_attempts(

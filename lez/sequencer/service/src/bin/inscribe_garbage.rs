@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
 
     let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
     mock_storage
-        .expect_handle_get_zone_checkpoint_bytes()
+        .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
     let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
 

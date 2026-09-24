@@ -1,6 +1,8 @@
 use kameo::error::Infallible;
 use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
 
+use crate::protocol::ChannelSeq;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Storage request failed")]
@@ -64,6 +66,14 @@ pub enum Error {
     // TODO: Not a technical limitation, but rather a complexity of dealing with zone sdk
     #[error("Cannot publish block on parent with withdrawals")]
     CannotPublishBlockOnParentWithWithdrawals,
+
+    #[error(
+        "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
+    )]
+    ChannelMoved {
+        provided: ChannelSeq,
+        current: ChannelSeq,
+    },
 
     #[error("Zone-sdk error")]
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),

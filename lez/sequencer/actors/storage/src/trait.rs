@@ -17,11 +17,11 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        GetZoneAnchor, GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
         SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        ZoneAnchorRecord,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -37,7 +37,7 @@ pub trait StorageActorTrait:
     + Message<GetLatestBlockMeta, Reply = Result<Option<BlockMeta>>>
     + Message<GetLeeState, Reply = Result<Option<V03State>>>
     + Message<GetFinalSnapshot, Reply = Result<Option<(V03State, BlockMeta)>>>
-    + Message<GetZoneCheckpointBytes, Reply = Result<Option<Vec<u8>>>>
+    + Message<GetZoneCheckpoint, Reply = Result<Option<ZoneCheckpointRecord>>>
     + Message<UpdateZoneCheckpoint, Reply = Result<()>>
     + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutSlashRecordBytes, Reply = Result<()>>
