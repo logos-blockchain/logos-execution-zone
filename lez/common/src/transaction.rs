@@ -54,16 +54,25 @@ impl LeeTransaction {
     // TODO: Introduce type-safe wrapper around checked transaction, e.g. AuthenticatedTransaction
     pub fn transaction_stateless_check(self) -> Result<Self, TransactionMalformationError> {
         // Stateless checks here
+        let has_duplicate_signers = |keys: &[(lee::Signature, lee::PublicKey)]| {
+            let unique: std::collections::HashSet<AccountId> =
+                keys.iter().map(|(_, pk)| AccountId::from(pk)).collect();
+            unique.len() != keys.len()
+        };
         match self {
             Self::Public(tx) => {
-                if tx.witness_set().is_valid_for(tx.message()) {
+                if has_duplicate_signers(tx.witness_set().signatures_and_public_keys()) {
+                    Err(TransactionMalformationError::DuplicateSigner)
+                } else if tx.witness_set().is_valid_for(tx.message()) {
                     Ok(Self::Public(tx))
                 } else {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
             Self::PrivacyPreserving(tx) => {
-                if tx.witness_set().signatures_are_valid_for(tx.message()) {
+                if has_duplicate_signers(tx.witness_set().signatures_and_public_keys()) {
+                    Err(TransactionMalformationError::DuplicateSigner)
+                } else if tx.witness_set().signatures_are_valid_for(tx.message()) {
                     Ok(Self::PrivacyPreserving(tx))
                 } else {
                     Err(TransactionMalformationError::InvalidSignature)
@@ -167,6 +176,8 @@ pub enum TxKind {
 pub enum TransactionMalformationError {
     #[error("Invalid signature(-s)")]
     InvalidSignature,
+    #[error("Duplicate signer in witness set")]
+    DuplicateSigner,
     #[error("Failed to decode transaction with hash: {tx:?}")]
     FailedToDecode { tx: HashType },
     #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]

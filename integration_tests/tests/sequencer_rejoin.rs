@@ -33,6 +33,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let channel = config::bedrock_channel_id();
     let partial = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(2),
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
 
@@ -42,7 +44,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
                 num_nodes: 2,
                 bedrock_channel: channel,
             })
-            .with_sequencer_partial_config(partial),
+            .with_sequencer_partial_config(partial)
+            .with_gossip(),
         )
         .build()
         .await

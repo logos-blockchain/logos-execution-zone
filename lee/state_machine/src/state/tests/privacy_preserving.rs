@@ -58,6 +58,35 @@ fn transition_from_privacy_preserving_transaction_shielded() {
 }
 
 #[test]
+fn privacy_preserving_witness_set_cannot_have_dulicate_signers() {
+    let sender_keys = test_public_account_keys_1();
+    let recipient_keys = test_private_account_keys_1();
+
+    let mut state = V03State::new().with_public_account_balances([(sender_keys.account_id(), 200)]);
+
+    let tx = shielded_balance_transfer_for_tests(&sender_keys, &recipient_keys, 37, &state);
+
+    // Re-sign the same message with the sender twice; both nonces match the
+    // current state, so only the repeat is at fault.
+    let (_, proof) = tx.witness_set.into_raw_parts();
+    let mut message = tx.message;
+    let nonce = message.nonces[0];
+    message.nonces = vec![nonce, nonce];
+    let witness_set = WitnessSet::for_message(
+        &message,
+        proof,
+        &[&sender_keys.signing_key, &sender_keys.signing_key],
+    );
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+    ));
+}
+
+#[test]
 fn transition_from_privacy_preserving_transaction_private() {
     let sender_keys = test_private_account_keys_1();
     let sender_nonce = Nonce(0xdead_beef);

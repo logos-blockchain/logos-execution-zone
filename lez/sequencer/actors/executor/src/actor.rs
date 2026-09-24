@@ -35,10 +35,10 @@ use crate::{
     error::Error,
     protocol::{
         FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetChannelIdReply,
-        GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId,
-        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
+        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
+        GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -612,5 +612,39 @@ impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
             .await
             .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
         Ok(RequeueCrossZoneDeadLetterReply { outcome })
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static> Message<GetBlockByHash>
+    for ExecutorActor<S, BP>
+{
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetBlockByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask::<sequencer_storage_actor::protocol::GetBlockByHash>(msg.into())
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, BP: BlockPublisherTrait + Send + Sync + 'static>
+    Message<GetAccountTransactions> for ExecutorActor<S, BP>
+{
+    type Reply = Result<Option<Vec<LeeTransaction>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetAccountTransactions,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
+            .await
+            .map_err(Into::into)
     }
 }

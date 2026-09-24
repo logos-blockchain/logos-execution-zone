@@ -4,6 +4,7 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
     test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
+    transaction::clock_invocation,
 };
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{Account, AccountId, V03State};
@@ -17,13 +18,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetBlock, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetTransactionByHash,
-        GetZoneCheckpointBytes, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetAccountTransactions, GetBlock, GetBlockByHash, GetChannelCursor,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, WithdrawalReconciliationKey,
     },
 };
 
@@ -351,6 +353,149 @@ async fn net_shortening_reorg_drops_stale_blocks() {
         "A block above the new head must be deleted, or the tip read back is the orphan's"
     );
     assert_tip_is(&storage_ref, &block1b).await;
+}
+
+#[tokio::test]
+async fn net_shortening_reorg_drops_block_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: block1a.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2")
+            .expect("Block 2 is stored"),
+        2
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 0")
+            .expect("Block 0 is stored"),
+        0
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: block1b.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 1")
+            .expect("Block 1 is stored"),
+        1
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: block2.header.hash
+            })
+            .await
+            .expect("Failed to read map for block 2"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn net_shortening_reorg_drops_acc_maps() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(0, None, vec![]);
+    let block1a = produce_dummy_block(1, Some(genesis.header.hash), vec![]);
+    let block2 = produce_dummy_block(2, Some(block1a.header.hash), vec![]);
+    let block1b = produce_dummy_block(1, Some(HashType([9; 32])), vec![]);
+
+    let storage_ref = spawn_with_blocks(
+        dir.path(),
+        vec![genesis.clone(), block1a.clone(), block2.clone()],
+    )
+    .await;
+
+    let genesis_clock_tx = clock_invocation(0_u64.saturating_mul(100));
+    let block_1a_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+
+    let clock_1_acc = genesis_clock_tx.message.shard_selectors[0].account_id;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1a_clock_tx.clone().into(),
+            block_2_clock_tx.clone().into(),
+        ])
+    );
+
+    storage_ref
+        .ask(reorg_update(vec![block1b.clone()], &block1b))
+        .await
+        .expect("Failed to apply the reorg");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            genesis_clock_tx.clone().into(),
+            block_1b_clock_tx.clone().into(),
+        ])
+    );
 }
 
 /// An orphan-only update: block 2 falls off the branch with no replacement, so
@@ -898,6 +1043,15 @@ async fn an_unseeded_store_reports_no_chain() {
             .expect("Failed to read block 1")
             .is_none()
     );
+    assert!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: [0; 32].into()
+            })
+            .await
+            .expect("Failed to get block id by map")
+            .is_none()
+    );
 }
 
 /// The property that lets a genesis go in as an ordinary block write.
@@ -906,6 +1060,11 @@ async fn the_first_block_written_starts_the_chain() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let genesis = produce_dummy_block(1, None, vec![]);
     let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
+
+    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
     assert_eq!(
         storage_ref
@@ -921,9 +1080,30 @@ async fn the_first_block_written_starts_the_chain() {
             .expect("Failed to read the last block id"),
         Some(1)
     );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: genesis.header.hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(1)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 100,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![block_1_clock_tx.clone().into()])
+    );
 
     // A later block extends the chain rather than restarting it.
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let second_hash = second.header.hash;
     storage_ref
         .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new())))
         .await
@@ -942,6 +1122,110 @@ async fn the_first_block_written_starts_the_chain() {
             .await
             .expect("Failed to read the last block id"),
         Some(2)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetBlockByHash {
+                block_hash: second_hash
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(2)
+    );
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 100,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![block_1_clock_tx.into(), block_2_clock_tx.into()])
+    );
+}
+
+#[tokio::test]
+async fn acc_id_to_tx_map_corectness() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(1, None, vec![]);
+    let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
+
+    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_3_clock_tx = clock_invocation(3_u64.saturating_mul(100));
+    let block_4_clock_tx = clock_invocation(4_u64.saturating_mul(100));
+
+    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
+
+    // A later block extends the chain rather than restarting it.
+    let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let block_2_hash = block_2.header.hash;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(block_2, Arc::new(V03State::new())))
+        .await
+        .expect("Failed to record the second block");
+
+    let block_3 = produce_dummy_block(3, Some(block_2_hash), vec![]);
+    let block_3_hash = block_3.header.hash;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(block_3, Arc::new(V03State::new())))
+        .await
+        .expect("Failed to record the second block");
+
+    let block_4 = produce_dummy_block(4, Some(block_3_hash), vec![]);
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(block_4, Arc::new(V03State::new())))
+        .await
+        .expect("Failed to record the second block");
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 0,
+                limit: 2,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_1_clock_tx.clone().into(),
+            block_2_clock_tx.clone().into()
+        ])
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 1,
+                limit: 2,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_2_clock_tx.clone().into(),
+            block_3_clock_tx.clone().into()
+        ])
+    );
+
+    assert_eq!(
+        storage_ref
+            .ask(GetAccountTransactions {
+                account_id: clock_1_acc,
+                offset: 1,
+                limit: 3,
+            })
+            .await
+            .expect("Failed to get block id by map"),
+        Some(vec![
+            block_2_clock_tx.into(),
+            block_3_clock_tx.into(),
+            block_4_clock_tx.into()
+        ])
     );
 }
 

@@ -24,3 +24,23 @@ impl From<sequencer_core::fees::FeeStateQuote> for protocol::FeeStateQuote {
         }
     }
 }
+
+impl From<protocol::GetBlockByHash> for sequencer_storage_actor::protocol::GetBlockByHash {
+    fn from(value: protocol::GetBlockByHash) -> Self {
+        Self {
+            block_hash: value.block_hash,
+        }
+    }
+}
+
+impl From<protocol::GetAccountTransactions>
+    for sequencer_storage_actor::protocol::GetAccountTransactions
+{
+    fn from(value: protocol::GetAccountTransactions) -> Self {
+        Self {
+            account_id: value.account_id,
+            offset: value.offset,
+            limit: value.limit,
+        }
+    }
+}
