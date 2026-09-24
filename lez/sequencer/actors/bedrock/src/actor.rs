@@ -25,7 +25,7 @@ use logos_blockchain_core::{
         traits::Hashable as _,
         transactions::{MantleTxBuilder, OpProofs},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
 };
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -47,11 +47,11 @@ use crate::{
     actor::config::Config,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelUpdate,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys, GetChannelId,
-        GetChannelIdReply, GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId,
-        PrepareConfig, PreparedChannelConfig, PublishBlock, PublishOutcome, ReadChannel, Slot,
-        ZoneMessage,
+        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelParams,
+        ChannelUpdate, CheckChannelExists, CheckIsOurTurn, CreateChannel, GetAccreditedKeys,
+        GetChannelId, GetChannelIdReply, GetChannelTipMessageId, GetChannelTipSlot,
+        LiveChannelConfig, MsgId, PrepareConfig, PreparedChannelConfig, PublishBlock,
+        PublishOutcome, ReadChannel, Slot, ZoneMessage,
     },
 };
 
@@ -350,16 +350,12 @@ impl Message<CreateChannel> for BedrockActor {
         let key_count = keys.len();
         let keys = Keys::try_from(keys).map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
 
-        let config_op = ChannelConfigOp {
-            channel: self.config.channel_id,
-            // The channel does not exist yet, so the config lineage starts here.
-            parent: MsgId::root(),
+        let config_op = genesis_config_op(
+            self.config.channel_id,
             keys,
-            posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-            posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
+            &channel_params,
             configuration_threshold,
-            transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-        };
+        );
 
         let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
         let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
@@ -387,12 +383,9 @@ impl Message<CreateChannel> for BedrockActor {
             .config
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-        // Creation skips the channel-config signature check, but the proof must
-        // still be well formed; index 0 is our own key.
-        let config_proof =
-            ChannelMultiSigProof::try_new(IndexedSignature::new(0, signature).into())?;
 
-        let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(config_proof)]);
+        let mut op_proofs =
+            OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof()?)]);
         op_proofs
             .try_push(OpProof::Ed25519Sig(signature))
             .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
@@ -718,6 +711,32 @@ impl From<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChannelC
             required_signatures: state.configuration_threshold,
         }
     }
+}
+
+/// The config op that creates `channel_id` with `keys` as its founding committee.
+fn genesis_config_op(
+    channel_id: ChannelId,
+    keys: Keys,
+    channel_params: &ChannelParams,
+    configuration_threshold: u16,
+) -> ChannelConfigOp {
+    ChannelConfigOp {
+        channel: channel_id,
+        // The channel does not exist yet, so the config lineage starts here.
+        parent: MsgId::root(),
+        keys,
+        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
+        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
+        configuration_threshold,
+        transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+    }
+}
+
+/// The proof a channel-creating config op carries. No key is accredited before
+/// creation, so Bedrock verifies against a threshold of zero and rejects the
+/// whole creation tx over a proof holding any signature.
+fn genesis_config_proof() -> Result<ChannelMultiSigProof> {
+    ChannelMultiSigProof::try_new(IndexedSignatures::default()).map_err(Into::into)
 }
 
 /// Whether `checkpoint` records messages published to or observed on the channel.

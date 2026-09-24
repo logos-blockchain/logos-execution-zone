@@ -5,20 +5,27 @@ use common::{
 };
 use logos_blockchain_core::mantle::{
     SignedOps,
-    ledger::verification_mode::StandardMode,
+    channel::Channels,
+    ledger::{VerifiableOperation as _, verification_mode::StandardMode},
     ops::{
-        Op, OpProof,
+        Op, OpProof, SignedOperation,
         channel::{
             ChannelId, MsgId,
+            config::{ChannelConfigValidationContext, Keys},
             inscribe::{Inscription, InscriptionOp},
         },
     },
-    transactions::{MantleTxBuilder, OpProofs, states::Unverified},
+    transactions::{
+        MantleTxBuilder, OpProofs,
+        hash::{TxHash, TxHashView},
+        states::Unverified,
+    },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
 use super::channel_blocks;
+use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
@@ -67,4 +74,38 @@ fn a_config_tx_yields_nothing() {
         SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
     );
     assert!(channel_blocks(&config, channel).is_empty());
+}
+
+/// Bedrock verifies a channel-creating config op against a threshold of zero,
+/// so the op we build must pass with the proof we pair it with. A proof holding
+/// even our own signature sinks the whole creation tx, and with it the channel.
+#[test]
+fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
+    let keys = Keys::from(Ed25519Key::generate(&mut rand::rngs::OsRng).public_key());
+    let op = super::genesis_config_op(
+        ChannelId::from([1; 32]),
+        keys,
+        &ChannelParams {
+            minimum_sequencer_stake: 0,
+            posting_timeframe: 10,
+            posting_timeout: 20,
+        },
+        1,
+    );
+    let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
+
+    let signed = SignedOperation::<_, Unverified, StandardMode>::new(
+        op,
+        super::genesis_config_proof().expect("the proof is well formed"),
+    )
+    .into_preverified(&())
+    .expect("the config is well formed");
+
+    signed
+        .verify(&ChannelConfigValidationContext {
+            // An empty ledger: the channel this op creates does not exist yet.
+            channels: &Channels::new(),
+            tx_hash_view: &tx_hash_view,
+        })
+        .expect("Bedrock accepts the channel-creating config op");
 }
