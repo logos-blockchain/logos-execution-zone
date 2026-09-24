@@ -1,5 +1,8 @@
 use lee::{AccountInput, program::Program};
-use lee_core::program::InstructionData;
+use lee_core::{
+    native_token::{NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    program::InstructionData,
+};
 
 use crate::{ExecutionFailureKind, WalletCore};
 
@@ -14,15 +17,14 @@ pub mod shielded;
 )]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
-fn auth_transfer_preparation(
+fn native_transfer_preparation(
     balance_to_move: u128,
 ) -> (
     InstructionData,
-    Program,
     impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
 ) {
     let instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
             amount: balance_to_move,
         })
         .unwrap();
@@ -30,16 +32,14 @@ fn auth_transfer_preparation(
     // TODO: handle large Err-variant properly
     let tx_pre_check = move |accounts: &[AccountInput]| {
         let from = &accounts[0];
-        if from.balance >= balance_to_move {
+        let balance = decode_balance(from.shard_of(NATIVE_TOKEN_PROGRAM_ID))
+            .map_err(|_error| ExecutionFailureKind::AccountDataError(from.account_id))?;
+        if balance >= balance_to_move {
             Ok(())
         } else {
             Err(ExecutionFailureKind::InsufficientFundsError)
         }
     };
 
-    (
-        instruction_data,
-        programs::authenticated_transfer(),
-        tx_pre_check,
-    )
+    (instruction_data, tx_pre_check)
 }

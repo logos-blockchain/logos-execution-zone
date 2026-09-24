@@ -11,12 +11,9 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData, Instruction,
 };
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+    respond_unsupported_call,
 };
 
 fn update_if_multiple(
@@ -24,15 +21,15 @@ fn update_if_multiple(
     divisor: u64,
     current_block_id: u64,
     updated_data: &[u8],
-) -> AccountStateDiff {
+) -> ShardStateDiff {
     if current_block_id.is_multiple_of(divisor) {
         let new_data = updated_data
             .to_vec()
             .try_into()
             .expect("Clock account data should fit in account data");
-        AccountStateDiff::new(pre, BalanceDiff::Add(0), new_data)
+        ShardStateDiff::new(pre, new_data)
     } else {
-        AccountStateDiff::unchanged(pre)
+        ShardStateDiff::unchanged(pre)
     }
 }
 

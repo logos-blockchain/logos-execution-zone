@@ -141,29 +141,23 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
 #[repr(C)]
 pub struct FfiProgramShardSelector {
     pub account_id: FfiAccountId,
-    pub program_account_id: FfiOption<FfiAccountId>,
+    pub program_account_id: FfiAccountId,
 }
 
 impl From<ProgramShardSelector> for FfiProgramShardSelector {
     fn from(value: ProgramShardSelector) -> Self {
         Self {
             account_id: value.account_id.into(),
-            program_account_id: value
-                .program_account_id
-                .map_or_else(FfiOption::from_none, |val| {
-                    FfiOption::from_value(val.into())
-                }),
+            program_account_id: value.program_account_id.into(),
         }
     }
 }
 
 impl From<FfiProgramShardSelector> for ProgramShardSelector {
     fn from(value: FfiProgramShardSelector) -> Self {
-        let std_opt: Option<FfiAccountId> = value.program_account_id.into();
-
         Self {
             account_id: value.account_id.into(),
-            program_account_id: std_opt.map(Into::into),
+            program_account_id: value.program_account_id.into(),
         }
     }
 }
@@ -208,25 +202,58 @@ impl From<lee::public_transaction::Message> for FfiPublicMessage {
 }
 
 #[repr(C)]
+pub enum FfiProgramImageClaimKind {
+    Disclosed = 0x0,
+    Undisclosed,
+}
+
+#[repr(C)]
 pub struct FfiProgramImageClaim {
-    account_id: FfiAccountId,
-    image_id: [u32; 8],
+    image_claim_kind: FfiProgramImageClaimKind,
+    account_id: *const FfiAccountId,
+    image_id: *const [u32; 8],
+    root: *const [u8; 32],
 }
 
 impl From<ProgramImageClaim> for FfiProgramImageClaim {
     fn from(value: ProgramImageClaim) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-            image_id: value.image_id,
+        match value {
+            ProgramImageClaim::Disclosed {
+                account_id,
+                image_id,
+            } => Self {
+                image_claim_kind: FfiProgramImageClaimKind::Disclosed,
+                account_id: Box::into_raw(Box::new(account_id.into())),
+                image_id: Box::into_raw(Box::new(image_id)),
+                root: std::ptr::null(),
+            },
+            ProgramImageClaim::Undisclosed { root } => Self {
+                image_claim_kind: FfiProgramImageClaimKind::Disclosed,
+                account_id: std::ptr::null(),
+                image_id: std::ptr::null(),
+                root: Box::into_raw(Box::new(root)),
+            },
         }
     }
 }
 
 impl From<FfiProgramImageClaim> for ProgramImageClaim {
     fn from(value: FfiProgramImageClaim) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-            image_id: value.image_id,
+        match value.image_claim_kind {
+            FfiProgramImageClaimKind::Disclosed => {
+                let account_id = unsafe { Box::from_raw(value.account_id.cast_mut()) };
+                let image_id = unsafe { Box::from_raw(value.image_id.cast_mut()) };
+
+                Self::Disclosed {
+                    account_id: (*account_id).into(),
+                    image_id: *image_id,
+                }
+            }
+            FfiProgramImageClaimKind::Undisclosed => {
+                let root = unsafe { Box::from_raw(value.root.cast_mut()) };
+
+                Self::Undisclosed { root: *root }
+            }
         }
     }
 }
@@ -692,7 +719,7 @@ mod tests {
                 program_account_id: AccountId::new([42; 32]),
                 shard_selectors: vec![ProgramShardSelector {
                     account_id: AccountId::new([3; 32]),
-                    program_account_id: Some(AccountId::new([42; 32])),
+                    program_account_id: AccountId::new([42; 32]),
                 }],
                 nonces: vec![],
                 instruction_data: vec![9, 9],

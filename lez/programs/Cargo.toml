@@ -86,7 +86,6 @@ programs = [
   "dep:token_program",
   "dep:amm_core",
   "dep:associated_token_account_core",
-  "dep:authenticated_transfer_core",
   "dep:bridge_core",
   "dep:clock_core",
   "dep:fee_core",
@@ -106,9 +105,6 @@ lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
 amm_core = { workspace = true, optional = true }
 associated_token_account_core = { workspace = true, optional = true }
-authenticated_transfer_core = { workspace = true, optional = true, features = [
-  "image_id",
-] }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }

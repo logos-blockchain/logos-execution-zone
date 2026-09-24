@@ -12,6 +12,7 @@ sequencer_service.workspace = true
 sequencer_storage_actor.workspace = true
 sequencer_executor_actor.workspace = true
 sequencer_slasher_actor.workspace = true
+sequencer_channel_config_actor.workspace = true
 common.workspace = true
 
 env_logger.workspace = true

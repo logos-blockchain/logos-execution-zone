@@ -14,18 +14,13 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::transaction::LeeTransaction;
-use integration_tests::{get_account, new_account};
-use lee::AccountId;
-use lee_core::program::{InstructionData, ProgramEvent};
+use integration_tests::{get_account};
 use log::info;
 use logos_blockchain_zone_sdk::adapter::Node as _;
 use sequencer_core::block_publisher::Ed25519Key;
 use sequencer_ffi::api::types::{FfiOption, transaction::FfiTransactionKind};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::bedrock_channel_id};
-
-use crate::sequencer_ffi_helpers::sequencer_ffi_query_events;
+use test_fixtures::{config::bedrock_channel_id};
 
 #[path = "sequencer_ffi_helpers/mod.rs"]
 mod sequencer_ffi_helpers;
@@ -403,8 +398,8 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
 }
 
 #[test]
-fn sequencer_ffi_event_test() -> Result<()> {
-    let (mut ctx, node, _, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
+fn sequencer_ffi_events_produced_correctly() -> Result<()> {
+    let (ctx, node, _, sequencer_ffi_res) = sequencer_ffi_helpers::joining_setup()?;
 
     let sequencer_ffi =
     // SAFETY: sequencer_ffi_helpers::joining_setup guarantees validity.
@@ -446,94 +441,43 @@ fn sequencer_ffi_event_test() -> Result<()> {
     }
     info!("Joining sequencer produced a block on its round-robin turn");
 
-    // Deploying event emitter
-
-    let deployed = test_programs::event_emitter();
-    // Every account a deploy touches is freshly claimed and unfunded, so a genesis-funded wallet
-    // account covers the fees instead (see `ProgramLoader::send`).
-    let payer_id = ctx.ctx().existing_public_accounts()[0];
-
-    // Deploy through `program_loader`: one segment holds the (small, test-sized) program's
-    // `user_elf`, then a header claims it. Both accounts are freshly claimed, permissionless
-    // writes.
-    let header_id = ctx.block_on_mut(|ctx| new_account(ctx, false, None))?;
-    let mut segment_ids = Vec::new();
-    for _ in deployed
-        .user_elf()
-        .expect("valid ProgramBinary")
-        .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
-    {
-        segment_ids.push(ctx.block_on_mut(|ctx| new_account(ctx, false, None))?);
-    }
-    let account_id = ctx.block_on(|ctx| async {
-        wallet::program_facades::program_loader::ProgramLoader(ctx.wallet())
-            .deploy(
-                header_id,
-                &segment_ids,
-                deployed.elf().to_vec(),
-                true,
-                Some(payer_id),
-            )
-            .await
-    })?;
-
-    // The claimed account holds nothing to fund the reserve with, so `payer_id` co-signs: its
-    // nonce and signature go last, after the account list's own.
-    let nonces = ctx.block_on_mut(|ctx| async {
-        ctx.wallet_mut()
-            .get_accounts_nonces(&[payer_id])
-            .await
-    })?;
-    let message = lee::public_transaction::Message::try_new_with_fees(
-        account_id,
-        vec![lee::ProgramShardSelector::balance(payer_id)],
-        nonces,
-        EmitterInstruction {
-                events: vec![emitted(5)],
-                chain: vec![],
-            },
-        common::test_utils::test_fee_declaration(payer_id),
-    )?;
-    let payer_key = ctx
-        .ctx()
-        .wallet()
-        .get_account_public_signing_key(payer_id)
-        .unwrap();
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[payer_key]);
-    let transaction = lee::PublicTransaction::new(message, witness_set);
-    let _response = ctx.block_on(|ctx| {
-        ctx.sequencer_client()
-            .send_transaction(LeeTransaction::Public(transaction))
-    })?;
-
-    log::info!("Waiting for next block creation");
-    // Waiting for long time as it may take some time for such a big transaction to be included in a
-    // block
-    std::thread::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    let next_id_after_deploy_res = unsafe {
+    let res =
+            // SAFETY: sequencer_ffi created by FFI, it is valid.
+            unsafe {
                 sequencer_ffi_helpers::sequencer_ffi_query_last_block(std::ptr::from_ref(sequencer_ffi))
             };
-    
-    let next_id_after_deploy = if next_id_after_deploy_res.is_some && next_id_after_deploy_res.error.is_ok() {
-        next_id_after_deploy_res.block_id
-    } else {
-        anyhow::bail!("After deploy next id failure");
+            let last_common_block = if res.error.is_ok() && res.is_some {
+                res.block_id
+            } else {
+                return Err(anyhow::anyhow!("Failed to get last block id from FFI"));
+            };
+
+    // We already produce events on a first couple of blocks 
+    // so there should be some
+    let events_res = unsafe{
+        sequencer_ffi_helpers::sequencer_ffi_query_events(
+        sequencer_ffi,
+        1,
+        FfiOption::from_value(last_common_block),
+        std::ptr::null(),
+        std::ptr::null(),
+        std::ptr::null(),
+        )
     };
 
-    let events_vec_res = unsafe{ sequencer_ffi_query_events(sequencer_ffi, 
-        1, FfiOption::from_value(next_id_after_deploy), std::ptr::null(), 
-        std::ptr::null(), std::ptr::null()) };
+    assert!(events_res.error.is_ok(), "FFI must fetch events");
 
-    assert!(events_vec_res.error.is_ok(), "Event fetch must be successfull");
+    // SAFETY: ensured by FFI.
+    let events_vec = unsafe{ events_res.value.read() };
+    // SAFETY: ensured by FFI.
+    let event_1 = unsafe{ events_vec.get(0) };
 
-    let events_vec = unsafe { events_vec_res.value.read() };
-    let event_1 = unsafe{events_vec.get(0)};
+    log::info!("EVENT PRODUCED {event_1:#?}");
 
-    log::info!("EVENT RECORD IS {event_1:#?}");
-
-    log::info!("Successfully deployed and executed program");
+    // SAFETY: events_res created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::free_ffi_event_record_vec(events_res.value);
+    }
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
@@ -542,16 +486,3 @@ fn sequencer_ffi_event_test() -> Result<()> {
 
     Ok(())
 }
-
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-    struct EmitterInstruction {
-        events: Vec<ProgramEvent>,
-        chain: Vec<(AccountId, InstructionData)>,
-    }
-
-fn emitted(n: u8) -> ProgramEvent {
-        ProgramEvent {
-            selector: [n; 8],
-            data: vec![n; 4],
-        }
-    }

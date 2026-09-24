@@ -1,10 +1,7 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
-use lee_core::{
-    account::BalanceDiff,
-    program::{
-        AccountInput, AccountStateDiff, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
-        respond_unsupported_call,
-    },
+use lee_core::program::{
+    AccountInput, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
+    respond_unsupported_call,
 };
 use wrapped_token_core::{
     Instruction, MAX_MINT_AMOUNT, SourceEntry, SourcePolicy, WrappedTokenConfig, balance_bytes,
@@ -126,9 +123,8 @@ fn mint(
     let new_balance = read_balance(holding.shard_of(self_account_id))
         .checked_add(amount)
         .expect("wrapped-token balance overflow");
-    let holding_post = AccountStateDiff::new(
+    let holding_post = ShardStateDiff::new(
         holding,
-        BalanceDiff::Add(0),
         balance_bytes(new_balance)
             .to_vec()
             .try_into()
@@ -136,9 +132,8 @@ fn mint(
     );
     // The advanced counter is written back, so the cap survives restarts and
     // re-derivation alike: it is state, not host memory.
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -148,11 +143,7 @@ fn mint(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![
-            AccountStateDiff::unchanged(marker),
-            config_post,
-            holding_post,
-        ],
+        vec![ShardStateDiff::unchanged(marker), config_post, holding_post],
     )
     .write();
 }
@@ -199,9 +190,8 @@ fn renounce_authority(
     );
 
     cfg.authority = None;
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -211,7 +201,7 @@ fn renounce_authority(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![config_post, AccountStateDiff::unchanged(authority)],
+        vec![config_post, ShardStateDiff::unchanged(authority)],
     )
     .write();
 }
@@ -286,9 +276,8 @@ fn update_sources(
             policy,
         })
         .collect();
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         cfg.to_bytes()
             .try_into()
             .expect("wrapped-token config fits in account data"),
@@ -298,7 +287,7 @@ fn update_sources(
         self_account_id,
         caller_account_id,
         instruction_data,
-        vec![config_post, AccountStateDiff::unchanged(authority)],
+        vec![config_post, ShardStateDiff::unchanged(authority)],
     )
     .write();
 }
@@ -338,9 +327,8 @@ fn init_config(
         );
     }
 
-    let config_post = AccountStateDiff::new(
+    let config_post = ShardStateDiff::new(
         config,
-        BalanceDiff::Add(0),
         config_value
             .to_bytes()
             .try_into()

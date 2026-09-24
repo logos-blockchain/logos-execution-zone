@@ -1,6 +1,6 @@
 use lee_core::{
-    account::{AccountId, BalanceDiff, ShardData},
-    program::{AccountInput, AccountStateDiff},
+    account::{AccountId, ShardData},
+    program::{AccountInput, ShardStateDiff},
 };
 use token_core::TokenHolding;
 
@@ -10,7 +10,7 @@ pub fn transfer(
     recipient: &AccountInput,
     self_account_id: AccountId,
     balance_to_move: u128,
-) -> Vec<AccountStateDiff> {
+) -> Vec<ShardStateDiff> {
     assert!(sender.is_authorized, "Sender authorization is missing");
 
     let mut sender_holding =
@@ -100,17 +100,10 @@ pub fn transfer(
         }
     }
 
-    let sender_diff = AccountStateDiff::new(
-        sender.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&sender_holding),
-    );
+    let sender_diff = ShardStateDiff::new(sender.clone(), ShardData::from(&sender_holding));
 
-    let recipient_diff = AccountStateDiff::new(
-        recipient.clone(),
-        BalanceDiff::Add(0),
-        ShardData::from(&recipient_holding),
-    );
+    let recipient_diff =
+        ShardStateDiff::new(recipient.clone(), ShardData::from(&recipient_holding));
 
     vec![sender_diff, recipient_diff]
 }

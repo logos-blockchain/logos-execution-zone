@@ -9,8 +9,6 @@ use crate::{
 
 #[repr(C)]
 pub struct FfiAccountData {
-    /// Balance as little-endian [u8; 16].
-    pub balance: FfiU128,
     /// Account shards keys.
     pub account_data_keys: FfiVec<FfiAccountId>,
     /// Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
@@ -19,7 +17,7 @@ pub struct FfiAccountData {
 
 impl From<AccountData> for FfiAccountData {
     fn from(value: AccountData) -> Self {
-        let AccountData { balance, shards } = value;
+        let AccountData { shards } = value;
 
         let acc_data_keys = shards.keys().copied().map(Into::into).collect::<Vec<_>>();
         let acc_data_values = shards
@@ -30,7 +28,6 @@ impl From<AccountData> for FfiAccountData {
             .collect::<Vec<_>>();
 
         Self {
-            balance: balance.into(),
             account_data_keys: acc_data_keys.into(),
             account_data_values: acc_data_values.into(),
         }
@@ -66,7 +63,6 @@ impl TryFrom<FfiAccountData> for AccountData {
         }
 
         Ok(Self {
-            balance: value.balance.into(),
             shards: keys_std
                 .into_iter()
                 .zip(values_std)
@@ -187,10 +183,7 @@ mod tests {
 
         let account_std = Account {
             nonce: Nonce::from(5),
-            data: AccountData {
-                balance: 10,
-                shards,
-            },
+            data: AccountData { shards },
         };
 
         let ffi_account: FfiAccount = account_std.clone().into();

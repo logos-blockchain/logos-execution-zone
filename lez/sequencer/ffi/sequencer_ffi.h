@@ -15,6 +15,11 @@ typedef enum OperationStatus {
   InvalidArgument = 6,
 } OperationStatus;
 
+typedef enum FfiProgramImageClaimKind {
+  Disclosed = 0,
+  Undisclosed,
+} FfiProgramImageClaimKind;
+
 typedef enum FfiTransactionKind {
   Public = 0,
   Private,
@@ -140,14 +145,9 @@ typedef struct FfiBlockHeader {
 
 typedef struct FfiBytes32 FfiAccountId;
 
-typedef struct FfiOption_FfiAccountId {
-  FfiAccountId *value;
-  bool is_some;
-} FfiOption_FfiAccountId;
-
 typedef struct FfiProgramShardSelector {
   FfiAccountId account_id;
-  struct FfiOption_FfiAccountId program_account_id;
+  FfiAccountId program_account_id;
 } FfiProgramShardSelector;
 
 typedef struct FfiVec_FfiProgramShardSelector {
@@ -237,10 +237,6 @@ typedef struct FfiVec_FfiVecU8 {
 
 typedef struct FfiAccountData {
   /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
-  /**
    * Account shards keys.
    */
   struct FfiVec_FfiAccountId account_data_keys;
@@ -285,8 +281,10 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiProgramImageClaim {
-  FfiAccountId account_id;
-  uint32_t image_id[8];
+  enum FfiProgramImageClaimKind image_claim_kind;
+  const FfiAccountId *account_id;
+  const uint32_t (*image_id)[8];
+  const uint8_t (*root)[32];
 } FfiProgramImageClaim;
 
 typedef struct FfiVec_FfiProgramImageClaim {
