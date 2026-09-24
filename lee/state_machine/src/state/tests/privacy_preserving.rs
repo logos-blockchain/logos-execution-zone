@@ -62,15 +62,7 @@ fn privacy_preserving_witness_set_cannot_have_dulicate_signers() {
     let sender_keys = test_public_account_keys_1();
     let recipient_keys = test_private_account_keys_1();
 
-    let mut state = V03State::new().with_public_accounts([(
-        sender_keys.account_id(),
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
-            balance: 200,
-            ..Account::default()
-        },
-    )]);
-    register_program(&mut state, &crate::test_methods::simple_balance_transfer());
+    let mut state = V03State::new().with_public_account_balances([(sender_keys.account_id(), 200)]);
 
     let tx = shielded_balance_transfer_for_tests(&sender_keys, &recipient_keys, 37, &state);
 
