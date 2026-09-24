@@ -3,6 +3,7 @@ use common::{
     HashType,
     block::{BlockMeta, PeerChainTip},
 };
+use lee::AccountId;
 use lee_core::BlockId;
 
 use crate::actor::{
@@ -40,6 +41,8 @@ pub enum ColumnFamily {
     Meta,
     /// Small records deleted as the work they track settles.
     Pending,
+    /// Many small records, contains various maps.
+    BlockMeta,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -47,7 +50,7 @@ impl db::ColumnFamilies for ColumnFamily {
         let mut options = rocksdb::Options::default();
 
         match *self {
-            Self::Block => {
+            Self::Block | Self::BlockMeta => {
                 // Written in bursts of whole blocks, so more memtables to fill
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
@@ -356,4 +359,68 @@ impl db::Storable<ColumnFamily> for CrossZonePeerTip {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
     const TYPE_NAME: &'static str = db::type_name!(CrossZonePeerTip);
+}
+
+/// The map entry between block hashes and block ids.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BlockHashToBlockIdMappingDestination {
+    pub block_id: BlockId,
+}
+
+impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
+    type Key = HashType;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
+    const TYPE_NAME: &'static str = db::type_name!(BlockHashToBlockIdMappingDestination);
+}
+
+/// The map key between account id and block id, which affect this account.
+#[derive(Debug)]
+pub struct AccountIdToBlockIdKey {
+    // There can not be 2 fields here, because we need to implement AsRef<[u8]>.
+    pub key_bytes: [u8; 32 + 8],
+}
+
+impl AccountIdToBlockIdKey {
+    pub fn new(account_id: AccountId, index: u64) -> Self {
+        let mut key_bytes = [0; 32 + 8];
+
+        key_bytes[..32].copy_from_slice(account_id.as_ref());
+        #[expect(clippy::big_endian_bytes, reason = "We use big endian for `u64` in DB")]
+        key_bytes[32..].copy_from_slice(index.to_be_bytes().as_ref());
+
+        Self { key_bytes }
+    }
+}
+
+impl AsRef<[u8]> for AccountIdToBlockIdKey {
+    fn as_ref(&self) -> &[u8] {
+        self.key_bytes.as_ref()
+    }
+}
+
+/// The map entry between account id and block id, which affect this account.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct AccountIdToBlockIdDestination {
+    pub block_id: BlockId,
+}
+
+impl db::Storable<ColumnFamily> for AccountIdToBlockIdDestination {
+    type Key = AccountIdToBlockIdKey;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
+    const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdDestination);
+}
+
+/// The metadata entry to store length of map for some account id.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct AccountIdToBlockIdMetaLen {
+    pub length: u64,
+}
+
+impl db::Storable<ColumnFamily> for AccountIdToBlockIdMetaLen {
+    type Key = AccountId;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
+    const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdMetaLen);
 }

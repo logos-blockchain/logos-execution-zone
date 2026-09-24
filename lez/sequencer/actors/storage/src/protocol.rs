@@ -4,7 +4,7 @@ use common::{
     HashType,
     block::{Block, BlockMeta, PeerChainTip},
 };
-use lee::V03State;
+use lee::{AccountId, V03State};
 use lee_core::BlockId;
 
 /// Content-addressed replay key of a cross-zone message, and the identity of the
@@ -124,6 +124,16 @@ pub struct GetCrossZonePeerTip {
 pub struct SetCrossZonePeerTip {
     pub peer_zone: PeerZoneKey,
     pub tip: PeerChainTip,
+}
+
+pub struct GetBlockByHash {
+    pub block_hash: HashType,
+}
+
+pub struct GetAccountTransactions {
+    pub account_id: AccountId,
+    pub offset: u64,
+    pub limit: u64,
 }
 
 pub struct DumpDb;

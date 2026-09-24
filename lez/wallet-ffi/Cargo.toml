@@ -24,7 +24,7 @@ serde_json.workspace = true
 bip39.workspace = true
 
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen.workspace = true
 
 [features]
 default = ["prove"]

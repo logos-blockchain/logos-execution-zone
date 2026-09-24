@@ -62,13 +62,16 @@ typedef struct Runtime {
 /**
  * FFI-owned sequencer.
  *
- * - A [`ActorRef<StorageActor>`] used to get acess to db.
- * - A [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial shutdown.
- * - An [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query the node.
- * - A [`ActorRef<Scheduler>`] right now is unused and exists only for gracial shutdown.
- * - A [`Option<Gossip>`] right now is unused and exists only to pin gossip.
- * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
- *   already FFI-safe.
+ * - `storage_ref`: an [`ActorRef<StorageActor>`] used to get acess to db.
+ * - `slasher_ref`: an [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial
+ *   shutdown.
+ * - `executor_ref`: an [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query
+ *   the node.
+ * - `scheduler_ref`: an [`ActorRef<Scheduler>`] right now is unused and exists only for gracial
+ *   shutdown.
+ * - `gossip`: an [`Option<Gossip>`] right now is unused and exists only to pin gossip.
+ * - `runtime`: the [`Runtime`] used to run async queries against the store (either owned or
+ *   borrowed), already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
   void *storage_ref;
@@ -540,7 +543,7 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
  *
  * Not supporded yet.
  *
- * `ToDo`: Add support. Needs database modifications.
+ * TODO: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -581,10 +584,6 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
 
 /**
  * Query the block by hash from sequencer.
- *  
- * Not supporded yet.
- *
- * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -601,7 +600,7 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
-                                                                                    FfiHashType _hash);
+                                                                                    FfiHashType hash);
 
 /**
  * Query the account by id from sequencer.
@@ -687,10 +686,6 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
 
 /**
  * Query the transactions range by account id from sequencer.
- *  
- * Not supporded yet.
- *
- * `ToDo`: Add support. Needs database modifications.
  *
  * # Arguments
  *
@@ -709,9 +704,9 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
 struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
-                                                                                                           FfiAccountId _account_id,
-                                                                                                           uint64_t _offset,
-                                                                                                           uint64_t _limit);
+                                                                                                           FfiAccountId account_id,
+                                                                                                           uint64_t offset,
+                                                                                                           uint64_t limit);
 
 /**
  * Frees the resources associated with the given ffi account.
