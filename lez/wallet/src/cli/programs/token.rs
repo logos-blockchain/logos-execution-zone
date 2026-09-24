@@ -51,8 +51,8 @@ pub enum TokenProgramAgnosticSubcommand {
         to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
-        #[arg(long)]
-        to_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        to_identifier: Option<Vec<u128>>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -101,8 +101,8 @@ pub enum TokenProgramAgnosticSubcommand {
         holder_keys: Option<String>,
         /// Identifier for the holder's private account (only used when minting to a foreign
         /// private account via `--holder-npk`/`--holder-vpk` or `--holder-keys`).
-        #[arg(long)]
-        holder_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        holder_identifier: Option<Vec<u128>>,
         /// amount - amount of balance to mint.
         #[arg(long)]
         amount: u128,
@@ -222,7 +222,7 @@ impl TokenProgramAgnosticSubcommand {
         from_mention: CliAccountMention,
         to_npk: String,
         to_vpk: String,
-        to_identifier: Option<u128>,
+        to_identifier: Option<Vec<u128>>,
         amount: u128,
     ) -> TokenProgramSubcommand {
         match from {
@@ -257,7 +257,7 @@ impl TokenProgramAgnosticSubcommand {
         to_npk: Option<String>,
         to_vpk: Option<String>,
         to_keys: Option<String>,
-        to_identifier: Option<u128>,
+        to_identifier: Option<Vec<u128>>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -395,7 +395,7 @@ impl TokenProgramAgnosticSubcommand {
         definition: AccountIdWithPrivacy,
         holder_npk: String,
         holder_vpk: String,
-        holder_identifier: Option<u128>,
+        holder_identifier: Option<Vec<u128>>,
         amount: u128,
     ) -> TokenProgramSubcommand {
         match definition {
@@ -430,7 +430,7 @@ impl TokenProgramAgnosticSubcommand {
         holder_npk: Option<String>,
         holder_vpk: Option<String>,
         holder_keys: Option<String>,
-        holder_identifier: Option<u128>,
+        holder_identifier: Option<Vec<u128>>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -622,8 +622,8 @@ pub enum TokenProgramSubcommandPrivate {
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long)]
-        recipient_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        recipient_identifier: Option<Vec<u128>>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -654,8 +654,8 @@ pub enum TokenProgramSubcommandPrivate {
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
-        #[arg(long)]
-        holder_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        holder_identifier: Option<Vec<u128>>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -716,8 +716,8 @@ pub enum TokenProgramSubcommandShielded {
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long)]
-        recipient_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        recipient_identifier: Option<Vec<u128>>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -748,8 +748,8 @@ pub enum TokenProgramSubcommandShielded {
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
-        #[arg(long)]
-        holder_identifier: Option<u128>,
+        #[arg(long, num_args = 2, value_names = ["HIGH", "LOW"], action = clap::ArgAction::Set)]
+        holder_identifier: Option<Vec<u128>>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -971,7 +971,7 @@ impl TokenProgramSubcommandPrivate {
         sender_account_id: AccountId,
         recipient_npk: String,
         recipient_vpk: String,
-        recipient_identifier: Option<u128>,
+        recipient_identifier: Option<Vec<u128>>,
         balance_to_move: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -983,7 +983,7 @@ impl TokenProgramSubcommandPrivate {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
-                recipient_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_from_parts(recipient_identifier),
                 balance_to_move,
             )
             .await?;
@@ -1047,7 +1047,7 @@ impl TokenProgramSubcommandPrivate {
         definition_account_id: AccountId,
         holder_npk: String,
         holder_vpk: String,
-        holder_identifier: Option<u128>,
+        holder_identifier: Option<Vec<u128>>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -1058,7 +1058,7 @@ impl TokenProgramSubcommandPrivate {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
-                holder_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_from_parts(holder_identifier),
                 amount,
             )
             .await?;
@@ -1270,7 +1270,7 @@ impl TokenProgramSubcommandShielded {
         sender: Option<AccountIdentity>,
         recipient_npk: String,
         recipient_vpk: String,
-        recipient_identifier: Option<u128>,
+        recipient_identifier: Option<Vec<u128>>,
         balance_to_move: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -1282,7 +1282,7 @@ impl TokenProgramSubcommandShielded {
                 sender.expect("sender set during Send dispatch"),
                 recipient_npk,
                 recipient_vpk,
-                recipient_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_from_parts(recipient_identifier),
                 balance_to_move,
             )
             .await?;
@@ -1352,7 +1352,7 @@ impl TokenProgramSubcommandShielded {
         definition_account_id: AccountId,
         holder_npk: String,
         holder_vpk: String,
-        holder_identifier: Option<u128>,
+        holder_identifier: Option<Vec<u128>>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -1363,7 +1363,7 @@ impl TokenProgramSubcommandShielded {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
-                holder_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_from_parts(holder_identifier),
                 amount,
             )
             .await?;

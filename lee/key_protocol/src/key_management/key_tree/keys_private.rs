@@ -79,7 +79,7 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                BTreeMap::from_iter([(PrivateAccountKind::Regular(0), lee::Account::default())]),
+                BTreeMap::from_iter([(PrivateAccountKind::Regular((0, 0)), lee::Account::default())]),
             ),
             ccc,
             cci,

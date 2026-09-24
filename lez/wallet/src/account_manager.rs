@@ -974,7 +974,7 @@ mod tests {
         let acc = AccountIdentity::PrivateShared {
             ask: AuthorizationSecretKey([0; 32]),
             vpk: ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]),
-            identifier: 42,
+            identifier: (0, 42),
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
@@ -983,7 +983,7 @@ mod tests {
     fn private_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id = lee::AccountId::from((&npk, &vpk, (0, 0)));
         let pre_state = PreparedAccount {
             account_id,
             account: Account::default(),
@@ -992,7 +992,7 @@ mod tests {
             kind: WitnessKind::Regular { ask: None },
             nsk: None,
             npk,
-            identifier: 0,
+            identifier: (0, 0),
             vpk,
             pre_state,
             proof: None,
@@ -1003,7 +1003,7 @@ mod tests {
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id = lee::AccountId::from((&npk, &vpk, (0, 0)));
         let account = PreparedAccount {
             account_id,
             account: Account::default(),
@@ -1200,9 +1200,9 @@ mod tests {
     fn foreign_private_init_is_unauthorized() {
         let npk = NullifierPublicKey([7; 32]);
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, 0));
+        let account_id = lee::AccountId::from((&npk, &vpk, (0, 0)));
         let pre =
-            private_foreign_acc_preparation(account_id, npk, vpk, &PrivateAccountKind::Regular(0));
+            private_foreign_acc_preparation(account_id, npk, vpk, &PrivateAccountKind::Regular((0, 0)));
 
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
 
@@ -1224,11 +1224,11 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: authority,
                 seed,
-                identifier: 3,
+                identifier: (0, 3),
             },
             Some(ask),
         );
-        let regular = witness_kind(&PrivateAccountKind::Regular(3), Some(ask));
+        let regular = witness_kind(&PrivateAccountKind::Regular((0, 3)), Some(ask));
 
         assert!(matches!(pda, WitnessKind::Pda { binding } if binding == (authority, seed)));
         assert!(matches!(regular, WitnessKind::Regular { ask: Some(_) }));
@@ -1243,19 +1243,19 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: authority,
             seed,
-            identifier: 9,
+            identifier: (0, 9),
         };
 
         let account_id = AccountId::for_private_account(&npk, &vpk, &kind);
         assert_ne!(
             account_id,
-            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(9)),
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular((0, 9))),
             "the binding is part of the address, not decoration",
         );
 
         let pre = private_foreign_acc_preparation(account_id, npk, vpk, &kind);
 
-        assert_eq!(pre.identifier, 9);
+        assert_eq!(pre.identifier, (0, 9));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
         assert!(!manager.pre_states()[0].is_authorized);

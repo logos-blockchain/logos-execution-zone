@@ -6,7 +6,25 @@ use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
-pub type Identifier = u128;
+/// 256 bits of identifier entropy as `(high, low)`, so tuple `Ord` matches numeric order.
+pub type Identifier = (u128, u128);
+
+/// Little-endian byte encoding of `identifier` (low half first, then high half).
+#[must_use]
+pub fn identifier_to_le_bytes((high, low): Identifier) -> [u8; 32] {
+    let mut bytes = [0_u8; 32];
+    bytes[..16].copy_from_slice(&low.to_le_bytes());
+    bytes[16..].copy_from_slice(&high.to_le_bytes());
+    bytes
+}
+
+/// Inverse of [`identifier_to_le_bytes`].
+#[must_use]
+pub fn identifier_from_le_bytes(bytes: [u8; 32]) -> Identifier {
+    let low = u128::from_le_bytes(bytes[..16].try_into().expect("slice is 16 bytes"));
+    let high = u128::from_le_bytes(bytes[16..].try_into().expect("slice is 16 bytes"));
+    (high, low)
+}
 
 #[derive(
     Debug,
@@ -33,11 +51,11 @@ impl AccountId {
         vpk: &ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
-        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 32];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
         bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier_to_le_bytes(identifier));
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -225,11 +243,11 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            6, 35, 121, 102, 237, 184, 156, 247, 28, 185, 212, 214, 51, 229, 66, 170, 10, 75, 126,
-            12, 93, 139, 88, 61, 65, 246, 230, 184, 223, 232, 252, 124,
+            211, 228, 241, 40, 66, 75, 99, 113, 149, 61, 234, 62, 12, 139, 200, 82, 83, 147, 50,
+            118, 187, 238, 65, 251, 54, 229, 89, 151, 17, 104, 62, 240,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, (0, 0));
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -243,18 +261,22 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            56, 217, 214, 244, 51, 212, 184, 73, 217, 85, 4, 126, 54, 35, 135, 225, 75, 253, 183,
-            19, 96, 182, 189, 138, 62, 101, 131, 30, 2, 236, 157, 235,
+            102, 89, 46, 127, 4, 8, 19, 206, 59, 72, 107, 7, 93, 218, 64, 3, 30, 142, 224, 191, 97,
+            158, 166, 161, 16, 4, 6, 192, 226, 63, 161, 18,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, (0, 1));
 
         assert_eq!(account_id, expected_account_id);
     }
 
     #[test]
     fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
-        let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
+        // Every byte position distinct, to catch a byte-order bug anywhere in the width.
+        let identifier: Identifier = (
+            0x0001_0203_0405_0607_0809_0A0B_0C0D_0E0F_u128,
+            0x1011_1213_1415_1617_1819_1A1B_1C1D_1E1F_u128,
+        );
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -262,8 +284,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            14, 231, 97, 140, 18, 163, 250, 222, 102, 223, 118, 160, 65, 228, 201, 232, 182, 198,
-            230, 213, 216, 143, 78, 95, 163, 95, 32, 1, 20, 240, 97, 95,
+            85, 181, 131, 200, 165, 119, 91, 82, 130, 15, 231, 74, 219, 76, 145, 214, 128, 129,
+            247, 25, 184, 193, 113, 92, 74, 237, 68, 200, 106, 85, 34, 163,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);

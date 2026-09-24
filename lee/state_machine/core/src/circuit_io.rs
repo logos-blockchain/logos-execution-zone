@@ -348,7 +348,7 @@ mod tests {
     fn private_witness_account_id_matches_its_derivation() {
         let npk = NullifierPublicKey([3; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1; 32], &[2; 32]);
-        let identifier: Identifier = 77;
+        let identifier: Identifier = (0, 77);
         let witness = |kind| PrivateWitness {
             account: Account::default(),
             vpk: vpk.clone(),

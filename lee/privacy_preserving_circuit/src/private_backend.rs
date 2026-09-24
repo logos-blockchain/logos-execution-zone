@@ -355,7 +355,7 @@ mod tests {
             account: Account::default(),
             vpk: ViewingPublicKey::from_seed(&[4; 32], &[5; 32]),
             random_seed: [6; 32],
-            identifier: 0,
+            identifier: (0, 0),
             kind,
             nullifier: NullifierWitness::Init {
                 npk: NullifierPublicKey([7; 32]),

@@ -14,7 +14,7 @@ use crate::{
         FfiShard, WalletHandle,
     },
     wallet::get_wallet,
-    FfiU128,
+    FfiIdentifier,
 };
 
 /// Create a new public account.
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// - `handle`: Valid wallet handle
 /// - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
 /// - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
-/// - `identifier`: Identifier for this private account as little-endian u128 bytes
+/// - `identifier`: Identifier for this private account as 32 little-endian bytes
 /// - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
 ///
 /// # Returns
@@ -635,14 +635,14 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `key_chain_json` must be a valid pointer to a null-terminated C string
-/// - `identifier` must be a valid pointer to a `FfiU128` struct
+/// - `identifier` must be a valid pointer to a `FfiIdentifier` struct
 /// - `account_state_json` must be a valid pointer to a null-terminated C string
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_import_private_account(
     handle: *mut WalletHandle,
     key_chain_json: *const c_char,
     chain_index: *const c_char,
-    identifier: *const FfiU128,
+    identifier: *const FfiIdentifier,
     account_state_json: *const c_char,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -710,7 +710,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Some(parsed_chain_index)
     };
 
-    let identifier = u128::from_le_bytes(unsafe { (*identifier).data });
+    let identifier = lee_core::identifier_from_le_bytes(unsafe { (*identifier).data });
 
     wallet
         .storage_mut()

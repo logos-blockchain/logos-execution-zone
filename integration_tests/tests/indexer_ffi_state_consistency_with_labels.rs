@@ -49,7 +49,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         to_vpk: None,
         to_keys: None,
         amount: 100,
-        to_identifier: Some(0),
+        to_identifier: Some(vec![0, 0]),
     });
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
