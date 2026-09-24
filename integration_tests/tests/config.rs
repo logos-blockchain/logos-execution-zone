@@ -8,7 +8,7 @@ use anyhow::Result;
 use integration_tests::{TestContext, public_mention, utils::send};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,
-    config::{MultiNodeTestContextConfig, bedrock_channel_id},
+    config::{MultiNodeTestContextConfig, SequencerPartialConfig, bedrock_channel_id},
 };
 use tokio::test;
 use wallet::cli::{Command, config::ConfigSubcommand, statistics::StatisticsSubcommand};
@@ -44,10 +44,18 @@ async fn modify_config_field() -> Result<()> {
 #[test]
 async fn modify_config_field_multiseq() -> Result<()> {
     let mut ctx = MultiZoneTestContextBuilder::default()
-        .with_zone(ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
-            num_nodes: 2,
-            bedrock_channel: bedrock_channel_id(),
-        }))
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 2,
+                bedrock_channel: bedrock_channel_id(),
+            })
+            .with_sequencer_partial_config(SequencerPartialConfig {
+                // Covers the storage price doubling at the devnet's first epoch rotations.
+                priority_fee_percent: 150,
+                ..SequencerPartialConfig::default()
+            })
+            .with_gossip(),
+        )
         .build()
         .await?;
 
