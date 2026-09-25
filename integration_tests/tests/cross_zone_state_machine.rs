@@ -2077,13 +2077,13 @@ fn the_receiver_authority_path_holds() {
         &state,
         &update(authority, &other_key, 0),
         1,
-        "must authorize a source change",
+        "must authorize a change",
     );
     rejects_at(
         &state,
         &renounce(authority, &other_key, 0),
         1,
-        "must authorize renouncing it",
+        "must authorize a change",
     );
 
     // The authority itself works, and renouncing is one-way.
@@ -2150,17 +2150,22 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
         &closed,
         &update(),
         1,
-        "must be the wrapped-token config PDA",
+        "requires exactly the config and authority accounts",
     );
 
     // Naming the inbox as governance changes nothing: the obstacle is structural,
-    // not the caller check. The prepended marker sits at index 0, so with or
-    // without the inbox named as governance the call dies on the config-address
-    // check, before the caller check is even reached.
+    // not the caller check. The prepended marker makes three accounts where these
+    // instructions take exactly two, so with or without the inbox named as
+    // governance the call dies on that count, before the caller check is reached.
     let mut open = base_state();
     seed_inbox_config(&mut open, self_zone);
     seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), &[]);
-    rejects_at(&open, &update(), 1, "must be the wrapped-token config PDA");
+    rejects_at(
+        &open,
+        &update(),
+        1,
+        "requires exactly the config and authority accounts",
+    );
 }
 
 /// A program-held authority acts through the governance program delegating its PDA on the
@@ -2517,22 +2522,20 @@ fn the_remaining_authority_guards_hold() {
         );
     }
 
-    // Reached through the inbox rather than top-level: the prepended marker sits
-    // at index 0, so each call dies on the target's config-address check. The
-    // caller pins themselves are exercised through the proxy in
+    // Reached through the inbox rather than top-level: the prepended marker makes
+    // three accounts where each instruction takes two, so each call dies on that
+    // count. The caller pins themselves are exercised through the proxy in
     // the_governance_path_guards_hold, where the account list is well formed.
-    for (target, config_id, instruction_data, expected) in [
+    for (target, config_id, instruction_data) in [
         (
             wrapped_token_id,
             wrapped_token_core::config_account_id(wrapped_token_id),
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
-            "must be the wrapped-token config PDA",
         ),
         (
             receiver_id,
             receiver_config_account_id(receiver_id),
             bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
-            "must be the receiver config PDA",
         ),
         (
             receiver_id,
@@ -2540,14 +2543,13 @@ fn the_remaining_authority_guards_hold() {
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
                 sources: vec![(src_zone, programs::ping_sender_account_id())],
             }),
-            "must be the receiver config PDA",
         ),
     ] {
         rejects_at(
             &state,
             &chained_via_inbox(target, config_id, authority, instruction_data),
             1,
-            expected,
+            "requires exactly the config and authority accounts",
         );
     }
 }
