@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+#[cfg(feature = "keycard")]
 use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
@@ -266,6 +267,8 @@ impl State {
 pub struct AccountManager {
     states: Vec<State>,
     rows: Vec<Row>,
+    /// PIN used to unlock Keycard signing; dead weight in `keycard`-off builds.
+    #[cfg_attr(not(feature = "keycard"), allow(dead_code))]
     pin: Option<String>,
     dummy_commitment_root: CommitmentSetDigest,
 }
@@ -596,6 +599,7 @@ impl AccountManager {
     }
 
     pub fn sign_message(&self, message_hash: [u8; 32]) -> Result<Vec<(Signature, PublicKey)>> {
+        #[cfg_attr(not(feature = "keycard"), allow(unused_mut))]
         let mut sigs: Vec<(Signature, PublicKey)> = self
             .public_non_keycard_account_auth()
             .into_iter()
@@ -616,12 +620,19 @@ impl AccountManager {
             })
             .collect();
 
+        #[cfg(feature = "keycard")]
         if let Some(pin) = self.pin.clone() {
             let mut wallet = KeycardWallet::new()?;
             wallet.connect(&pin)?;
             for path in keycard_paths {
                 sigs.push(wallet.sign_message_for_path(path, &message_hash)?);
             }
+        }
+        #[cfg(not(feature = "keycard"))]
+        if !keycard_paths.is_empty() {
+            anyhow::bail!(
+                "cannot sign for keycard accounts: the `keycard` feature is disabled in this build"
+            );
         }
 
         Ok(sigs)

@@ -10,6 +10,8 @@ use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
+#[cfg(feature = "keycard")]
+use crate::cli::keycard::KeycardSubcommand;
 use crate::{
     WalletCore,
     account::{AccountIdWithPrivacy, Label},
@@ -18,7 +20,6 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         group::GroupSubcommand,
-        keycard::KeycardSubcommand,
         network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
@@ -35,6 +36,7 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod group;
+#[cfg(feature = "keycard")]
 pub mod keycard;
 pub mod network;
 pub mod programs;
@@ -96,6 +98,7 @@ pub enum Command {
         depth: u32,
     },
     /// Keycard hardware wallet management.
+    #[cfg(feature = "keycard")]
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
     /// Metrics management.
@@ -147,14 +150,24 @@ impl CliAccountMention {
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
             Self::KeyPath(path) => {
-                let pin = read_pin()?;
-                let id_str =
-                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
-                        &pin, path,
-                    )
-                    .map_err(anyhow::Error::from)?;
-                AccountIdWithPrivacy::from_str(&id_str)
-                    .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
+                #[cfg(feature = "keycard")]
+                {
+                    let pin = read_pin()?;
+                    let id_str =
+                        keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
+                            &pin, path,
+                        )
+                        .map_err(anyhow::Error::from)?;
+                    AccountIdWithPrivacy::from_str(&id_str)
+                        .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
+                }
+                #[cfg(not(feature = "keycard"))]
+                {
+                    let _ = path;
+                    Err(anyhow::anyhow!(
+                        "key-path account resolution requires the `keycard` feature (disabled in this build)"
+                    ))
+                }
             }
         }
     }
@@ -270,6 +283,7 @@ pub async fn execute_subcommand(
                 .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
+        #[cfg(feature = "keycard")]
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
         }
