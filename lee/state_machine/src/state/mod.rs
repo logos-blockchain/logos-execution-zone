@@ -210,10 +210,19 @@ impl V03State {
     /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
     /// `user_elf`, chunked the same way a live `program_loader` deploy would.
     pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
-        self.insert_program_at(AccountId::from_builtin_program(program.id()), program, immutable);
+        self.insert_program_at(
+            AccountId::from_builtin_program(program.id()),
+            program,
+            immutable,
+        );
     }
 
-    fn insert_program_at(&mut self, header_account_id: AccountId, program: &Program, immutable: bool) {
+    fn insert_program_at(
+        &mut self,
+        header_account_id: AccountId,
+        program: &Program,
+        immutable: bool,
+    ) {
         let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
             .expect("builtin program must be a valid ProgramBinary")
             .user_elf
