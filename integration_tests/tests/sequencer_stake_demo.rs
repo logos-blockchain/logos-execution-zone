@@ -172,6 +172,13 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         !ownership_account.data.shard(stake_id).is_empty(),
         "ownership account should now hold a sequencer_stake record"
     );
+    // Checked before the joiner produces blocks: a sequencer's producer rewards are paid to its
+    // stake ownership account, so after its turns this account holds the dust transfer's fee share.
+    assert_eq!(
+        ownership_account.data.native_balance().unwrap(),
+        0,
+        "the ownership account never custodies the stake"
+    );
     let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
         staked_balance,
@@ -344,11 +351,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     let drained_ownership_account = get_account(&ctx, ownership_id)
         .await
         .context("Failed to read the ownership account after the release")?;
-    assert_eq!(
-        drained_ownership_account.data.native_balance().unwrap(),
-        0,
-        "the ownership account never custodies the stake"
-    );
     let drained_record = sequencer_stake_core::StakeRecord::from_bytes(
         drained_ownership_account.data.shard(stake_id).as_ref(),
     )
