@@ -181,6 +181,17 @@ impl V03State {
     }
 
     #[must_use]
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program)>,
+    ) -> Self {
+        for (account_id, program) in programs {
+            self.insert_program_at(account_id, &program, true);
+        }
+        self
+    }
+
+    #[must_use]
     pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
         self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
     }
@@ -199,7 +210,19 @@ impl V03State {
     /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
     /// `user_elf`, chunked the same way a live `program_loader` deploy would.
     pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
-        let header_account_id = AccountId::from_builtin_program(program.id());
+        self.insert_program_at(
+            AccountId::from_builtin_program(program.id()),
+            program,
+            immutable,
+        );
+    }
+
+    fn insert_program_at(
+        &mut self,
+        header_account_id: AccountId,
+        program: &Program,
+        immutable: bool,
+    ) {
         let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
             .expect("builtin program must be a valid ProgramBinary")
             .user_elf
@@ -311,16 +334,13 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
-    /// Reconstructs a genesis-seeded builtin's bytecode from its default address's header and
-    /// segment chain — a program deployed elsewhere via `program_loader` won't be found here.
+    /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at
+    /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
-    pub fn get_builtin_program(&self, program_id: ProgramId) -> Option<(ProgramId, Vec<u8>)> {
-        let (image_id, user_elf) =
-            get_program_via(AccountId::from_builtin_program(program_id), |account_id| {
-                self.get_account_by_id_ref(account_id)
-                    .map(|account| &account.data)
-            })?;
-        Some((image_id, crate::program::attach_kernel(&user_elf)))
+    pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
+        crate::program::resolve_program(account_id, |id| {
+            self.get_account_by_id_ref(id).map(|account| &account.data)
+        })
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there

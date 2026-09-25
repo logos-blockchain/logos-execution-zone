@@ -7,6 +7,8 @@ pub mod event;
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
 const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/0";
 
+pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
+
 #[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Transfers native tokens from the bridge PDA account to a recipient,
@@ -40,6 +42,11 @@ pub enum Instruction {
         amount: u64,
         bedrock_account_pk: [u8; 32],
     },
+}
+
+#[must_use]
+pub fn bridge_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&BRIDGE_NAME)
 }
 
 #[must_use]

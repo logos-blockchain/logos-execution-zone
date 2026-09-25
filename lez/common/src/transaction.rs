@@ -201,14 +201,9 @@ pub struct TxEvents {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::clock().id()),
+        programs::clock_account_id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| {
-                ProgramShardSelector::new(
-                    id,
-                    AccountId::from_builtin_program(programs::clock().id()),
-                )
-            })
+            .map(|id| ProgramShardSelector::new(id, programs::clock_account_id()))
             .to_vec(),
         vec![],
         timestamp,
@@ -243,21 +238,19 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
         return false;
     }
     let message = public_tx.message();
-    if message.program_account_id == AccountId::from_builtin_program(programs::bridge().id()) {
+    if message.program_account_id == programs::bridge_account_id() {
         return matches!(
             borsh::from_slice::<bridge_core::Instruction>(&message.instruction_data),
             Ok(bridge_core::Instruction::Deposit { .. })
         );
     }
-    if message.program_account_id
-        == AccountId::from_builtin_program(programs::cross_zone_inbox().id())
-    {
+    if message.program_account_id == programs::cross_zone_inbox_account_id() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Instruction>(&message.instruction_data),
             Ok(cross_zone_inbox_core::Instruction::Dispatch(_))
         );
     }
-    if message.program_account_id == AccountId::from_builtin_program(programs::ping_sender().id()) {
+    if message.program_account_id == programs::ping_sender_account_id() {
         return matches!(
             borsh::from_slice::<ping_core::SenderInstruction>(&message.instruction_data),
             Ok(ping_core::SenderInstruction::Send { .. })
@@ -279,7 +272,7 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
         return false;
     };
     let message = public_tx.message();
-    if message.program_account_id != AccountId::from_builtin_program(programs::bridge_lock().id()) {
+    if message.program_account_id != programs::bridge_lock_account_id() {
         return false;
     }
     matches!(
@@ -299,8 +292,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().program_account_id
-        == AccountId::from_builtin_program(programs::sequencer_stake().id())
+    public_tx.message().program_account_id == programs::sequencer_stake_account_id()
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
@@ -313,7 +305,7 @@ pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
-    let fee_program_id = AccountId::from_builtin_program(programs::fee().id());
+    let fee_program_id = programs::fee_account_id();
     // Select the fee state shard and balances for the escrow, inbox, and producer.
     let shard_selectors = vec![
         ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
@@ -386,7 +378,7 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
 #[must_use]
 pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
     lee::public_transaction::Message::try_new(
-        AccountId::from_builtin_program(programs::fee().id()),
+        programs::fee_account_id(),
         vec![
             ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
             ProgramShardSelector::balance(payer),

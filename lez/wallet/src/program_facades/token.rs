@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+
 use common::HashType;
-use lee::{AccountId, program::Program};
+use lee::{
+    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
     encryption::ViewingPublicKey,
@@ -21,7 +25,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_pub_tx(
@@ -45,7 +49,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -58,7 +62,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -80,7 +84,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -93,7 +97,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -115,7 +119,7 @@ impl Token<'_> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -130,7 +134,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -152,7 +156,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_pub_tx(
@@ -177,7 +181,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -192,7 +196,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -216,7 +220,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -233,7 +237,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -255,7 +259,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -268,7 +272,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -291,7 +295,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -302,7 +306,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -327,7 +331,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -340,7 +344,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -363,7 +367,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_pub_tx(
@@ -389,7 +393,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -404,7 +408,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -426,7 +430,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -439,7 +443,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -462,7 +466,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -475,7 +479,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -498,7 +502,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_pub_tx(
@@ -523,7 +527,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -538,7 +542,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -562,7 +566,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -579,7 +583,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -601,7 +605,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -614,7 +618,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -637,7 +641,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -650,7 +654,7 @@ impl Token<'_> {
                         .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {
@@ -675,7 +679,7 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let token_program_id = AccountId::from_builtin_program(programs::token().id());
+        let token_program_id = programs::token_account_id();
 
         self.0
             .send_privacy_preserving_tx(
@@ -690,7 +694,7 @@ impl Token<'_> {
                     .select_program_shard(token_program_id),
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
             )
             .await
             .map(|(resp, secrets)| {

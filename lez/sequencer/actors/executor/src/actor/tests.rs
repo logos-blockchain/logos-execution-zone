@@ -174,7 +174,7 @@ fn prepare_mock_storage_with_stake(
     let state = testnet_initial_state::initial_state(false).with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
         Account::default().with_shard(
-            AccountId::from_builtin_program(programs::sequencer_stake().id()),
+            programs::sequencer_stake_account_id(),
             sequencer_stake_core::SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: 0,

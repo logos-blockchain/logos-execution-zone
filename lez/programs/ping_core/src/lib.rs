@@ -7,6 +7,10 @@ use lee_core::{
 const PING_RECORD_SEED: [u8; 32] = *b"/LEZ/v0.3/PingRecord/0000000000/";
 const SENDER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingSenderCfg/0000000/";
 const RECEIVER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingReceiverCfg/00000/";
+
+pub const PING_SENDER_NAME: [u8; 11] = *b"ping_sender";
+pub const PING_RECEIVER_NAME: [u8; 13] = *b"ping_receiver";
+
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
@@ -99,6 +103,16 @@ pub enum SenderInstruction {
     ///
     /// Required accounts (1): the sender config PDA.
     InitConfig { outbox_account_id: AccountId },
+}
+
+#[must_use]
+pub fn ping_sender_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&PING_SENDER_NAME)
+}
+
+#[must_use]
+pub fn ping_receiver_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&PING_RECEIVER_NAME)
 }
 
 /// The account a `ping_receiver` records the latest delivered payload into.

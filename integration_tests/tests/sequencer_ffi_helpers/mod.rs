@@ -216,7 +216,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
         hex::encode(joining_sequencer_key.to_bytes())
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(

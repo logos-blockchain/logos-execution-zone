@@ -91,10 +91,8 @@ impl StoredChain {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
                 allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
-                    target_account_id: AccountId::from_builtin_program(
-                        programs::ping_receiver().id(),
-                    ),
+                    src_account_id: programs::ping_sender_account_id(),
+                    target_account_id: programs::ping_receiver_account_id(),
                     mint_cap: None,
                 }],
                 expected_block_signing_pubkeys: Vec::new(),
@@ -351,7 +349,7 @@ fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
 
 /// A delivery of `payload` to the ping receiver, read off peer block `src_block_id`.
 fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
-    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+    let receiver_id = programs::ping_receiver_account_id();
     let instruction = borsh::to_vec(&ReceiverInstruction::Record {
         payload: payload.to_vec(),
     })
@@ -362,7 +360,7 @@ fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
             src_tx_index: 0,
-            src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
+            src_account_id: programs::ping_sender_account_id(),
         },
         receiver_id,
         &[
@@ -375,7 +373,7 @@ fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
 
 /// The mint a finalized L1 deposit event injects, as the sequencer builds it.
 fn deposit_tx(op_id: [u8; 32], recipient: AccountId, amount: u64) -> LeeTransaction {
-    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
+    let bridge_program_id = programs::bridge_account_id();
     let message = Message::try_new(
         bridge_program_id,
         vec![
@@ -668,7 +666,7 @@ async fn reconstructed_delivery_settles_its_pending_record() -> Result<()> {
     let genesis = genesis();
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
     let block2_hash = block2.header.hash;
-    let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+    let receiver_id = programs::ping_receiver_account_id();
     let record_id = ping_record_pda(receiver_id);
 
     let mut store = StoredChain::cross_zone_genesis()
@@ -779,7 +777,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
     let funded = testnet_initial_state::initial_public_user_accounts()[0].balance;
     let deposit_amount = 400_u64;
     let deposit_op_id = [0x1a_u8; 32];
-    let bridge_program_id = AccountId::from_builtin_program(programs::bridge().id());
+    let bridge_program_id = programs::bridge_account_id();
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id);
 
     let genesis = genesis();
