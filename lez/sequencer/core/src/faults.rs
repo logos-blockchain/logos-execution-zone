@@ -80,7 +80,7 @@ mod tests {
             got: 7,
         };
         let finalized = [
-            finalized(1, AcceptOutcome::Applied, true),
+            finalized(1, AcceptOutcome::Applied(vec![]), true),
             finalized(2, AcceptOutcome::AlreadyApplied, true),
             finalized(
                 3,

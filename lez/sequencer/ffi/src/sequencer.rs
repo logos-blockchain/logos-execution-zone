@@ -2,6 +2,7 @@ use std::ffi::c_void;
 
 use kameo::actor::ActorRef;
 use sequencer_service::{ExecutorActor, SequencerHandle};
+use sequencer_storage_actor::StorageActor;
 
 use crate::Runtime;
 
@@ -29,6 +30,12 @@ impl SequencerServiceFFI {
     #[must_use]
     pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
         self.handle().executor_ref()
+    }
+
+    /// Borrow the [`Storage`] to run a query against the node's db.
+    #[must_use]
+    pub const fn storage_ref(&self) -> &ActorRef<StorageActor> {
+        self.handle().storage_ref()
     }
 
     /// Borrow the runtime to `block_on` an async query.

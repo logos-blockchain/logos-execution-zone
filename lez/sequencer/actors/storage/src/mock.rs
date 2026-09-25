@@ -18,19 +18,20 @@ pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
 use crate::{
     Result, StorageActorTrait,
+    actor::event_filter::EventFilter,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -239,6 +240,18 @@ mockall::mock! {
             msg: GetAccountTransactions,
             ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
         ) -> Result<Option<Vec<LeeTransaction>>>;
+
+        pub fn handle_get_event_filter(
+            &mut self,
+            msg: GetEventFilter,
+            ctx: &mut Context<Self, Result<EventFilter>>
+        ) -> Result<EventFilter>;
+
+        pub fn handle_checkpoint(
+            &mut self,
+            msg: Checkpoint,
+            ctx: &mut Context<Self, Result<()>>,
+        ) -> Result<()>;
     }
 }
 
@@ -250,18 +263,6 @@ impl Actor for MockStorageActor {
 
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
         Ok(args)
-    }
-}
-
-impl Message<Checkpoint> for MockStorageActor {
-    type Reply = ();
-
-    async fn handle(
-        &mut self,
-        Checkpoint: Checkpoint,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.checkpoint();
     }
 }
 
@@ -675,5 +676,29 @@ impl Message<GetAccountTransactions> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_account_transactions(msg, ctx)
+    }
+}
+
+impl Message<GetEventFilter> for MockStorageActor {
+    type Reply = Result<EventFilter>;
+
+    async fn handle(
+        &mut self,
+        msg: GetEventFilter,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_event_filter(msg, ctx)
+    }
+}
+
+impl Message<Checkpoint> for MockStorageActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        Checkpoint: Checkpoint,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.checkpoint();
     }
 }

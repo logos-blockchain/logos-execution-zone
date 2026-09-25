@@ -711,7 +711,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (genesis_state, genesis_txs) =
+    let (genesis_state, genesis_txs, _) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
@@ -727,6 +727,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
         .ask(AtomicUpdate::from_block(
             genesis_block,
             Arc::new(genesis_state),
+            Vec::new(),
         ))
         .await
         .unwrap();
@@ -3755,6 +3756,7 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
                 ..AtomicUpdate::from_block(
                     view[1].block.clone().unwrap(),
                     sequencer.chain().lock().await.share_head_state(),
+                    vec![],
                 )
             })
             .await
@@ -4327,7 +4329,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, _genesis_txs) =
+    let (state, _genesis_txs, _) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
@@ -4369,7 +4371,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (mut state, _genesis_txs) =
+    let (mut state, _genesis_txs, _) =
         build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
 
     let stake_id = bootstrap_stake_account_id(&config);
@@ -5060,7 +5062,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
     assert!(
         !txs.iter()
             .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
@@ -5080,7 +5082,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     });
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs, _) = build_genesis_state(&signing_key, &config, Some(key));
     let cross_zone_txs: Vec<_> = txs
         .iter()
         .map(tx_program)

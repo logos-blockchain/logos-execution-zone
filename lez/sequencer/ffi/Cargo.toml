@@ -9,6 +9,7 @@ lee.workspace = true
 lee_core.workspace = true
 sequencer_service.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor.workspace = true
 common.workspace = true
 
 env_logger.workspace = true

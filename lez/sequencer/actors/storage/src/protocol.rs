@@ -3,6 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use common::{
     HashType,
     block::{Block, BlockMeta, PeerChainTip},
+    transaction::TxEvents,
 };
 use lee::{AccountId, V03State};
 use lee_core::BlockId;
@@ -128,11 +129,21 @@ pub struct GetBlockByHash {
     pub block_hash: HashType,
 }
 
+pub struct GetTxHashToBlockIdMapItem {
+    pub tx_hash: HashType,
+}
+
 pub struct GetAccountTransactions {
     pub account_id: AccountId,
     pub offset: u64,
     pub limit: u64,
 }
+
+pub struct GetBlockEvents {
+    pub block_id: u64,
+}
+
+pub struct GetEventFilter;
 
 pub struct DumpDb;
 
@@ -174,6 +185,9 @@ pub struct AtomicUpdate {
 
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
+
+    /// Events emitted by transactions in blocks.
+    pub events: Vec<(BlockId, Vec<TxEvents>)>,
 }
 
 impl AtomicUpdate {
@@ -181,7 +195,11 @@ impl AtomicUpdate {
     ///
     /// Leaves all other fields empty or [`None`].
     #[must_use]
-    pub fn from_block(block: Block, state: Arc<V03State>) -> Self {
+    pub fn from_block(
+        block: Block,
+        state: Arc<V03State>,
+        events: Vec<(BlockId, Vec<TxEvents>)>,
+    ) -> Self {
         Self {
             checkpoint: None,
             head_tip: Some(BlockMeta::from(&block)),
@@ -196,6 +214,7 @@ impl AtomicUpdate {
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
+            events,
         }
     }
 }

@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{BlockMeta, PeerChainTip},
+    transaction::TxEvents,
 };
 use lee::AccountId;
 use lee_core::BlockId;
@@ -40,6 +41,8 @@ pub enum ColumnFamily {
     Pending,
     /// Many small records, contains various maps.
     BlockMeta,
+    /// Block events.
+    Events,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -52,7 +55,7 @@ impl db::ColumnFamilies for ColumnFamily {
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
             }
-            Self::State => {
+            Self::State | Self::Events => {
                 // A whole state is rewritten on every update. Blob files keep
                 // those values out of compaction, which would otherwise copy
                 // every one of them through each level.
@@ -408,4 +411,17 @@ impl db::Storable<ColumnFamily> for AccountIdToBlockIdMetaLen {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
     const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdMetaLen);
+}
+
+/// The map entry between tx hashes and block ids.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BlockEvents {
+    pub events: Vec<TxEvents>,
+}
+
+impl db::Storable<ColumnFamily> for BlockEvents {
+    type Key = BigEndian<BlockId>;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Events;
+    const TYPE_NAME: &'static str = db::type_name!(BlockEvents);
 }

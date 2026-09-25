@@ -7,7 +7,7 @@ use std::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
-    transaction::LeeTransaction,
+    transaction::{LeeTransaction, TxEvents},
 };
 use itertools::Itertools as _;
 use kameo::{
@@ -24,20 +24,21 @@ use log::debug;
 use crate::protocol::ResetAllBlocksToPending;
 use crate::{
     Result, StorageActorTrait,
-    actor::tx_index::TransactionIndex,
+    actor::{event_filter::EventFilter, tx_index::TransactionIndex},
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
+        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -45,6 +46,7 @@ mod conversions;
 pub mod db;
 mod encoding;
 mod entities;
+pub mod event_filter;
 #[cfg(test)]
 mod tests;
 mod tx_index;
@@ -343,6 +345,11 @@ impl StorageActor {
 
                 self.db()
                     .delete_batch::<entities::Block>(batch, &encoding::BigEndian::new(&stale_id));
+
+                self.db().delete_batch::<entities::BlockEvents>(
+                    batch,
+                    &encoding::BigEndian::new(&stale_id),
+                );
 
                 removed_block_ids.push(stale_id);
             }
@@ -651,6 +658,24 @@ impl StorageActor {
         }
 
         Ok(Some(affecting_txs))
+    }
+
+    fn update_events(
+        &self,
+        batch: &mut db::WriteBatch,
+        events: Vec<(BlockId, Vec<TxEvents>)>,
+    ) -> Result<()> {
+        for (block_id, block_events) in events {
+            self.db().put_batch(
+                batch,
+                &encoding::BigEndian::new(&block_id),
+                &entities::BlockEvents {
+                    events: block_events,
+                },
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -978,6 +1003,7 @@ impl Message<AtomicUpdate> for StorageActor {
             new_withdraw_intents,
             finalized_dispatch_records,
             zone_anchor,
+            events,
         } = msg;
 
         let mut batch = db::WriteBatch::default();
@@ -1047,6 +1073,9 @@ impl Message<AtomicUpdate> for StorageActor {
                 },
             )?;
         }
+
+        // Events
+        self.update_events(&mut batch, events)?;
 
         self.db().write(batch)?;
 
@@ -1406,6 +1435,19 @@ impl Message<GetBlockByHash> for StorageActor {
     }
 }
 
+impl Message<GetTxHashToBlockIdMapItem> for StorageActor {
+    type Reply = Result<Option<u64>>;
+
+    async fn handle(
+        &mut self,
+        GetTxHashToBlockIdMapItem { tx_hash }: GetTxHashToBlockIdMapItem,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // TODO: Use DB map, when implemented.
+        Ok(self.tx_index.block_for_tx(&tx_hash))
+    }
+}
+
 impl Message<GetAccountTransactions> for StorageActor {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
@@ -1419,6 +1461,35 @@ impl Message<GetAccountTransactions> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.get_affecting_txs_for_account_id(account_id, offset, limit)
+    }
+}
+
+impl Message<GetBlockEvents> for StorageActor {
+    type Reply = Result<Option<Vec<TxEvents>>>;
+
+    async fn handle(
+        &mut self,
+        GetBlockEvents { block_id }: GetBlockEvents,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::BlockEvents>(&encoding::BigEndian::new(&block_id))?
+            .map(|dest| dest.events))
+    }
+}
+
+impl Message<GetEventFilter> for StorageActor {
+    type Reply = Result<EventFilter>;
+
+    async fn handle(
+        &mut self,
+        GetEventFilter: GetEventFilter,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // For now, storage is only archival.
+        // TODO: update sequencer configs to support custom archival policies.
+        Ok(EventFilter::Archival)
     }
 }
 

@@ -1552,6 +1552,7 @@ dependencies = [
  "serde",
  "serde_json",
  "system_accounts",
+ "test_methods",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
@@ -11264,6 +11265,7 @@ dependencies = [
  "log",
  "sequencer_executor_actor",
  "sequencer_service",
+ "sequencer_storage_actor",
  "serde_json",
  "tokio",
 ]

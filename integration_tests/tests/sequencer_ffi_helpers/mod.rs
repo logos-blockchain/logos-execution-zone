@@ -22,9 +22,10 @@ use sequencer_ffi::{
         lifecycle::InitializedSequencerServiceFFIResult,
         query::LastBlockIdResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
             transaction::FfiTransaction,
         },
     },
@@ -79,12 +80,22 @@ unsafe extern "C" {
         limit: u64,
     ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus>;
 
+    pub unsafe fn sequencer_ffi_query_events(
+        sequencer: *const SequencerServiceFFI,
+        from_block: u64,
+        to_block: FfiOption<u64>,
+        tx_hash: *const FfiHashType,
+        program_account_id: *const FfiAccountId,
+        selector: *const FfiSelector,
+    ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus>;
+
     pub unsafe fn sequencer_ffi_free_ffi_block(val: FfiBlock);
     pub unsafe fn sequencer_ffi_free_cstring(block: *mut c_char);
     pub unsafe fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt);
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
     pub unsafe fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>);
     pub unsafe fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>);
+    pub unsafe fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.

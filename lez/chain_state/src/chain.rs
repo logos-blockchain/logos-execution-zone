@@ -5,7 +5,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use common::{HashType, block::Block};
+use common::{HashType, block::Block, transaction::TxEvents};
 use lee::V03State;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
@@ -313,7 +313,7 @@ impl ChainState {
 
         let outcome = block.map(|block| self.apply_final_block(block));
         let held_at = self.view.iter().position(|entry| entry.msg == msg);
-        let is_next = matches!(outcome, Some(AcceptOutcome::Applied))
+        let is_next = matches!(outcome, Some(AcceptOutcome::Applied(_)))
             || parent == Some(self.final_msg)
             || held_at.is_some();
         if !is_next {
@@ -428,11 +428,11 @@ impl ChainState {
         }
 
         match apply_with_retries(self.final_tip.as_ref(), block, &self.final_state) {
-            Ok(state) => {
+            Ok((state, events)) => {
                 self.final_state = state;
                 self.final_tip = Some(Tip::from(block));
                 self.newly_final.push(block.clone());
-                AcceptOutcome::Applied
+                AcceptOutcome::Applied(vec![(block.header.block_id, events)])
             }
             Err(err) => AcceptOutcome::Parked(err),
         }
@@ -443,7 +443,7 @@ impl ChainState {
 fn fold_block(tip: Option<&Tip>, block: &Block, state: &Arc<V03State>) -> Option<Arc<V03State>> {
     validate_against_tip(tip, block).ok()?;
     match apply_with_retries(tip, block, state) {
-        Ok(next) => Some(next),
+        Ok((next, _)) => Some(next),
         Err(err) => {
             warn!(
                 "Skipping channel block {} ({}): {err}",
@@ -459,12 +459,12 @@ fn apply_with_retries(
     tip: Option<&Tip>,
     block: &Block,
     state: &Arc<V03State>,
-) -> Result<Arc<V03State>, BlockIngestError> {
+) -> Result<(Arc<V03State>, Vec<TxEvents>), BlockIngestError> {
     let mut attempt = 1;
     loop {
         let mut scratch = Arc::clone(state);
         match apply_block(tip, block, Arc::make_mut(&mut scratch)) {
-            Ok(()) => return Ok(scratch),
+            Ok(block_events) => return Ok((scratch, block_events)),
             Err(err) if err.is_retryable() && attempt < APPLY_ATTEMPTS => {
                 warn!(
                     "Block {} failed to apply (attempt {attempt}), retrying: {err}",
@@ -729,7 +729,7 @@ mod tests {
         let outcome = chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
 
         // Block 1 finalized first, as the parent of the entry that finalized.
-        assert!(matches!(outcome, Some(AcceptOutcome::Applied)));
+        assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
         assert_eq!(chain.final_msg(), msg(2));
         assert_eq!(chain.view().len(), 1);
@@ -783,7 +783,7 @@ mod tests {
         chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
         let outcome = chain.apply_finalized(msg(9), Some(msg(8)), Some(&blocks[1]));
 
-        assert!(matches!(outcome, Some(AcceptOutcome::Applied)));
+        assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
         assert_eq!(chain.final_msg(), msg(9));
         assert_eq!(chain.pin(), msg(9));
         assert_eq!(head_id(&chain), Some(2));
@@ -879,7 +879,7 @@ mod tests {
         // Entry 3 was never adopted, but it chains on entry 2.
         let outcome = chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2]));
 
-        assert!(matches!(outcome, Some(AcceptOutcome::Applied)));
+        assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
         assert_eq!(chain.final_tip().unwrap().block_id, 3);
         assert_eq!(chain.final_msg(), msg(3));
         assert!(chain.view().is_empty());
@@ -1142,7 +1142,7 @@ mod tests {
 
         assert!(matches!(
             chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[1])),
-            Some(AcceptOutcome::Applied)
+            Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
         assert_head_is_the_fold(&chain);

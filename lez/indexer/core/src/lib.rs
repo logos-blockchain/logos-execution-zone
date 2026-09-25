@@ -469,7 +469,8 @@ impl IndexerCore {
                     };
 
                     match self.store.accept_block(&block, slot).await {
-                        Ok(AcceptOutcome::Applied) => {
+                        // Indexer writes logs directly into DB, they are redundant here.
+                        Ok(AcceptOutcome::Applied(_)) => {
                             if let Some(verifier) = &self.verifier {
                                 verifier.record_seen(verified_keys).await;
                             }
@@ -708,7 +709,7 @@ mod tests {
                 .accept_block(&genesis, Slot::from(1_000))
                 .await
                 .expect("accept"),
-            AcceptOutcome::Applied
+            AcceptOutcome::Applied(_)
         ));
         core.store
             .set_zone_cursor(&Slot::from(1_000))

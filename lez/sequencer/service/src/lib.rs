@@ -222,6 +222,13 @@ impl SequencerHandle {
         self.executor.actor_ref()
     }
 
+    /// The storage, for embedders that talk to the sequencer in-process
+    /// instead of over the RPC.
+    #[must_use]
+    pub const fn storage_ref(&self) -> &ActorRef<StorageActor> {
+        self.storage.actor_ref()
+    }
+
     /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
     /// gossip `bootstrap_peers`. `None` when gossip is unconfigured.
     #[must_use]

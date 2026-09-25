@@ -16,7 +16,7 @@ use chain_state::{
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation, fee_invocation},
+    transaction::{LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
@@ -293,9 +293,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             return;
         }
 
-        let (block, state) = genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let (block, state, events) =
+            genesis_block_and_state(signing_key, bootstrap_sequencer_key, config);
+        let genesis_events = vec![(block.header.block_id, events)];
+
         storage_ref
-            .ask(AtomicUpdate::from_block(block, Arc::new(state)))
+            // No need for events on first block
+            .ask(AtomicUpdate::from_block(block, Arc::new(state), genesis_events))
             .await
             .expect("Failed to seed the database with the genesis block");
 
@@ -773,7 +777,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 None
             };
             match outcome {
-                Some(AcceptOutcome::Applied) => update.zone_anchor = Some(record),
+                Some(AcceptOutcome::Applied(events)) => {
+                    update.zone_anchor = Some(record);
+                    update.events = events;
+                }
                 // A block we already hold verbatim needs no replay, but the
                 // channel serving it is what makes it irreversible, so its
                 // deliveries are settled and their records are owed nothing.
@@ -862,6 +869,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
+            let mut events = Vec::new();
             let mut judged = Vec::new();
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
@@ -872,7 +880,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     continue;
                 };
                 match &outcome {
-                    AcceptOutcome::Applied => {}
+                    AcceptOutcome::Applied(entry_events) => {
+                        events.extend(entry_events.clone());
+                    }
                     // A re-delivery of the final tip: it is irreversible all the
                     // same, so it still settles its deposits.
                     AcceptOutcome::AlreadyApplied => {
@@ -981,6 +991,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     finalized_deposit_records: finalized_deposit_ids,
                     finalized_dispatch_records: finalized_dispatch_keys,
                     consumed_withdrawals,
+                    events,
                     ..chain_update(&chain)
                 })
                 .await
@@ -2405,6 +2416,7 @@ fn chain_update(chain: &ChainState) -> AtomicUpdate {
         new_withdraw_intents: HashSet::new(),
         finalized_dispatch_records: HashSet::new(),
         zone_anchor: None,
+        events: Vec::new(),
     }
 }
 
@@ -2413,8 +2425,8 @@ fn genesis_block_and_state(
     signing_key: &lee::PrivateKey,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     config: &SequencerConfig,
-) -> (Block, lee::V03State) {
-    let (genesis_state, genesis_txs) =
+) -> (Block, lee::V03State, Vec<TxEvents>) {
+    let (genesis_state, genesis_txs, genesis_events) =
         build_genesis_state(signing_key, config, bootstrap_sequencer_key);
     let genesis_block = HashableBlockData {
         block_id: GENESIS_BLOCK_ID,
@@ -2424,7 +2436,7 @@ fn genesis_block_and_state(
     }
     .into_pending_block(signing_key);
 
-    (genesis_block, genesis_state)
+    (genesis_block, genesis_state, genesis_events)
 }
 
 /// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
@@ -2450,8 +2462,9 @@ fn build_genesis_state(
     signing_key: &lee::PrivateKey,
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
-) -> (lee::V03State, Vec<LeeTransaction>) {
+) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
     let mut state = build_initial_state(config);
+    let mut events = vec![];
 
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
@@ -2514,21 +2527,6 @@ fn build_genesis_state(
         config.bedrock_config.channel_params.minimum_sequencer_stake,
     );
 
-    let mut genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
-        config.bedrock_config.channel_params,
-        *config.bedrock_config.channel_id.as_ref(),
-    ))
-    .chain(cross_zone_config_txs)
-    .chain(inbox_config_tx)
-    .chain(supply_txs)
-    .chain(bootstrap_stake_txs)
-    .inspect(|tx| {
-        state
-            .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
-            .expect("Failed to execute genesis transaction");
-    })
-    .collect();
-
     // The genesis fee transaction credits the first staked sequencer's ownership account.
     //
     // A stakeless genesis (e.g. a sequencer reconstructing an existing channel
@@ -2540,21 +2538,38 @@ fn build_genesis_state(
         || lee::AccountId::from(&lee::PublicKey::new_from_private_key(signing_key)),
         |stake| lee::AccountId::from(&stake.owner),
     );
-    for tx in [
-        fee_invocation(fee_core::BlockFeeSummary::default(), producer),
-        clock_invocation(0),
-    ] {
-        state
-            .transition_from_public_transaction(&tx, GENESIS_BLOCK_ID, 0)
+
+    let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
+        config.bedrock_config.channel_params,
+        *config.bedrock_config.channel_id.as_ref(),
+    ))
+    .chain(cross_zone_config_txs)
+    .chain(inbox_config_tx)
+    .chain(supply_txs)
+    .chain(bootstrap_stake_txs)
+    .chain(std::iter::once(fee_invocation(
+        fee_core::BlockFeeSummary::default(),
+        producer,
+    )))
+    .chain(std::iter::once(clock_invocation(0)))
+    .collect();
+
+    for (idx, tx) in genesis_txs.iter().enumerate() {
+        let tx_events = state
+            .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
             .expect("Failed to execute genesis transaction");
-        genesis_txs.push(tx);
+        events.push(TxEvents {
+            tx_index: idx.try_into().expect("Realistically, will fit for genesis"),
+            tx_hash: tx.hash().into(),
+            events: tx_events,
+        });
     }
     let genesis_txs = genesis_txs
         .into_iter()
         .map(LeeTransaction::Public)
         .collect();
 
-    (state, genesis_txs)
+    (state, genesis_txs, events)
 }
 
 fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
