@@ -387,7 +387,6 @@ mod tests {
     #[test]
     fn genesis_fee_accounts_are_registered_with_their_records() {
         let state = initial_state(true);
-        let fee_program_id = programs::fee().id();
 
         let ids = system_accounts::fee_account_ids();
         // state, escrow, inbox — all distinct, all non-default.
@@ -406,7 +405,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(AccountId::from_builtin_program(fee_program_id)),
+                .shard(programs::fee_account_id()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
