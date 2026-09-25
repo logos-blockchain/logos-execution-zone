@@ -7,6 +7,11 @@ use lee_core::{BlockId, account::AccountId, program::TransactionEvent};
 // Largest block span a single events range query may cover. Lives here so every surface
 // that serves the query (RPC service, FFI) enforces the identical bound.
 pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
+// Bounds the bytes one getEvents response can carry, measured as serialized:
+// base64 inflates `data` by 4/3 and the fixed fields cost a flat allowance. Kept
+// under the transport's response cap so this limit is the one that binds.
+pub const MAX_EVENT_QUERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const EVENT_RECORD_BASE_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EventFilter {
@@ -204,6 +209,22 @@ pub fn resolve_event_block_range(
     }
 
     Ok((from_block, to_block))
+}
+
+// The response is filtered and charged against the budget as it is built, so an
+// over-budget query fails before materializing the response; the store's own
+// span-bounded scan has already happened by then.
+#[must_use]
+pub const fn record_charge(record: &EventRecord) -> usize {
+    let EventRecord {
+        block_id: _,
+        tx_index: _,
+        tx_hash: _,
+        program_account_id: _,
+        selector: _,
+        data,
+    } = record;
+    EVENT_RECORD_BASE_BYTES.saturating_add(data.len().div_ceil(3).saturating_mul(4))
 }
 
 #[cfg(test)]

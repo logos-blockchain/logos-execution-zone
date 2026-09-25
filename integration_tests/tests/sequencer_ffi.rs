@@ -500,7 +500,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
 
     // SAFETY: events_res created by FFI, it is valid.
     unsafe {
-        sequencer_ffi_helpers::free_ffi_event_record_vec(events_res.value);
+        sequencer_ffi_helpers::sequencer_ffi_free_ffi_event_record_vec(events_res.value);
     }
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.

@@ -6,7 +6,7 @@ use sequencer_executor_actor::protocol::{
     TransactionOrigin,
 };
 use sequencer_storage_actor::{
-    actor::event_filter::{EventRecord, Selector},
+    actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
     protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
 };
 
@@ -616,7 +616,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
             map_opt.map_or_else(
                 || {
                     log::error!("query_block_by_tx_hash: block for this block id does not exist");
-                    PointerResult::from_error(OperationStatus::ClientError)
+                    PointerResult::from_error(OperationStatus::InvalidArgument)
                 },
                 PointerResult::from_value,
             )
@@ -624,13 +624,39 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
     )
 }
 
+/// Frees the resources associated with the query for block id by transaction hash.
+///
+/// # Arguments
+///
+/// - `val`: Valid pointer into `u64`, received from `sequencer_ffi_query_block_by_tx_hash` as a
+///   `PointerResult.value`
+///
+/// # Returns
+///
+/// void.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `val` is a valid pointer into `u64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sequencer_ffi_free_query_block_id_by_transaction(val: *mut u64) {
+    if val.is_null() {
+        log::error!("Attempted to free a null pointer. This is a bug. Aborting.");
+        return;
+    }
+
+    let boxed_val = unsafe { Box::from_raw(val) };
+    drop(boxed_val);
+}
+
 /// Query events emitted by programs, optionally filtered.
 ///
 /// Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
 /// lookup and the block range is ignored; otherwise the range from `from_block` to
 /// `to_block` (defaulting to the current tip when none) is read, capped at
-/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
-/// past the indexed tip and queries outside the sequencer's event-filter history.
+/// `MAX_EVENT_QUERY_BLOCK_SPAN` blocks, returning `InvalidArgument` when the span is
+/// exceeded or a bound is past the sequencer's tip.
 /// `program_account_id` and `selector` are exact-match filters applied to the result.
 ///
 /// # Arguments
@@ -746,7 +772,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         };
 
         if to_block.is_some && to_block.value.is_null() {
-            log::error!("query_events to_block is flagged present but its value pointer isnull");
+            log::error!("query_events to_block is flagged present but its value pointer is null");
             return PointerResult::from_error(OperationStatus::InvalidArgument);
         }
         let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
@@ -778,6 +804,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         }
 
         let mut events_range = vec![];
+        let mut cumulative_events_size: usize = 0;
 
         for block_id in from_block..=to_block {
             let Ok(block_events) = sequencer
@@ -802,6 +829,17 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             else {
                 return PointerResult::from_error(OperationStatus::ClientError);
             };
+
+            cumulative_events_size = cumulative_events_size.saturating_add(
+                block_events
+                    .iter()
+                    .fold(0, |acc, x| acc.saturating_add(record_charge(x))),
+            );
+
+            if cumulative_events_size > MAX_EVENT_QUERY_RESPONSE_BYTES {
+                return PointerResult::from_error(OperationStatus::ResponseTooBig);
+            }
+
             events_range.extend(block_events);
         }
 

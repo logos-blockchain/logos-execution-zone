@@ -95,7 +95,7 @@ unsafe extern "C" {
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
     pub unsafe fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>);
     pub unsafe fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>);
-    pub unsafe fn free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>);
+    pub unsafe fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.

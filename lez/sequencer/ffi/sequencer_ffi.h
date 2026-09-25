@@ -13,6 +13,7 @@ typedef enum OperationStatus {
   CastError = 4,
   NotSupported = 5,
   InvalidArgument = 6,
+  ResponseTooBig = 7,
 } OperationStatus;
 
 typedef enum FfiProgramImageClaimKind {
@@ -776,13 +777,32 @@ struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(c
                                                                                FfiHashType tx_hash);
 
 /**
+ * Frees the resources associated with the query for block id by transaction hash.
+ *
+ * # Arguments
+ *
+ * - `val`: Valid pointer into `u64`, received from `sequencer_ffi_query_block_by_tx_hash` as a
+ *   `PointerResult.value`
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid pointer into `u64`.
+ */
+void sequencer_ffi_free_query_block_id_by_transaction(uint64_t *val);
+
+/**
  * Query events emitted by programs, optionally filtered.
  *
  * Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
  * lookup and the block range is ignored; otherwise the range from `from_block` to
  * `to_block` (defaulting to the current tip when none) is read, capped at
- * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
- * past the indexed tip and queries outside the sequencer's event-filter history.
+ * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks, returning `InvalidArgument` when the span is
+ * exceeded or a bound is past the sequencer's tip.
  * `program_account_id` and `selector` are exact-match filters applied to the result.
  *
  * # Arguments
@@ -924,9 +944,9 @@ void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yetfreed.
+ * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
  */
-void free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
+void sequencer_ffi_free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.

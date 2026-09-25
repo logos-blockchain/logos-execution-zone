@@ -191,7 +191,7 @@ pub struct AtomicUpdate {
     /// Lower the published high water mark to this height if it is above.
     pub lower_published_high_water: Option<BlockId>,
 
-    /// Events omitted by transactions in blocks.
+    /// Events emitted by transactions in blocks.
     pub events: Vec<(BlockId, Vec<TxEvents>)>,
 }
 

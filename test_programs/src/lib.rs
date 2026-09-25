@@ -93,13 +93,3 @@ pub const fn clock_chain_caller() -> Program {
 
     Program::new_unchecked(CLOCK_CHAIN_CALLER_ID, Cow::Borrowed(CLOCK_CHAIN_CALLER_ELF))
 }
-
-#[must_use]
-#[inline]
-pub const fn event_emitter() -> Program {
-    use guests::{EVENT_EMITTER_ELF, EVENT_EMITTER_ID, EVENT_EMITTER_PATH};
-
-    let _unused = EVENT_EMITTER_PATH;
-
-    Program::new_unchecked(EVENT_EMITTER_ID, Cow::Borrowed(EVENT_EMITTER_ELF))
-}

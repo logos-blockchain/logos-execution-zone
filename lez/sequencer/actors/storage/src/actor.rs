@@ -1518,10 +1518,8 @@ impl Message<GetTxHashToBlockIdMapItem> for StorageActor {
         GetTxHashToBlockIdMapItem { tx_hash }: GetTxHashToBlockIdMapItem,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::TxHashToBlockIdMappingDestination>(&tx_hash)?
-            .map(|dest| dest.id))
+        // TODO: Use DB map, when implemented.
+        Ok(self.tx_index.block_for_tx(&tx_hash))
     }
 }
 
@@ -1565,7 +1563,7 @@ impl Message<GetEventFilter> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         // For now, storage is only archival.
-        // TODO: update sequecner configs to support custom archivation.
+        // TODO: update sequencer configs to support custom archival policies.
         Ok(EventFilter::Archival)
     }
 }
