@@ -69,8 +69,8 @@ pub struct BedrockActor {
     sequencer: ZoneSequencer<NodeHttpClient>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
-    /// Version of the channel view this actor holds, bumped by everything that
-    /// mints a checkpoint.
+    /// Version of the channel view this actor holds, bumped by every broadcast
+    /// update and every publish.
     seq: ChannelSeq,
 }
 
@@ -161,6 +161,12 @@ impl BedrockActor {
                 finalized,
                 deposits: _,
             } => {
+                // An L1 block that moved nothing on this channel: it only advances the checkpoint.
+                if matches!(&channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
+                    && finalized.is_empty()
+                {
+                    return Ok(());
+                }
                 let channel_id = self.config.channel_id;
                 let entries = |txs: &mut dyn Iterator<Item = &ChannelUpdateTx>| {
                     txs.flat_map(|tx| channel_entries(tx, channel_id)).collect()
