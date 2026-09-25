@@ -191,6 +191,33 @@ pub mod tests {
     }
 
     #[test]
+    fn witness_set_cannot_have_dulicate_signers() {
+        let (key1, _, addr1, addr2) = keys_for_tests();
+        let state = state_for_tests();
+        // both nonces match the current state, so only the repeat is at fault
+        let nonces = vec![0_u128.into(), 0_u128.into()];
+        let instruction = NativeInstruction::Transfer { amount: 1337 };
+        let message = Message::try_new(
+            NATIVE_TOKEN_PROGRAM_ID,
+            vec![
+                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::balance(addr2),
+            ],
+            nonces,
+            instruction,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
+        let tx = PublicTransaction::new(message, witness_set);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        assert!(matches!(
+            result,
+            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+        ));
+    }
+
+    #[test]
     fn number_of_nonces_must_match_number_of_signatures() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();

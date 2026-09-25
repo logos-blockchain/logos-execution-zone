@@ -21,7 +21,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 mkdir -p "$1"
-home="$(realpath -m "$1")"
+home="$(cd "$1" && pwd -P)"
 shift
 funding="${1:-}"
 shift || true
@@ -103,7 +103,7 @@ if port_busy "$port"; then
     exit 2
 fi
 
-printf '\n=== %s  %s  rpc :%s  metrics :%s ===\n' "$(date -Is)" "$name" "$port" "$metrics" >>"$log"
+printf '\n=== %s  %s  rpc :%s  metrics :%s ===\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$name" "$port" "$metrics" >>"$log"
 say "home $home, log $log, rpc :$port, metrics :$metrics"
 
 cd "$repo"
@@ -129,7 +129,7 @@ fi
 
 if [ "$stake" = true ]; then
     stake_log="$home/stake.log"
-    printf '\n=== %s  %s staking ===\n' "$(date -Is)" "$name" >>"$stake_log"
+    printf '\n=== %s  %s staking ===\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$name" >>"$stake_log"
     say "staking in the background, log $stake_log"
     [ -n "$funding" ] && set -- --funding-account "$funding" "$@"
     [ -d "$home/wallet" ] && set -- --wallet "$home/wallet" "$@"

@@ -23,10 +23,11 @@ use crate::{
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
+        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
         RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        SetCrossZonePeerTip, UpdateZoneCheckpoint, WithdrawalReconciliationKey,
+        ZoneCheckpointRecord,
     },
 };
 
@@ -49,6 +50,23 @@ fn bookkeeping_update() -> AtomicUpdate {
         lower_published_high_water: None,
         events: Vec::new(),
     }
+}
+
+/// A checkpoint of `bytes` minted at channel sequence `seq`.
+fn checkpoint_record(bytes: &[u8], seq: u64) -> ZoneCheckpointRecord {
+    ZoneCheckpointRecord {
+        bytes: bytes.to_vec(),
+        seq,
+    }
+}
+
+/// The checkpoint bytes the store holds, or [`None`] when it holds none.
+async fn stored_checkpoint(storage_ref: &ActorRef<StorageActor>) -> Option<Vec<u8>> {
+    storage_ref
+        .ask(GetZoneCheckpoint)
+        .await
+        .expect("Failed to read the checkpoint")
+        .map(|checkpoint| checkpoint.bytes)
 }
 
 fn withdrawal_key(byte: u8) -> WithdrawalReconciliationKey {
@@ -985,7 +1003,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
     // comes with the update. The state it carries is ignored.
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: Some(b"cp-idle".to_vec()),
+            checkpoint: Some(checkpoint_record(b"cp-idle", 1)),
             head_tip: Some(BlockMeta::from(&genesis)),
             head_state: state_with_balance(999),
             ..bookkeeping_update()
@@ -994,10 +1012,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .expect("Failed to apply the checkpoint-only update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint"),
+        stored_checkpoint(&storage_ref).await,
         Some(b"cp-idle".to_vec()),
         "The checkpoint still has to land"
     );
@@ -1051,20 +1066,99 @@ async fn checkpoint_lands_with_an_update_carrying_no_block() {
 
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: Some(b"cp-orphan".to_vec()),
+            checkpoint: Some(checkpoint_record(b"cp-orphan", 1)),
             ..bookkeeping_update()
         })
         .await
         .expect("Failed to apply the update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint")
-            .as_deref(),
+        stored_checkpoint(&storage_ref).await.as_deref(),
         Some(b"cp-orphan".as_slice())
     );
+}
+
+#[tokio::test]
+async fn a_checkpoint_behind_the_stored_one_is_dropped() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-produced", 20),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    // What the follow path was holding while the produce path published.
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-stale", 10),
+        })
+        .await
+        .expect("A stale checkpoint is dropped, not an error");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+        "The newer checkpoint has to survive the stale one"
+    );
+
+    // Same sequence, different bytes: nothing says the newcomer is the later
+    // view, so the store keeps what it has.
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-tie", 20),
+        })
+        .await
+        .expect("A tied checkpoint is dropped, not an error");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+    );
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-followed", 30),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-followed".as_slice()),
+        "A newer checkpoint still has to land"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_checkpoint_in_an_atomic_update_drops_alone() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(1, None, vec![]);
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-produced", 20),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    storage_ref
+        .ask(AtomicUpdate {
+            checkpoint: Some(checkpoint_record(b"cp-stale", 10)),
+            ..AtomicUpdate::from_block(genesis.clone(), Arc::new(V03State::new()), vec![])
+        })
+        .await
+        .expect("Failed to apply the update");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+        "The stored checkpoint is the newer one"
+    );
+    assert_tip_is(&storage_ref, &genesis).await;
 }
 
 /// A database nothing has written a chain into answers "nothing yet" rather
