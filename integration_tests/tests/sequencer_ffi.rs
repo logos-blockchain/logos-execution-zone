@@ -5,7 +5,6 @@
     reason = "Integration tests live at crate root and don't care about these lints"
 )]
 #![expect(
-    clippy::shadow_unrelated,
     clippy::cast_possible_truncation,
     clippy::as_conversions,
     reason = "We don't care about it in tests"
@@ -18,7 +17,10 @@ use integration_tests::get_account;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
-use sequencer_ffi::api::types::{FfiOption, transaction::FfiTransactionKind};
+use sequencer_ffi::api::types::{
+    FfiOption,
+    transaction::{FfiTransaction, FfiTransactionKind},
+};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
 
@@ -320,7 +322,10 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
     }
     info!("Leader and joining sequencer agree on all {common} shared blocks");
 
-    // Get first `common` transactions of a owner_id.
+    // Every block the joining sequencer produces distributes fees to its payout
+    // account, which is this ownership account, so the number of transactions
+    // indexed against it grows for as long as the node runs. `common` bounds it:
+    // there is at most one such transaction per block.
 
     let owner_id_transactions_res =
     // SAFETY: FFI ensures validity of value.
@@ -342,52 +347,40 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
     // SAFETY: FFI ensures validity of value.
     unsafe{ owner_id_transactions_res.value.read() };
 
-    // Sanity check, there should be exactly 2 transaction
-    // and it must affect owner_id.
+    // Which selector names the account is what the transaction is: the Stake
+    // that opened the record, or one of the block rewards that followed it.
+    let mut stake_txs = 0_usize;
+    let mut reward_txs = 0_usize;
+    for i in 0..owner_id_transactions.len {
+        let owner_id_tx =
+        // SAFETY: `i` is below the vector's length.
+        unsafe { owner_id_transactions.get(i) };
 
-    assert_eq!(owner_id_transactions.len, 2);
-
-    let owner_id_tx =
-        // SAFETY: FFI ensures validity of value.
-        unsafe{ owner_id_transactions.get(0) };
-
-    match owner_id_tx.kind {
-        FfiTransactionKind::Public => {
-            let ffi_acc_ids =
-                // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { owner_id_tx.body.public_body.read().message.shard_selectors };
-
-            let second_ffi_acc =
-                // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { ffi_acc_ids.get(1).account_id.data };
-
-            assert_eq!(second_ffi_acc, *owner_id.value());
-        }
-        FfiTransactionKind::Private => {
-            return Err(anyhow::anyhow!("All owner_id transactions must be public"));
+        match owner_id_selector_position(owner_id_tx, *owner_id.value())? {
+            // Stake: funding, ownership, funds, config.
+            Some(1) => stake_txs += 1,
+            // Fee distribution: fee state, escrow, inbox, producer payout.
+            Some(3) => reward_txs += 1,
+            position => anyhow::bail!(
+                "Transaction {i} names {owner_id} at selector {position:?}, which is neither the \
+                 Stake transaction nor a block reward"
+            ),
         }
     }
 
-    let owner_id_tx =
-        // SAFETY: FFI ensures validity of value.
-        unsafe{ owner_id_transactions.get(1) };
-
-    match owner_id_tx.kind {
-        FfiTransactionKind::Public => {
-            let ffi_acc_ids =
-                // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { owner_id_tx.body.public_body.read().message.shard_selectors };
-
-            let forth_ffi_acc =
-                // SAFETY: FfiTransactionKind ensures validity of value.
-                unsafe { ffi_acc_ids.get(3).account_id.data };
-
-            assert_eq!(forth_ffi_acc, *owner_id.value());
-        }
-        FfiTransactionKind::Private => {
-            return Err(anyhow::anyhow!("All owner_id transactions must be public"));
-        }
-    }
+    // One Stake opened the record, and re-reading the channel must not index it
+    // a second time.
+    assert_eq!(
+        stake_txs, 1,
+        "expected exactly one Stake transaction against {owner_id}, got {stake_txs}"
+    );
+    // The test waited for a block of the joining sequencer's own, so its payout
+    // account has been credited at least once.
+    assert!(
+        reward_txs >= 1,
+        "expected at least one block reward against {owner_id}, got none"
+    );
+    info!("Joining sequencer's ownership account indexes 1 Stake and {reward_txs} block reward(s)");
 
     // SAFETY: FFI ensures validity of value.
     unsafe {
@@ -407,4 +400,20 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Which shard selector of `tx` names `account`, if any.
+fn owner_id_selector_position(tx: &FfiTransaction, account: [u8; 32]) -> Result<Option<usize>> {
+    let FfiTransactionKind::Public = tx.kind else {
+        return Err(anyhow::anyhow!("All owner_id transactions must be public"));
+    };
+
+    let shard_selectors =
+        // SAFETY: the kind says the public body is the live union member.
+        unsafe { tx.body.public_body.read().message.shard_selectors };
+
+    Ok((0..shard_selectors.len).find(|&i| {
+        // SAFETY: `i` is below the vector's length.
+        unsafe { shard_selectors.get(i).account_id.data == account }
+    }))
 }

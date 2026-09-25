@@ -15,11 +15,11 @@ use sequencer_channel_config_actor::{
 };
 pub use sequencer_core::config::*;
 use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
-use sequencer_executor_actor::ExecutorActor;
 use sequencer_gossip_actor::{
     GossipActor,
     protocol::{PublishConfig, PublishTransaction},
 };
+#[cfg(feature = "rpc")]
 use sequencer_rpc_server_actor::RpcServerActor;
 use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
 use sequencer_storage_actor::StorageActor;
@@ -35,10 +35,34 @@ const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
 const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(not(feature = "standalone"))]
-type BedrockActor = sequencer_bedrock_actor::BedrockActor;
+pub type BedrockActor = sequencer_bedrock_actor::BedrockActor;
 
 #[cfg(feature = "standalone")]
-type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
+pub type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
+
+pub type ExecutorActor = sequencer_executor_actor::ExecutorActor<StorageActor, BedrockActor>;
+
+/// The RPC server actor together with the address it ended up bound to.
+#[cfg(feature = "rpc")]
+struct RpcServer {
+    actor: ActorHandle<RpcServerActor>,
+    addr: SocketAddr,
+}
+
+#[cfg(feature = "rpc")]
+impl RpcServer {
+    async fn shutdown(self) {
+        self.actor.shutdown().await;
+    }
+
+    async fn failed(&self) -> Result<Never> {
+        self.actor.failed().await
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.actor.is_healthy()
+    }
+}
 
 /// Handle to manage the sequencer and its tasks.
 ///
@@ -47,14 +71,14 @@ pub struct SequencerHandle {
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
     bedrock_broker: ActorHandle<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
-    rpc_server: ActorHandle<RpcServerActor>,
+    #[cfg(feature = "rpc")]
+    rpc_server: RpcServer,
     /// `None` when gossip is unconfigured.
     gossip: Option<Gossip>,
-    executor: ActorHandle<ExecutorActor<StorageActor, BedrockActor>>,
+    executor: ActorHandle<ExecutorActor>,
     slasher: ActorHandle<SlasherActor>,
     bedrock: ActorHandle<BedrockActor>,
     storage: ActorHandle<StorageActor>,
-    addr: SocketAddr,
 }
 
 /// The gossip actor and its companions.
@@ -72,18 +96,19 @@ impl SequencerHandle {
         let Self {
             scheduler,
             bedrock_broker,
+            #[cfg(feature = "rpc")]
             rpc_server,
             gossip,
             executor,
             slasher,
             bedrock,
             storage,
-            addr: _,
         } = self;
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
         scheduler.shutdown().await;
         bedrock_broker.shutdown().await;
+        #[cfg(feature = "rpc")]
         rpc_server.shutdown().await;
         if let Some(gossip) = gossip {
             gossip.actor.shutdown().await;
@@ -108,13 +133,20 @@ impl SequencerHandle {
             scheduler,
             slasher,
             bedrock_broker,
+            #[cfg(feature = "rpc")]
             rpc_server,
             executor,
             bedrock,
             storage,
-            addr: _,
             gossip: _,
         } = self;
+
+        // A build without an RPC server has none that could fail, so its branch
+        // is a future that never resolves.
+        #[cfg(feature = "rpc")]
+        let rpc_failed = rpc_server.failed();
+        #[cfg(not(feature = "rpc"))]
+        let rpc_failed = std::future::pending::<Result<Never>>();
 
         select! {
             Err(err) = scheduler.failed() => {
@@ -123,7 +155,7 @@ impl SequencerHandle {
             Err(err) = bedrock_broker.failed() => {
                 Err(err)
             }
-            Err(err) = rpc_server.failed() => {
+            Err(err) = rpc_failed => {
                 Err(err)
             }
             Err(err) = executor.failed() => {
@@ -154,26 +186,40 @@ impl SequencerHandle {
             scheduler,
             slasher,
             bedrock_broker,
+            #[cfg(feature = "rpc")]
             rpc_server,
             executor,
             bedrock,
             storage,
-            addr: _,
             gossip: _,
         } = self;
 
+        #[cfg(feature = "rpc")]
+        let rpc_healthy = rpc_server.is_healthy();
+        #[cfg(not(feature = "rpc"))]
+        let rpc_healthy = true;
+
         scheduler.is_healthy()
             && bedrock_broker.is_healthy()
-            && rpc_server.is_healthy()
+            && rpc_healthy
             && slasher.is_healthy()
             && executor.is_healthy()
             && bedrock.is_healthy()
             && storage.is_healthy()
     }
 
+    /// The address the RPC server bound to.
+    #[cfg(feature = "rpc")]
     #[must_use]
     pub const fn addr(&self) -> SocketAddr {
-        self.addr
+        self.rpc_server.addr
+    }
+
+    /// The executor, for embedders that talk to the sequencer in-process
+    /// instead of over the RPC.
+    #[must_use]
+    pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
+        self.executor.actor_ref()
     }
 
     /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
@@ -186,6 +232,10 @@ impl SequencerHandle {
     }
 }
 
+/// Runs the sequencer, serving its RPC on `listen_addr`.
+///
+/// `listen_addr` goes unused without the `rpc` feature, since there is then no
+/// RPC server to bind it.
 #[expect(
     clippy::manual_async_fn,
     reason = "Explicit Send future works around rust-lang/rust#100013"
@@ -270,17 +320,18 @@ pub fn run(
         }
         .unzip();
 
-        let rpc_server = RpcServerActor::new(
+        #[cfg(feature = "rpc")]
+        let rpc_server = setup_rpc_server(
             listen_addr,
             max_block_size,
             executor_ref.clone(),
             gossip_publisher,
         )
-        .await
-        .context("Failed to initialize RPC Server Actor")?;
-        let addr = rpc_server.addr();
-        let rpc_server_ref = RpcServerActor::spawn(rpc_server);
-        info!("RPC Server Actor spawned");
+        .await?;
+        // Nothing binds the address in this build, and with no RPC server there
+        // is nobody left to publish the transactions it would have accepted.
+        #[cfg(not(feature = "rpc"))]
+        drop((listen_addr, gossip_publisher));
 
         scheduler_ref
             .tell(
@@ -298,12 +349,12 @@ pub fn run(
         Ok(SequencerHandle {
             scheduler: ActorHandle::new(scheduler_ref),
             bedrock_broker: ActorHandle::new(bedrock_broker_ref),
-            rpc_server: ActorHandle::new(rpc_server_ref),
+            #[cfg(feature = "rpc")]
+            rpc_server,
             executor: ActorHandle::new(executor_ref),
             bedrock: ActorHandle::new(bedrock_ref),
             slasher: ActorHandle::new(slasher_ref),
             storage: ActorHandle::new(storage_ref),
-            addr,
             gossip,
         })
     }
@@ -325,7 +376,7 @@ pub async fn setup_gossip(
     max_block_size: u64,
     accredited_keys_rx: AccreditedKeysReceiver,
     staked_keys_rx: AccreditedKeysReceiver,
-    executor_ref: &ActorRef<ExecutorActor<StorageActor, BedrockActor>>,
+    executor_ref: &ActorRef<ExecutorActor>,
     slasher_ref: &ActorRef<SlasherActor>,
     config_manager_ref: &ActorRef<ChannelConfigActor>,
     scheduler_ref: &ActorRef<Scheduler>,
@@ -435,6 +486,27 @@ pub async fn setup_gossip(
         },
         publisher,
     ))
+}
+
+#[cfg(feature = "rpc")]
+async fn setup_rpc_server(
+    listen_addr: SocketAddr,
+    max_block_size: bytesize::ByteSize,
+    executor_ref: ActorRef<ExecutorActor>,
+    gossip_publisher: Option<Recipient<PublishTransaction>>,
+) -> Result<RpcServer> {
+    let rpc_server =
+        RpcServerActor::new(listen_addr, max_block_size, executor_ref, gossip_publisher)
+            .await
+            .context("Failed to initialize RPC Server Actor")?;
+    let addr = rpc_server.addr();
+    let rpc_server_ref = RpcServerActor::spawn(rpc_server);
+    info!("RPC Server Actor spawned");
+
+    Ok(RpcServer {
+        actor: ActorHandle::new(rpc_server_ref),
+        addr,
+    })
 }
 
 #[cfg(not(feature = "standalone"))]

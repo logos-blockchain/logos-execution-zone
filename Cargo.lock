@@ -11234,23 +11234,15 @@ dependencies = [
 name = "sequencer_ffi"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cbindgen",
  "common",
  "env_logger",
- "glob",
  "kameo",
- "kameo_actors",
  "lee",
  "lee_core",
  "log",
- "sequencer_bedrock_actor",
- "sequencer_channel_config_actor",
- "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_service",
- "sequencer_slasher_actor",
- "sequencer_storage_actor",
  "serde_json",
  "tokio",
 ]
@@ -11313,6 +11305,7 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "clap",
  "env_logger",
  "futures",

@@ -12,7 +12,7 @@ workspace = true
 sequencer_core.workspace = true
 sequencer_channel_config_actor.workspace = true
 sequencer_gossip_actor = { workspace = true, features = ["actor"] }
-sequencer_rpc_server_actor.workspace = true
+sequencer_rpc_server_actor = { workspace = true, optional = true }
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_slasher_actor.workspace = true
 sequencer_storage_actor = { workspace = true, features = ["actor"] }
@@ -35,6 +35,12 @@ tokio.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 glob.workspace = true
+bytesize = { workspace = true, optional = true }
+
+[[bin]]
+name = "sequencer_service"
+path = "src/main.rs"
+required-features = ["rpc"]
 
 [[bin]]
 name = "inscribe_garbage"
@@ -47,7 +53,10 @@ path = "src/bin/submit_stake.rs"
 required-features = ["submit_stake"]
 
 [features]
-default = []
+default = ["rpc"]
+# Serves the sequencer over the JSON-RPC API. Off for embedders that hold a
+# `SequencerHandle` and talk to the executor directly.
+rpc = ["dep:sequencer_rpc_server_actor", "dep:bytesize"]
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["sequencer_core/prove"]
 # Runs the sequencer in standalone mode without depending on Bedrock.
