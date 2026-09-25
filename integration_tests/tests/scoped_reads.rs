@@ -619,14 +619,11 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         .wallet()
         .send_privacy_preserving_tx(
             vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
-            Program::serialize_instruction((
-                None::<(AccountId, Vec<u8>)>,
-                vec![(
-                    q_id,
-                    ProgramShardSelector::new(account_id, q_id),
-                    Program::serialize_instruction(rewritten.clone())?,
-                )],
-            ))?,
+            Program::serialize_instruction(vec![(
+                q_id,
+                ProgramShardSelector::new(account_id, q_id),
+                Program::serialize_instruction(rewritten.clone())?,
+            )])?,
             &program,
         )
         .await
