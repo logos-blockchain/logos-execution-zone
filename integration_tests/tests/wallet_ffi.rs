@@ -944,8 +944,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &credit_result);
 
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
@@ -1078,8 +1077,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1140,8 +1138,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1222,8 +1219,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
