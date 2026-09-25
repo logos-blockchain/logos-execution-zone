@@ -19,6 +19,10 @@ pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 300;
 pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 25;
 pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
 
+// TODO: Size against mainnet finality before launch.
+/// Blocks an unstake waits before release.
+pub const DEFAULT_SEQUENCER_EXIT_DELAY: u64 = 100;
+
 pub type Slots = u32;
 
 #[must_use]

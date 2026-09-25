@@ -1085,15 +1085,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.discard_config_draft().await;
         }
 
-        let live_committee = self.live_accredited_sequencer_keys().await;
-
         let BlockWithMeta {
             block,
             withdrawals,
             parent,
             mempool_transactions,
         } = self
-            .build_block_from_mempool(live_committee.as_ref())
+            .build_block_from_mempool()
             .await
             .context("Failed to build block from mempool transactions")?;
 
@@ -1136,51 +1134,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.record_produced_block(outcome, block).await?;
 
         Ok(block_id)
-    }
-
-    /// Live committee snapshot for gating `FinalizeUnstake` inclusion. `None`
-    /// if the channel is missing or unreadable.
-    async fn live_accredited_sequencer_keys(&self) -> Option<LiveCommittee> {
-        match self
-            .bedrock_ref
-            .ask(sequencer_bedrock_actor::protocol::GetAccreditedKeys)
-            .await
-        {
-            Ok(Some(sequencer_bedrock_actor::protocol::AccreditedKeys {
-                keys,
-                config_tip,
-                tip_sequencer: _,
-            })) => Some(LiveCommittee {
-                keys: keys
-                    .iter()
-                    .filter_map(|key| {
-                        sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
-                            warn!(
-                                "Ignoring accredited key {}: not a valid Ed25519 public key",
-                                hex::encode(key.to_bytes())
-                            );
-                            None
-                        })
-                    })
-                    .collect(),
-                config_tip,
-            }),
-            Ok(None) => {
-                warn!(
-                    "No channel to read a live committee from; skipping FinalizeUnstake inclusion \
-                     this round"
-                );
-                None
-            }
-            Err(err) => {
-                warn!(
-                    "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
-                     this round: {:#}",
-                    anyhow!(err)
-                );
-                None
-            }
-        }
     }
 
     /// Whether the channel has advanced far enough past `submitted_at` to call
@@ -1457,6 +1410,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
+                // Only the sequencer mints deposits, from their L1 events.
+                if extract_bridge_deposit_id(tx).is_some() {
+                    if matches!(origin, TransactionOrigin::Gossip) {
+                        debug!("Dropping gossiped bridge deposit {tx_hash}");
+                    } else {
+                        log::warn!("Dropping user-submitted bridge deposit {tx_hash}");
+                    }
+                    return false;
+                }
+
                 // The cheap admission screen first: an unfundable or fee-invalid
                 // candidate is dropped before paying for the scratch clone and
                 // the settlement's guest executions.
@@ -1484,19 +1447,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     &mut scratch_summary,
                 ) {
                     Ok(_events) => {
-                        // a user/gossip submitted transaction cannot debit the bridge escrow
-                        let bridge_id = system_accounts::bridge_account_id();
-                        if tx.affected_public_account_ids().contains(&bridge_id)
-                            && !common::transaction::bridge_balance_only_increased(
-                                &state.get_account_by_id(bridge_id),
-                                &scratch.get_account_by_id(bridge_id),
-                            )
-                        {
-                            log::warn!(
-                                "Transaction {tx_hash} illegally modifies the bridge account; dropping it",
-                            );
-                            return false;
-                        }
                         if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
                             withdrawals.push(withdraw_data);
                         }
@@ -1559,10 +1509,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         clippy::cognitive_complexity,
         reason = "Slop has won the battle, but our war is not over"
     )]
-    async fn build_block_from_mempool(
-        &mut self,
-        live_committee: Option<&LiveCommittee>,
-    ) -> Result<BlockWithMeta> {
+    async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
         // Decoded outside the chain lock, and read before it is taken: the usual
@@ -1660,18 +1607,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }),
             None => Vec::new(),
         };
-
-        // The live committee is the finalized one only while no config is in
-        // flight: its config entry is the one the checkpoint reports finalized.
-        let finalized_config = zone_checkpoint(&self.storage_ref)
-            .await
-            .map_err(|err| warn!("Failed to read the zone checkpoint: {:#}", anyhow!(err)))
-            .ok()
-            .flatten()
-            .map(|checkpoint| checkpoint.finalized_config);
-        let finalized_committee = live_committee
-            .filter(|committee| finalized_config == Some(committee.config_tip))
-            .map(|committee| committee.keys.as_slice());
 
         if !settled.is_empty() {
             if let Err(err) = self
@@ -1829,17 +1764,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     self.mempool.push_front((origin, tx));
                 }
                 break;
-            }
-
-            // Block-validity rule: a not-yet-valid FinalizeUnstake is dropped
-            // outright, not applied — whether it arrived via the mempool
-            // (anyone may submit one, per spec) or from this sequencer's own
-            // discovery above. It re-appears on its own once conditions are
-            // met (mempool: whoever wants it finalized resubmits;
-            // discovery-sourced: reconstructed fresh next block), so it
-            // doesn't need requeuing here.
-            if !finalize_unstake_is_includable(&working_state, &tx, finalized_committee) {
-                continue;
             }
 
             // Declared-gas pre-screen: a charged transaction whose signed
@@ -2210,25 +2134,6 @@ struct BlockWithMeta {
 pub struct ChannelMovedWhileBuilding {
     pub expected: sequencer_bedrock_actor::protocol::ChannelSeq,
     pub current: sequencer_bedrock_actor::protocol::ChannelSeq,
-}
-
-/// The channel's live accredited keys, with the config entry they come from.
-///
-/// The config entry is what decides whether these keys are the finalized ones:
-/// it matches the checkpoint's `finalized_config` exactly when no later config
-/// is in flight.
-pub struct LiveCommittee {
-    keys: Vec<sequencer_stake_core::SequencerKey>,
-    config_tip: MsgId,
-}
-
-impl LiveCommittee {
-    /// A committee reported as sitting at `config_tip`.
-    #[cfg(test)]
-    #[must_use]
-    const fn at(keys: Vec<sequencer_stake_core::SequencerKey>, config_tip: MsgId) -> Self {
-        Self { keys, config_tip }
-    }
 }
 
 /// The persisted zone-sdk checkpoint, decoded from the encoding
@@ -2909,44 +2814,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     )))
 }
 
-/// Block-validity gate for a `FinalizeUnstake`, applied uniformly regardless
-/// of where the transaction came from. Passes through unconditionally for
-/// anything that isn't a `FinalizeUnstake` call.
-fn finalize_unstake_is_includable(
-    state: &lee::V03State,
-    tx: &LeeTransaction,
-    finalized_committee: Option<&[sequencer_stake_core::SequencerKey]>,
-) -> bool {
-    let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
-        return true;
-    };
-    committee_discovery::finalize_unstake_is_valid(state, ownership_id, finalized_committee)
-}
-
-/// The ownership account a `FinalizeUnstake` call targets, or `None` if `tx`
-/// isn't one.
-fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> {
-    let LeeTransaction::Public(tx) = tx else {
-        return None;
-    };
-
-    let message = tx.message();
-    if message.program_account_id != programs::sequencer_stake_account_id() {
-        return None;
-    }
-
-    match borsh::from_slice::<sequencer_stake_core::Instruction>(&message.instruction_data) {
-        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => message
-            .shard_selectors
-            .first()
-            .map(|shard_selector| shard_selector.account_id),
-        Ok(_) | Err(_) => None,
-    }
-}
-
-/// A `FinalizeUnstake` for every release `state` has pending. Whether each one
-/// is actually includable is decided later, uniformly, by
-/// [`finalize_unstake_is_includable`].
+/// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
@@ -2973,6 +2841,10 @@ fn build_finalize_unstake_tx(
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
+            ),
+            ProgramShardSelector::new(
+                system_accounts::clock_account_ids()[0],
+                programs::clock_account_id(),
             ),
         ],
         vec![],

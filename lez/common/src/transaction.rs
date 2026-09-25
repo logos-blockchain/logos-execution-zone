@@ -398,7 +398,7 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
 /// user-section fee-program invocation that honest followers would otherwise
 /// apply. The bridge account has its own increase-only rule
 /// ([`validate_bridge_account_modification`]) and is not included here.
-pub fn validate_no_restricted_account_modification(
+fn validate_no_restricted_account_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
 ) -> Result<(), lee::error::LeeError> {
@@ -429,7 +429,7 @@ fn validate_doesnt_modify_account(
     }
 }
 
-pub fn validate_bridge_account_modification(
+fn validate_bridge_account_modification(
     state: &V03State,
     diff: &ValidatedStateDiff,
     is_public_tx: bool,
@@ -455,13 +455,55 @@ pub fn validate_bridge_account_modification(
     }
 }
 
+/// Rejects a diff that writes system state a user transaction may not: the
+/// clock and fee accounts never, the bridge only by a deposit's debit, and any
+/// account's inbox shard only by a dispatch.
+pub fn validate_user_state_modification(
+    tx: &LeeTransaction,
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+) -> Result<(), lee::error::LeeError> {
+    validate_no_restricted_account_modification(state, diff)?;
+    let injected_program = match tx {
+        LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
+            Some(public_tx.message().program_account_id)
+        }
+        LeeTransaction::Public(_) | LeeTransaction::PrivacyPreserving(_) => None,
+    };
+    if injected_program != Some(programs::bridge_account_id()) {
+        validate_bridge_account_modification(state, diff, matches!(tx, LeeTransaction::Public(_)))?;
+    }
+    if injected_program != Some(programs::cross_zone_inbox_account_id()) {
+        validate_no_inbox_state_modification(state, diff)?;
+    }
+    Ok(())
+}
+
+/// Rejects a diff that changes any account's cross-zone inbox shard.
+fn validate_no_inbox_state_modification(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+) -> Result<(), lee::error::LeeError> {
+    let inbox = programs::cross_zone_inbox_account_id();
+    let modified = diff.public_diff().iter().any(|(account_id, post)| {
+        state.get_account_by_id(*account_id).data.shards.get(&inbox) != post.data.shards.get(&inbox)
+    });
+    if modified {
+        Err(lee::error::LeeError::InvalidInput(
+            "Transaction modifies cross-zone inbox state".to_owned(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Whether the bridge escrow went from `pre` to `post` by a pure balance
 /// increase (only bridge modification a public transaction may make).
 ///
 /// Legit deposits debit the escrow, but they are sequencer-injected, never
 /// user-submitted, so a user transaction that fails this is a forgery attempt.
 #[must_use]
-pub fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
+fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
         account: &lee::Account,
     ) -> impl Iterator<Item = (&lee::AccountId, &lee::ShardData)> {
@@ -488,7 +530,7 @@ mod tests {
 
     use super::{
         validate_bridge_account_modification, validate_doesnt_modify_account,
-        validate_reward_target,
+        validate_reward_target, validate_user_state_modification,
     };
     use crate::test_utils::{create_transaction_native_token_transfer, state_and_diff};
 
@@ -702,5 +744,63 @@ mod tests {
             tx.validate_on_state(&state, 1, 0).is_err(),
             "validate_on_state must reject a transfer that credits a clock system account",
         );
+    }
+
+    /// A bridge `Deposit` in the injection shape: empty witness set.
+    fn injected_deposit() -> super::LeeTransaction {
+        let message = lee::public_transaction::Message::try_new(
+            programs::bridge_account_id(),
+            vec![],
+            vec![],
+            bridge_core::Instruction::Deposit {
+                l1_deposit_op_id: [1; 32],
+                recipient_id: AccountId::new([2; 32]),
+                amount: 10,
+            },
+        )
+        .expect("deposit message");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+        super::LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    }
+
+    fn signed_transfer() -> super::LeeTransaction {
+        let key = PrivateKey::try_new([3; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&key));
+        create_transaction_native_token_transfer(from, 0, AccountId::new([4; 32]), 1, &key)
+    }
+
+    /// The bridge losing 100 of its balance.
+    fn bridge_debit() -> (V03State, lee::ValidatedStateDiff) {
+        let pre = Account::funded(500);
+        let mut post = pre.clone();
+        post.data
+            .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(400));
+        state_and_diff(system_accounts::bridge_account_id(), pre, post)
+    }
+
+    /// An account gaining a cross-zone inbox shard.
+    fn inbox_state_write() -> (V03State, lee::ValidatedStateDiff) {
+        let pre = Account::funded(0);
+        let mut post = pre.clone();
+        post.data.set_shard(
+            programs::cross_zone_inbox_account_id(),
+            lee::ShardData::try_from(vec![1]).expect("fits"),
+        );
+        state_and_diff(AccountId::new([5; 32]), pre, post)
+    }
+
+    #[test]
+    fn only_an_injected_deposit_may_debit_the_bridge() {
+        let (state, diff) = bridge_debit();
+        validate_user_state_modification(&injected_deposit(), &state, &diff)
+            .expect("an injected deposit debits the bridge");
+        assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
+    }
+
+    #[test]
+    fn no_user_transaction_may_write_inbox_state() {
+        let (state, diff) = inbox_state_write();
+        assert!(validate_user_state_modification(&injected_deposit(), &state, &diff).is_err());
+        assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
     }
 }

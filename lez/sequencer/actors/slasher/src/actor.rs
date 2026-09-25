@@ -535,6 +535,7 @@ mod tests {
                 minimum_sequencer_stake: 1,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                exit_delay: 10,
             }),
             channel_id: Some(CHANNEL),
             entries: keys

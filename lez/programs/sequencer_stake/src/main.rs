@@ -1,5 +1,6 @@
 use std::collections::btree_map::Entry;
 
+use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
     account::{AccountId, ProgramShardSelector, ShardData},
     native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
@@ -117,6 +118,15 @@ fn main() {
     .write();
 }
 
+/// The block id `clock` reads. Panics unless it is the per-block clock account.
+fn clock_block_id(clock: &AccountInput) -> u64 {
+    assert_eq!(
+        clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID,
+        "not the per-block clock account"
+    );
+    ClockAccountData::from_bytes(clock.shard_of(clock_core::clock_account_id())).block_id
+}
+
 fn decode_config(
     config_account: &AccountInput,
     self_account_id: lee_core::account::AccountId,
@@ -165,6 +175,10 @@ fn stake(
 
     let mut config = decode_config(&config_account, self_account_id);
     let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
+    assert!(
+        amount >= minimum_sequencer_stake,
+        "a stake or top-up must add at least the minimum"
+    );
 
     let balance_before = native_balance(&funds_account);
     let expected_balance_after = balance_before
@@ -206,10 +220,6 @@ fn stake(
         }
         Entry::Vacant(vacant) => {
             // first stake for this key, or a new one after a full exit
-            assert!(
-                amount >= minimum_sequencer_stake,
-                "an initial stake must already meet the minimum"
-            );
             vacant.insert(SequencerEntry {
                 account_id: ownership_account.account_id,
                 total_staked: amount,
@@ -299,8 +309,12 @@ fn unstake_request(
     amount: u128,
     destination: AccountId,
 ) -> Vec<ShardStateDiff> {
-    let [ownership_account, config_account] = <[AccountInput; 2]>::try_from(pre_states)
-        .expect("UnstakeRequest requires the ownership account and the config account");
+    let [ownership_account, config_account, clock_account] = <[AccountInput; 3]>::try_from(
+        pre_states,
+    )
+    .expect(
+        "UnstakeRequest requires the ownership account, the config account, and the clock account",
+    );
 
     assert!(
         ownership_account.is_authorized,
@@ -336,6 +350,7 @@ fn unstake_request(
     record.pending_unstake = Some(PendingUnstake {
         amount,
         destination,
+        requested_at: clock_block_id(&clock_account),
     });
     entry.total_pending_unstake = entry
         .total_pending_unstake
@@ -359,7 +374,11 @@ fn unstake_request(
             .expect("SequencerStakeConfig should fit in account data"),
     );
 
-    vec![ownership_post, config_post]
+    vec![
+        ownership_post,
+        config_post,
+        ShardStateDiff::unchanged(clock_account),
+    ]
 }
 
 /// Checks for enough distinct approvals from accredited keys over this key and
@@ -445,6 +464,7 @@ fn init_channel_params(
         channel_params.minimum_sequencer_stake > 0,
         "minimum_sequencer_stake must be non-zero"
     );
+    assert!(channel_params.exit_delay > 0, "exit_delay must be non-zero");
 
     config.channel_params = Some(channel_params);
     config.channel_id = Some(channel_id);
@@ -541,10 +561,15 @@ fn finalize_unstake(
     self_account_id: lee_core::account::AccountId,
     pre_states: Vec<AccountInput>,
 ) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
-    let [ownership_account, funds_account, destination_account, config_account] =
-        <[AccountInput; 4]>::try_from(pre_states).expect(
-            "FinalizeUnstake requires the ownership account, the stake funds account, a destination account, and the config account",
-        );
+    let [
+        ownership_account,
+        funds_account,
+        destination_account,
+        config_account,
+        clock_account,
+    ] = <[AccountInput; 5]>::try_from(pre_states).expect(
+        "FinalizeUnstake requires the ownership account, the stake funds account, a destination account, the config account, and the clock account",
+    );
 
     assert_funds_account(self_account_id, &ownership_account, &funds_account);
     let ownership_id = ownership_account.account_id;
@@ -570,6 +595,10 @@ fn finalize_unstake(
     );
 
     let mut config = decode_config(&config_account, self_account_id);
+    assert!(
+        clock_block_id(&clock_account) >= pending.releasable_at(channel_params(&config).exit_delay),
+        "the exit delay has not passed since the unstake request"
+    );
     let entry = config
         .entries
         .get_mut(&record.sequencer_key)
@@ -612,6 +641,7 @@ fn finalize_unstake(
             ShardStateDiff::unchanged(funds_account),
             ShardStateDiff::unchanged(destination_account),
             config_post,
+            ShardStateDiff::unchanged(clock_account),
         ],
         vec![release_call],
     )

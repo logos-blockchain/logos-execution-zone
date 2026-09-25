@@ -9,4 +9,5 @@ workspace = true
 
 [dependencies]
 sequencer_stake_core.workspace = true
+clock_core.workspace = true
 lee_core.workspace = true

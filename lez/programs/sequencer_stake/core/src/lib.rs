@@ -89,8 +89,8 @@ pub enum Instruction {
         destination: AccountId,
     },
 
-    /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
-    /// Block-inclusion validity is enforced outside this program.
+    /// Unsigned, permissionless: releases a pending `UnstakeRequest` once
+    /// [`ChannelParams::exit_delay`] blocks have passed since it.
     FinalizeUnstake,
 
     /// Sets the channel params and the channel id once, at genesis. Rejected
@@ -146,6 +146,16 @@ impl StakeRecord {
 pub struct PendingUnstake {
     pub amount: u128,
     pub destination: AccountId,
+    /// The block id the clock read when the request was made.
+    pub requested_at: u64,
+}
+
+impl PendingUnstake {
+    /// The first block id the clock must read for `FinalizeUnstake` to release this.
+    #[must_use]
+    pub const fn releasable_at(&self, exit_delay: u64) -> u64 {
+        self.requested_at.saturating_add(exit_delay)
+    }
 }
 
 /// The values genesis fixes for the chain's life.
@@ -171,6 +181,8 @@ pub struct ChannelParams {
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
+    /// Blocks an unstake waits before `FinalizeUnstake` may release it.
+    pub exit_delay: u64,
 }
 
 /// Minimum stake and per-key standing, stored in this program's config shard.
@@ -376,6 +388,7 @@ mod tests {
             pending_unstake: Some(PendingUnstake {
                 amount: 42,
                 destination: test_destination(),
+                requested_at: 3,
             }),
         };
         let bytes = record.to_bytes();
@@ -397,6 +410,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                exit_delay: 10,
             }),
             channel_id: Some([0xC1; 32]),
             entries,
@@ -418,6 +432,7 @@ mod tests {
             Some(PendingUnstake {
                 amount: 0,
                 destination: AccountId::new([0; 32]),
+                requested_at: 0,
             }),
         ] {
             let bytes = StakeRecord {
@@ -577,6 +592,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                exit_delay: 10,
             }),
             channel_id: Some([0xC1; 32]),
             entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),

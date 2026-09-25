@@ -11154,6 +11154,7 @@ dependencies = [
  "bytesize",
  "chain_state",
  "chrono",
+ "clock_core",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -11414,6 +11415,7 @@ dependencies = [
 name = "sequencer_stake_program"
 version = "0.1.0"
 dependencies = [
+ "clock_core",
  "lee_core",
  "sequencer_stake_core",
 ]
