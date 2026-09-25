@@ -366,6 +366,15 @@ mod tests {
     }
 
     #[test]
+    fn identifier_display_matches_pinned_base58() {
+        assert_eq!(Identifier::ZERO.to_string(), "1".repeat(32));
+        assert_eq!(
+            Identifier::new([1; 32]).to_string(),
+            "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+        );
+    }
+
+    #[test]
     fn identifier_serde_json_round_trip() {
         let identifier = Identifier::new(core::array::from_fn(|i| u8::try_from(i).unwrap()));
         let json = serde_json::to_string(&identifier).unwrap();
