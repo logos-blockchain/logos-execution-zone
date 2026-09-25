@@ -109,10 +109,16 @@ fn transition_from_privacy_preserving_transaction_private() {
         &state,
     );
 
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let sender_account_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
+    let recipient_account_id = AccountId::for_regular_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        Identifier::ZERO,
+    );
     let expected_new_commitment_1 = Commitment::new(
         &sender_account_id,
         &Account {
@@ -235,8 +241,11 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         &state,
     );
 
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
     let expected_new_commitment = Commitment::new(
         &sender_account_id,
         &Account {

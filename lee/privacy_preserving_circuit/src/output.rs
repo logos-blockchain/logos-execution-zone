@@ -244,7 +244,7 @@ mod tests {
     use std::collections::HashMap;
 
     use lee_core::{
-        DUMMY_COMMITMENT_HASH, EphemeralPublicKey, PublicAction,
+        DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier, PublicAction,
         account::{AccountData, ShardData},
         validation::TrackedAccount,
     };
@@ -313,7 +313,7 @@ mod tests {
         let commitment = Commitment::for_dummy(&nullifier, &[tag; 32]);
         let ciphertext = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(0),
+            &PrivateAccountKind::Regular(Identifier::ZERO),
             &SharedSecretKey([0; 32]),
             &nullifier,
             None,

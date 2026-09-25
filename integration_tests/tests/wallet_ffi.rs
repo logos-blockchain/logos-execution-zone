@@ -27,12 +27,14 @@ use integration_tests::{
     config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID};
+use lee_core::{
+    Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
+};
 use token_core::{TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
-    FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult,
     WalletHandle, error,
     generic_transaction::{
         FfiDependency, FfiMembershipProof, FfiProgramHeader, FfiProgramKind,
@@ -77,7 +79,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         key_chain_json: *const c_char,
         chain_index: *const c_char,
-        identifier: *const FfiU128,
+        identifier: *const FfiIdentifier,
         account_state_json: *const c_char,
     ) -> error::WalletFfiError;
 
@@ -151,7 +153,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiU128,
+        to_identifier: *const FfiIdentifier,
         amount: *const [u8; 16],
         key_path: *const c_char,
         out_result: *mut FfiTransferResult,
@@ -169,7 +171,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiU128,
+        to_identifier: *const FfiIdentifier,
         amount: *const [u8; 16],
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
@@ -366,8 +368,8 @@ fn new_wallet_ffi_with_test_context_config(
         let chain_index_ptr = chain_index
             .as_ref()
             .map_or(std::ptr::null(), |value| value.as_ptr());
-        let identifier = FfiU128 {
-            data: account.kind.identifier().to_le_bytes(),
+        let identifier = FfiIdentifier {
+            data: account.kind.identifier().into_value(),
         };
 
         unsafe {
@@ -1051,7 +1053,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1062,9 +1064,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_shielded(
             wallet_ffi_handle,
             &raw const from,
@@ -1195,7 +1195,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1205,9 +1205,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from,
@@ -1279,7 +1277,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1291,7 +1289,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1328,9 +1326,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 
     let mut transfer_result_1 = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from_private,
@@ -1356,9 +1352,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 
     let mut transfer_result_2 = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from_private,

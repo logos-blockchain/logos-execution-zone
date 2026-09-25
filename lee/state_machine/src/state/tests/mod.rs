@@ -49,7 +49,8 @@ mod validity_window;
 impl V03State {
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+        let account_id =
+            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
@@ -318,8 +319,11 @@ fn shielded_balance_transfer_for_tests(
     let sender_id = sender_keys.account_id();
     let sender_account = state.get_account_by_id(sender_id);
     let sender_nonce = sender_account.nonce;
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_id = AccountId::for_regular_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        Identifier::ZERO,
+    );
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -329,7 +333,11 @@ fn shielded_balance_transfer_for_tests(
             ],
             signers: [sender_id].into(),
             public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![init_witness(recipient_keys, 0, Account::default())],
+            private_witnesses: vec![init_witness(
+                recipient_keys,
+                Identifier::ZERO,
+                Account::default(),
+            )],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
             })
@@ -353,11 +361,17 @@ fn private_balance_transfer_for_tests(
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_id = AccountId::for_regular_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        Identifier::ZERO,
+    );
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
@@ -368,13 +382,13 @@ fn private_balance_transfer_for_tests(
             private_witnesses: vec![
                 update_witness(
                     sender_keys,
-                    0,
+                    Identifier::ZERO,
                     sender_private_account.clone(),
                     state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
                 ),
-                init_witness(recipient_keys, 0, Account::default()),
+                init_witness(recipient_keys, Identifier::ZERO, Account::default()),
             ],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -400,8 +414,11 @@ fn deshielded_balance_transfer_for_tests(
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
 
     let (output, proof) = execute_and_prove(
@@ -417,7 +434,7 @@ fn deshielded_balance_transfer_for_tests(
             .into(),
             private_witnesses: vec![update_witness(
                 sender_keys,
-                0,
+                Identifier::ZERO,
                 sender_private_account.clone(),
                 state
                     .get_proof_for_commitment(&sender_commitment)

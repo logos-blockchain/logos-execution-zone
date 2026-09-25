@@ -12,8 +12,8 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateWitness,
-    WitnessKind, account::Account, encryption::ViewingPublicKey,
+    DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
+    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -60,7 +60,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -144,7 +144,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -274,7 +274,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -419,8 +419,8 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     let npk_hex = hex::encode(npk.0);
     let vpk_hex = hex::encode(vpk.to_bytes());
 
-    let identifier_1 = 1_u128;
-    let identifier_2 = 2_u128;
+    let identifier_1 = Identifier::new([1; 32]);
+    let identifier_2 = Identifier::new([2; 32]);
 
     let sender_0: AccountId = ctx.existing_public_accounts()[0];
     let sender_1: AccountId = ctx.existing_public_accounts()[1];
@@ -512,7 +512,7 @@ async fn prove_init_with_commitment_root(
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
     let (output, _) = execute_and_prove(
         ProvingInput {
@@ -526,7 +526,7 @@ async fn prove_init_with_commitment_root(
                 account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: Some(ask) },
                 nullifier: NullifierWitness::Init {
                     npk,
@@ -554,7 +554,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 

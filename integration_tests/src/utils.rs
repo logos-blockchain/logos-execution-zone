@@ -125,7 +125,7 @@ pub async fn send(
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(lee_core::Identifier::ZERO),
         amount,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -165,7 +165,7 @@ pub async fn token_send(
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(lee_core::Identifier::ZERO),
         amount,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;

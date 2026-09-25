@@ -15,7 +15,7 @@ use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiTransferResult, FfiU128, WalletHandle},
+    types::{FfiBytes32, FfiIdentifier, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
 };
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiU128,
+    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             return e;
         }
     };
-    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let from_mention = optional_c_str(key_path).map_or_else(
         || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiU128,
+    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             return e;
         }
     };
-    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 

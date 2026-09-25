@@ -192,17 +192,18 @@ pub enum PrivateAccountKind {
 }
 
 impl PrivateAccountKind {
-    /// Borsh layout (all integers little-endian, variant index is u8):
+    /// Borsh layout (integers little-endian, variant index is u8; `ident` is `Identifier`'s
+    /// opaque 32-byte encoding):
     ///
     /// ```text
-    /// Regular(ident):                 0x00 || ident (16 LE) || [0u8; 64]
-    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (16 LE)
+    /// Regular(ident):                 0x00 || ident (32) || [0u8; 64]
+    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32)
     /// ```
     ///
     /// Both variants are zero-padded to the same length so all ciphertexts are the same size,
     /// preventing observers from distinguishing `Regular` from `Pda` via ciphertext length.
-    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 + 16 = 81.
-    pub const HEADER_LEN: usize = 81;
+    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 + 32 = 97.
+    pub const HEADER_LEN: usize = 97;
 
     #[must_use]
     pub const fn identifier(&self) -> Identifier {
@@ -287,7 +288,7 @@ impl AccountId {
     /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
     /// derivation, making the address unique per group of controllers sharing viewing keys.
     /// The `identifier` further diversifies the address, so a single `(account_id, seed, npk)`
-    /// tuple controls a family of 2^128 addresses.
+    /// tuple controls a family of 2^256 addresses.
     #[must_use]
     pub fn for_private_pda(
         account_id: &Self,
@@ -299,13 +300,13 @@ impl AccountId {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 32];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
         bytes[32..64].copy_from_slice(account_id.as_ref());
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
         bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()

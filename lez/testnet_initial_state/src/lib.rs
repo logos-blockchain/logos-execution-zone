@@ -4,6 +4,7 @@ use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
 use lee::{Account, AccountId, PrivateKey, PublicKey, V03State, program::Program};
+use lee_core::Identifier;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -113,13 +114,13 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
             account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
             key_chain: key_chain_1,
             chain_index: None,
-            identifier: 0,
+            identifier: Identifier::ZERO,
         },
         PrivateAccountPrivateInitialData {
             account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
             key_chain: key_chain_2,
             chain_index: None,
-            identifier: 0,
+            identifier: Identifier::ZERO,
         },
     ]
 }
@@ -140,8 +141,11 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
-            let account_id =
-                lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
+            let account_id = lee::AccountId::for_regular_private_account(
+                npk,
+                &init_comm_data.vpk,
+                Identifier::ZERO,
+            );
 
             (
                 lee_core::Commitment::new(&account_id, &init_comm_data.account),
@@ -281,8 +285,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "As5oeEYgbwFwHCB8xCnRJA5uQV1eYCcU86Pfir3D29fX";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "GhB15jD2Yig2h2SnDXqxsZii1B3EhnmSucvwodfXKhAa";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "GzKZCEamT6Mt7SnwrhoAJvaQpTG4q7yegcBSCYoRVyaE";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "Baovohr2wgDpZXAEXwfvmMKBrsdotsxUsYpH3LUufDe";
 
     #[test]
     fn pub_state_consistency() {

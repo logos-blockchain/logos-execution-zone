@@ -39,7 +39,7 @@ pub enum AuthTransferSubcommand {
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -57,7 +57,7 @@ impl AuthTransferSubcommand {
         to_npk: Option<String>,
         to_vpk: Option<String>,
         to_keys: Option<String>,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -248,7 +248,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         to_vpk: String,
         /// Identifier for the recipient's private account.
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -288,7 +288,7 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         to_vpk: String,
         /// Identifier for the recipient's private account.
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -318,7 +318,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
         from: AccountId,
         to_npk: String,
         to_vpk: String,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -329,7 +329,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
                 from,
                 to_npk,
                 to_vpk,
-                to_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;
@@ -390,7 +390,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
         from: Option<AccountIdentity>,
         to_npk: String,
         to_vpk: String,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -401,7 +401,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
                 from.expect("from set during Send dispatch"),
                 to_npk,
                 to_vpk,
-                to_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;

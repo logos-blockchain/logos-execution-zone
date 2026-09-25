@@ -186,6 +186,7 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::Identifier;
 
     use super::*;
 
@@ -213,9 +214,12 @@ mod tests {
 
         let key_chain = key_protocol::key_management::KeyChain::new_os_random();
         let account = lee::Account::default();
-        storage
-            .key_chain_mut()
-            .add_imported_private_account(key_chain, None, 0, account);
+        storage.key_chain_mut().add_imported_private_account(
+            key_chain,
+            None,
+            Identifier::ZERO,
+            account,
+        );
 
         storage.set_last_synced_block(42);
 

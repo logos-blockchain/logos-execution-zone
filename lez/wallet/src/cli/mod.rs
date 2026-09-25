@@ -320,6 +320,11 @@ pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> 
     }
 }
 
+#[must_use]
+pub fn identifier_or_random(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
+    identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
+}
+
 pub fn read_password_from_stdin() -> Result<String> {
     let mut password = String::new();
 

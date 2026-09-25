@@ -542,15 +542,6 @@ impl WalletCore {
         })
     }
 
-    /// Create a shared regular private account from a group's GMS with a random identifier.
-    pub async fn create_shared_regular_account(
-        &mut self,
-        group_name: Label,
-    ) -> Result<SharedAccountInfo> {
-        self.create_shared_regular_account_with_identifier(group_name, rand::random())
-            .await
-    }
-
     /// Create a shared regular private account from a group's GMS under the given `identifier`.
     pub async fn create_shared_regular_account_with_identifier(
         &mut self,

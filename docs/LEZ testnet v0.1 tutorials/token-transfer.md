@@ -105,7 +105,7 @@ Account
 > Private accounts are structurally identical to public accounts, but their values are stored off-chain. On-chain, only a 32-byte commitment is recorded.
 > Transactions include encrypted private values so the owner can recover them, and the decryption keys are never shared.
 > Private accounts use two keypairs: nullifier keys for privacy-preserving executions and viewing keys for encrypting and decrypting values.
-> The private account ID is derived from the nullifier public key and a numeric identifier: `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
+> The private account ID is derived from the nullifier public key and a 32-byte identifier (base58-encoded on the CLI): `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
 > Private accounts can be initialized by anyone, but once initialized they can only be modified by the owner’s keys.
 > Updates include a new commitment and a nullifier for the old state, which prevents linkage between versions.
 
@@ -247,7 +247,7 @@ With vpk <1184-byte ML-KEM-768 encapsulation key, hex-encoded>
 
 Alice shares the `npk` and `vpk` values with Bob and Charlie out of band.
 
-### b. Bob sends 10 tokens to Alice using identifier 1
+### b. Bob sends 10 tokens to Alice using an explicit identifier
 
 Bob uses the received `alice.keys` file:
 
@@ -255,17 +255,17 @@ Bob uses the received `alice.keys` file:
 wallet auth-transfer send \
     --from Public/BobXqJprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPA \
     --to-keys alice.keys \
-    --to-identifier 1 \
+    --to-identifier 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi \
     --amount 10
 ```
 
-### c. Charlie sends 5 tokens to Alice using identifier 2
+### c. Charlie sends 5 tokens to Alice using an explicit identifier
 
 ```bash
 wallet auth-transfer send \
     --from Public/CharlieYrP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPB \
     --to-keys alice.keys \
-    --to-identifier 2 \
+    --to-identifier 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR \
     --amount 5
 ```
 

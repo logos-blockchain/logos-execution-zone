@@ -23,7 +23,7 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
+    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, MembershipProof, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind, account::Nonce,
     encryption::ViewingPublicKey,
 };
@@ -241,7 +241,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
-    let sender_id = AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0);
+    let sender_id =
+        AccountId::for_regular_private_account(&sender_npk, &sender_vpk, Identifier::ZERO);
     let sender_account = Account {
         nonce: Nonce(0xdead_beef),
         ..Account::funded(100)
@@ -250,7 +251,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_nsk = NullifierSecretKey::from(&recipient_ask);
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
-    let recipient_id = AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0);
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, Identifier::ZERO);
 
     let balance_to_move: u128 = 1;
     let proof: MembershipProof = (
@@ -271,7 +273,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                     account: sender_account,
                     vpk: sender_vpk,
                     random_seed: [0; 32],
-                    identifier: 0,
+                    identifier: Identifier::ZERO,
                     kind: WitnessKind::Regular {
                         ask: Some(sender_ask),
                     },
@@ -285,7 +287,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                     account: Account::default(),
                     vpk: recipient_vpk,
                     random_seed: [0; 32],
-                    identifier: 0,
+                    identifier: Identifier::ZERO,
                     kind: WitnessKind::Regular {
                         ask: Some(recipient_ask),
                     },

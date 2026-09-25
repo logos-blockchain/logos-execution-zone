@@ -22,7 +22,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
+    DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
     native_token::Instruction as NativeInstruction, program::PdaSeed,
 };
@@ -41,7 +41,7 @@ async fn fund_private_pda(
     sender: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
-    identifier: u128,
+    identifier: Identifier,
     seed: PdaSeed,
     authority_program_id: AccountId,
     amount: u128,
@@ -120,7 +120,7 @@ async fn spend_private_pda(
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
-                    kind: PrivateAccountKind::Regular(0),
+                    kind: PrivateAccountKind::Regular(Identifier::ZERO),
                 }
                 .balance(),
             ],
@@ -256,8 +256,15 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let spend_program = ProgramWithDependencies::new(proxy, proxy_id, HashMap::new());
 
-    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
-    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
+    let alice_pda_0_id =
+        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, Identifier::ZERO);
+    let alice_pda_1_id = AccountId::for_private_pda(
+        &proxy_id,
+        &seed,
+        &alice_npk,
+        &alice_vpk,
+        Identifier::new([1; 32]),
+    );
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();
@@ -272,7 +279,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         sender_0,
         alice_npk,
         alice_vpk.clone(),
-        0,
+        Identifier::ZERO,
         seed,
         proxy_id,
         amount,
@@ -285,7 +292,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         sender_1,
         alice_npk,
         alice_vpk.clone(),
-        1,
+        Identifier::new([1; 32]),
         seed,
         proxy_id,
         amount,

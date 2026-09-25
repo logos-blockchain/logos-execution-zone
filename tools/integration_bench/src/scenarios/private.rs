@@ -47,7 +47,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_identifier: Some(0),
+                    to_identifier: Some(lee_core::Identifier::ZERO),
                     amount: 1_000,
                 }),
             )
@@ -66,7 +66,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_identifier: Some(0),
+                    to_identifier: Some(lee_core::Identifier::ZERO),
                     amount: 100,
                 }),
             )
@@ -85,7 +85,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_npk: None,
                     to_vpk: None,
                     to_keys: None,
-                    to_identifier: Some(0),
+                    to_identifier: Some(lee_core::Identifier::ZERO),
                     amount: 200,
                 }),
             )

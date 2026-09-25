@@ -18,7 +18,8 @@ pub use encryption::{
 };
 pub use frame::{from_frame, to_borsh_frame, to_frame};
 pub use nullifier::{
-    AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, Identifier, IdentifierError, Nullifier, NullifierPublicKey,
+    NullifierSecretKey,
 };
 pub use program::PrivateAccountKind;
 

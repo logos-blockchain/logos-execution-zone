@@ -122,8 +122,11 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
+    let account_id = AccountId::for_regular_private_account(
+        &account_keys.npk(),
+        &account_keys.vpk(),
+        Identifier::ZERO,
+    );
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let instruction = (
@@ -133,7 +136,11 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-                private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
+                private_witnesses: vec![init_witness(
+                    &account_keys,
+                    Identifier::ZERO,
+                    Account::default(),
+                )],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()
             },
@@ -181,8 +188,11 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
+    let account_id = AccountId::for_regular_private_account(
+        &account_keys.npk(),
+        &account_keys.vpk(),
+        Identifier::ZERO,
+    );
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
         let instruction = (
@@ -192,7 +202,11 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-                private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
+                private_witnesses: vec![init_witness(
+                    &account_keys,
+                    Identifier::ZERO,
+                    Account::default(),
+                )],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()
             },

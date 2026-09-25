@@ -158,7 +158,7 @@ impl GroupKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
-        hasher.update(identifier.to_le_bytes());
+        hasher.update(identifier.value());
         let derivation_seed: [u8; 32] = hasher.finalize().into();
         self.derive_keys_for_shared_account(&derivation_seed)
     }
@@ -354,7 +354,13 @@ mod tests {
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
+        let account_id = AccountId::for_private_pda(
+            &program_id,
+            &seed,
+            &npk,
+            &vpk,
+            Identifier::new([u8::MAX; 32]),
+        );
 
         let expected_npk = NullifierPublicKey([
             59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
@@ -362,8 +368,13 @@ mod tests {
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id =
-            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk, u128::MAX);
+        let expected_account_id = AccountId::for_private_pda(
+            &program_id,
+            &seed,
+            &expected_npk,
+            &vpk,
+            Identifier::new([u8::MAX; 32]),
+        );
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
@@ -566,10 +577,20 @@ mod tests {
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk, 0);
-        let bob_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk, 0);
+        let alice_account_id = AccountId::for_private_pda(
+            &program_id,
+            &pda_seed,
+            &alice_npk,
+            &alice_vpk,
+            Identifier::ZERO,
+        );
+        let bob_account_id = AccountId::for_private_pda(
+            &program_id,
+            &pda_seed,
+            &bob_npk,
+            &bob_group_vpk,
+            Identifier::ZERO,
+        );
         assert_eq!(alice_account_id, bob_account_id);
     }
 
