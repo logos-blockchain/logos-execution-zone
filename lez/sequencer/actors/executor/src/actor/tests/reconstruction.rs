@@ -2,9 +2,13 @@
 //! history its store misses, and refuses to start on a channel that serves a
 //! different chain.
 
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
+use chain_state::ChainState;
 use common::{
     HashType,
     block::{Block, BlockMeta, HashableBlockData},
@@ -19,7 +23,8 @@ use lee::{
     AccountId, ProgramShardSelector, PublicTransaction, V03State,
     public_transaction::{Message, WitnessSet},
 };
-use logos_blockchain_core::{codec::SerializeOp as _, mantle::ops::channel::inscribe::Inscription};
+use logos_blockchain_binary_codec::bincode::SerializeOp as _;
+use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
 use logos_blockchain_zone_sdk::ZoneBlock;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
@@ -154,6 +159,12 @@ impl StoredChain {
 
     /// Serves every read startup makes. Writes are left for each test to expect.
     fn into_mock(self) -> MockStorageActor {
+        self.into_mock_capturing_view().0
+    }
+
+    /// [`Self::into_mock`], also returning the channel view the last
+    /// anchorless, blockless update persisted.
+    fn into_mock_capturing_view(self) -> (MockStorageActor, Arc<Mutex<Option<Vec<u8>>>>) {
         let Self {
             blocks,
             final_snapshot,
@@ -195,17 +206,28 @@ impl StoredChain {
                     .clone()
                     .map(|bytes| ZoneCheckpointRecord { bytes, seq: 0 }))
             });
-        mock.expect_handle_get_channel_cursor()
+        mock.expect_handle_get_channel_view_bytes()
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_slash_record_bytes()
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_pending_cross_zone_dispatches()
             .returning(move |_msg, _ctx| Ok(pending_dispatches.clone()));
-        mock.expect_handle_raise_published_high_water()
-            .returning(|_msg, _ctx| Ok(()));
         mock.expect_handle_get_dead_letter_dispatches()
             .returning(|_msg, _ctx| Ok(Vec::new()));
-        mock
+        // A replayed entry that stores no block and moves no anchor.
+        let view = Arc::new(Mutex::new(None));
+        mock.expect_handle_apply_store_update()
+            .withf(|update, _ctx| update.blocks.is_empty() && update.zone_anchor.is_none())
+            .returning({
+                let view = Arc::clone(&view);
+                move |update, _ctx| {
+                    if let Some(bytes) = update.channel_view {
+                        *view.lock().expect("view capture lock") = Some(bytes);
+                    }
+                    Ok(StoreUpdateOutcome::default())
+                }
+            });
+        (mock, view)
     }
 }
 
@@ -217,10 +239,12 @@ fn expect_anchor(store: &mut MockStorageActor, block: &Block, slot: u64) {
         hash: block.header.hash,
     };
     store
-        .expect_handle_set_zone_anchor()
-        .withf(move |msg, _ctx| msg.anchor == anchor)
+        .expect_handle_apply_store_update()
+        .withf(move |update, _ctx| {
+            update.blocks.is_empty() && update.zone_anchor.as_ref() == Some(&anchor)
+        })
         .times(1)
-        .returning(|_msg, _ctx| Ok(()));
+        .returning(|_msg, _ctx| Ok(StoreUpdateOutcome::default()));
 }
 
 /// Expects `block`, read off the channel at `slot`, persisted as final and as
@@ -433,6 +457,48 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     Ok(())
 }
 
+/// Garbage before and after genesis in finalized history: the lineage ends on
+/// the last entry, block or not, so the pin does too.
+#[test]
+async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
+    let genesis = genesis();
+    let junk = |n: u8, slot: u64| {
+        (
+            ZoneMessage::Block(ZoneBlock {
+                id: MsgId::from([n; 32]),
+                data: Inscription::try_from(b"not a block".as_slice())
+                    .expect("fits an inscription"),
+            }),
+            Slot::from(slot),
+        )
+    };
+
+    let (mut store, view) = StoredChain::fresh().into_mock_capturing_view();
+    expect_reconstructed(&mut store, &genesis, 2);
+    let bedrock = channel_serving(
+        Some(Slot::from(3)),
+        vec![junk(40, 1), channel_message(&genesis, 2), junk(41, 3)],
+    );
+
+    let storage_ref = MockStorageActor::spawn(store);
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    start(&storage_ref, &bedrock_ref)
+        .await
+        .expect("garbage in finalized history must not abort startup");
+    storage_ref.ask(MockCheckpoint).await?;
+
+    let bytes = view
+        .lock()
+        .expect("view capture lock")
+        .clone()
+        .expect("the trailing garbage persists the view");
+    let mut chain = ChainState::from_final(V03State::default(), None);
+    chain.restore_view(&bytes)?;
+    assert_eq!(chain.final_msg(), MsgId::from([41; 32]));
+    assert_eq!(chain.pin(), MsgId::from([41; 32]));
+    Ok(())
+}
+
 #[test]
 async fn reconstructs_missing_channel_blocks_into_the_store() -> Result<()> {
     let genesis = genesis();
@@ -513,7 +579,7 @@ async fn fails_when_channel_is_missing() {
 }
 
 // The following cases exercise the divergence branches of
-// `apply_reconstructed_block` reached with no recorded anchor, so the block's own
+// `apply_reconstructed_entry` reached with no recorded anchor, so the block's own
 // validation fires rather than the up-front `AnchorConsistencyCheck`.
 
 #[test]
@@ -531,16 +597,14 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
     let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
         start(&storage_ref, &bedrock_ref).await,
-        "does not extend local tip",
+        "does not apply on our genesis state",
     );
 }
 
+/// A finalized block whose header hash does not cover its contents is
+/// skipped once the final tier holds genesis.
 #[test]
-async fn fails_when_a_below_tip_channel_block_does_not_validate() {
-    // A below-tip block re-served with a corrupted hash. Holding a different
-    // block at that id is not itself grounds to abort — the head tier is
-    // reorg-able — but this one's header hash does not cover its contents, so it
-    // parks on validation.
+async fn reconstruction_skips_a_finalized_block_that_does_not_validate() -> Result<()> {
     let genesis = genesis();
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let mut corrupted = block2.clone();
@@ -550,10 +614,11 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     let store = StoredChain::finalized_genesis().with_head(block2);
     let storage_ref = MockStorageActor::spawn(store.into_mock());
     let bedrock_ref = MockBedrockActor::spawn(bedrock);
-    assert_refused(
-        start(&storage_ref, &bedrock_ref).await,
-        "does not extend local tip",
-    );
+    start(&storage_ref, &bedrock_ref)
+        .await
+        .expect("an invalid finalized block must not abort startup");
+    storage_ref.ask(MockCheckpoint).await?;
+    Ok(())
 }
 
 #[test]
@@ -569,7 +634,7 @@ async fn fails_when_a_channel_block_is_numbered_below_genesis() {
     let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
         start(&storage_ref, &bedrock_ref).await,
-        "does not extend local tip",
+        "does not apply on our genesis state",
     );
 }
 
@@ -584,7 +649,7 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
     let bedrock_ref = MockBedrockActor::spawn(bedrock);
     assert_refused(
         start(&storage_ref, &bedrock_ref).await,
-        "does not extend local tip",
+        "does not apply on our genesis state",
     );
 }
 

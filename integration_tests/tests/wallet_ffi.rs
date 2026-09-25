@@ -267,6 +267,25 @@ unsafe extern "C" {
     ) -> error::WalletFfiError;
 }
 
+/// Blocks until the transfer is in a block, panicking if it never lands.
+fn wait_for_inclusion(handle: *mut WalletHandle, result: &FfiTransferResult) {
+    let tx_hash: HashType = unsafe { CStr::from_ptr(result.tx_hash) }
+        .to_str()
+        .expect("a transaction hash is UTF-8")
+        .parse()
+        .expect("a transaction hash parses");
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the transfer must land");
+}
+
 /// Reads an account's balance through the FFI, panicking on error.
 fn ffi_balance(handle: *mut WalletHandle, account_id: &FfiBytes32, is_public: bool) -> u128 {
     let mut out_balance: [u8; 16] = [0; 16];
@@ -925,8 +944,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &credit_result);
 
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
@@ -1059,8 +1077,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1121,8 +1138,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1203,8 +1219,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1327,8 +1342,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_1);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1355,8 +1370,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_2);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1379,8 +1394,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_3);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1403,8 +1418,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_4);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {

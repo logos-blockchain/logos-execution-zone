@@ -1,12 +1,10 @@
 use kameo::Reply;
-use logos_blockchain_codec::{BinaryDecodeExt as _, BinaryEncode as _};
+use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
 use logos_blockchain_core::{
-    mantle::{
-        ops::channel::{Ed25519PublicKey, MsgId},
-        transactions::Ops,
-    },
+    mantle::{ops::channel::MsgId, transactions::Ops},
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
+use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 
 /// Tags the two message shapes on the wire. A draft is a whole
 /// transaction; a signature is worthless without the one it was signed over,
