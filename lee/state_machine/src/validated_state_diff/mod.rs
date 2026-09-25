@@ -13,7 +13,7 @@ use lee_core::{
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
         ApplyInput, ApplyOutput, PROGRAM_LOADER_ACCOUNT_ID, PlanInput, PlanOutput,
-        TransactionEvent, get_program_via, validate_apply_output,
+        TransactionEvent, validate_apply_output,
     },
 };
 use program_loader_core::Instruction as ProgramLoaderInstruction;
@@ -474,8 +474,7 @@ fn load_program<'state>(
     account_id: AccountId,
     loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
 ) -> Option<Program> {
-    let (program_id, elf) = get_program_via(account_id, loader_shard)?;
-    let elf = crate::program::attach_kernel(&elf);
+    let (program_id, elf) = crate::program::resolve_program(account_id, loader_shard)?;
     Some(Program::new_unchecked(program_id, Cow::Owned(elf)))
 }
 

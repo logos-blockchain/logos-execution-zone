@@ -2,11 +2,11 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::Cycles,
+    account::{AccountId, Cycles, ShardData},
     from_frame,
     program::{
         ApplyInput, ApplyOutput, CallKind, GuestOutput, InstructionData, PlanInput, PlanOutput,
-        ProgramId,
+        ProgramId, get_program_via,
     },
     to_borsh_frame, to_frame,
 };
@@ -222,6 +222,16 @@ pub(crate) fn check_exit_code(
 /// blob ready to decode and execute.
 pub(crate) fn attach_kernel(user_elf: &[u8]) -> Vec<u8> {
     risc0_binfmt::ProgramBinary::new(user_elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode()
+}
+
+/// Resolves whatever's deployed at `account_id` into a runnable ELF via [`get_program_via`],
+/// then re-attaches the kernel.
+pub(crate) fn resolve_program<'state>(
+    account_id: AccountId,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+) -> Option<(ProgramId, Vec<u8>)> {
+    let (image_id, user_elf) = get_program_via(account_id, loader_shard)?;
+    Some((image_id, attach_kernel(&user_elf)))
 }
 
 pub(crate) fn decode_guest_output(journal: &[u8]) -> Result<GuestOutput, LeeError> {

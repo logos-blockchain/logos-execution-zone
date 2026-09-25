@@ -3971,8 +3971,8 @@ fn stake_entry(
     .copied()
 }
 
-/// A state carrying the two `sequencer_stake` needs plus a funding account
-/// holding `funding_balance`.
+/// The `sequencer_stake` program and its config account, plus a funding
+/// account holding `funding_balance`.
 fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
     V03State::new()
         .with_named_programs([(
@@ -3981,10 +3981,6 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
         )])
         .with_public_accounts([
             (funding_id, Account::funded(funding_balance)),
-            (
-                system_accounts::clock_account_ids()[0],
-                system_accounts::clock_account(),
-            ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
                 system_accounts::sequencer_stake_config_account(
@@ -4370,10 +4366,6 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         )])
         .with_public_accounts([
             (funding_id, Account::funded(amount)),
-            (
-                system_accounts::clock_account_ids()[0],
-                system_accounts::clock_account(),
-            ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
                 system_accounts::sequencer_stake_config_account(

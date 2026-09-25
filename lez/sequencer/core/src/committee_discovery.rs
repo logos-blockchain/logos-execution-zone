@@ -81,9 +81,8 @@ pub fn committee_update(
     (desired != live || stale_threshold).then_some(desired)
 }
 
-/// Ownership-account id + pending-release details for every release whose
-/// exit delay has passed on the clock `state` holds, so its `FinalizeUnstake`
-/// succeeds in the next block.
+/// Ownership-account id + pending-release details for every release that may
+/// land in the block after the one the clock in `state` holds.
 #[must_use]
 pub fn finalize_unstake_candidates(
     state: &lee::V03State,
@@ -94,7 +93,8 @@ pub fn finalize_unstake_candidates(
     let Some(params) = config.channel_params else {
         return Vec::new();
     };
-    let Some(now) = clock_block_id(state) else {
+    let Some(next_block_id) = clock_block_id(state).map(|block_id| block_id.saturating_add(1))
+    else {
         return Vec::new();
     };
 
@@ -104,7 +104,7 @@ pub fn finalize_unstake_candidates(
         .filter_map(|entry| {
             let record = stake_record(state, entry.account_id)?;
             let pending = record.pending_unstake?;
-            (now >= pending.releasable_at(params.exit_delay)).then_some((
+            (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
                 entry.account_id,
                 record.sequencer_key,
                 pending,
@@ -426,9 +426,9 @@ mod tests {
         let staked = Staked::new(5, MINIMUM).pending(MINIMUM, 3);
         let releasable_at = 3 + EXIT_DELAY;
 
-        assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 1)).is_empty());
+        assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 2)).is_empty());
         assert_eq!(
-            finalize_unstake_candidates(&state_at([staked], releasable_at)),
+            finalize_unstake_candidates(&state_at([staked], releasable_at - 1)),
             vec![(staked.account_id, staked.key, staked.pending.unwrap())]
         );
     }
