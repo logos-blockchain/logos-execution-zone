@@ -113,6 +113,11 @@ struct EmitterInstruction {
     chain: Vec<(AccountId, InstructionData)>,
 }
 
+pub fn synthetic_program(program: Program) -> ProgramWithDependencies {
+    let self_account_id = AccountId::from_builtin_program(program.id());
+    ProgramWithDependencies::new(program, self_account_id, HashMap::new())
+}
+
 fn transfer_transaction(
     from: AccountId,
     from_key: &PrivateKey,

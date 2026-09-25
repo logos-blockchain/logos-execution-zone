@@ -202,41 +202,56 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-fn initial_programs(cross_zone: bool) -> Vec<Program> {
+fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
     let mut programs = vec![
-        programs::token(),
-        programs::amm(),
-        programs::clock(),
-        programs::fee(),
-        programs::ata(),
-        programs::bridge(),
-        programs::sequencer_stake(),
+        (programs::token_account_id(), programs::token()),
+        (programs::amm_account_id(), programs::amm()),
+        (programs::clock_account_id(), programs::clock()),
+        (programs::fee_account_id(), programs::fee()),
+        (programs::ata_account_id(), programs::ata()),
+        (programs::bridge_account_id(), programs::bridge()),
+        (
+            programs::sequencer_stake_account_id(),
+            programs::sequencer_stake(),
+        ),
     ];
     if cross_zone {
         // Builtins baked into every node (genesis-block ELFs would exceed the
         // inscription size limit); registered only on cross_zone zones, fixed at
         // genesis.
         programs.extend([
-            programs::cross_zone_inbox(),
-            programs::cross_zone_outbox(),
-            programs::ping_sender(),
-            programs::ping_receiver(),
-            programs::bridge_lock(),
-            programs::wrapped_token(),
+            (
+                programs::cross_zone_inbox_account_id(),
+                programs::cross_zone_inbox(),
+            ),
+            (
+                programs::cross_zone_outbox_account_id(),
+                programs::cross_zone_outbox(),
+            ),
+            (programs::ping_sender_account_id(), programs::ping_sender()),
+            (
+                programs::ping_receiver_account_id(),
+                programs::ping_receiver(),
+            ),
+            (programs::bridge_lock_account_id(), programs::bridge_lock()),
+            (
+                programs::wrapped_token_account_id(),
+                programs::wrapped_token(),
+            ),
         ]);
     }
     programs
 }
 
-/// The pre-genesis state. `cross_zone` selects whether the six cross-zone
-/// builtins are registered; ids are content-derived, so only membership
-/// changes. Not defaulted: every caller states the choice.
+/// The pre-genesis state. `cross_zone` selects whether the six cross-zone builtins are
+/// registered, each at a name-derived, `image_id`-independent address. Not defaulted: every
+/// caller states the choice.
 #[must_use]
 pub fn initial_state(cross_zone: bool) -> V03State {
     lee::V03State::new()
         .with_public_accounts(initial_public_accounts())
         .with_private_accounts(initial_private_accounts())
-        .with_programs(initial_programs(cross_zone))
+        .with_named_programs(initial_programs(cross_zone))
 }
 
 #[cfg(test)]
@@ -376,7 +391,6 @@ mod tests {
     #[test]
     fn genesis_fee_accounts_are_registered_with_their_records() {
         let state = initial_state(true);
-        let fee_program_id = programs::fee().id();
 
         let ids = system_accounts::fee_account_ids();
         // state, escrow, inbox — all distinct, all non-default.
@@ -395,7 +409,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(AccountId::from_builtin_program(fee_program_id)),
+                .shard(programs::fee_account_id()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
@@ -435,12 +449,12 @@ mod tests {
     #[test]
     fn cross_zone_builtins_register_only_when_declared() {
         let cross_zone_ids = [
-            programs::cross_zone_inbox().id(),
-            programs::cross_zone_outbox().id(),
-            programs::ping_sender().id(),
-            programs::ping_receiver().id(),
-            programs::bridge_lock().id(),
-            programs::wrapped_token().id(),
+            programs::cross_zone_inbox_account_id(),
+            programs::cross_zone_outbox_account_id(),
+            programs::ping_sender_account_id(),
+            programs::ping_receiver_account_id(),
+            programs::bridge_lock_account_id(),
+            programs::wrapped_token_account_id(),
         ];
         let with = initial_state(true);
         let without = initial_state(false);

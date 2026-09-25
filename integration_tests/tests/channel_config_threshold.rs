@@ -16,8 +16,8 @@ use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use log::info;
-use logos_blockchain_core::mantle::{channel::ChannelState, ops::channel::Ed25519PublicKey};
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_core::mantle::channel::ChannelState;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -66,7 +66,11 @@ async fn channel_state(ctx: &TestContext) -> Result<ChannelState> {
 async fn wait_for_accreditation(ctx: &TestContext, key: Ed25519PublicKey) -> Result<ChannelState> {
     for _ in 0..COMMITTEE_ATTEMPTS {
         let state = channel_state(ctx).await?;
-        if state.accredited_keys.iter().any(|live| *live == key) {
+        if state
+            .accredited_keys
+            .iter()
+            .any(|live| *live == key.into_unverified())
+        {
             return Ok(state);
         }
         tokio::time::sleep(COMMITTEE_POLL).await;
@@ -155,7 +159,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         "Staking sequencer key {}",
         hex::encode(joiner_key.to_bytes())
     );
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
     ctx.wallet()
         .send_pub_tx(
             vec![

@@ -8,29 +8,30 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::{
-    Actor, Reply,
+    Actor,
     actor::ActorRef,
     message::{Context, Message},
 };
 use lee::V03State;
 use lee_core::BlockId;
+pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
 use crate::{
     Result, StorageActorTrait,
+    actor::event_filter::EventFilter,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, ZoneAnchorRecord,
+        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -60,12 +61,6 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
-        pub fn handle_reset_all_blocks_to_pending(
-            &mut self,
-            msg: ResetAllBlocksToPending,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
         pub fn handle_get_first_block_id(
             &mut self,
             msg: GetFirstBlockId,
@@ -90,15 +85,15 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<V03State>>>
         ) -> Result<Option<V03State>>;
 
-        pub fn handle_get_zone_checkpoint_bytes(
+        pub fn handle_get_zone_checkpoint(
             &mut self,
-            msg: GetZoneCheckpointBytes,
-            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
-        ) -> Result<Option<Vec<u8>>>;
+            msg: GetZoneCheckpoint,
+            ctx: &mut Context<Self, Result<Option<ZoneCheckpointRecord>>>
+        ) -> Result<Option<ZoneCheckpointRecord>>;
 
-        pub fn handle_set_zone_checkpoint_bytes(
+        pub fn handle_update_zone_checkpoint(
             &mut self,
-            msg: SetZoneCheckpointBytes,
+            msg: UpdateZoneCheckpoint,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -132,23 +127,11 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
-        pub fn handle_get_channel_cursor(
+        pub fn handle_get_channel_view_bytes(
             &mut self,
-            msg: GetChannelCursor,
-            ctx: &mut Context<Self, Result<Option<MsgId>>>
-        ) -> Result<Option<MsgId>>;
-
-        pub fn handle_get_published_high_water(
-            &mut self,
-            msg: GetPublishedHighWater,
-            ctx: &mut Context<Self, Result<Option<BlockId>>>
-        ) -> Result<Option<BlockId>>;
-
-        pub fn handle_raise_published_high_water(
-            &mut self,
-            msg: RaisePublishedHighWater,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
+            msg: GetChannelViewBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
 
         pub fn handle_get_pending_deposit_events(
             &mut self,
@@ -257,6 +240,18 @@ mockall::mock! {
             msg: GetAccountTransactions,
             ctx: &mut Context<Self, Result<Option<Vec<LeeTransaction>>>>
         ) -> Result<Option<Vec<LeeTransaction>>>;
+
+        pub fn handle_get_event_filter(
+            &mut self,
+            msg: GetEventFilter,
+            ctx: &mut Context<Self, Result<EventFilter>>
+        ) -> Result<EventFilter>;
+
+        pub fn handle_checkpoint(
+            &mut self,
+            msg: Checkpoint,
+            ctx: &mut Context<Self, Result<()>>,
+        ) -> Result<()>;
     }
 }
 
@@ -271,39 +266,12 @@ impl Actor for MockStorageActor {
     }
 }
 
-/// Special message to trigger [`MockStorageActor::checkpoint()`].
-pub struct Checkpoint;
-
-impl Message<Checkpoint> for MockStorageActor {
-    type Reply = ();
+impl Message<Replace<Self>> for MockStorageActor {
+    type Reply = ReplaceReply<Self>;
 
     async fn handle(
         &mut self,
-        Checkpoint: Checkpoint,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.checkpoint();
-    }
-}
-
-/// Special message to [`std::mem::replace()`] the inner state of [`MockStorageActor`] with a new
-/// one, returning old state.
-/// This is useful for testing, to swap in a new mock with different expectations.
-pub struct Replace {
-    pub mock: MockStorageActor,
-}
-
-#[derive(Reply)]
-pub struct ReplaceReply {
-    pub old_mock: MockStorageActor,
-}
-
-impl Message<Replace> for MockStorageActor {
-    type Reply = ReplaceReply;
-
-    async fn handle(
-        &mut self,
-        Replace { mock }: Replace,
+        Replace { mock }: Replace<Self>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);
@@ -355,18 +323,6 @@ impl Message<DeleteBlock> for MockStorageActor {
     }
 }
 
-impl Message<ResetAllBlocksToPending> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: ResetAllBlocksToPending,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_reset_all_blocks_to_pending(msg, ctx)
-    }
-}
-
 impl Message<GetFirstBlockId> for MockStorageActor {
     type Reply = Result<Option<BlockId>>;
 
@@ -415,27 +371,27 @@ impl Message<GetLeeState> for MockStorageActor {
     }
 }
 
-impl Message<GetZoneCheckpointBytes> for MockStorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl Message<GetZoneCheckpoint> for MockStorageActor {
+    type Reply = Result<Option<ZoneCheckpointRecord>>;
 
     async fn handle(
         &mut self,
-        msg: GetZoneCheckpointBytes,
+        msg: GetZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_zone_checkpoint_bytes(msg, ctx)
+        self.handle_get_zone_checkpoint(msg, ctx)
     }
 }
 
-impl Message<SetZoneCheckpointBytes> for MockStorageActor {
+impl Message<UpdateZoneCheckpoint> for MockStorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: SetZoneCheckpointBytes,
+        msg: UpdateZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_set_zone_checkpoint_bytes(msg, ctx)
+        self.handle_update_zone_checkpoint(msg, ctx)
     }
 }
 
@@ -499,39 +455,15 @@ impl Message<SetZoneAnchor> for MockStorageActor {
     }
 }
 
-impl Message<GetChannelCursor> for MockStorageActor {
-    type Reply = Result<Option<MsgId>>;
+impl Message<GetChannelViewBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
-        msg: GetChannelCursor,
+        msg: GetChannelViewBytes,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_channel_cursor(msg, ctx)
-    }
-}
-
-impl Message<GetPublishedHighWater> for MockStorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetPublishedHighWater,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_published_high_water(msg, ctx)
-    }
-}
-
-impl Message<RaisePublishedHighWater> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: RaisePublishedHighWater,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_raise_published_high_water(msg, ctx)
+        self.handle_get_channel_view_bytes(msg, ctx)
     }
 }
 
@@ -744,5 +676,29 @@ impl Message<GetAccountTransactions> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_account_transactions(msg, ctx)
+    }
+}
+
+impl Message<GetEventFilter> for MockStorageActor {
+    type Reply = Result<EventFilter>;
+
+    async fn handle(
+        &mut self,
+        msg: GetEventFilter,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_event_filter(msg, ctx)
+    }
+}
+
+impl Message<Checkpoint> for MockStorageActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        Checkpoint: Checkpoint,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.checkpoint();
     }
 }

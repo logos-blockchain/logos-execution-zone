@@ -21,11 +21,26 @@ mod inner {
         include!(concat!(env!("OUT_DIR"), "/lez/programs/mod.rs"));
     }
 
+    pub use amm_core::AMM_NAME;
+    pub use associated_token_account_core::ASSOCIATED_TOKEN_ACCOUNT_NAME;
+    pub use bridge_core::BRIDGE_NAME;
+    pub use bridge_lock_core::BRIDGE_LOCK_NAME;
+    pub use clock_core::CLOCK_NAME;
+    pub use cross_zone_inbox_core::CROSS_ZONE_INBOX_NAME;
+    pub use cross_zone_outbox_core::CROSS_ZONE_OUTBOX_NAME;
+    pub use fee_core::FEE_NAME;
+    pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
+    pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
+    pub use token_core::TOKEN_NAME;
+    pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
+
     #[must_use]
     #[inline]
     pub const fn token() -> Program {
         Program::new_unchecked(TOKEN_ID, Cow::Borrowed(TOKEN_ELF))
     }
+
+    pub use token_core::token_account_id;
 
     #[must_use]
     #[inline]
@@ -33,17 +48,23 @@ mod inner {
         Program::new_unchecked(AMM_ID, Cow::Borrowed(AMM_ELF))
     }
 
+    pub use amm_core::amm_account_id;
+
     #[must_use]
     #[inline]
     pub const fn clock() -> Program {
         Program::new_unchecked(CLOCK_ID, Cow::Borrowed(CLOCK_ELF))
     }
 
+    pub use clock_core::clock_account_id;
+
     #[must_use]
     #[inline]
     pub const fn fee() -> Program {
         Program::new_unchecked(FEE_ID, Cow::Borrowed(FEE_ELF))
     }
+
+    pub use fee_core::fee_account_id;
 
     #[must_use]
     #[inline]
@@ -54,11 +75,15 @@ mod inner {
         )
     }
 
+    pub use associated_token_account_core::ata_account_id;
+
     #[must_use]
     #[inline]
     pub const fn bridge() -> Program {
         Program::new_unchecked(BRIDGE_ID, Cow::Borrowed(BRIDGE_ELF))
     }
+
+    pub use bridge_core::bridge_account_id;
 
     #[must_use]
     #[inline]
@@ -66,11 +91,15 @@ mod inner {
         Program::new_unchecked(CROSS_ZONE_OUTBOX_ID, Cow::Borrowed(CROSS_ZONE_OUTBOX_ELF))
     }
 
+    pub use cross_zone_outbox_core::cross_zone_outbox_account_id;
+
     #[must_use]
     #[inline]
     pub const fn cross_zone_inbox() -> Program {
         Program::new_unchecked(CROSS_ZONE_INBOX_ID, Cow::Borrowed(CROSS_ZONE_INBOX_ELF))
     }
+
+    pub use cross_zone_inbox_core::cross_zone_inbox_account_id;
 
     #[must_use]
     #[inline]
@@ -78,11 +107,15 @@ mod inner {
         Program::new_unchecked(PING_SENDER_ID, Cow::Borrowed(PING_SENDER_ELF))
     }
 
+    pub use ping_core::ping_sender_account_id;
+
     #[must_use]
     #[inline]
     pub const fn ping_receiver() -> Program {
         Program::new_unchecked(PING_RECEIVER_ID, Cow::Borrowed(PING_RECEIVER_ELF))
     }
+
+    pub use ping_core::ping_receiver_account_id;
 
     #[must_use]
     #[inline]
@@ -90,17 +123,23 @@ mod inner {
         Program::new_unchecked(BRIDGE_LOCK_ID, Cow::Borrowed(BRIDGE_LOCK_ELF))
     }
 
+    pub use bridge_lock_core::bridge_lock_account_id;
+
     #[must_use]
     #[inline]
     pub const fn wrapped_token() -> Program {
         Program::new_unchecked(WRAPPED_TOKEN_ID, Cow::Borrowed(WRAPPED_TOKEN_ELF))
     }
 
+    pub use wrapped_token_core::wrapped_token_account_id;
+
     #[must_use]
     #[inline]
     pub const fn sequencer_stake() -> Program {
         Program::new_unchecked(SEQUENCER_STAKE_ID, Cow::Borrowed(SEQUENCER_STAKE_ELF))
     }
+
+    pub use sequencer_stake_core::sequencer_stake_account_id;
 
     #[cfg(test)]
     mod tests {
@@ -113,18 +152,15 @@ mod inner {
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
             let message = public_transaction::Message::try_new(
-                AccountId::from_builtin_program(bridge().id()),
+                bridge_account_id(),
                 vec![
                     ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
-                        AccountId::from_builtin_program(bridge().id()),
+                        bridge_account_id(),
                     )),
                     ProgramShardSelector::balance(recipient_id),
                     ProgramShardSelector::new(
-                        bridge_core::deposit_receipt_account_id(
-                            AccountId::from_builtin_program(bridge().id()),
-                            op_id,
-                        ),
-                        AccountId::from_builtin_program(bridge().id()),
+                        bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
+                        bridge_account_id(),
                     ),
                 ],
                 vec![],
@@ -149,21 +185,16 @@ mod inner {
             let amount = 1_000;
             let mut state = V03State::new()
                 .with_public_accounts([(
-                    bridge_core::compute_bridge_account_id(AccountId::from_builtin_program(
-                        bridge().id(),
-                    )),
+                    bridge_core::compute_bridge_account_id(bridge_account_id()),
                     Account::funded(u128::from(amount)),
                 )])
-                .with_programs([bridge()]);
+                .with_named_programs([(bridge_account_id(), bridge())]);
 
             let tx = deposit_tx(op_id, recipient_id, amount);
             let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
             assert_eq!(events.len(), 1);
-            assert_eq!(
-                events[0].account_id,
-                AccountId::from_builtin_program(bridge().id())
-            );
+            assert_eq!(events[0].account_id, bridge_account_id());
             assert_eq!(
                 events[0].event.selector,
                 bridge_core::event::Deposit::SELECTOR

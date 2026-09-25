@@ -10,11 +10,11 @@ use lee_core::account::Nonce;
 use token_core::TokenHolding;
 
 fn token_program_id() -> AccountId {
-    AccountId::from_builtin_program(programs::token().id())
+    programs::token_account_id()
 }
 
 fn ata_program_id() -> AccountId {
-    AccountId::from_builtin_program(programs::ata().id())
+    programs::ata_account_id()
 }
 
 fn owner_keys() -> (PrivateKey, AccountId) {
@@ -104,7 +104,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     let noisy_ata = Account::funded(500).with_shard(FOREIGN_PROGRAM_ID, foreign_shard.clone());
 
     let mut state = V03State::new()
-        .with_programs([programs::token(), programs::ata()])
+        .with_named_programs([
+            (programs::token_account_id(), programs::token()),
+            (programs::ata_account_id(), programs::ata()),
+        ])
         .with_public_accounts([(ata_id, noisy_ata)])
         .with_public_account_balances([(owner_id, 100)]);
 

@@ -58,7 +58,7 @@ fn insert_program() {
     // Walks the full segment chain regardless of how many chunks the elf split into,
     // exercising the same reconstruction a real caller uses.
     let (image_id, elf) = state
-        .get_builtin_program(program_to_insert.id())
+        .get_builtin_program(account_id)
         .expect("the header and its segment chain must reconstruct the inserted program");
     assert_eq!(image_id, program_to_insert.id());
     assert_eq!(elf, program_to_insert.elf().to_vec());

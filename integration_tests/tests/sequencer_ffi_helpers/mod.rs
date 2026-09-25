@@ -10,12 +10,11 @@ use std::{
 use anyhow::{Context as _, Result};
 use integration_tests::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, native_token, program::Program};
-use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
 };
-use sequencer_core::block_publisher::Ed25519Key;
 use sequencer_ffi::{
     OperationStatus, Runtime, SequencerServiceFFI,
     api::{
@@ -23,14 +22,16 @@ use sequencer_ffi::{
         lifecycle::InitializedSequencerServiceFFIResult,
         query::LastBlockIdResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
+            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
+            event::FfiEventRecord,
             transaction::FfiTransaction,
         },
     },
 };
 use sequencer_service::GenesisAction;
+use tempfile::TempDir;
 use test_fixtures::{
     BlockingTestContext, MultiZoneTestContextBuilder, ZoneTestContextBuilder,
     config::{
@@ -79,12 +80,22 @@ unsafe extern "C" {
         limit: u64,
     ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus>;
 
+    pub unsafe fn sequencer_ffi_query_events(
+        sequencer: *const SequencerServiceFFI,
+        from_block: u64,
+        to_block: FfiOption<u64>,
+        tx_hash: *const FfiHashType,
+        program_account_id: *const FfiAccountId,
+        selector: *const FfiSelector,
+    ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus>;
+
     pub unsafe fn sequencer_ffi_free_ffi_block(val: FfiBlock);
     pub unsafe fn sequencer_ffi_free_cstring(block: *mut c_char);
     pub unsafe fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt);
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
     pub unsafe fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>);
     pub unsafe fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>);
+    pub unsafe fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
@@ -92,6 +103,18 @@ pub const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER
 
 /// Bedrock signing key of the sequencer that stakes its way in.
 pub const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
+
+/// A leader node with an FFI node staked into its channel.
+pub struct JoiningSetup {
+    pub ctx: BlockingTestContext,
+    pub node: NodeHttpClient,
+    pub ownership_id: AccountId,
+    pub sequencer_ffi: PointerResult<SequencerServiceFFI, OperationStatus>,
+    /// The joining node's home. Its `RocksDB` lives in here, so it has to
+    /// outlive the sequencer; dropping it pulls the database out from under a
+    /// node that is still running.
+    pub sequencer_home: TempDir,
+}
 
 /// Short block cadence for the joining.
 pub fn fast_blocks() -> SequencerPartialConfig {
@@ -127,12 +150,7 @@ pub fn wait_for_sequencer_ffi_block(
 
 /// Sets up blocking context with one leader node
 /// and joins FFI node through staking flow.
-pub fn joining_setup() -> Result<(
-    BlockingTestContext,
-    NodeHttpClient,
-    AccountId,
-    PointerResult<SequencerServiceFFI, OperationStatus>,
-)> {
+pub fn joining_setup() -> Result<JoiningSetup> {
     let joining_sequencer_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joining_stake_key =
         sequencer_stake_core::SequencerKey::new(joining_sequencer_key.to_bytes())
@@ -196,7 +214,7 @@ pub fn joining_setup() -> Result<(
         hex::encode(joining_sequencer_key.to_bytes())
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(
@@ -266,7 +284,7 @@ pub fn joining_setup() -> Result<(
         if state
             .accredited_keys
             .iter()
-            .any(|key: &Ed25519PublicKey| *key == joining_sequencer_key)
+            .any(|key| *key == joining_sequencer_key.into_unverified())
         {
             channel_state = Some(state);
             break;
@@ -286,7 +304,7 @@ pub fn joining_setup() -> Result<(
     // Only now start a node behind the key, against a channel that already has a chain.
     let setup = SequencerSetup::new(fast_blocks(), ctx.ctx().bedrock_addr())
         .with_channel_id(bedrock_channel_id())
-        .with_bedrock_signing_key(JOINER_SIGNING_KEY)
+        .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(&JOINER_SIGNING_KEY))
         .joining_existing_channel();
 
     let temp_sequencer_dir =
@@ -319,7 +337,13 @@ pub fn joining_setup() -> Result<(
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);
     }
 
-    Ok((ctx, node, ownership_id, sequencer_ffi_res))
+    Ok(JoiningSetup {
+        ctx,
+        node,
+        ownership_id,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home: temp_sequencer_dir,
+    })
 }
 
 /// Polls `check` once a second, up to `max_attempts` times, replacing fixed

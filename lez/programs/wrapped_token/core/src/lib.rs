@@ -22,6 +22,9 @@ pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/0000/";
+
+pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
+
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
@@ -127,6 +130,11 @@ impl WrappedTokenConfig {
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         borsh::from_slice(bytes).ok()
     }
+}
+
+#[must_use]
+pub fn wrapped_token_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&WRAPPED_TOKEN_NAME)
 }
 
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at

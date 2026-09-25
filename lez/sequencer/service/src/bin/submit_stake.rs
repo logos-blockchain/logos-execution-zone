@@ -93,8 +93,7 @@ async fn main() -> Result<()> {
                 })
                 .context("Failed to serialize Stake instruction")?;
 
-            let sequencer_stake_program_id =
-                AccountId::from_builtin_program(programs::sequencer_stake().id());
+            let sequencer_stake_program_id = programs::sequencer_stake_account_id();
             wallet
                 .send_pub_tx(
                     vec![
@@ -126,8 +125,7 @@ async fn main() -> Result<()> {
                 })
                 .context("Failed to serialize UnstakeRequest instruction")?;
 
-            let sequencer_stake_program_id =
-                AccountId::from_builtin_program(programs::sequencer_stake().id());
+            let sequencer_stake_program_id = programs::sequencer_stake_account_id();
             wallet
                 .send_pub_tx(
                     vec![

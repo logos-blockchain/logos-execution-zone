@@ -239,17 +239,18 @@ impl<S: StorageActorTrait> Message<Report> for SlasherActor<S> {
         for ReportedOffence {
             signer,
             inscription,
+            fault,
         } in offences
         {
             let Some(offender) = SequencerKey::new(signer) else {
                 warn!(
-                    "Undecodable inscription {} signed by an invalid key",
+                    "Offending inscription {} ({fault:?}) signed by an invalid key",
                     hex::encode(inscription)
                 );
                 continue;
             };
             error!(
-                "Undecodable inscription {} written by {}",
+                "Offending inscription {} ({fault:?}) written by {}",
                 hex::encode(inscription),
                 hex::encode(offender)
             );
@@ -394,7 +395,7 @@ pub fn build_slash_tx(
     offence: &Offence,
     approvals: Vec<SlashApproval>,
 ) -> anyhow::Result<LeeTransaction> {
-    let program_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let program_id = programs::sequencer_stake_account_id();
     let message = LeeMessage::try_new(
         program_id,
         vec![
@@ -512,6 +513,7 @@ mod tests {
         ReportedOffence {
             signer: key.public_key().to_bytes(),
             inscription,
+            fault: crate::Fault::NotABlock,
         }
     }
 

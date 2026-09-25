@@ -3,8 +3,7 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! A follower inscribes a payload that is not a block and the leader burns its
-//! stake.
+//! A follower inscribes an offending payload and the leader burns its stake.
 //!
 //! Neither follower produces, so only the leader can slash. Three staked keys put
 //! the threshold at two, so the burn needs a peer's approval to arrive over gossip.
@@ -17,14 +16,12 @@ use integration_tests::{assert_same_chain, committee, get_account, init_logger, 
 use lee::AccountId;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    block_publisher::{BlockPublisherTrait as _, ZoneSdkPublisher},
-    config::BedrockConfig,
-};
+use sequencer_bedrock_actor::protocol::{CheckIsOurTurn, PublishRawInscription};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
+    spawn_channel_observer, spawn_standalone_bedrock_actor,
 };
 use tokio::test;
 
@@ -49,9 +46,7 @@ async fn stake_config(ctx: &TestContext) -> Result<sequencer_stake_core::Sequenc
     sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(AccountId::from_builtin_program(
-                programs::sequencer_stake().id(),
-            ))
+            .shard(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("Config account should decode as SequencerStakeConfig")
@@ -63,9 +58,7 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        if public.message().program_account_id
-            != AccountId::from_builtin_program(programs::sequencer_stake().id())
-        {
+        if public.message().program_account_id != programs::sequencer_stake_account_id() {
             return None;
         }
         match borsh::from_slice(&public.message().instruction_data) {
@@ -97,6 +90,42 @@ where
 
 #[test]
 async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Result<()> {
+    Box::pin(assert_offender_is_slashed(|_tip| GARBAGE.to_vec())).await
+}
+
+#[test]
+async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_an_invalid_block() -> Result<()> {
+    // Chains on the leader's tip, but its transaction omits its fee.
+    Box::pin(assert_offender_is_slashed(|tip| {
+        block_by_offender(
+            tip.header.block_id + 1,
+            tip,
+            vec![common::test_utils::produce_dummy_empty_transaction()],
+        )
+    }))
+    .await
+}
+
+#[test]
+async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_block_with_a_wrong_id() -> Result<()> {
+    Box::pin(assert_offender_is_slashed(|tip| {
+        block_by_offender(tip.header.block_id + 5, tip, vec![])
+    }))
+    .await
+}
+
+/// A block at `block_id` on `tip`, signed with a block key the leader does not hold.
+fn block_by_offender(block_id: u64, tip: &Block, transactions: Vec<LeeTransaction>) -> Vec<u8> {
+    let block =
+        common::test_utils::produce_dummy_block(block_id, Some(tip.header.hash), transactions);
+    let block = common::block::HashableBlockData::from(block)
+        .into_pending_block(&lee::PrivateKey::try_new([38; 32]).expect("a valid private key"));
+    borsh::to_vec(&block).expect("a block should serialize")
+}
+
+/// Has the offender inscribe `payload(leader's tip)` on its turns until the leader
+/// burns its stake, then checks the slash and that the chain kept going.
+async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Result<()> {
     init_logger();
 
     let channel = config::bedrock_channel_id();
@@ -122,31 +151,22 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         .await
         .context("Failed to build the three-sequencer test context")?;
 
-    let offender_key = Ed25519Key::from_bytes(&config::sequencer_signing_key_from_seed(
+    let offender_key = config::sequencer_signing_key_from_seed(
         u32::try_from(OFFENDER_SEED).context("The offender seed does not fit in a u32")?,
-    ));
+    );
     let offender_stake_key =
         sequencer_stake_core::SequencerKey::new(offender_key.public_key().to_bytes())
             .context("The offender's Bedrock key is not a valid Ed25519 point")?;
     let offender_owner = config::founding_stake_owner_key(OFFENDER_SEED)?;
     let offender_account = AccountId::from(&lee::PublicKey::new_from_private_key(&offender_owner));
     let offender_funds = system_accounts::stake_funds_account_id(&offender_account);
-    let sink = sequencer_stake_core::slash_sink_account_id(AccountId::from_builtin_program(
-        programs::sequencer_stake().id(),
-    ));
+    let sink = sequencer_stake_core::slash_sink_account_id(programs::sequencer_stake_account_id());
 
-    let bedrock_config = BedrockConfig {
-        channel_id: channel,
-        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 
     // An unaccredited key writes nothing that L1 accepts.
     wait_until("the offender's key to be accredited", || async {
-        Ok(committee(&bedrock_config)
+        Ok(committee(&observer)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))
@@ -187,13 +207,15 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         .sequencer_client_by_node_ids(channel, OFFENDER_SEED)
         .context("The follower has no sequencer client")?;
     // The offender's node never publishes, so this is the only writer with its key.
-    let offender = ZoneSdkPublisher::new(
-        &bedrock_config,
-        offender_key,
-        Duration::from_secs(5),
-        None,
-        Box::new(|_update| Box::pin(async {})),
-    )
+    let offender = spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
+        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
+        basic_auth: None,
+        channel_id: channel,
+        bedrock_signing_key: offender_key.into(),
+        funding_pk: config::bedrock_funding_key(),
+        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
+        resubmit_interval: Duration::from_secs(5),
+    })
     .await
     .context("Failed to open a publisher for the offender")?;
 
@@ -203,12 +225,19 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
             return Ok(true);
         }
         // L1 rejects a write out of turn, so only offer on our turn.
-        if offender.is_our_turn() {
+        if offender.ask(CheckIsOurTurn).await? {
+            let height = leader_client.get_last_block_id().await?;
+            let tip = leader_client
+                .get_block(height)
+                .await?
+                .context("The leader has no block at its own height")?;
             let outcome = offender
-                .publish_raw_inscription(GARBAGE.to_vec())
+                .ask(PublishRawInscription {
+                    data: payload(&tip),
+                })
                 .await
-                .context("Failed to inscribe a non-block payload")?;
-            info!("Offered a non-block payload as {}", outcome.this_msg);
+                .context("Failed to inscribe the offending payload")?;
+            info!("Offered an offending payload as {}", outcome.this_msg);
         }
         Ok(false)
     })
@@ -219,9 +248,9 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         "the offender's whole tracked stake should be gone"
     );
 
-    // Garbage taking the channel tip sheds the leader's pending inscriptions, so
+    // The offence taking the channel tip sheds the leader's pending inscriptions, so
     // its height drops before it climbs again; only the climb proves liveness.
-    // That it produced *during* the garbage is already implied: attribution runs
+    // That it produced *during* the offence is already implied: attribution runs
     // on a production turn, so the slash above could not have landed otherwise.
     let height_after_slash = leader_client.get_last_block_id().await?;
     wait_until("the leader to produce again after the slash", || async {
@@ -229,12 +258,12 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     })
     .await?;
 
-    // A payload that is not a block never reaches chain state, so it takes no block id.
+    // An offending payload never applies, so it takes no block id.
     let height = leader_client.get_last_block_id().await?;
     let mut approvals = None;
     for id in 1..=height {
         let block = leader_client.get_block(id).await?.with_context(|| {
-            format!("block id {id} is missing: the garbage opened a gap in the chain")
+            format!("block id {id} is missing: the offence opened a gap in the chain")
         })?;
         approvals = approvals.or_else(|| slash_approvals_in(&block));
     }
@@ -274,7 +303,7 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     );
 
     wait_until("the offender to leave the accredited committee", || async {
-        Ok(!committee(&bedrock_config)
+        Ok(!committee(&observer)
             .await?
             .0
             .contains(&offender_stake_key.to_bytes()))

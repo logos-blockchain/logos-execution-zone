@@ -144,7 +144,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()
             },
-            &validity_window_program.into(),
+            &synthetic_program(validity_window_program),
         )
         .unwrap();
 
@@ -210,7 +210,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()
             },
-            &validity_window_program.into(),
+            &synthetic_program(validity_window_program),
         )
         .unwrap();
 

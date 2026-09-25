@@ -23,9 +23,8 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 pub type ProgramId = [u32; 8];
 
 impl AccountId {
-    /// The default `AccountId` a builtin program is deployed at — not a live address once
-    /// redeployed via `program_loader`. A byte reinterpretation, not a hash, since `ProgramId`
-    /// is already content-derived.
+    /// Derives a synthetic `AccountId` for seeding a test program in state. A byte
+    /// reinterpretation, not a hash, since `ProgramId` is already content-derived.
     #[must_use]
     pub fn from_builtin_program(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
@@ -33,6 +32,23 @@ impl AccountId {
             .flat_map(|word| word.to_le_bytes())
             .collect();
         Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
+    }
+
+    #[must_use]
+    pub fn from_builtin_program_name(name: &[u8]) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+        const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
+
+        let mut hasher = Sha256::new();
+        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
+        hasher.update(name);
+        Self::new(
+            hasher
+                .finalize()
+                .as_slice()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
     }
 }
 

@@ -4,10 +4,11 @@ use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
     test_utils::{produce_dummy_block, produce_dummy_empty_transaction},
-    transaction::clock_invocation,
+    transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{Account, AccountId, V03State};
+use lee_core::program::{ProgramEvent, TransactionEvent};
 
 use crate::{
     StorageActor,
@@ -18,14 +19,14 @@ use crate::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DeadLetterRequeue,
         DeleteCrossZonePeerFloor, DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches,
-        GetAccountTransactions, GetBlock, GetBlockByHash, GetChannelCursor,
+        GetAccountTransactions, GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes,
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
         GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetPublishedHighWater, GetTransactionByHash, GetZoneCheckpointBytes,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, WithdrawalReconciliationKey,
+        GetTransactionByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
 
@@ -44,9 +45,26 @@ fn bookkeeping_update() -> AtomicUpdate {
         consumed_withdrawals: HashSet::new(),
         new_withdraw_intents: HashSet::new(),
         zone_anchor: None,
-        channel_cursor: None,
-        lower_published_high_water: None,
+        events: Vec::new(),
+        channel_view: None,
     }
+}
+
+/// A checkpoint of `bytes` minted at channel sequence `seq`.
+fn checkpoint_record(bytes: &[u8], seq: u64) -> ZoneCheckpointRecord {
+    ZoneCheckpointRecord {
+        bytes: bytes.to_vec(),
+        seq,
+    }
+}
+
+/// The checkpoint bytes the store holds, or [`None`] when it holds none.
+async fn stored_checkpoint(storage_ref: &ActorRef<StorageActor>) -> Option<Vec<u8>> {
+    storage_ref
+        .ask(GetZoneCheckpoint)
+        .await
+        .expect("Failed to read the checkpoint")
+        .map(|checkpoint| checkpoint.bytes)
 }
 
 fn withdrawal_key(byte: u8) -> WithdrawalReconciliationKey {
@@ -71,7 +89,7 @@ fn deposit_record(byte: u8) -> PendingDepositEventRecord {
 fn reorg_update(blocks: Vec<Block>, head_tip: &Block) -> AtomicUpdate {
     AtomicUpdate {
         blocks,
-        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()))
+        ..AtomicUpdate::from_block(head_tip.clone(), Arc::new(V03State::new()), Vec::new())
     }
 }
 
@@ -94,7 +112,11 @@ async fn spawn_with_blocks(path: &Path, blocks: Vec<Block>) -> ActorRef<StorageA
     let storage_ref = StorageActor::spawn(StorageActor::new(path).expect("Failed to open db"));
     for block in blocks {
         storage_ref
-            .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+            .ask(AtomicUpdate::from_block(
+                block,
+                Arc::new(V03State::new()),
+                Vec::new(),
+            ))
             .await
             .expect("Failed to record a block");
     }
@@ -233,7 +255,11 @@ async fn recorded_transaction_is_looked_up_by_hash() {
     );
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            block,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the block");
 
@@ -246,6 +272,59 @@ async fn recorded_transaction_is_looked_up_by_hash() {
             .expect("Failed to look the transaction up"),
         Some((transaction, 1))
     );
+}
+
+#[tokio::test]
+async fn recorded_events_is_looked_up_by_block_id() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let transaction = produce_dummy_empty_transaction();
+    let block = produce_dummy_block(1, None, vec![transaction.clone()]);
+    let storage_ref =
+        spawn_with_blocks(dir.path(), vec![produce_dummy_block(0, None, vec![])]).await;
+
+    assert_eq!(
+        storage_ref
+            .ask(GetTransactionByHash {
+                hash: transaction.hash()
+            })
+            .await
+            .expect("Failed to look the transaction up"),
+        None,
+        "A transaction outside the chain has nowhere to be found"
+    );
+
+    let block_id = block.header.block_id;
+
+    storage_ref
+        .ask(AtomicUpdate::from_block(
+            block,
+            Arc::new(V03State::new()),
+            vec![(
+                block_id,
+                vec![TxEvents {
+                    tx_index: 0,
+                    tx_hash: HashType([42; 32]),
+                    events: vec![TransactionEvent {
+                        account_id: AccountId::new([43; 32]),
+                        event: ProgramEvent {
+                            selector: [1; 8],
+                            data: vec![1; 4],
+                        },
+                    }],
+                }],
+            )],
+        ))
+        .await
+        .expect("Failed to record the block");
+
+    let block_events = storage_ref
+        .ask(GetBlockEvents { block_id })
+        .await
+        .expect("Failed to look the events up")
+        .expect("There should be one event");
+
+    assert_eq!(block_events[0].events[0].event.data, vec![1; 4]);
+    assert_eq!(block_events[0].events[0].event.selector, [1; 8]);
 }
 
 /// The index lives only in memory, so a fresh actor has to build it off the
@@ -302,7 +381,11 @@ async fn replaced_block_leaves_no_stale_index_entries() {
         .expect("The orphaned block is the stored one so far");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(adopted, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            adopted,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to apply the update");
 
@@ -808,6 +891,7 @@ async fn block_and_state_are_stored_together() {
         .ask(AtomicUpdate::from_block(
             block.clone(),
             state_with_balance(200),
+            Vec::new(),
         ))
         .await
         .expect("Failed to record the block");
@@ -837,7 +921,7 @@ async fn finalized_up_to_marks_only_the_blocks_it_covers() {
             blocks: vec![block2.clone(), block3.clone()],
             head_tip: Some(BlockMeta::from(&block3)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block3.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -871,13 +955,17 @@ async fn a_rewritten_block_keeps_the_finalized_status_it_had() {
     storage_ref
         .ask(AtomicUpdate {
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(200), Vec::new())
         })
         .await
         .expect("Failed to finalize the block");
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block2, state_with_balance(300)))
+        .ask(AtomicUpdate::from_block(
+            block2,
+            state_with_balance(300),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to rewrite the block");
 
@@ -904,6 +992,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .ask(AtomicUpdate::from_block(
             genesis.clone(),
             state_with_balance(200),
+            Vec::new(),
         ))
         .await
         .expect("Failed to record the genesis block");
@@ -912,7 +1001,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
     // comes with the update. The state it carries is ignored.
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: Some(b"cp-idle".to_vec()),
+            checkpoint: Some(checkpoint_record(b"cp-idle", 1)),
             head_tip: Some(BlockMeta::from(&genesis)),
             head_state: state_with_balance(999),
             ..bookkeeping_update()
@@ -921,10 +1010,7 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
         .expect("Failed to apply the checkpoint-only update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint"),
+        stored_checkpoint(&storage_ref).await,
         Some(b"cp-idle".to_vec()),
         "The checkpoint still has to land"
     );
@@ -945,7 +1031,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         .ask(AtomicUpdate {
             final_snapshot: Some((state_with_balance(200), final_meta)),
             finalized_up_to: Some(2),
-            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300))
+            ..AtomicUpdate::from_block(block2.clone(), state_with_balance(300), Vec::new())
         })
         .await
         .expect("Failed to apply the update");
@@ -978,20 +1064,99 @@ async fn checkpoint_lands_with_an_update_carrying_no_block() {
 
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: Some(b"cp-orphan".to_vec()),
+            checkpoint: Some(checkpoint_record(b"cp-orphan", 1)),
             ..bookkeeping_update()
         })
         .await
         .expect("Failed to apply the update");
 
     assert_eq!(
-        storage_ref
-            .ask(GetZoneCheckpointBytes)
-            .await
-            .expect("Failed to read the checkpoint")
-            .as_deref(),
+        stored_checkpoint(&storage_ref).await.as_deref(),
         Some(b"cp-orphan".as_slice())
     );
+}
+
+#[tokio::test]
+async fn a_checkpoint_behind_the_stored_one_is_dropped() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-produced", 20),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    // What the follow path was holding while the produce path published.
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-stale", 10),
+        })
+        .await
+        .expect("A stale checkpoint is dropped, not an error");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+        "The newer checkpoint has to survive the stale one"
+    );
+
+    // Same sequence, different bytes: nothing says the newcomer is the later
+    // view, so the store keeps what it has.
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-tie", 20),
+        })
+        .await
+        .expect("A tied checkpoint is dropped, not an error");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+    );
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-followed", 30),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-followed".as_slice()),
+        "A newer checkpoint still has to land"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_checkpoint_in_an_atomic_update_drops_alone() {
+    let dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let genesis = produce_dummy_block(1, None, vec![]);
+    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
+
+    storage_ref
+        .ask(UpdateZoneCheckpoint {
+            checkpoint: checkpoint_record(b"cp-produced", 20),
+        })
+        .await
+        .expect("Failed to store the checkpoint");
+
+    storage_ref
+        .ask(AtomicUpdate {
+            checkpoint: Some(checkpoint_record(b"cp-stale", 10)),
+            ..AtomicUpdate::from_block(genesis.clone(), Arc::new(V03State::new()), vec![])
+        })
+        .await
+        .expect("Failed to apply the update");
+
+    assert_eq!(
+        stored_checkpoint(&storage_ref).await.as_deref(),
+        Some(b"cp-produced".as_slice()),
+        "The stored checkpoint is the newer one"
+    );
+    assert_tip_is(&storage_ref, &genesis).await;
 }
 
 /// A database nothing has written a chain into answers "nothing yet" rather
@@ -1052,6 +1217,13 @@ async fn an_unseeded_store_reports_no_chain() {
             .expect("Failed to get block id by map")
             .is_none()
     );
+    assert!(
+        storage_ref
+            .ask(GetBlockEvents { block_id: 1 })
+            .await
+            .expect("Failed to get events for block id")
+            .is_none()
+    );
 }
 
 /// The property that lets a genesis go in as an ordinary block write.
@@ -1105,7 +1277,11 @@ async fn the_first_block_written_starts_the_chain() {
     let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let second_hash = second.header.hash;
     storage_ref
-        .ask(AtomicUpdate::from_block(second, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            second,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the second block");
 
@@ -1163,7 +1339,11 @@ async fn acc_id_to_tx_map_corectness() {
     let block_2_hash = block_2.header.hash;
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_2, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            block_2,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the second block");
 
@@ -1171,14 +1351,22 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_hash = block_3.header.hash;
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_3, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            block_3,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the second block");
 
     let block_4 = produce_dummy_block(4, Some(block_3_hash), vec![]);
 
     storage_ref
-        .ask(AtomicUpdate::from_block(block_4, Arc::new(V03State::new())))
+        .ask(AtomicUpdate::from_block(
+            block_4,
+            Arc::new(V03State::new()),
+            Vec::new(),
+        ))
         .await
         .expect("Failed to record the second block");
 
@@ -1675,25 +1863,25 @@ async fn dead_letters_evict_the_oldest_at_the_cap_but_keep_counting() {
     );
 }
 
-/// The cursor has to outlive the process: a restart that cannot recover it has
-/// nothing to chain the next publish onto.
+/// The view has to outlive the process: a restart without it has no head to
+/// build on and nothing to chain the next publish onto.
 #[tokio::test]
-async fn channel_cursor_survives_a_reopen() {
+async fn channel_view_survives_a_reopen() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
 
     assert_eq!(
         storage_ref
-            .ask(GetChannelCursor)
+            .ask(GetChannelViewBytes)
             .await
-            .expect("Failed to read the channel cursor"),
+            .expect("Failed to read the channel view"),
         None,
-        "A store written without a cursor has none to report"
+        "A store written without a view has none to report"
     );
 
     storage_ref
         .ask(AtomicUpdate {
-            channel_cursor: Some([7; 32]),
+            channel_view: Some(vec![7; 3]),
             ..bookkeeping_update()
         })
         .await
@@ -1710,46 +1898,11 @@ async fn channel_cursor_survives_a_reopen() {
     let reopened_ref = spawn_with_blocks(dir.path(), vec![]).await;
     assert_eq!(
         reopened_ref
-            .ask(GetChannelCursor)
+            .ask(GetChannelViewBytes)
             .await
-            .expect("Failed to read the channel cursor"),
-        Some([7; 32]),
-        "The cursor comes back after a restart, and an update carrying none left it alone"
-    );
-}
-
-/// The mark otherwise only rises. Lowering it frees a height to be inscribed
-/// again, which is only ever right for a block the channel dropped, so an
-/// update naming a height above the mark must not raise it by the back door.
-#[tokio::test]
-async fn published_high_water_is_lowered_only_from_above() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(RaisePublishedHighWater { block_id: 9 })
-        .await
-        .expect("Failed to raise the high water mark");
-
-    let lower_to = async |block_id| {
-        storage_ref
-            .ask(AtomicUpdate {
-                lower_published_high_water: Some(block_id),
-                ..bookkeeping_update()
-            })
-            .await
-            .expect("Failed to apply the update");
-        storage_ref
-            .ask(GetPublishedHighWater)
-            .await
-            .expect("Failed to read the high water mark")
-    };
-
-    assert_eq!(lower_to(4).await, Some(4));
-    assert_eq!(
-        lower_to(7).await,
-        Some(4),
-        "A height the mark is already below leaves it where it is"
+            .expect("Failed to read the channel view"),
+        Some(vec![7; 3]),
+        "The view comes back after a restart, and an update carrying none left it alone"
     );
 }
 

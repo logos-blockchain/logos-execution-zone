@@ -8,16 +8,15 @@ use kameo::{
 use log::{debug, warn};
 use logos_blockchain_core::{
     mantle::{
-        ops::{
-            Op,
-            channel::{Ed25519PublicKey, config::ChannelConfigOp},
-        },
+        ops::{Op, channel::config::ChannelConfigOp},
         traits::Hashable as _,
         transactions::Ops,
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use logos_blockchain_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, Ed25519Signature,
+};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -54,6 +53,7 @@ pub struct ChannelConfigActor {
     /// Our own draft. Not persisted: a signature is only good for one funded
     /// transaction, and a restart funds a different one.
     draft: Option<OwnDraft>,
+    // TODO: Use messages instead of tokio's primitives.
     publisher: Option<mpsc::Sender<Wire>>,
     /// Sent the draft once it has its signatures.
     submitter: Option<WeakRecipient<SubmitConfig>>,

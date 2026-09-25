@@ -269,6 +269,25 @@ unsafe extern "C" {
     ) -> error::WalletFfiError;
 }
 
+/// Blocks until the transfer is in a block, panicking if it never lands.
+fn wait_for_inclusion(handle: *mut WalletHandle, result: &FfiTransferResult) {
+    let tx_hash: HashType = unsafe { CStr::from_ptr(result.tx_hash) }
+        .to_str()
+        .expect("a transaction hash is UTF-8")
+        .parse()
+        .expect("a transaction hash parses");
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the transfer must land");
+}
+
 /// Reads an account's balance through the FFI, panicking on error.
 fn ffi_balance(handle: *mut WalletHandle, account_id: &FfiBytes32, is_public: bool) -> u128 {
     let mut out_balance: [u8; 16] = [0; 16];
@@ -651,7 +670,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     );
     assert_eq!(balance_only.nonce.0, 2);
 
-    let program_id = AccountId::from_builtin_program(programs::token().id());
+    let program_id = programs::token_account_id();
     let mut out_program_full = FfiAccount::default();
     let program_full: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
@@ -927,8 +946,7 @@ fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &credit_result);
 
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
@@ -980,6 +998,19 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
+    let mut is_included = false;
+
+    unsafe {
+        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
+            .unwrap();
+    }
+
+    assert!(is_included);
+
     let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
     let to_balance = ffi_balance(wallet_ffi_handle, &to, true);
@@ -999,17 +1030,6 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         fee > 0 && fee <= DEFAULT_MAX_FEE,
         "a charged transfer pays a positive fee within the ceiling, got {fee}"
     );
-
-    // Also check for transaction inclusion
-    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
-    let mut is_included = false;
-
-    unsafe {
-        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
-            .unwrap();
-    }
-
-    assert!(is_included);
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -1057,8 +1077,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1119,8 +1138,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1199,8 +1217,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1321,8 +1338,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_1);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1347,8 +1364,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_2);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1371,8 +1388,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_3);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1395,8 +1412,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    log::info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_4);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1671,6 +1688,23 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let tx_hash: HashType = unsafe { CStr::from_ptr(transaction_result.tx_hash) }
+        .to_str()?
+        .parse()?;
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            wallet_ffi_handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the transfer transaction must land");
+
     let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
     let to_balance = ffi_balance(wallet_ffi_handle, &to, true);
@@ -1718,7 +1752,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     let definition_id = ctx.ctx().existing_private_accounts()[0];
     let definition: FfiBytes32 = definition_id.into();
     let holding: FfiBytes32 = ctx.ctx().existing_private_accounts()[1].into();
-    let token_program = AccountId::from_builtin_program(programs::token().id());
+    let token_program = programs::token_account_id();
     let total_supply = 100_u128;
 
     let mut transaction_result = FfiTransactionResult::default();

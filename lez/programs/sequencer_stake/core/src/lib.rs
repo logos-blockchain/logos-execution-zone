@@ -13,6 +13,8 @@ const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerSt
 const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
+pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
+
 /// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
 /// public key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -261,6 +263,11 @@ impl SequencerEntry {
             Some(remaining) => remaining == 0 || remaining >= minimum,
         }
     }
+}
+
+#[must_use]
+pub fn sequencer_stake_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&SEQUENCER_STAKE_NAME)
 }
 
 /// Approvals a `Slash` must carry: two thirds of the committee, never fewer

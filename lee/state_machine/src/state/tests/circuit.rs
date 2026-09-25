@@ -29,7 +29,7 @@ fn an_unused_private_witness_is_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(
@@ -77,7 +77,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
             instruction_data: Program::serialize_instruction(written.clone()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -147,7 +147,7 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
             instruction_data: Program::serialize_instruction((written.clone(), amount)).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .unwrap();
 
@@ -402,7 +402,7 @@ fn private_pda_witness_binding_succeeds() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     )
     .expect("witness-bound private PDA should succeed");
 
@@ -437,7 +437,7 @@ fn private_pda_npk_mismatch_fails() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1137,7 +1137,7 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1220,7 +1220,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1250,7 +1250,7 @@ fn private_authorized_uninitialized_account() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &crate::test_methods::noop().into(),
+        &synthetic_program(crate::test_methods::noop()),
     )
     .unwrap();
 
@@ -1297,7 +1297,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             instruction_data: Program::serialize_instruction(written.clone()).unwrap(),
             ..Default::default()
         },
-        &writer_program.into(),
+        &synthetic_program(writer_program),
     )
     .unwrap();
 
@@ -1330,7 +1330,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &noop_program.into(),
+        &synthetic_program(noop_program),
     );
 
     assert!(matches!(res, Err(LeeError::CircuitProvingError(_))));
@@ -1682,7 +1682,7 @@ fn dropped_public_account_through_the_privacy_circuit_is_caught() {
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert!(
@@ -1701,7 +1701,7 @@ fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
 
-    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+    let program_with_deps = synthetic_program(program).as_shadow_program();
     let shadow_id = program_with_deps.self_account_id;
 
     let account_id = AccountId::for_private_pda(
@@ -1747,7 +1747,7 @@ fn shadow_program_claims_a_regular_private_account_it_legitimately_owns() {
     let identifier = Identifier::new([u8::MAX; 32]);
 
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
-    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+    let program_with_deps = synthetic_program(program).as_shadow_program();
 
     let result = execute_and_prove(
         ProvingInput {
@@ -1774,7 +1774,7 @@ fn shadow_program_claims_a_regular_private_account_it_legitimately_owns() {
 #[test]
 fn shadow_program_claims_a_public_pda_it_legitimately_owns() {
     let program = crate::test_methods::noop();
-    let program_with_deps = ProgramWithDependencies::from(program).as_shadow_program();
+    let program_with_deps = synthetic_program(program).as_shadow_program();
     let shadow_id = program_with_deps.self_account_id;
     let account_id = AccountId::new([7; 32]);
 

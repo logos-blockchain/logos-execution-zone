@@ -8,3 +8,11 @@ slow-timeout = { period = "120s" }
 # One failing test should not hide the timings of the rest.
 fail-fast = false
 status-level = "slow"
+
+# Each slashing test runs a Bedrock node and three sequencers, so they run one at a time.
+[test-groups]
+slashing = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(slashing)'
+test-group = 'slashing'

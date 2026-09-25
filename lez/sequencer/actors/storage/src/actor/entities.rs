@@ -2,6 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{BlockMeta, PeerChainTip},
+    transaction::TxEvents,
 };
 use lee::AccountId;
 use lee_core::BlockId;
@@ -26,9 +27,6 @@ pub type CrossZoneMessageKey = [u8; 32];
 /// Zone id of a cross-zone peer, which doubles as the id of its channel.
 pub type PeerZoneKey = [u8; 32];
 
-/// The zone-sdk `MsgId` of a channel inscription, as the raw bytes it wraps.
-pub type MsgId = [u8; 32];
-
 /// Families group entities by how they are written, not by what they mean:
 /// types sharing one are still stored under disjoint keys.
 #[derive(strum::IntoStaticStr, enum_iterator::Sequence)]
@@ -43,6 +41,8 @@ pub enum ColumnFamily {
     Pending,
     /// Many small records, contains various maps.
     BlockMeta,
+    /// Block events.
+    Events,
 }
 
 impl db::ColumnFamilies for ColumnFamily {
@@ -55,7 +55,7 @@ impl db::ColumnFamilies for ColumnFamily {
                 // while one flushes.
                 options.set_max_write_buffer_number(4);
             }
-            Self::State => {
+            Self::State | Self::Events => {
                 // A whole state is rewritten on every update. Blob files keep
                 // those values out of compaction, which would otherwise copy
                 // every one of them through each level.
@@ -116,6 +116,8 @@ impl db::Storable<ColumnFamily> for FinalSnapshot {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ZoneCheckpoint {
     pub bytes: Vec<u8>,
+    /// The channel sequence this checkpoint was minted at.
+    pub seq: u64,
 }
 
 impl db::Storable<ColumnFamily> for ZoneCheckpoint {
@@ -154,31 +156,17 @@ impl db::Storable<ColumnFamily> for ZoneAnchor {
     const TYPE_NAME: &'static str = db::type_name!(ZoneAnchor);
 }
 
-/// The `MsgId` of the newest channel inscription processed, block or not: the
-/// parent the next produced block is pinned on.
+/// The serialized unfinalized channel view the head is folded from.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct ChannelCursor {
-    pub msg_id: MsgId,
+pub struct ChannelView {
+    pub bytes: Vec<u8>,
 }
 
-impl db::Storable<ColumnFamily> for ChannelCursor {
+impl db::Storable<ColumnFamily> for ChannelView {
     type Key = SingletonKey;
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
-    const TYPE_NAME: &'static str = db::type_name!(ChannelCursor);
-}
-
-/// The highest block id this sequencer must not inscribe on the channel again.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct PublishedHighWater {
-    pub block_id: BlockId,
-}
-
-impl db::Storable<ColumnFamily> for PublishedHighWater {
-    type Key = SingletonKey;
-
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
-    const TYPE_NAME: &'static str = db::type_name!(PublishedHighWater);
+    const TYPE_NAME: &'static str = db::type_name!(ChannelView);
 }
 
 /// An L1 deposit event observed but not yet seen finalized.
@@ -423,4 +411,17 @@ impl db::Storable<ColumnFamily> for AccountIdToBlockIdMetaLen {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Meta;
     const TYPE_NAME: &'static str = db::type_name!(AccountIdToBlockIdMetaLen);
+}
+
+/// The map entry between tx hashes and block ids.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct BlockEvents {
+    pub events: Vec<TxEvents>,
+}
+
+impl db::Storable<ColumnFamily> for BlockEvents {
+    type Key = BigEndian<BlockId>;
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Events;
+    const TYPE_NAME: &'static str = db::type_name!(BlockEvents);
 }
