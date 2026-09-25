@@ -4824,6 +4824,8 @@ dependencies = [
  "cross_zone_marker_core",
  "cross_zone_outbox_core",
  "cucumber",
+ "faucet_core",
+ "futures",
  "fee_core",
  "hex",
  "indexer_ffi",
