@@ -218,12 +218,10 @@ fn build_lock_tx(
             &holder_id.into_value(),
         )),
         ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-        ProgramShardSelector::native_balance(outbox_pda(
+        ProgramShardSelector::new(
+            outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
             outbox_id,
-            bridge_lock_id,
-            &target_zone,
-            ordinal,
-        )),
+        ),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee

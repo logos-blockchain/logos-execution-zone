@@ -52,6 +52,9 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // `u64` because genesis funds it through the bridge's `Deposit`.
     let funding_balance = u64::try_from(2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
         .expect("funding balance fits u64");
+    // Covers the dust transfer's fee reserve (`gas_limit x base_fee`, ~16M at wallet
+    // defaults) plus storage fees.
+    let dust_sender_balance: u64 = 1_000_000_000;
 
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -64,7 +67,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                     },
                     GenesisAction::SupplyAccount {
                         account_id: dust_sender_id,
-                        balance: funding_balance,
+                        balance: dust_sender_balance,
                     },
                 ]),
         )
@@ -86,7 +89,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     poll_until("genesis supply to land", 30, || async {
         Ok(
             account_balance(&ctx, funding_id).await? == u128::from(funding_balance)
-                && account_balance(&ctx, dust_sender_id).await? == u128::from(funding_balance),
+                && account_balance(&ctx, dust_sender_id).await? == u128::from(dust_sender_balance),
         )
     })
     .await?;

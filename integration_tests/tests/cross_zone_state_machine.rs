@@ -984,12 +984,10 @@ fn lock_tx_to(
             ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
                 bridge_lock_id,
             )),
-            ProgramShardSelector::native_balance(outbox_pda(
+            ProgramShardSelector::new(
+                outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
                 outbox_id,
-                bridge_lock_id,
-                &zone_b,
-                ordinal,
-            )),
+            ),
         ],
         vec![nonce.into()],
         lock,
@@ -1072,7 +1070,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::native_balance(send_slot),
+            ProgramShardSelector::new(send_slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1125,7 +1123,7 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::native_balance(foreign_slot),
+            ProgramShardSelector::new(foreign_slot, programs::cross_zone_outbox_account_id()),
         ],
         zone_b,
         ordinal,
@@ -1285,12 +1283,10 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
             ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
                 bridge_lock_id,
             )),
-            ProgramShardSelector::native_balance(outbox_pda(
+            ProgramShardSelector::new(
+                outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
                 outbox_id,
-                bridge_lock_id,
-                &zone_b,
-                ordinal,
-            )),
+            ),
         ],
         vec![0_u128.into()],
         lock,
@@ -1401,6 +1397,7 @@ fn a_zero_amount_lock_is_refused() {
     seed_bridge_lock_config(&mut state);
 
     let bridge_lock_id = programs::bridge_lock_account_id();
+    let outbox_id = programs::cross_zone_outbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
     let zone_b = [9_u8; 32];
     let lock = bridge_lock_core::Instruction::Lock {
@@ -1423,12 +1420,7 @@ fn a_zero_amount_lock_is_refused() {
             ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
                 bridge_lock_id,
             )),
-            ProgramShardSelector::native_balance(outbox_pda(
-                programs::cross_zone_outbox_account_id(),
-                bridge_lock_id,
-                &zone_b,
-                0,
-            )),
+            ProgramShardSelector::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
         ],
         vec![0_u128.into()],
         lock,
@@ -1453,6 +1445,7 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
     seed_bridge_lock_config(&mut state);
 
     let bridge_lock_id = programs::bridge_lock_account_id();
+    let outbox_id = programs::cross_zone_outbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
     let zone_b = [9_u8; 32];
     let lock = bridge_lock_core::Instruction::Lock {
@@ -1475,12 +1468,7 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
             ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
                 bridge_lock_id,
             )),
-            ProgramShardSelector::native_balance(outbox_pda(
-                programs::cross_zone_outbox_account_id(),
-                bridge_lock_id,
-                &zone_b,
-                0,
-            )),
+            ProgramShardSelector::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
         ],
         vec![0_u128.into()],
         lock,
@@ -1590,7 +1578,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
             panic!("a re-init naming a different {what} must not execute");
         };
         assert!(
-            format!("{err:?}").contains("already pins a different outbox or mint target"),
+            format!("{err:?}").contains("shard already holds different data"),
             "rejected for the wrong reason: {err:?}"
         );
     }
@@ -1610,7 +1598,7 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::native_balance(slot),
+            ProgramShardSelector::new(slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1641,7 +1629,7 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(ping_record_pda(sender_id), sender_id),
-            ProgramShardSelector::native_balance(slot),
+            ProgramShardSelector::new(slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1709,7 +1697,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
         panic!("a re-init naming a different outbox must not execute");
     };
     assert!(
-        format!("{err:?}").contains("already pins a different outbox"),
+        format!("{err:?}").contains("shard already holds different data"),
         "rejected for the wrong reason: {err:?}"
     );
 }
