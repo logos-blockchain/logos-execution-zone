@@ -239,17 +239,18 @@ impl<S: StorageActorTrait> Message<Report> for SlasherActor<S> {
         for ReportedOffence {
             signer,
             inscription,
+            fault,
         } in offences
         {
             let Some(offender) = SequencerKey::new(signer) else {
                 warn!(
-                    "Undecodable inscription {} signed by an invalid key",
+                    "Offending inscription {} ({fault:?}) signed by an invalid key",
                     hex::encode(inscription)
                 );
                 continue;
             };
             error!(
-                "Undecodable inscription {} written by {}",
+                "Offending inscription {} ({fault:?}) written by {}",
                 hex::encode(inscription),
                 hex::encode(offender)
             );
@@ -512,6 +513,7 @@ mod tests {
         ReportedOffence {
             signer: key.public_key().to_bytes(),
             inscription,
+            fault: crate::Fault::NotABlock,
         }
     }
 

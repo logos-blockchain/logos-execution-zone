@@ -68,6 +68,7 @@ use crate::{
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
+mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
@@ -814,9 +815,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             deposits,
             withdrawals,
             undecodable,
+            finalized_signers,
         } = &*update;
-
-        self.report_offences(undecodable).await;
 
         let moved_head = !finalized.is_empty()
             || match view {
@@ -862,29 +862,40 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
+            let mut judged = Vec::new();
             for entry in finalized {
+                // A root lineage over a held tier is a store restored without its view.
+                let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
                 let outcome =
                     chain.apply_finalized(entry.msg, Some(entry.parent), entry.block.as_ref());
-                let Some(block) = &entry.block else {
+                let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
-                match outcome {
-                    Some(AcceptOutcome::Applied) | None => {}
+                match &outcome {
+                    AcceptOutcome::Applied => {}
                     // A re-delivery of the final tip: it is irreversible all the
                     // same, so it still settles its deposits.
-                    Some(AcceptOutcome::AlreadyApplied) => {
+                    AcceptOutcome::AlreadyApplied => {
                         irreversible_redelivered.push(block.clone());
                     }
-                    Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) => {
+                    AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
                         warn!(
                             "Finalized block {} did not apply, the final tier stays at {:?}: {:#}",
                             block.header.block_id,
                             chain.final_tip().map(|tip| tip.block_id),
-                            anyhow!(err),
+                            anyhow!(err.clone()),
                         );
                     }
                 }
+                judged.push(faults::Finalized {
+                    msg: entry.msg,
+                    outcome,
+                    next: judgeable && chain.final_msg() == entry.msg,
+                });
             }
+            // Before the persist, so the checkpoint never moves past an unreported offence.
+            self.report_offences(faults::judge(undecodable, &judged, finalized_signers))
+                .await;
             let newly_final = chain.take_newly_final();
             let irreversible: Vec<&Block> = newly_final
                 .iter()
@@ -2159,18 +2170,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Records what the follow path saw, before the checkpoint moves past it.
-    async fn report_offences(&self, undecodable: &[(MsgId, Ed25519PublicKey)]) {
-        if undecodable.is_empty() {
+    async fn report_offences(&self, offences: Vec<ReportedOffence>) {
+        if offences.is_empty() {
             return;
         }
 
-        let offences = undecodable
-            .iter()
-            .map(|(msg_id, signer)| ReportedOffence {
-                signer: signer.to_bytes(),
-                inscription: (*msg_id).into(),
-            })
-            .collect();
         self.slasher
             .ask(Report { offences })
             .await

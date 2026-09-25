@@ -107,6 +107,8 @@ pub struct ChannelUpdate {
     pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
+    /// The key that signed each finalized entry carrying a block.
+    pub finalized_signers: Vec<(MsgId, Ed25519PublicKey)>,
 }
 
 /// The live channel config, as much of it as a config update needs.

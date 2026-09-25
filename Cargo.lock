@@ -11326,8 +11326,10 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "borsh",
  "bytesize",
  "clap",
+ "common",
  "env_logger",
  "futures",
  "glob",
