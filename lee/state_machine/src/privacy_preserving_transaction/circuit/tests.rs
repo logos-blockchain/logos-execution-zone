@@ -57,7 +57,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let recipient_account_id = AccountId::for_regular_private_account(
         &recipient_keys.npk(),
         &recipient_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
 
     let balance_to_move: u128 = 37;
@@ -84,7 +84,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
             public_accounts: [(sender_id, sender_account)].into(),
             private_witnesses: vec![init_witness(
                 &recipient_keys,
-                Identifier::default(),
+                Identifier::ZERO,
                 Account::default(),
             )],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
@@ -126,7 +126,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let sender_account_id = AccountId::for_regular_private_account(
         &sender_keys.npk(),
         &sender_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
     let sender_pre_account = Account {
         nonce: sender_nonce,
@@ -137,7 +137,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let recipient_account_id = AccountId::for_regular_private_account(
         &recipient_keys.npk(),
         &recipient_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
     let balance_to_move: u128 = 37;
 
@@ -188,13 +188,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             private_witnesses: vec![
                 update_witness(
                     &sender_keys,
-                    Identifier::default(),
+                    Identifier::ZERO,
                     sender_pre_account,
                     commitment_set
                         .get_proof_for(&commitment_sender)
                         .expect("sender's commitment must be in the set"),
                 ),
-                init_witness(&recipient_keys, Identifier::default(), Account::default()),
+                init_witness(&recipient_keys, Identifier::ZERO, Account::default()),
             ],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -256,7 +256,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 fn init_note_view_tag_is_derived_from_account_keys() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier = Identifier::default();
+    let identifier = Identifier::ZERO;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
 
     let (output, proof) = execute_and_prove(
@@ -398,7 +398,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let account_id = AccountId::for_regular_private_account(
         &account_keys.npk(),
         &account_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
 
     let validity_window_chain_caller = crate::test_methods::validity_window_chain_caller();
@@ -428,7 +428,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
             private_witnesses: vec![init_witness(
                 &account_keys,
-                Identifier::default(),
+                Identifier::ZERO,
                 Account::default(),
             )],
             instruction_data: instruction,
@@ -501,7 +501,7 @@ fn private_pda_withdraw() {
         &seed,
         &npk,
         &keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
 
     // Recipient (public)
@@ -527,7 +527,7 @@ fn private_pda_withdraw() {
             public_accounts: [(recipient_id, recipient_account)].into(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
-                Identifier::default(),
+                Identifier::ZERO,
                 (AccountId::from_builtin_program(program.id()), seed),
                 Account::default(),
             )],
@@ -717,8 +717,7 @@ fn seeded_regular_account(
 fn private_regular_update_without_ask_is_spendable() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) =
-        seeded_regular_account(&keys, Identifier::default());
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     execute_and_prove(
         ProvingInput {
@@ -727,7 +726,7 @@ fn private_regular_update_without_ask_is_spendable() {
                 account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
@@ -747,8 +746,7 @@ fn private_regular_update_without_ask_is_spendable() {
 fn private_regular_witness_without_ask_cannot_assert_authorization() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) =
-        seeded_regular_account(&keys, Identifier::default());
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -758,7 +756,7 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
                 account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
@@ -781,8 +779,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let foreign = test_private_account_keys_2();
-    let (account_id, account, membership_proof) =
-        seeded_regular_account(&keys, Identifier::default());
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -791,7 +788,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
                 account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular {
                     ask: Some(foreign.ask),
                 },
@@ -817,7 +814,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     let keys = test_private_account_keys_1();
     let foreign = test_private_account_keys_2();
     let account_id =
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::default());
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -826,7 +823,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
                 account: Account::default(),
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular {
                     ask: Some(foreign.ask),
                 },
@@ -850,8 +847,7 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
 fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
     let program = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) =
-        seeded_regular_account(&keys, Identifier::default());
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
@@ -860,7 +856,7 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
                 account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,

@@ -1033,7 +1033,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            Identifier::default(),
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1177,7 +1177,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            Identifier::default(),
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1260,7 +1260,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            Identifier::default(),
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1272,7 +1272,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            Identifier::default(),
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)

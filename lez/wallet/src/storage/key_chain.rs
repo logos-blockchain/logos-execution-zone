@@ -900,7 +900,7 @@ mod tests {
 
         let key_chain = KeyChain::new_os_random();
         let nsk = key_chain.private_key_holder.nullifier_secret_key();
-        let identifier = Identifier::default();
+        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
@@ -961,7 +961,7 @@ mod tests {
 
         let label = Label::new("group");
         let holder = GroupKeyHolder::new();
-        let identifier = Identifier::default();
+        let identifier = Identifier::ZERO;
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
@@ -1029,7 +1029,7 @@ mod tests {
 
         let label = Label::new("group");
         let holder = GroupKeyHolder::new();
-        let identifier = Identifier::default();
+        let identifier = Identifier::ZERO;
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
@@ -1109,7 +1109,7 @@ mod tests {
         let mut kc = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let identifier = Identifier::default();
+        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
@@ -1176,11 +1176,11 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::default(),
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, Identifier::default(), account);
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
 
         let is_account_added = user_data.private_account(account_id).is_some();
 
@@ -1195,16 +1195,11 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::default(),
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(
-            key_chain,
-            None,
-            Identifier::default(),
-            account.clone(),
-        );
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account.clone());
 
         let new_account = lee_core::account::Account {
             nonce: account.nonce,
@@ -1214,7 +1209,7 @@ mod tests {
         user_data
             .insert_private_account(
                 account_id,
-                PrivateAccountKind::Regular(Identifier::default()),
+                PrivateAccountKind::Regular(Identifier::ZERO),
                 new_account,
             )
             .unwrap();
@@ -1236,7 +1231,7 @@ mod tests {
         user_data
             .insert_private_account(
                 account_id,
-                PrivateAccountKind::Regular(Identifier::default()),
+                PrivateAccountKind::Regular(Identifier::ZERO),
                 new_account,
             )
             .unwrap();
@@ -1254,14 +1249,14 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::default(),
+            Identifier::ZERO,
         ));
 
         let new_account = lee_core::account::Account::funded(100);
 
         let result = user_data.insert_private_account(
             account_id,
-            PrivateAccountKind::Regular(Identifier::default()),
+            PrivateAccountKind::Regular(Identifier::ZERO),
             new_account,
         );
 
@@ -1276,10 +1271,10 @@ mod tests {
         let account_id1 = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::default(),
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
-        user_data.add_imported_private_account(key_chain, None, Identifier::default(), account);
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
 
         let (account_id2, chain_index2) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));

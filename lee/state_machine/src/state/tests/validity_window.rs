@@ -125,7 +125,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let account_id = AccountId::for_regular_private_account(
         &account_keys.npk(),
         &account_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
@@ -138,7 +138,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
                 shard_selectors: vec![ProgramShardSelector::balance(account_id)],
                 private_witnesses: vec![init_witness(
                     &account_keys,
-                    Identifier::default(),
+                    Identifier::ZERO,
                     Account::default(),
                 )],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
@@ -191,7 +191,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let account_id = AccountId::for_regular_private_account(
         &account_keys.npk(),
         &account_keys.vpk(),
-        Identifier::default(),
+        Identifier::ZERO,
     );
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
@@ -204,7 +204,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                 shard_selectors: vec![ProgramShardSelector::balance(account_id)],
                 private_witnesses: vec![init_witness(
                     &account_keys,
-                    Identifier::default(),
+                    Identifier::ZERO,
                     Account::default(),
                 )],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),

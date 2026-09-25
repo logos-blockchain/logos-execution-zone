@@ -180,7 +180,7 @@ impl PrivateAccountKind {
     /// opaque 32-byte encoding):
     ///
     /// ```text
-    /// Regular(ident):                 0x00 || ident (32) || [0u8; 48]
+    /// Regular(ident):                 0x00 || ident (32) || [0u8; 64]
     /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32)
     /// ```
     ///

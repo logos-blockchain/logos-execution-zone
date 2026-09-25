@@ -32,7 +32,7 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
 ///   `wallet_ffi_get_private_account_keys`)
 /// - `viewing_public_key_len`: length of a `viewing_public_key` (can be obtained from
 ///   `wallet_ffi_get_private_account_keys`), must be `1184`
-/// - `identifier`: little endian encoded 32-byte identifier
+/// - `identifier`: 32-byte opaque identifier
 /// - `account_id`: valid pointer to `FfiBytes32`
 ///
 /// # Returns

@@ -81,7 +81,7 @@ impl ChildKeysPrivate {
                     },
                 },
                 BTreeMap::from_iter([(
-                    PrivateAccountKind::Regular(Identifier::default()),
+                    PrivateAccountKind::Regular(Identifier::ZERO),
                     lee::Account::default(),
                 )]),
             ),

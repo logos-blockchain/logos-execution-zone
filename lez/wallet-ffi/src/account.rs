@@ -625,7 +625,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// - `handle`: Valid wallet handle
 /// - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
 /// - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
-/// - `identifier`: Identifier for this private account as 32 little-endian bytes
+/// - `identifier`: Identifier for this private account as 32 opaque bytes
 /// - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
 ///
 /// # Returns

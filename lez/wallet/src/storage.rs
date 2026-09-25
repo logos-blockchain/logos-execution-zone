@@ -217,7 +217,7 @@ mod tests {
         storage.key_chain_mut().add_imported_private_account(
             key_chain,
             None,
-            Identifier::default(),
+            Identifier::ZERO,
             account,
         );
 

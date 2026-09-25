@@ -983,7 +983,7 @@ mod tests {
     fn private_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::default()));
+        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
         let pre_state = PreparedAccount {
             account_id,
             account: Account::default(),
@@ -992,7 +992,7 @@ mod tests {
             kind: WitnessKind::Regular { ask: None },
             nsk: None,
             npk,
-            identifier: Identifier::default(),
+            identifier: Identifier::ZERO,
             vpk,
             pre_state,
             proof: None,
@@ -1003,7 +1003,7 @@ mod tests {
     fn public_state() -> State {
         let npk = NullifierPublicKey([0; 32]);
         let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::default()));
+        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
         let account = PreparedAccount {
             account_id,
             account: Account::default(),
@@ -1200,12 +1200,12 @@ mod tests {
     fn foreign_private_init_is_unauthorized() {
         let npk = NullifierPublicKey([7; 32]);
         let vpk = ViewingPublicKey::from_seed(&[8; 32], &[9; 32]);
-        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::default()));
+        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
         let pre = private_foreign_acc_preparation(
             account_id,
             npk,
             vpk,
-            &PrivateAccountKind::Regular(Identifier::default()),
+            &PrivateAccountKind::Regular(Identifier::ZERO),
         );
 
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));

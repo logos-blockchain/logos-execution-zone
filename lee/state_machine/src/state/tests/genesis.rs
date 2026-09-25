@@ -26,9 +26,9 @@ fn new_includes_nullifiers_for_private_accounts() {
     let account = Account::funded(100);
 
     let account_id1 =
-        AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), Identifier::default());
+        AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), Identifier::ZERO);
     let account_id2 =
-        AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), Identifier::default());
+        AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), Identifier::ZERO);
 
     let init_commitment1 = Commitment::new(&account_id1, &account);
     let init_commitment2 = Commitment::new(&account_id2, &account);

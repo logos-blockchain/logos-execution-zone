@@ -148,7 +148,7 @@ async fn import_private_account() -> Result<()> {
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::default(),
+        Identifier::ZERO,
     ));
     let account = lee::Account::funded(777);
 
@@ -160,7 +160,7 @@ async fn import_private_account() -> Result<()> {
         key_chain_json,
         account_state,
         chain_index: None,
-        identifier: Some(lee_core::Identifier::default()),
+        identifier: Some(lee_core::Identifier::ZERO),
     }));
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::Empty = sub_ret else {
@@ -189,7 +189,7 @@ async fn import_private_account() -> Result<()> {
 
     assert_eq!(imported_acc.chain_index, None);
 
-    assert_eq!(imported_acc.kind.identifier(), Identifier::default());
+    assert_eq!(imported_acc.kind.identifier(), Identifier::ZERO);
 
     assert_eq!(imported_acc.account, &account);
 
@@ -204,7 +204,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::default(),
+        Identifier::ZERO,
     ));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
@@ -218,7 +218,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
             key_chain_json: key_chain_json.clone(),
             account_state: HumanReadableAccount::from(initial_account),
             chain_index: None,
-            identifier: Some(lee_core::Identifier::default()),
+            identifier: Some(lee_core::Identifier::ZERO),
         })),
     )
     .await?;
@@ -232,7 +232,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
             key_chain_json,
             account_state: HumanReadableAccount::from(updated_account.clone()),
             chain_index: None,
-            identifier: Some(lee_core::Identifier::default()),
+            identifier: Some(lee_core::Identifier::ZERO),
         })),
     )
     .await?;

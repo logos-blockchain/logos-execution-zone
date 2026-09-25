@@ -271,16 +271,12 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
     let keys = test_private_account_keys_1();
     let emitter = crate::test_methods::event_emitter();
     let account_id =
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::default());
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(
-                &keys,
-                Identifier::default(),
-                Account::default(),
-            )],
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO, Account::default())],
             instruction_data: Program::serialize_instruction(EmitterInstruction {
                 events: vec![emitted(0), emitted(1)],
                 chain: vec![],

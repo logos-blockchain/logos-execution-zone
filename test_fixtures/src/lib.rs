@@ -828,7 +828,7 @@ impl MultiZoneTestContextBuilder {
             reason = "Zones can be started in any order"
         )]
         for (channel_id, zone_builder) in self.zone_builders {
-            let zone_ctx = zone_builder.build(bedrock_addr).await?;
+            let zone_ctx = Box::pin(zone_builder.build(bedrock_addr)).await?;
 
             log::info!("Built context for {channel_id}");
 

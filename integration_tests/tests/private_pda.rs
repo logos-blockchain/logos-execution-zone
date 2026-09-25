@@ -120,7 +120,7 @@ async fn spend_private_pda(
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
-                    kind: PrivateAccountKind::Regular(Identifier::default()),
+                    kind: PrivateAccountKind::Regular(Identifier::ZERO),
                 }
                 .balance(),
             ],
@@ -256,13 +256,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let spend_program = ProgramWithDependencies::new(proxy, proxy_id, HashMap::new());
 
-    let alice_pda_0_id = AccountId::for_private_pda(
-        &proxy_id,
-        &seed,
-        &alice_npk,
-        &alice_vpk,
-        Identifier::default(),
-    );
+    let alice_pda_0_id =
+        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, Identifier::ZERO);
     let alice_pda_1_id = AccountId::for_private_pda(
         &proxy_id,
         &seed,
@@ -284,7 +279,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         sender_0,
         alice_npk,
         alice_vpk.clone(),
-        Identifier::default(),
+        Identifier::ZERO,
         seed,
         proxy_id,
         amount,

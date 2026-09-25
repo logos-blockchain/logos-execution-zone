@@ -582,14 +582,14 @@ mod tests {
             &pda_seed,
             &alice_npk,
             &alice_vpk,
-            Identifier::default(),
+            Identifier::ZERO,
         );
         let bob_account_id = AccountId::for_private_pda(
             &program_id,
             &pda_seed,
             &bob_npk,
             &bob_group_vpk,
-            Identifier::default(),
+            Identifier::ZERO,
         );
         assert_eq!(alice_account_id, bob_account_id);
     }

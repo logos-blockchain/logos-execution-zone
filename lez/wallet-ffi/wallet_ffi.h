@@ -620,7 +620,7 @@ enum WalletFfiError wallet_ffi_import_public_account(struct WalletHandle *handle
  * - `handle`: Valid wallet handle
  * - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
  * - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
- * - `identifier`: Identifier for this private account as 32 little-endian bytes
+ * - `identifier`: Identifier for this private account as 32 opaque bytes
  * - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
  *
  * # Returns
@@ -1017,7 +1017,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiBytes32 program
  *   `wallet_ffi_get_private_account_keys`)
  * - `viewing_public_key_len`: length of a `viewing_public_key` (can be obtained from
  *   `wallet_ffi_get_private_account_keys`), must be `1184`
- * - `identifier`: little endian encoded 32-byte identifier
+ * - `identifier`: 32-byte opaque identifier
  * - `account_id`: valid pointer to `FfiBytes32`
  *
  * # Returns

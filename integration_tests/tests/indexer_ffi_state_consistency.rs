@@ -30,7 +30,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         to_vpk: None,
         to_keys: None,
         amount: 100,
-        to_identifier: Some(lee_core::Identifier::default()),
+        to_identifier: Some(lee_core::Identifier::ZERO),
     });
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
@@ -76,7 +76,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         to_vpk: None,
         to_keys: None,
         amount: 100,
-        to_identifier: Some(lee_core::Identifier::default()),
+        to_identifier: Some(lee_core::Identifier::ZERO),
     });
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;

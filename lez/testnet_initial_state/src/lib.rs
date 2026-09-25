@@ -114,13 +114,13 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
             account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
             key_chain: key_chain_1,
             chain_index: None,
-            identifier: Identifier::default(),
+            identifier: Identifier::ZERO,
         },
         PrivateAccountPrivateInitialData {
             account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
             key_chain: key_chain_2,
             chain_index: None,
-            identifier: Identifier::default(),
+            identifier: Identifier::ZERO,
         },
     ]
 }
@@ -144,7 +144,7 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             let account_id = lee::AccountId::for_regular_private_account(
                 npk,
                 &init_comm_data.vpk,
-                Identifier::default(),
+                Identifier::ZERO,
             );
 
             (

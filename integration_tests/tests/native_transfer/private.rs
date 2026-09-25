@@ -60,7 +60,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_identifier: Some(Identifier::default()),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -144,7 +144,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(Identifier::default()),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -274,7 +274,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_identifier: Some(Identifier::default()),
+        to_identifier: Some(Identifier::ZERO),
         amount: 100,
     });
 
@@ -512,8 +512,7 @@ async fn prove_init_with_commitment_root(
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&npk, &vpk, Identifier::default());
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
     let (output, _) = execute_and_prove(
         ProvingInput {
@@ -527,7 +526,7 @@ async fn prove_init_with_commitment_root(
                 account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
-                identifier: Identifier::default(),
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: Some(ask) },
                 nullifier: NullifierWitness::Init {
                     npk,
@@ -555,8 +554,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&npk, &vpk, Identifier::default());
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 

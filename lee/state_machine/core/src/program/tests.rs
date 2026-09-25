@@ -441,11 +441,11 @@ fn for_private_pda_differs_for_different_identifier() {
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::default()),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::ZERO),
         AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::new([1; 32])),
     );
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::default()),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, Identifier::ZERO),
         AccountId::for_private_pda(
             &program_id,
             &seed,

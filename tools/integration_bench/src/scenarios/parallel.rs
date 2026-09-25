@@ -70,7 +70,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
-                        to_identifier: Some(lee_core::Identifier::default()),
+                        to_identifier: Some(lee_core::Identifier::ZERO),
                         amount: AMOUNT_PER_TRANSFER * 5,
                     }),
                 )
@@ -99,7 +99,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(lee_core::Identifier::default()),
+                to_identifier: Some(lee_core::Identifier::ZERO),
                 amount: AMOUNT_PER_TRANSFER,
             }),
         )

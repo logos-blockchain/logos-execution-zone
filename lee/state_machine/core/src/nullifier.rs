@@ -8,9 +8,8 @@ use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
-/// 256 bits of identifier entropy, big-endian so byte order matches numeric order.
+/// 256-bit opaque private-account identifier.
 #[derive(
-    Default,
     Copy,
     Clone,
     SerializeDisplay,
@@ -22,18 +21,20 @@ const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\
     Ord,
     BorshSerialize,
     BorshDeserialize,
+    derive_more::Debug,
+    derive_more::Display,
+    derive_more::AsRef,
 )]
+#[debug("{}", value.to_base58())]
+#[display("{}", value.to_base58())]
 pub struct Identifier {
+    #[as_ref([u8])]
     value: [u8; 32],
 }
 
-impl std::fmt::Debug for Identifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value.to_base58())
-    }
-}
-
 impl Identifier {
+    pub const ZERO: Self = Self { value: [0; 32] };
+
     #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self { value }
@@ -47,12 +48,6 @@ impl Identifier {
     #[must_use]
     pub const fn into_value(self) -> [u8; 32] {
         self.value
-    }
-}
-
-impl AsRef<[u8]> for Identifier {
-    fn as_ref(&self) -> &[u8] {
-        &self.value
     }
 }
 
@@ -75,12 +70,6 @@ impl std::str::FromStr for Identifier {
         let mut value = [0_u8; 32];
         value.copy_from_slice(&bytes);
         Ok(Self { value })
-    }
-}
-
-impl std::fmt::Display for Identifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value.to_base58())
     }
 }
 
@@ -305,7 +294,7 @@ mod tests {
             118, 187, 238, 65, 251, 54, 229, 89, 151, 17, 104, 62, 240,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::default());
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -361,5 +350,39 @@ mod tests {
             157, 125, 171, 137, 46, 64, 206, 191, 211, 231, 0, 11, 86,
         ]);
         assert_eq!(Nullifier::for_dummy(&nullifier_seed), expected_nullifier);
+    }
+
+    #[test]
+    fn identifier_display_from_str_round_trip() {
+        for identifier in [
+            Identifier::ZERO,
+            Identifier::new([0xff; 32]),
+            Identifier::new(core::array::from_fn(|i| u8::try_from(i).unwrap())),
+        ] {
+            let round_tripped: Identifier = identifier.to_string().parse().unwrap();
+            assert_eq!(round_tripped, identifier);
+            assert_eq!(format!("{identifier:?}"), identifier.to_string());
+        }
+    }
+
+    #[test]
+    fn identifier_serde_json_round_trip() {
+        let identifier = Identifier::new(core::array::from_fn(|i| u8::try_from(i).unwrap()));
+        let json = serde_json::to_string(&identifier).unwrap();
+        let round_tripped: Identifier = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, identifier);
+    }
+
+    #[test]
+    fn identifier_from_str_rejects_invalid_base58() {
+        let err = "0OIl".parse::<Identifier>().unwrap_err();
+        assert!(matches!(err, IdentifierError::InvalidBase58(_)));
+    }
+
+    #[test]
+    fn identifier_from_str_rejects_wrong_length() {
+        let too_short = [1_u8; 16].to_base58();
+        let err = too_short.parse::<Identifier>().unwrap_err();
+        assert!(matches!(err, IdentifierError::InvalidLength(16)));
     }
 }
