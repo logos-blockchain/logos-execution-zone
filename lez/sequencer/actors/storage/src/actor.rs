@@ -20,6 +20,8 @@ use lee::{AccountId, V03State};
 use lee_core::BlockId;
 use log::debug;
 
+#[cfg(feature = "test-utils")]
+use crate::protocol::ResetAllBlocksToPending;
 use crate::{
     Result, StorageActorTrait,
     actor::tx_index::TransactionIndex,
@@ -32,11 +34,11 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        GetZoneAnchor, GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -433,6 +435,36 @@ impl StorageActor {
         Ok(())
     }
 
+    /// Stages `checkpoint`, if it's newer than the one already stored.
+    fn stage_zone_checkpoint(
+        &self,
+        batch: &mut db::WriteBatch,
+        checkpoint: ZoneCheckpointRecord,
+    ) -> Result<()> {
+        let stored = self
+            .db()
+            .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?;
+
+        if let Some(stored) = stored
+            && stored.seq >= checkpoint.seq
+        {
+            log::debug!(
+                "Dropping a zone checkpoint at sequence {} for the stored one at {}",
+                checkpoint.seq,
+                stored.seq,
+            );
+            return Ok(());
+        }
+
+        self.db()
+            .put_batch(
+                batch,
+                &encoding::SingletonKey,
+                &entities::ZoneCheckpoint::from(checkpoint),
+            )
+            .map_err(Into::into)
+    }
+
     /// Stages the published high water mark down to `block_id`, leaving a mark
     /// already at or below it alone.
     fn lower_published_high_water(
@@ -745,38 +777,6 @@ impl Message<DeleteBlock> for StorageActor {
     }
 }
 
-impl Message<ResetAllBlocksToPending> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        ResetAllBlocksToPending: ResetAllBlocksToPending,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-
-        let blocks_to_reset = self
-            .db()
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .filter_ok(|block| !matches!(block.bedrock_status, BedrockStatus::Pending));
-
-        for block in blocks_to_reset {
-            let mut block = block?;
-            block.bedrock_status = BedrockStatus::Pending;
-            self.db().put_batch(
-                &mut batch,
-                &encoding::BigEndian::new(&block.header.block_id),
-                &entities::Block { block },
-            )?;
-        }
-
-        self.db().write(batch)?;
-
-        Ok(())
-    }
-}
-
 impl Message<GetFirstBlockId> for StorageActor {
     type Reply = Result<Option<BlockId>>;
 
@@ -835,32 +835,32 @@ impl Message<GetLeeState> for StorageActor {
     }
 }
 
-impl Message<GetZoneCheckpointBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl Message<GetZoneCheckpoint> for StorageActor {
+    type Reply = Result<Option<ZoneCheckpointRecord>>;
 
     async fn handle(
         &mut self,
-        GetZoneCheckpointBytes: GetZoneCheckpointBytes,
+        GetZoneCheckpoint: GetZoneCheckpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self
             .db()
             .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?
-            .map(|checkpoint| checkpoint.bytes))
+            .map(Into::into))
     }
 }
 
-impl Message<SetZoneCheckpointBytes> for StorageActor {
+impl Message<UpdateZoneCheckpoint> for StorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        SetZoneCheckpointBytes { bytes }: SetZoneCheckpointBytes,
+        UpdateZoneCheckpoint { checkpoint }: UpdateZoneCheckpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.db()
-            .put(&encoding::SingletonKey, &entities::ZoneCheckpoint { bytes })
-            .map_err(Into::into)
+        let mut batch = db::WriteBatch::default();
+        self.stage_zone_checkpoint(&mut batch, checkpoint)?;
+        self.db().write(batch).map_err(Into::into)
     }
 }
 
@@ -1064,11 +1064,7 @@ impl Message<AtomicUpdate> for StorageActor {
 
         // Checkpoint
         if let Some(checkpoint) = checkpoint {
-            self.db().put_batch(
-                &mut batch,
-                &encoding::SingletonKey,
-                &entities::ZoneCheckpoint { bytes: checkpoint },
-            )?;
+            self.stage_zone_checkpoint(&mut batch, checkpoint)?;
         }
 
         // Zone anchor
@@ -1494,5 +1490,38 @@ impl Message<GetAccountTransactions> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.get_affecting_txs_for_account_id(account_id, offset, limit)
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Message<ResetAllBlocksToPending> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        ResetAllBlocksToPending: ResetAllBlocksToPending,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let mut batch = db::WriteBatch::default();
+
+        let blocks_to_reset = self
+            .db()
+            .iter::<entities::Block>()
+            .map_ok(|block| block.block)
+            .filter_ok(|block| !matches!(block.bedrock_status, BedrockStatus::Pending));
+
+        for block in blocks_to_reset {
+            let mut block = block?;
+            block.bedrock_status = BedrockStatus::Pending;
+            self.db().put_batch(
+                &mut batch,
+                &encoding::BigEndian::new(&block.header.block_id),
+                &entities::Block { block },
+            )?;
+        }
+
+        self.db().write(batch)?;
+
+        Ok(())
     }
 }

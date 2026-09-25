@@ -54,6 +54,7 @@ pub struct ChannelConfigActor {
     /// Our own draft. Not persisted: a signature is only good for one funded
     /// transaction, and a restart funds a different one.
     draft: Option<OwnDraft>,
+    // TODO: Use messages instead of tokio's primitives.
     publisher: Option<mpsc::Sender<Wire>>,
     /// Sent the draft once it has its signatures.
     submitter: Option<WeakRecipient<SubmitConfig>>,

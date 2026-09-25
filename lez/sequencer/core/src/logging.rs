@@ -6,8 +6,7 @@ use chain_state::AcceptOutcome;
 use common::block::Block;
 use log::{info, warn};
 use logos_blockchain_zone_sdk::Slot;
-
-use crate::block_publisher::MsgId;
+use sequencer_bedrock_actor::protocol::MsgId;
 
 /// `lo..=hi (n)` for a log line, flagged when the ids do not fill that range.
 pub(crate) fn id_span(ids: &[u64]) -> String {

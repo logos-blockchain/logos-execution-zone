@@ -116,6 +116,8 @@ impl db::Storable<ColumnFamily> for FinalSnapshot {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ZoneCheckpoint {
     pub bytes: Vec<u8>,
+    /// The channel sequence this checkpoint was minted at.
+    pub seq: u64,
 }
 
 impl db::Storable<ColumnFamily> for ZoneCheckpoint {

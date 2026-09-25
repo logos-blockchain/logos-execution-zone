@@ -22,6 +22,10 @@ impl<T: kameo::Actor> ActorHandle<T> {
         &self.full_name
     }
 
+    pub const fn actor_ref(&self) -> &ActorRef<T> {
+        &self.actor_ref
+    }
+
     pub async fn shutdown(self) {
         let full_name = self.full_name();
         info!("Stopping {full_name} actor...");

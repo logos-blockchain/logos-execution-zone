@@ -978,6 +978,19 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
+    let mut is_included = false;
+
+    unsafe {
+        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
+            .unwrap();
+    }
+
+    assert!(is_included);
+
     let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
     let to_balance = ffi_balance(wallet_ffi_handle, &to, true);
@@ -997,17 +1010,6 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         fee > 0 && fee <= DEFAULT_MAX_FEE,
         "a charged transfer pays a positive fee within the ceiling, got {fee}"
     );
-
-    // Also check for transaction inclusion
-    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
-    let mut is_included = false;
-
-    unsafe {
-        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
-            .unwrap();
-    }
-
-    assert!(is_included);
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -1676,6 +1678,23 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
 
     log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let tx_hash: HashType = unsafe { CStr::from_ptr(transaction_result.tx_hash) }
+        .to_str()?
+        .parse()?;
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            wallet_ffi_handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the transfer transaction must land");
 
     let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
