@@ -126,7 +126,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .ask(AtomicUpdate {
             checkpoint: None,
             blocks: vec![],
-            channel_cursor: None,
+            channel_view: None,
             head_tip: Some(tip.clone()),
             head_state: Arc::clone(&state),
             final_snapshot: Some((state, tip)),
@@ -138,7 +138,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
-            lower_published_high_water: None,
             events: vec![],
         })
         .await

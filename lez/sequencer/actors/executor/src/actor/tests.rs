@@ -30,7 +30,6 @@ use tokio::{sync::mpsc, test, time::timeout};
 
 use crate::{
     ExecutorActor,
-    actor::BlockedAttempts,
     protocol::{self, TransactionOrigin},
 };
 
@@ -232,7 +231,7 @@ fn prepare_mock_storage_with_stake(
         .returning(|_, _| Ok(None));
 
     mock_storage
-        .expect_handle_get_channel_cursor()
+        .expect_handle_get_channel_view_bytes()
         .returning(|_, _| Ok(None));
 
     mock_storage
@@ -242,10 +241,6 @@ fn prepare_mock_storage_with_stake(
     mock_storage
         .expect_handle_get_latest_block_meta()
         .returning(move |_, _| Ok(Some(genesis_block_meta.clone())));
-
-    mock_storage
-        .expect_handle_raise_published_high_water()
-        .returning(|_, _| Ok(()));
 
     mock_storage
         .expect_handle_get_dead_letter_dispatches()
@@ -265,10 +260,6 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    // Startup published genesis, so the turn is not a rewind.
-    mock_storage
-        .expect_handle_get_published_high_water()
-        .returning(|_msg, _ctx| Ok(Some(1)));
     mock_storage
         .expect_handle_get_pending_cross_zone_dispatches()
         .returning(|_msg, _ctx| Ok(Vec::new()));
@@ -282,9 +273,6 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel();
     mock_bedrock
         .expect_handle_get_accredited_keys()
-        .returning(|_msg, _ctx| Ok(None));
-    mock_bedrock
-        .expect_handle_get_channel_tip_message_id()
         .returning(|_msg, _ctx| Ok(None));
 
     // The first publish loses the race; the second is served and its block
@@ -301,11 +289,13 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                 });
             }
             let msg_id = MsgId::from(msg.block.header.hash.0);
+            let parent = msg.parent.unwrap_or_else(MsgId::root);
             published_tx
                 .send(msg.block)
                 .expect("the test still listens");
             Ok(PublishOutcome {
                 this_msg: msg_id,
+                parent,
                 checkpoint: Checkpoint {
                     last_msg_id: msg_id,
                     pending_txs: Vec::new(),
@@ -372,40 +362,6 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     Ok(())
 }
 
-/// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.
-#[test]
-async fn a_blocked_run_restarts_whenever_the_channel_tip_changes() {
-    let mut blocked = BlockedAttempts::default();
-    let first = MsgId::from([1_u8; 32]);
-    let second = MsgId::from([2_u8; 32]);
-
-    assert_eq!(blocked.record(first), 1);
-    assert_eq!(blocked.record(first), 2);
-    assert_eq!(
-        blocked.record(second),
-        1,
-        "a different tip is a channel that moved, not a stuck one"
-    );
-    assert_eq!(blocked.record(second), 2);
-}
-
-/// A recovered node must not leave the gauge high.
-#[test]
-async fn clearing_a_blocked_run_reports_only_a_real_change() {
-    let mut blocked = BlockedAttempts::default();
-    assert!(!blocked.clear(), "nothing to clear before any skip");
-
-    blocked.record(MsgId::from([1_u8; 32]));
-    assert!(blocked.clear(), "a run that existed is worth reporting");
-    assert!(!blocked.clear(), "and only once");
-
-    assert_eq!(
-        blocked.record(MsgId::from([1_u8; 32])),
-        1,
-        "a cleared run starts over"
-    );
-}
-
 /// The scheduler's interval task gives up for good the first time it finds
 /// this actor stopped, so a failed turn must not surface as an error — that
 /// would end block production permanently.
@@ -415,10 +371,6 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
 
     let (config, _home) = sequencer_config();
     let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    // Startup published genesis, so the turn is not a rewind.
-    mock_storage
-        .expect_handle_get_published_high_water()
-        .returning(|_msg, _ctx| Ok(Some(1)));
     mock_storage
         .expect_handle_get_pending_cross_zone_dispatches()
         .returning(|_msg, _ctx| Ok(Vec::new()));

@@ -543,26 +543,34 @@ async fn setup_bedrock_actor(
 }
 
 #[cfg(feature = "standalone")]
-#[expect(
-    clippy::unused_async,
-    reason = "Must be async to match the signature of the non-standalone version"
-)]
 async fn setup_bedrock_actor(
     config: &SequencerConfig,
-    _storage_ref: ActorRef<StorageActor>,
+    storage_ref: ActorRef<StorageActor>,
     _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
 ) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    use std::sync::{Arc, Mutex};
+
     use sequencer_bedrock_actor::protocol::{
         AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
     };
+    use sequencer_storage_actor::protocol::GetZoneCheckpoint;
+
+    // The channel exists once a previous run stored a checkpoint, so a fresh
+    // store bootstraps it by publishing genesis.
+    let stored_seq = storage_ref
+        .ask(GetZoneCheckpoint)
+        .await
+        .expect("Failed to read the zone checkpoint")
+        .map(|record| record.seq);
+    let channel_exists = stored_seq.is_some();
 
     let mut mock = BedrockActor::default();
 
     mock.expect_handle_check_channel_exists()
-        .returning(|_msg, _ctx| Ok(false));
+        .returning(move |_msg, _ctx| Ok(channel_exists));
 
     mock.expect_handle_get_channel_tip_slot()
-        .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+        .returning(move |_msg, _ctx| Ok(channel_exists.then(|| Slot::from(0))));
 
     mock.expect_handle_read_channel()
         .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
@@ -584,27 +592,42 @@ async fn setup_bedrock_actor(
             }))
         });
 
-    let seq = std::sync::atomic::AtomicU64::new(0);
-    mock.expect_handle_publish_block()
+    // Continues the stored sequence so the store keeps each new checkpoint.
+    let seq = Arc::new(std::sync::atomic::AtomicU64::new(stored_seq.unwrap_or(0)));
+    let tip = Arc::new(Mutex::new(MsgId::root()));
+    let outcome = move |hash: [u8; 32], parent: Option<MsgId>| {
+        let msg_id = MsgId::from(hash);
+        let mut tip = tip.lock().expect("mock channel tip lock");
+        let parent = parent.unwrap_or(*tip);
+        *tip = msg_id;
+        PublishOutcome {
+            this_msg: msg_id,
+            parent,
+            checkpoint: Checkpoint {
+                last_msg_id: msg_id,
+                pending_txs: Vec::new(),
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+                channel_notes: Vec::new(),
+                finalized_config: MsgId::root(),
+            },
+            seq: ChannelSeq::mocked(
+                seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    .saturating_add(1),
+            ),
+            released_notes: Vec::new(),
+        }
+    };
+    let create_outcome = outcome.clone();
+    mock.expect_handle_create_channel()
         .returning(move |msg, _ctx| {
-            let msg_id = MsgId::from(msg.block.header.hash.0);
-            Ok(PublishOutcome {
-                this_msg: msg_id,
-                checkpoint: Checkpoint {
-                    last_msg_id: msg_id,
-                    pending_txs: Vec::new(),
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: Slot::from(0),
-                    channel_notes: Vec::new(),
-                    finalized_config: MsgId::root(),
-                },
-                seq: ChannelSeq::mocked(
-                    seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                        .saturating_add(1),
-                ),
-                released_notes: Vec::new(),
-            })
+            Ok(create_outcome(
+                msg.genesis.header.hash.0,
+                Some(MsgId::root()),
+            ))
         });
+    mock.expect_handle_publish_block()
+        .returning(move |msg, _ctx| Ok(outcome(msg.block.header.hash.0, msg.parent)));
 
     Ok(mock)
 }

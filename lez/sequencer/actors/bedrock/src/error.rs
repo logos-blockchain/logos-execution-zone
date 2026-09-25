@@ -14,7 +14,7 @@ pub enum Error {
     BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
 
     #[error("Checkpoint (de-)serialization failed")]
-    CheckpointSerializationFailed(#[from] logos_blockchain_core::codec::Error),
+    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \

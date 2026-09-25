@@ -10,8 +10,8 @@ use logos_blockchain_core::mantle::{
     ops::{
         Op, OpProof, SignedOperation,
         channel::{
-            ChannelId, MsgId,
-            config::{ChannelConfigValidationContext, Keys},
+            ChannelId, MsgId, VerifiedChannelKeys,
+            config::ChannelConfigValidationContext,
             inscribe::{Inscription, InscriptionOp},
         },
     },
@@ -24,7 +24,7 @@ use logos_blockchain_core::mantle::{
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
-use super::channel_blocks;
+use super::channel_entries;
 use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
@@ -35,7 +35,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
         channel_id: channel,
         inscription,
         parent: MsgId::root(),
-        signer: signer.public_key(),
+        signer: signer.public_key().into_unverified(),
     });
     let raw = MantleTxBuilder::new()
         .extend_ops([op])
@@ -59,11 +59,15 @@ fn a_custom_tx_yields_its_block() {
     .into_pending_block(&sequencer_sign_key_for_testing());
 
     let custom = ChannelUpdateTx::Custom(inscribing_tx(channel, &block));
-    let blocks = channel_blocks(&custom, channel);
+    let entries = channel_entries(&custom, channel);
 
-    assert_eq!(blocks.len(), 1, "the Custom tx carries one block");
-    assert_eq!(blocks[0].header.block_id, 7);
-    assert_eq!(blocks[0].header.hash, block.header.hash);
+    assert_eq!(entries.len(), 1, "the Custom tx carries one entry");
+    let carried = entries[0]
+        .block
+        .as_ref()
+        .expect("the entry carries a block");
+    assert_eq!(carried.header.block_id, 7);
+    assert_eq!(carried.header.hash, block.header.hash);
 }
 
 #[test]
@@ -73,7 +77,7 @@ fn a_config_tx_yields_nothing() {
     let config = ChannelUpdateTx::Config(
         SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
     );
-    assert!(channel_blocks(&config, channel).is_empty());
+    assert!(channel_entries(&config, channel).is_empty());
 }
 
 /// Bedrock verifies a channel-creating config op against a threshold of zero,
@@ -81,7 +85,7 @@ fn a_config_tx_yields_nothing() {
 /// even our own signature sinks the whole creation tx, and with it the channel.
 #[test]
 fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
-    let keys = Keys::from(Ed25519Key::generate(&mut rand::rngs::OsRng).public_key());
+    let keys = VerifiedChannelKeys::from(Ed25519Key::generate(&mut rand::rngs::OsRng).public_key());
     let op = super::genesis_config_op(
         ChannelId::from([1; 32]),
         keys,

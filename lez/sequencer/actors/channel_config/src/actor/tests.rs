@@ -5,7 +5,7 @@ use logos_blockchain_core::{
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId, Outputs},
         ops::{
-            channel::{ChannelId, MsgId, config::Keys, withdraw::ChannelWithdrawOp},
+            channel::{ChannelId, MsgId, VerifiedChannelKeys, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
     },
@@ -77,7 +77,7 @@ fn draft_tx(target: &ConfigTarget) -> Ops {
     let op = ChannelConfigOp {
         channel: ChannelId::from(CHANNEL),
         parent: target.parent,
-        keys: Keys::try_from(target.keys.clone()).expect("a non-empty key list"),
+        keys: VerifiedChannelKeys::try_from(target.keys.clone()).expect("a non-empty key list"),
         posting_timeframe: SlotTimeframe::from(target.posting_timeframe),
         posting_timeout: SlotTimeout::from(target.posting_timeout),
         configuration_threshold: target.configuration_threshold,

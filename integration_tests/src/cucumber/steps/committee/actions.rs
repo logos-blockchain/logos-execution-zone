@@ -292,7 +292,7 @@ async fn sequencer_becomes_posting_turn(
             .ok_or_else(|| StepError::InvalidArgument {
                 message: format!("sequencer '{alias}' is not registered"),
             })?;
-    let expected_key: Ed25519PublicKey = Ed25519Key::from_bytes(&signing_key).public_key();
+    let expected_key = Ed25519Key::from_bytes(&signing_key).public_key();
     let observer = spawn_channel_observer(
         context.bedrock().primary_api_addr(),
         config::bedrock_channel_id(),

@@ -15,10 +15,6 @@ pub type CrossZoneMessageKey = [u8; 32];
 /// Zone id of a cross-zone peer.
 pub type PeerZoneKey = [u8; 32];
 
-/// The zone-sdk `MsgId` of a channel inscription, as the raw bytes it wraps: the
-/// sdk type does not derive borsh, and so cannot be stored.
-pub type MsgId = [u8; 32];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GetBlock {
     pub block_id: BlockId,
@@ -74,15 +70,8 @@ pub struct SetZoneAnchor {
     pub anchor: ZoneAnchorRecord,
 }
 
-pub struct GetPublishedHighWater;
-
-/// The `MsgId` of the newest channel inscription processed, block or not.
-pub struct GetChannelCursor;
-
-/// Raises the published high water mark to `block_id`, never lowering it.
-pub struct RaisePublishedHighWater {
-    pub block_id: BlockId,
-}
+/// The serialized unfinalized channel view.
+pub struct GetChannelViewBytes;
 
 pub struct GetPendingDepositEvents;
 
@@ -167,9 +156,8 @@ pub struct AtomicUpdate {
     /// Block payloads to write.
     pub blocks: Vec<Block>,
 
-    /// The `MsgId` of the newest inscription this update processed, block or
-    /// not; `None` leaves the stored cursor untouched.
-    pub channel_cursor: Option<MsgId>,
+    /// Serialized unfinalized channel view; `None` leaves the stored one untouched.
+    pub channel_view: Option<Vec<u8>>,
 
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
     pub head_tip: Option<BlockMeta>,
@@ -198,9 +186,6 @@ pub struct AtomicUpdate {
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
 
-    /// Lower the published high water mark to this height if it is above.
-    pub lower_published_high_water: Option<BlockId>,
-
     /// Events emitted by transactions in blocks.
     pub events: Vec<(BlockId, Vec<TxEvents>)>,
 }
@@ -219,7 +204,7 @@ impl AtomicUpdate {
             checkpoint: None,
             head_tip: Some(BlockMeta::from(&block)),
             blocks: vec![block],
-            channel_cursor: None,
+            channel_view: None,
             head_state: state,
             final_snapshot: None,
             finalized_up_to: None,
@@ -229,7 +214,6 @@ impl AtomicUpdate {
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
-            lower_published_high_water: None,
             events,
         }
     }

@@ -30,6 +30,7 @@ sequencer_stake_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
+logos-blockchain-binary-codec.workspace = true
 kameo.workspace = true
 anyhow.workspace = true
 serde.workspace = true

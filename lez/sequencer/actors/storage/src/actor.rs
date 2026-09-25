@@ -30,16 +30,15 @@ use crate::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetBlockEvents, GetChannelCursor, GetCrossZonePeerFloorBytes,
+        GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
         GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetSlashRecordBytes, GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor,
-        GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RaisePublishedHighWater, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
-        ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -468,30 +467,6 @@ impl StorageActor {
                 batch,
                 &encoding::SingletonKey,
                 &entities::ZoneCheckpoint::from(checkpoint),
-            )
-            .map_err(Into::into)
-    }
-
-    /// Stages the published high water mark down to `block_id`, leaving a mark
-    /// already at or below it alone.
-    fn lower_published_high_water(
-        &self,
-        batch: &mut db::WriteBatch,
-        block_id: BlockId,
-    ) -> Result<()> {
-        let stored = self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?;
-
-        if stored.is_none_or(|stored| stored.block_id <= block_id) {
-            return Ok(());
-        }
-
-        self.db()
-            .put_batch(
-                batch,
-                &encoding::SingletonKey,
-                &entities::PublishedHighWater { block_id },
             )
             .map_err(Into::into)
     }
@@ -961,58 +936,18 @@ impl Message<SetZoneAnchor> for StorageActor {
     }
 }
 
-impl Message<GetChannelCursor> for StorageActor {
-    type Reply = Result<Option<MsgId>>;
+impl Message<GetChannelViewBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
-        GetChannelCursor: GetChannelCursor,
+        GetChannelViewBytes: GetChannelViewBytes,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         Ok(self
             .db()
-            .get::<entities::ChannelCursor>(&encoding::SingletonKey)?
-            .map(|cursor| cursor.msg_id))
-    }
-}
-
-impl Message<GetPublishedHighWater> for StorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        GetPublishedHighWater: GetPublishedHighWater,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?
-            .map(|high_water| high_water.block_id))
-    }
-}
-
-impl Message<RaisePublishedHighWater> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        RaisePublishedHighWater { block_id }: RaisePublishedHighWater,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let stored = self
-            .db()
-            .get::<entities::PublishedHighWater>(&encoding::SingletonKey)?;
-
-        if stored.is_some_and(|stored| stored.block_id >= block_id) {
-            return Ok(());
-        }
-
-        self.db().put(
-            &encoding::SingletonKey,
-            &entities::PublishedHighWater { block_id },
-        )?;
-
-        Ok(())
+            .get::<entities::ChannelView>(&encoding::SingletonKey)?
+            .map(|view| view.bytes))
     }
 }
 
@@ -1057,7 +992,7 @@ impl Message<AtomicUpdate> for StorageActor {
         let AtomicUpdate {
             checkpoint,
             blocks,
-            channel_cursor,
+            channel_view,
             head_tip,
             head_state,
             final_snapshot,
@@ -1068,24 +1003,18 @@ impl Message<AtomicUpdate> for StorageActor {
             new_withdraw_intents,
             finalized_dispatch_records,
             zone_anchor,
-            lower_published_high_water,
             events,
         } = msg;
 
         let mut batch = db::WriteBatch::default();
 
-        // Channel cursor
-        if let Some(msg_id) = channel_cursor {
+        // Channel view
+        if let Some(bytes) = channel_view {
             self.db().put_batch(
                 &mut batch,
                 &encoding::SingletonKey,
-                &entities::ChannelCursor { msg_id },
+                &entities::ChannelView { bytes },
             )?;
-        }
-
-        // Published high water
-        if let Some(block_id) = lower_published_high_water {
-            self.lower_published_high_water(&mut batch, block_id)?;
         }
 
         // Checkpoint

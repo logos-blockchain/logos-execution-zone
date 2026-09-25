@@ -2,11 +2,9 @@
 //!
 //! Kept apart from the logic so the callers stay one line each.
 
-use chain_state::AcceptOutcome;
-use common::block::Block;
+use chain_state::ChannelEntry;
 use log::{info, warn};
-use logos_blockchain_zone_sdk::Slot;
-use sequencer_bedrock_actor::protocol::MsgId;
+use sequencer_bedrock_actor::protocol::{MsgId, ViewChange};
 
 /// `lo..=hi (n)` for a log line, flagged when the ids do not fill that range.
 pub(crate) fn id_span(ids: &[u64]) -> String {
@@ -21,79 +19,40 @@ pub(crate) fn id_span(ids: &[u64]) -> String {
     }
 }
 
-pub(crate) fn block_ids(blocks: &[Block]) -> Vec<u64> {
-    blocks.iter().map(|block| block.header.block_id).collect()
-}
-
-/// The pin — the channel entry the next publish chains on — as a log field.
-pub(crate) fn pin_str(pin: Option<MsgId>) -> String {
-    pin.map_or_else(|| "none".to_owned(), |msg| msg.to_string())
-}
-
 /// The L2 view of one update: decoded heights and the head they meet.
 ///
 /// Counts, entry ids and the channel tip are zone-sdk's `ChannelUpdate` debug
 /// line; this carries only what that cannot know.
-pub(crate) fn log_update(
-    orphaned: &[Block],
-    adopted: &[Block],
-    finalized: &[(Block, Slot)],
-    head: Option<u64>,
-) {
-    info!(
-        "Channel update: orphaned {}, adopted {}, finalized {}, head {head:?}",
-        id_span(&block_ids(orphaned)),
-        id_span(&block_ids(adopted)),
+pub(crate) fn log_update(view: &ViewChange, finalized: &[ChannelEntry], head: Option<u64>) {
+    let entry_ids = |entries: &mut dyn Iterator<Item = &ChannelEntry>| {
         id_span(
-            &finalized
-                .iter()
-                .map(|(b, _)| b.header.block_id)
-                .collect::<Vec<_>>()
+            &entries
+                .filter_map(|entry| entry.block.as_ref())
+                .map(|block| block.header.block_id)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let finalized = entry_ids(&mut finalized.iter());
+    match view {
+        ViewChange::Extension(adopted) => info!(
+            "Channel update: adopted {}, finalized {finalized}, head {head:?}",
+            entry_ids(&mut adopted.iter()),
         ),
-    );
-}
-
-/// Adoptions that did not apply, with the pin they were left behind by.
-pub(crate) fn log_parked(
-    adopted: &[Block],
-    outcomes: &[AcceptOutcome],
-    head: Option<u64>,
-    pin: Option<MsgId>,
-) {
-    for (block, outcome) in adopted.iter().zip(outcomes) {
-        if let AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) = outcome {
-            warn!(
-                "Adopted block {} did not apply, head stays at {head:?} with the pin at {}: {err}",
-                block.header.block_id,
-                pin_str(pin),
-            );
-        }
+        ViewChange::Conflict {
+            canonical,
+            orphaned,
+        } => info!(
+            "Channel conflict: orphaned {}, view now {}, finalized {finalized}, head {head:?}",
+            entry_ids(&mut orphaned.iter()),
+            entry_ids(&mut canonical.iter()),
+        ),
     }
 }
 
-pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: Option<MsgId>) {
+pub(crate) fn log_rewind(before: Option<u64>, after: Option<u64>, pin: MsgId) {
     if let (Some(before), Some(after)) = (before, after)
         && after < before
     {
-        warn!(
-            "Head rewound from {before} to {after}, pin now {}",
-            pin_str(pin)
-        );
-    }
-}
-
-/// Dropping the mark permits a second block at a height already inscribed, so
-/// name the heights it frees: they are checkable on L1.
-pub(crate) fn log_high_water_lowered(mark: Option<u64>, orphans_above_head: &[&Block]) {
-    if let Some(mark) = mark {
-        let ids: Vec<u64> = orphans_above_head
-            .iter()
-            .map(|block| block.header.block_id)
-            .collect();
-        warn!(
-            "Lowering the published high water to {mark}, every height above it is writable \
-             again; orphaned above the head and not re-adopted: {}",
-            id_span(&ids),
-        );
+        warn!("Head rewound from {before} to {after}, pin now {pin}");
     }
 }

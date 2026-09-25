@@ -62,7 +62,7 @@ fn sequencer_ffi_join_setup_and_simple_queries_test() -> Result<()> {
             .get(usize::from(state.tip_sequencer))
             .copied();
 
-        if turn == Some(joining_sequencer_key)
+        if turn == Some(joining_sequencer_key.into_unverified())
             && ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())? > joined_at
         {
             poll_flag = true;
@@ -216,7 +216,7 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
             .get(usize::from(state.tip_sequencer))
             .copied();
 
-        if turn == Some(joining_sequencer_key)
+        if turn == Some(joining_sequencer_key.into_unverified())
             && ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())? > joined_at
         {
             poll_flag = true;
@@ -437,7 +437,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
             .get(usize::from(state.tip_sequencer))
             .copied();
 
-        if turn == Some(joining_sequencer_key)
+        if turn == Some(joining_sequencer_key.into_unverified())
             && ctx.block_on(|ctx| ctx.sequencer_client().get_last_block_id())? > joined_at
         {
             poll_flag = true;

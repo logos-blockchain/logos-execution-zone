@@ -24,15 +24,14 @@ use crate::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelCursor, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetPublishedHighWater,
-        GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, MsgId,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RaisePublishedHighWater, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -128,23 +127,11 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
-        pub fn handle_get_channel_cursor(
+        pub fn handle_get_channel_view_bytes(
             &mut self,
-            msg: GetChannelCursor,
-            ctx: &mut Context<Self, Result<Option<MsgId>>>
-        ) -> Result<Option<MsgId>>;
-
-        pub fn handle_get_published_high_water(
-            &mut self,
-            msg: GetPublishedHighWater,
-            ctx: &mut Context<Self, Result<Option<BlockId>>>
-        ) -> Result<Option<BlockId>>;
-
-        pub fn handle_raise_published_high_water(
-            &mut self,
-            msg: RaisePublishedHighWater,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
+            msg: GetChannelViewBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
 
         pub fn handle_get_pending_deposit_events(
             &mut self,
@@ -468,39 +455,15 @@ impl Message<SetZoneAnchor> for MockStorageActor {
     }
 }
 
-impl Message<GetChannelCursor> for MockStorageActor {
-    type Reply = Result<Option<MsgId>>;
+impl Message<GetChannelViewBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
-        msg: GetChannelCursor,
+        msg: GetChannelViewBytes,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_channel_cursor(msg, ctx)
-    }
-}
-
-impl Message<GetPublishedHighWater> for MockStorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetPublishedHighWater,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_published_high_water(msg, ctx)
-    }
-}
-
-impl Message<RaisePublishedHighWater> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: RaisePublishedHighWater,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_raise_published_high_water(msg, ctx)
+        self.handle_get_channel_view_bytes(msg, ctx)
     }
 }
 
