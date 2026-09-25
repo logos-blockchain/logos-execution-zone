@@ -27,6 +27,8 @@ Most of the shared config is safe to edit by hand. The genesis stake entries are
 `stake_signature` covers the minimum stake and the node's position in the committee, so changing
 `minimum_sequencer_stake`, the number of nodes, their order, or the stake message format invalidates
 all four, and a node with an invalid founding stake panics as it applies genesis. Rerun here instead.
+This crate's unit test checks the committed signatures, so a stale config fails CI rather than the
+devnet.
 
 Every run draws new keys and new signatures, so it always rewrites everything — there is no such
 thing as a no-op rerun here. That also makes it a new committee on a new genesis block: wipe the
