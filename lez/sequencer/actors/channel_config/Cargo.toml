@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-logos-blockchain-codec.workspace = true
+logos-blockchain-binary-codec.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 

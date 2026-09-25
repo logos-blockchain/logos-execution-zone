@@ -10,9 +10,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use integration_tests::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, native_token, program::Program};
-use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, UnsecuredEd25519Key,
-};
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -275,7 +273,7 @@ pub fn joining_setup() -> Result<JoiningSetup> {
         if state
             .accredited_keys
             .iter()
-            .any(|key: &Ed25519PublicKey| *key == joining_sequencer_key)
+            .any(|key| *key == joining_sequencer_key.into_unverified())
         {
             channel_state = Some(state);
             break;

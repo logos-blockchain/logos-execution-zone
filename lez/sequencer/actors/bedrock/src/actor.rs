@@ -11,16 +11,13 @@ use kameo::{
 };
 use kameo_actors::broker::Broker;
 use log::{info, warn};
+use logos_blockchain_binary_codec::bincode::DeserializeOp as _;
 use logos_blockchain_core::{
-    codec::DeserializeOp as _,
     mantle::{
         NoteId, Op, OpProof, SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         gas::GasCost,
-        ops::channel::{
-            config::{ChannelConfigOp, Keys},
-            inscribe::InscriptionOp,
-        },
+        ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp, inscribe::InscriptionOp},
         traits::Hashable as _,
         transactions::{MantleTxBuilder, OpProofs},
     },
@@ -31,8 +28,9 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
-        ChannelUpdateTx, Event, FinalizedOp, FundingConfig, InscriptionInfo, PendingTx,
-        SequencerChannelView, SequencerCheckpoint, SequencerConfig, WithdrawInputs, ZoneSequencer,
+        ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FundingConfig,
+        InscriptionInfo, PendingTx, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
+        WithdrawInputs, ZoneSequencer,
     },
 };
 use sequencer_actors_common::EraseMessage as _;
@@ -46,11 +44,12 @@ use crate::{
     actor::config::Config,
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelParams,
-        ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn, CreateChannel,
-        GetAccreditedKeys, GetChannelId, GetChannelIdReply, GetChannelTipMessageId,
-        GetChannelTipSlot, LiveChannelConfig, MsgId, PrepareConfig, PreparedChannelConfig,
-        PublishBlock, PublishOutcome, ReadChannel, Slot, ZoneMessage,
+        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEntry, ChannelEvent, ChannelId,
+        ChannelParams, ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn,
+        CreateChannel, Ed25519PublicKey, GetAccreditedKeys, GetChannelId, GetChannelIdReply,
+        GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId, PrepareConfig,
+        PreparedChannelConfig, PublishBlock, PublishOutcome, ReadChannel, Slot, ViewChange,
+        ZoneMessage, verified_keys,
     },
 };
 
@@ -160,47 +159,47 @@ impl BedrockActor {
                 checkpoint,
                 channel_update,
                 finalized,
+                deposits: _,
             } => {
-                let adopted = channel_update
-                    .adopted
-                    .iter()
-                    .flat_map(|tx| channel_blocks(tx, self.config.channel_id))
-                    .collect();
-                let orphaned = channel_update
-                    .orphaned
-                    .iter()
-                    .flat_map(|tx| channel_blocks(tx, self.config.channel_id))
-                    .collect();
+                let channel_id = self.config.channel_id;
+                let entries = |txs: &mut dyn Iterator<Item = &ChannelUpdateTx>| {
+                    txs.flat_map(|tx| channel_entries(tx, channel_id)).collect()
+                };
+                let view = match &channel_update {
+                    SdkChannelUpdate::Extension { adopted } => {
+                        ViewChange::Extension(entries(&mut adopted.iter()))
+                    }
+                    SdkChannelUpdate::Conflict { orphaned, .. } => ViewChange::Conflict {
+                        canonical: entries(
+                            &mut channel_update.canonical_chain().into_iter().flatten(),
+                        ),
+                        orphaned: entries(&mut orphaned.iter()),
+                    },
+                };
 
-                let mut finalized_blocks = Vec::new();
+                let mut finalized_entries = Vec::new();
                 let mut deposits = Vec::new();
                 let mut withdrawals = Vec::new();
                 let mut undecodable = Vec::new();
-                for (l1_slot, op) in finalized.into_iter().flat_map(|item| {
-                    let l1_slot = item.l1_slot;
-                    item.ops.into_iter().map(move |op| (l1_slot, op))
-                }) {
+                for op in finalized.into_iter().flat_map(|item| item.ops) {
                     match op {
                         FinalizedOp::Inscription(inscription) => {
-                            match block_from_inscription(&inscription) {
-                                Some(block) => {
-                                    finalized_blocks.push((block, l1_slot));
-                                }
-                                // An empty payload is not a
-                                // block, but we don't slash
-                                // for it.
-                                None if <Inscription as AsRef<[u8]>>::as_ref(
-                                    &inscription.payload,
-                                )
-                                .is_empty() => {}
-                                // An inscription always names
-                                // its signer.
-                                None => undecodable.extend(
+                            let entry = channel_entry(&inscription);
+                            // Empty payload: a missed turn for the liveness
+                            // fault. Signer-less entries are configs, via
+                            // `FinalizedOp::Config`.
+                            if entry.block.is_none()
+                                && !<Inscription as AsRef<[u8]>>::as_ref(&inscription.payload)
+                                    .is_empty()
+                            {
+                                undecodable.extend(
                                     inscription
                                         .signer
+                                        .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
                                         .map(|signer| (inscription.this_msg, signer)),
-                                ),
+                                );
                             }
+                            finalized_entries.push(entry);
                         }
                         FinalizedOp::Deposit(deposit) => deposits.push(deposit),
                         FinalizedOp::Withdraw(withdraw) => {
@@ -219,9 +218,8 @@ impl BedrockActor {
                         message: ChannelEvent::Update(Arc::new(ChannelUpdate {
                             checkpoint,
                             seq,
-                            adopted,
-                            orphaned,
-                            finalized: finalized_blocks,
+                            view,
+                            finalized: finalized_entries,
                             deposits,
                             withdrawals,
                             undecodable,
@@ -261,7 +259,7 @@ impl BedrockActor {
             return Ok(());
         };
 
-        let config = LiveChannelConfig::from(&channel);
+        let config = LiveChannelConfig::try_from(&channel)?;
 
         self.broker_ref
             .tell(kameo_actors::broker::Publish {
@@ -279,6 +277,7 @@ impl BedrockActor {
             logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
         >,
         msg_id: MsgId,
+        parent: MsgId,
     ) -> Result<PublishOutcome> {
         let (result, checkpoint) = self
             .sequencer
@@ -288,6 +287,7 @@ impl BedrockActor {
 
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
+            parent,
             checkpoint,
             seq: self.next_seq(),
             released_notes: released_notes(&result.tx),
@@ -356,7 +356,8 @@ impl Message<CreateChannel> for BedrockActor {
         }
 
         let key_count = keys.len();
-        let keys = Keys::try_from(keys).map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
+        let keys = VerifiedChannelKeys::try_from(keys)
+            .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
 
         let config_op = genesis_config_op(
             self.config.channel_id,
@@ -372,7 +373,7 @@ impl Message<CreateChannel> for BedrockActor {
             channel_id: self.config.channel_id,
             inscription,
             parent: MsgId::root(),
-            signer: own_key,
+            signer: own_key.into_unverified(),
         };
         let msg_id = inscribe_op.id();
 
@@ -406,7 +407,7 @@ impl Message<CreateChannel> for BedrockActor {
         info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
 
         let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
-        self.submit_tx(tx, msg_id)
+        self.submit_tx(tx, msg_id, MsgId::root())
     }
 }
 
@@ -444,7 +445,11 @@ impl Message<PublishBlock> for BedrockActor {
                 channel_id: self.config.channel_id,
                 inscription,
                 parent,
-                signer: self.config.bedrock_signing_key.public_key(),
+                signer: self
+                    .config
+                    .bedrock_signing_key
+                    .public_key()
+                    .into_unverified(),
             };
 
             let msg_id = inscribe_op.id();
@@ -465,7 +470,7 @@ impl Message<PublishBlock> for BedrockActor {
             }
 
             let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
-            self.submit_tx(tx, msg_id)
+            self.submit_tx(tx, msg_id, parent)
         } else {
             let (result, checkpoint) = if withdrawals.is_empty() {
                 self.sequencer
@@ -483,6 +488,7 @@ impl Message<PublishBlock> for BedrockActor {
 
             Ok(PublishOutcome {
                 this_msg: result.tx.inscription().this_msg,
+                parent: result.tx.inscription().parent_msg,
                 checkpoint,
                 seq: self.next_seq(),
                 released_notes: released_notes(&result.tx),
@@ -499,7 +505,7 @@ impl Message<PrepareConfig> for BedrockActor {
         PrepareConfig { target }: PrepareConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let keys = Keys::try_from(target.keys.clone())
+        let keys = VerifiedChannelKeys::try_from(target.keys.clone())
             .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
 
         self.sequencer
@@ -589,16 +595,18 @@ impl Message<GetAccreditedKeys> for BedrockActor {
         _msg: GetAccreditedKeys,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self
-            .node
+        self.node
             .channel_state(self.config.channel_id)
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
-            .map(|state| AccreditedKeys {
-                keys: state.accredited_keys.to_vec(),
-                config_tip: state.config_tip_hash,
-                tip_sequencer: state.tip_sequencer,
-            }))
+            .map(|state| -> Result<AccreditedKeys> {
+                Ok(AccreditedKeys {
+                    keys: verified_keys(&state.accredited_keys)?,
+                    config_tip: state.config_tip_hash,
+                    tip_sequencer: state.tip_sequencer,
+                })
+            })
+            .transpose()
     }
 }
 
@@ -714,6 +722,7 @@ impl Message<PublishRawInscription> for BedrockActor {
 
         Ok(PublishOutcome {
             this_msg: result.tx.inscription().this_msg,
+            parent: result.tx.inscription().parent_msg,
             checkpoint,
             seq: self.next_seq(),
             released_notes: released_notes(&result.tx),
@@ -721,20 +730,22 @@ impl Message<PublishRawInscription> for BedrockActor {
     }
 }
 
-impl From<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChannelConfig {
-    fn from(state: &logos_blockchain_zone_sdk::node_types::ChannelState) -> Self {
-        Self {
-            keys: state.accredited_keys.to_vec(),
+impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChannelConfig {
+    type Error = Error;
+
+    fn try_from(state: &logos_blockchain_zone_sdk::node_types::ChannelState) -> Result<Self> {
+        Ok(Self {
+            keys: verified_keys(&state.accredited_keys)?,
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
-        }
+        })
     }
 }
 
 /// The config op that creates `channel_id` with `keys` as its founding committee.
 fn genesis_config_op(
     channel_id: ChannelId,
-    keys: Keys,
+    keys: VerifiedChannelKeys,
     channel_params: &ChannelParams,
     configuration_threshold: u16,
 ) -> ChannelConfigOp {
@@ -762,27 +773,33 @@ fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
     checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
 }
 
-/// Every block a channel tx carries, in op order.
+/// A message-lineage entry, with its block when the payload decodes to one.
+fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
+    let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
+        None
+    } else {
+        block_from_inscription(inscription)
+    };
+    ChannelEntry {
+        msg: inscription.this_msg,
+        parent: inscription.parent_msg,
+        block,
+    }
+}
+
+/// Every message-lineage entry a channel tx carries, in op order.
 ///
 /// A config op is on the config lineage, not this one, so it is skipped.
-fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<Block> {
-    let entry = |inscription: &InscriptionInfo| {
-        if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
-            None
-        } else {
-            block_from_inscription(inscription)
-        }
-    };
+fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
     match tx {
-        ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
-        ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
-        ChannelUpdateTx::PinDeposit(bundle) => entry(&bundle.inscription).into_iter().collect(),
-        // A config-only tx carries no payload to apply.
+        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info)],
+        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription)],
+        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription)],
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => {
             logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)
                 .iter()
-                .filter_map(entry)
+                .map(channel_entry)
                 .collect()
         }
     }

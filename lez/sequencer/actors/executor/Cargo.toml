@@ -56,6 +56,7 @@ cross_zone_inbox_core.workspace = true
 fee_core.workspace = true
 ping_core.workspace = true
 logos-blockchain-core.workspace = true
+logos-blockchain-binary-codec.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true

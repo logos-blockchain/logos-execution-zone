@@ -31,8 +31,6 @@ pub struct CannedChannel {
     /// Entry the last publish left the channel at. A publish chained on any
     /// other entry is refused, as L1 does.
     pub tip: Option<MsgId>,
-    /// When set, the tip a read reports instead of [`Self::tip`].
-    pub stale_tip_read: Option<MsgId>,
     /// Fails every publish.
     pub publish_fails: bool,
 }
@@ -56,7 +54,6 @@ impl CannedChannel {
             tip_slot,
             messages,
             tip,
-            stale_tip_read,
             publish_fails,
         } = self;
         let tip = Arc::new(Mutex::new(tip));
@@ -83,16 +80,10 @@ impl CannedChannel {
             .returning(|_msg, _ctx| Ok(()));
         mock.expect_handle_read_channel()
             .returning(move |ReadChannel { after }, _ctx| Ok(history_after(&messages, after)));
-        mock.expect_handle_get_channel_tip_message_id().returning({
-            let tip = Arc::clone(&tip);
-            move |_msg, _ctx| {
-                Ok(stale_tip_read.or_else(|| *tip.lock().expect("channel tip lock poisoned")))
-            }
-        });
         mock.expect_handle_create_channel().returning({
             let tip = Arc::clone(&tip);
             move |CreateChannel { genesis, .. }, _ctx| {
-                land(&tip, publish_fails, &genesis, Vec::new())
+                land(&tip, publish_fails, &genesis, None, Vec::new())
             }
         });
         mock.expect_handle_publish_block().returning(
@@ -116,6 +107,7 @@ impl CannedChannel {
                     &tip,
                     publish_fails,
                     &block,
+                    parent,
                     mock_released_notes(&withdrawals),
                 )
             },
@@ -137,11 +129,13 @@ fn history_after(
     Box::pin(futures::stream::iter(messages))
 }
 
-/// Moves the channel tip to `block` and reports what its publish produced.
+/// Moves the channel tip to `block` and reports what its publish produced,
+/// chained on `parent` or else on the tip.
 fn land(
     tip: &Mutex<Option<MsgId>>,
     publish_fails: bool,
     block: &Block,
+    parent: Option<MsgId>,
     released_notes: Vec<NoteId>,
 ) -> Result<PublishOutcome> {
     if publish_fails {
@@ -151,9 +145,13 @@ fn land(
         )));
     }
     let this_msg = mock_msg_of(block);
-    *tip.lock().expect("channel tip lock poisoned") = Some(this_msg);
+    let previous = tip
+        .lock()
+        .expect("channel tip lock poisoned")
+        .replace(this_msg);
     Ok(PublishOutcome {
         this_msg,
+        parent: parent.or(previous).unwrap_or_else(MsgId::root),
         checkpoint: checkpoint_at(this_msg),
         seq: next_channel_seq(),
         released_notes,

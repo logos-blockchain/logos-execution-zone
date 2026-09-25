@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+pub use chain_state::ChannelEntry;
 use common::block::Block;
 use kameo::Reply;
 pub use logos_blockchain_core::mantle::NoteId;
+pub use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 pub use logos_blockchain_zone_sdk::{
-    Ed25519PublicKey, Slot, ZoneMessage,
+    Slot, ZoneMessage,
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
         DepositInfo, Ed25519Key, IndexedSignature, PreparedChannelConfig,
@@ -72,30 +74,33 @@ pub enum ChannelEvent {
 
     Config(LiveChannelConfig),
 }
+
+/// How the unfinalized message lineage moved across one update.
+#[derive(Debug, Clone)]
+pub enum ViewChange {
+    /// Entries appended to the view.
+    Extension(Vec<ChannelEntry>),
+    /// Entries left the view; `canonical` is the whole view at the new tip.
+    Conflict {
+        canonical: Vec<ChannelEntry>,
+        orphaned: Vec<ChannelEntry>,
+    },
+}
+
 /// Everything one channel update carries.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
     /// Resume cursor for this event. Persist only together with the effects
-    /// below, never ahead of them. Its `last_msg_id` is the channel tip on
-    /// the view this update leaves behind — non-block entries and the rewind
-    /// after an orphan included — and is what the next publish pins on.
+    /// below, never ahead of them.
     pub checkpoint: Checkpoint,
     /// The channel sequence this update leaves the actor at. A consumer that
     /// wants to publish echoes the last one it applied back in
     /// [`PublishBlock::expected_seq`].
     pub seq: ChannelSeq,
-    /// Blocks newly on the followed L1 branch, in channel order; they extend
-    /// or replace part of the `head` tier. Non-block entries (garbage, a
-    /// config op) surface only through the checkpoint's tip. No inscription
-    /// ids ride along: blocks correlate by hash (a re-inscription changes the
-    /// id, never the hash), and the only publishable id is the checkpoint's.
-    pub adopted: Vec<Block>,
-    /// Blocks dropped from the branch by an L1 reorg: reverted from the
-    /// `head`, their user txs resubmitted to the mempool.
-    pub orphaned: Vec<Block>,
-    /// Blocks whose containing L1 block reached finality, each with that L1
-    /// block's slot: they move into the irreversible `final` tier.
-    pub finalized: Vec<(Block, Slot)>,
+    /// How the unfinalized message lineage moved.
+    pub view: ViewChange,
+    /// Message-lineage entries whose L1 block reached finality, in channel order.
+    pub finalized: Vec<ChannelEntry>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
@@ -145,6 +150,8 @@ pub struct PublishBlock {
 pub struct PublishOutcome {
     /// The `MsgId` zone-sdk assigned the published inscription.
     pub this_msg: MsgId,
+    /// The entry the inscription chains on.
+    pub parent: MsgId,
     /// The checkpoint that now holds the inscription as pending.
     pub checkpoint: Checkpoint,
     /// The channel sequence this publish leaves the actor at.
@@ -223,4 +230,18 @@ pub struct GetChannelTipMessageId;
 pub struct ReadChannel {
     /// Passing [`None`] will read from the channel's genesis.
     pub after: Option<Slot>,
+}
+
+/// The node reports keys unverified; a committee position is an index, so one
+/// bad key fails the whole list.
+pub fn verified_keys(
+    keys: &[logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey],
+) -> crate::Result<Vec<Ed25519PublicKey>> {
+    keys.iter()
+        .map(|key| {
+            Ed25519PublicKey::try_from(*key).map_err(|err| {
+                crate::error::Error::InvalidChannelKeyList(anyhow::anyhow!("{err:?}"))
+            })
+        })
+        .collect()
 }
