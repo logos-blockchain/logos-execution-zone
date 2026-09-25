@@ -470,11 +470,11 @@ async fn pool_definition(
 fn amm_with_token_dependency() -> ProgramWithDependencies {
     let token = programs::token();
     let amm = programs::amm();
-    let amm_id = AccountId::from_builtin_program(amm.id());
+    let amm_id = programs::amm_account_id();
     ProgramWithDependencies::new(
         amm,
         amm_id,
-        HashMap::from([(AccountId::from_builtin_program(token.id()), token)]),
+        HashMap::from([(programs::token_account_id(), token)]),
     )
 }
 
