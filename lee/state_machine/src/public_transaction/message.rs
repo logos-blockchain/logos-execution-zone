@@ -214,7 +214,9 @@ mod tests {
     fn hash_public_pinned_balance_shard_selector() {
         assert_hash_pinned(
             &pinned_message(
-                vec![ProgramShardSelector::balance(AccountId::new([42; 32]))],
+                vec![ProgramShardSelector::native_balance(AccountId::new(
+                    [42; 32],
+                ))],
                 vec![],
                 None,
             ),

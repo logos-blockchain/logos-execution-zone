@@ -211,34 +211,25 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiAccountId;
-
 typedef struct FfiVec_u8 FfiVecU8;
 
-typedef struct FfiVec_FfiVecU8 {
-  FfiVecU8 *entries;
+typedef struct FfiPublicEffect {
+  FfiAccountId program_account_id;
+  FfiAccountId shard_program_account_id;
+  FfiVecU8 data;
+} FfiPublicEffect;
+
+typedef struct FfiVec_FfiPublicEffect {
+  struct FfiPublicEffect *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiVecU8;
+} FfiVec_FfiPublicEffect;
 
-typedef struct FfiAccountData {
-  /**
-   * Account shards keys.
-   */
-  struct FfiVec_FfiAccountId account_data_keys;
-  /**
-   * Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
-   */
-  struct FfiVec_FfiVecU8 account_data_values;
-} FfiAccountData;
+typedef struct FfiVec_FfiPublicEffect FfiPublicEffectList;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccountData post;
+  FfiPublicEffectList effects;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -344,6 +335,29 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+typedef struct FfiVec_FfiAccountId {
+  FfiAccountId *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountId;
+
+typedef struct FfiVec_FfiVecU8 {
+  FfiVecU8 *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiVecU8;
+
+typedef struct FfiAccountData {
+  /**
+   * Account shards keys.
+   */
+  struct FfiVec_FfiAccountId account_data_keys;
+  /**
+   * Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
+   */
+  struct FfiVec_FfiVecU8 account_data_values;
+} FfiAccountData;
 
 /**
  * Account data structure - C-compatible version of lee Account.

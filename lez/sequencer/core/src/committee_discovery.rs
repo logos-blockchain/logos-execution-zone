@@ -85,7 +85,9 @@ pub fn committee_update(
 /// exit delay has passed on the clock `state` holds, so its `FinalizeUnstake`
 /// succeeds in the next block.
 #[must_use]
-pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId, PendingUnstake)> {
+pub fn finalize_unstake_candidates(
+    state: &lee::V03State,
+) -> Vec<(lee::AccountId, SequencerKey, PendingUnstake)> {
     let Some(config) = read_config(state) else {
         return Vec::new();
     };
@@ -100,8 +102,13 @@ pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId
         .entries
         .into_values()
         .filter_map(|entry| {
-            let pending = stake_record(state, entry.account_id)?.pending_unstake?;
-            (now >= pending.releasable_at(params.exit_delay)).then_some((entry.account_id, pending))
+            let record = stake_record(state, entry.account_id)?;
+            let pending = record.pending_unstake?;
+            (now >= pending.releasable_at(params.exit_delay)).then_some((
+                entry.account_id,
+                record.sequencer_key,
+                pending,
+            ))
         })
         .collect()
 }
@@ -422,7 +429,7 @@ mod tests {
         assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 1)).is_empty());
         assert_eq!(
             finalize_unstake_candidates(&state_at([staked], releasable_at)),
-            vec![(staked.account_id, staked.pending.unwrap())]
+            vec![(staked.account_id, staked.key, staked.pending.unwrap())]
         );
     }
 

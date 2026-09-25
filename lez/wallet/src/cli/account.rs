@@ -368,7 +368,7 @@ impl AccountSubcommand {
                 ReadScope::All => wallet_core.get_account_public(id).await?,
                 ReadScope::Balance => {
                     wallet_core
-                        .get_account_view(ProgramShardSelector::balance(id))
+                        .get_account_view(ProgramShardSelector::native_balance(id))
                         .await?
                 }
                 ReadScope::Shard(program) => {
@@ -506,7 +506,7 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::balance(id))
+                .get_account_view(ProgramShardSelector::native_balance(id))
                 .await
             {
                 Ok(account) => print_account_details(&account, "  ", true),
@@ -697,7 +697,7 @@ impl WalletSubcommand for ImportSubcommand {
 
 fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     if balance_read {
-        let balance = account.data.balance().map_or_else(
+        let balance = account.data.native_balance().map_or_else(
             |_error| "<malformed>".to_owned(),
             |balance| balance.to_string(),
         );

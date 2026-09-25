@@ -11,7 +11,7 @@ pub use lee_core::{
     },
     encryption::EphemeralPublicKey,
     native_token,
-    program::{AccountInput, ProgramId},
+    program::{AccountMeta, ProgramId},
 };
 pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
@@ -23,7 +23,7 @@ pub use privacy_preserving_transaction::{
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
-pub use validated_state_diff::{ExecutionOutcome, ValidatedStateDiff};
+pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
 
 pub mod encoding;
 pub mod error;
@@ -266,10 +266,26 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn forges_apply_echo() -> Program {
+        Program::new_unchecked(
+            test_methods::FORGES_APPLY_ECHO_ID,
+            Cow::Borrowed(test_methods::FORGES_APPLY_ECHO_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn reordering_writer() -> Program {
         Program::new_unchecked(
             test_methods::REORDERING_WRITER_ID,
             Cow::Borrowed(test_methods::REORDERING_WRITER_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn scripted_applier() -> Program {
+        Program::new_unchecked(
+            test_methods::SCRIPTED_APPLIER_ID,
+            Cow::Borrowed(test_methods::SCRIPTED_APPLIER_ELF),
         )
     }
 }

@@ -23,7 +23,7 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
-    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
+    PrivateWitness, WitnessKind, encryption::ViewingPublicKey,
     native_token::Instruction as NativeInstruction, program::PdaSeed,
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -62,13 +62,11 @@ async fn fund_private_pda(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender),
-                ProgramShardSelector::balance(pda_account_id),
+                ProgramShardSelector::native_balance(sender),
+                ProgramShardSelector::native_balance(pda_account_id),
             ],
             signers: [sender].into(),
-            public_accounts: HashMap::from([(sender, sender_account.clone())]),
             private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
                 identifier,
@@ -310,13 +308,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after sync")?;
-    assert_eq!(pda_0_account.data.balance().unwrap(), amount);
+    assert_eq!(pda_0_account.data.native_balance().unwrap(), amount);
 
     let pda_1_account = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after sync")?;
-    assert_eq!(pda_1_account.data.balance().unwrap(), amount);
+    assert_eq!(pda_1_account.data.native_balance().unwrap(), amount);
 
     // Commitments for both PDAs must be in the sequencer's state.
     let commitment_0 = ctx
@@ -387,13 +385,19 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .wallet()
         .get_account_private(alice_pda_0_id)
         .context("alice_pda_0 not found after spend sync")?;
-    assert_eq!(pda_0_spent.data.balance().unwrap(), amount - amount_spend_0);
+    assert_eq!(
+        pda_0_spent.data.native_balance().unwrap(),
+        amount - amount_spend_0
+    );
 
     let pda_1_spent = ctx
         .wallet()
         .get_account_private(alice_pda_1_id)
         .context("alice_pda_1 not found after spend sync")?;
-    assert_eq!(pda_1_spent.data.balance().unwrap(), amount - amount_spend_1);
+    assert_eq!(
+        pda_1_spent.data.native_balance().unwrap(),
+        amount - amount_spend_1
+    );
 
     // Post-spend commitments must be in state.
     let post_spend_commitment_0 = ctx

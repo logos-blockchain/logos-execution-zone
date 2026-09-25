@@ -25,6 +25,7 @@ cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
+amm_core.workspace = true
 token_core.workspace = true
 wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }

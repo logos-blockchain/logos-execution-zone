@@ -80,17 +80,22 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // B leaves.
     let settlement_before = account_balance(&ctx, settlement).await?;
+    let requested_at = ctx
+        .sequencer_client()
+        .get_last_block_id()
+        .await?
+        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     send_stake_tx(
         &ctx,
         vec![
             AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
             AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(system_accounts::clock_account_ids()[0])
-                .select_program_shard(programs::clock_account_id()),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
+            requested_at,
         },
     )
     .await
@@ -104,7 +109,12 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B removed from the Bedrock committee");
 
     wait_until("B's stake to be released", || async {
-        Ok(get_account(&ctx, funds_b).await?.data.balance().unwrap() == 0)
+        Ok(get_account(&ctx, funds_b)
+            .await?
+            .data
+            .native_balance()
+            .unwrap()
+            == 0)
     })
     .await?;
     ensure!(
@@ -118,11 +128,12 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B's stake released in full");
 
     // B rejoins on the same ownership account, which stays claimed after an exit.
-    let mover_instruction_data =
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
-            amount: STAKE,
-        })
-        .context("Failed to serialize the mover instruction")?;
+    let has_record = !get_account(&ctx, ownership_b)
+        .await
+        .context("Failed to read B's stake ownership account")?
+        .data
+        .shard(stake_id)
+        .is_empty();
     send_stake_tx(
         &ctx,
         vec![
@@ -134,15 +145,19 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         &sequencer_stake_core::Instruction::Stake {
             sequencer_key: stake_key_b,
             amount: STAKE,
-            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            mover_instruction_data,
+            has_record,
         },
     )
     .await
     .context("Failed to submit B's re-stake")?;
 
     wait_until("B's re-stake to land", || async {
-        Ok(get_account(&ctx, funds_b).await?.data.balance().unwrap() == STAKE)
+        Ok(get_account(&ctx, funds_b)
+            .await?
+            .data
+            .native_balance()
+            .unwrap()
+            == STAKE)
     })
     .await?;
     info!("B staked again");

@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
-    transaction::LeeTransaction,
+    transaction::{LeeTransaction, clock_invocation},
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
@@ -77,8 +77,8 @@ fn test_transaction() -> LeeTransaction {
     let message = Message::try_new_with_fees(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(payer),
-            ProgramShardSelector::balance(acc2),
+            ProgramShardSelector::native_balance(payer),
+            ProgramShardSelector::native_balance(acc2),
         ],
         nonces,
         NativeInstruction::Transfer { amount: 1337 },
@@ -170,7 +170,7 @@ fn prepare_mock_storage_with_stake(
     };
     // The real genesis state, so programs are loaded and a transaction can
     // actually settle; only the stake config is layered on, to name this node.
-    let state = testnet_initial_state::initial_state(false).with_public_accounts([(
+    let mut state = testnet_initial_state::initial_state(false).with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
         Account::default().with_shard(
             programs::sequencer_stake_account_id(),
@@ -189,6 +189,13 @@ fn prepare_mock_storage_with_stake(
             .expect("Sequencer stake config must fit into ShardData"),
         ),
     )]);
+    state
+        .transition_from_public_transaction(
+            &clock_invocation(genesis_block_meta.id, 0),
+            genesis_block_meta.id,
+            0,
+        )
+        .expect("the genesis clock tick applies");
 
     let mut mock_storage = MockStorageActor::new();
 
@@ -566,8 +573,8 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let message = Message::try_new_with_fees(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(payer),
-            ProgramShardSelector::balance(acc2),
+            ProgramShardSelector::native_balance(payer),
+            ProgramShardSelector::native_balance(acc2),
         ],
         vec![0_u128.into(), 0_u128.into()],
         NativeInstruction::Transfer { amount: 1337 },

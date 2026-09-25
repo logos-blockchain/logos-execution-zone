@@ -3,6 +3,8 @@
 //! non-test consumers (e.g. `integration_bench`) can depend on them without
 //! pulling in the test files.
 
+/// AMM pool fixtures shared by the AMM integration tests.
+pub mod amm;
 /// Cucumber world, configuration, and step support for integration tests.
 #[cfg(feature = "cucumber")]
 pub mod cucumber;

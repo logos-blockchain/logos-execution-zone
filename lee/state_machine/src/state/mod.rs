@@ -20,8 +20,6 @@ use crate::{
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
 
-pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
-
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct CommitmentSet {
@@ -338,9 +336,8 @@ impl V03State {
     /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
     pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        crate::program::resolve_program(account_id, |id| {
-            self.get_account_by_id_ref(id).map(|account| &account.data)
-        })
+        let (image_id, user_elf) = get_program_via(account_id, |id| self.loader_shard(id))?;
+        Some((image_id, crate::program::attach_kernel(&user_elf)))
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
@@ -350,10 +347,12 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| {
-            self.get_account_by_id_ref(id).map(|account| &account.data)
-        })
-        .map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
+    }
+
+    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ShardData> {
+        self.get_account_by_id_ref(account_id)
+            .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
     }
 
     #[must_use]

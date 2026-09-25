@@ -341,7 +341,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
-        match account.data.balance() {
+        match account.data.native_balance() {
             Ok(balance) => balance,
             Err(error) => {
                 print_error(format!("Private account balance is malformed: {error}"));

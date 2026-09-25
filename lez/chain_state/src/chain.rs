@@ -588,14 +588,16 @@ mod tests {
             transaction::{LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
-        let summary = crate::apply::derive_block_summary(state, &txs, id, timestamp)
+        let (summary, payout) = crate::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
         let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
             &sequencer_sign_key_for_testing(),
         ));
         let mut transactions = txs;
-        transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-        transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+        transactions.push(LeeTransaction::Public(fee_invocation(
+            summary, payout, producer,
+        )));
+        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev,
@@ -1184,7 +1186,7 @@ mod tests {
                 .head_state()
                 .get_account_by_id(to)
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             INITIAL_TO_BALANCE + 10
         );

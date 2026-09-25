@@ -2,10 +2,11 @@
 //! between them. Each crate still ships its own binary, and so its own image id.
 
 use lee_core::{
+    account::ProgramShardSelector,
     native_token::custody_transfer,
     program::{
-        ChainedCall, PdaSeed, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff,
-        read_lee_call, respond_unsupported_call,
+        ChainedCall, GuestOutput, PdaSeed, Plan, PlanOutput, ProgramCall, ShardEffect, apply_write,
+        read_program_call,
     },
 };
 
@@ -13,123 +14,76 @@ use crate::ChainCall;
 
 /// Calls another program `calls` times, permuting the input account order on each call.
 pub fn chain_caller() {
-    let call = read_lee_call::<ChainCall>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction:
-                ChainCall {
-                    callee_account_id,
-                    instruction_data: call_instruction_data,
-                    calls,
-                    pda_seed,
-                },
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let ProgramCall::Plan(input, instruction) = read_program_call::<ChainCall>() else {
+        panic!("chain_caller emits no effect to apply")
     };
+    let ChainCall {
+        callee_account_id,
+        instruction_data: call_instruction_data,
+        calls,
+        pda_seed,
+    } = instruction;
 
-    let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([recipient, sender]) = <[_; 2]>::try_from(input.accounts.clone()) else {
         return;
     };
 
     let permuted = vec![
-        lee_core::account::ProgramShardSelector::from(&sender_pre),
-        lee_core::account::ProgramShardSelector::from(&recipient_pre),
+        ProgramShardSelector::from(&sender),
+        ProgramShardSelector::from(&recipient),
     ];
 
-    let mut chained_calls = Vec::new();
+    let mut plan = Plan::new(&input);
     for _ in 0..calls {
-        chained_calls.push(ChainedCall {
+        plan.call(ChainedCall {
             program_account_id: callee_account_id,
             instruction_data: call_instruction_data.clone(),
             shard_selectors: permuted.clone(),
             pda_seeds: pda_seed.iter().copied().collect(),
         });
     }
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![
-            ShardStateDiff::unchanged(sender_pre),
-            ShardStateDiff::unchanged(recipient_pre),
-        ],
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+    plan.write();
 }
 
 /// Writes the instruction bytes into the account's shard.
 pub fn data_writer() {
-    let call = read_lee_call::<Vec<u8>>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: data,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
-
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
-        return;
-    };
-
-    let post_data = data
-        .try_into()
-        .expect("provided data should fit into data limit");
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![ShardStateDiff::new(pre, post_data)],
-    )
-    .write();
+    match read_program_call::<Vec<u8>>() {
+        ProgramCall::Plan(input, instruction) => {
+            let Ok([account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
+                panic!("data_changer requires exactly 1 account");
+            };
+            let effect = ShardEffect::new(&account, &instruction);
+            GuestOutput::Plan(PlanOutput::new(input).with_effects(vec![effect])).write();
+        }
+        ProgramCall::Apply(input) => {
+            let written: Vec<u8> =
+                borsh::from_slice(&input.effect_data).expect("data_writer wrote its own effect");
+            let data = written
+                .try_into()
+                .expect("written data fits the data limit");
+            apply_write(input, data);
+        }
+    }
 }
 
-/// Spends from a private PDA via the native token program: `pre_states = [pda, recipient]`.
+/// Spends from a private PDA via the native token program: `accounts = [pda, recipient]`.
 /// The PDA-to-npk binding is established via `pda_seeds` in the chained transfer.
 pub fn pda_spend_proxy() {
-    let call = read_lee_call::<(PdaSeed, u128)>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (seed, amount),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let ProgramCall::Plan(input, instruction) = read_program_call::<(PdaSeed, u128)>() else {
+        panic!("pda_spend_proxy emits no effect to apply")
     };
+    let (seed, amount) = instruction;
 
-    let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([first, second]) = <[_; 2]>::try_from(input.accounts.clone()) else {
         return;
     };
 
-    let chained_call = custody_transfer(first.account_id, seed, second.account_id, amount);
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![
-            ShardStateDiff::unchanged(first),
-            ShardStateDiff::unchanged(second),
-        ],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    let mut plan = Plan::new(&input);
+    plan.call(custody_transfer(
+        first.account_id,
+        seed,
+        second.account_id,
+        amount,
+    ));
+    plan.write();
 }

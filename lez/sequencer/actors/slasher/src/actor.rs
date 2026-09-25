@@ -305,7 +305,7 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
             if approvals.len() < threshold {
                 continue;
             }
-            match build_slash_tx(entry.account_id, offence, approvals) {
+            match build_slash_tx(entry.account_id, offence, approvals, entry.total_staked) {
                 Ok(tx) => {
                     proposed.push(tx);
                     proposed_for.insert(offence.offender);
@@ -394,14 +394,19 @@ pub fn build_slash_tx(
     ownership_id: AccountId,
     offence: &Offence,
     approvals: Vec<SlashApproval>,
+    total_staked: u128,
 ) -> anyhow::Result<LeeTransaction> {
     let program_id = programs::sequencer_stake_account_id();
     let message = LeeMessage::try_new(
         program_id,
         vec![
             ProgramShardSelector::new(ownership_id, program_id),
-            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
-            ProgramShardSelector::balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
+                &ownership_id,
+            )),
+            ProgramShardSelector::native_balance(sequencer_stake_core::slash_sink_account_id(
+                program_id,
+            )),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 program_id,
@@ -412,6 +417,7 @@ pub fn build_slash_tx(
             sequencer_key: offence.offender,
             inscription: offence.inscription,
             approvals,
+            total_staked,
         },
     )
     .context("Failed to build a Slash message")?;

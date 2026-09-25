@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{borrow::Borrow, collections::HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::guest::env;
@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountData, AccountId, Balance, ProgramShardSelector, ShardData},
+    account::{Account, AccountId, ProgramShardSelector, ShardData},
     encryption::ViewingPublicKey,
-    native_token::encode_balance,
 };
 
 /// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
@@ -54,87 +53,85 @@ impl AccountId {
 
 /// Borsh-encoded program instruction bytes.
 pub type InstructionData = Vec<u8>;
+pub type EffectData = Vec<u8>;
 
-/// An account seen as an input to an LEE program.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct AccountInput {
+pub struct AccountMeta {
     pub account_id: AccountId,
     pub is_authorized: bool,
-    pub shard: (AccountId, ShardData),
+    pub program_account_id: AccountId,
 }
 
-impl AccountInput {
+impl AccountMeta {
     #[must_use]
-    pub const fn with_shard(
+    pub const fn new(
         account_id: AccountId,
         is_authorized: bool,
         program_account_id: AccountId,
-        data: ShardData,
     ) -> Self {
         Self {
             account_id,
             is_authorized,
-            shard: (program_account_id, data),
+            program_account_id,
         }
     }
 
     #[must_use]
-    pub fn native_balance(account_id: AccountId, is_authorized: bool, balance: Balance) -> Self {
-        Self::with_shard(
+    pub const fn native_balance(account_id: AccountId, is_authorized: bool) -> Self {
+        Self::new(
             account_id,
             is_authorized,
             crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            encode_balance(balance),
         )
-    }
-
-    #[must_use]
-    pub fn at(
-        shard_selector: ProgramShardSelector,
-        is_authorized: bool,
-        data: &AccountData,
-    ) -> Self {
-        Self::with_shard(
-            shard_selector.account_id,
-            is_authorized,
-            shard_selector.program_account_id,
-            data.shard(shard_selector.program_account_id).clone(),
-        )
-    }
-
-    #[must_use]
-    pub const fn program_account_id(&self) -> AccountId {
-        self.shard.0
-    }
-
-    /// Returns the shard data. Panics unless the input selects `program`'s shard.
-    #[must_use]
-    pub fn shard_of(&self, program: AccountId) -> &ShardData {
-        let (selected, data) = &self.shard;
-        assert_eq!(
-            *selected, program,
-            "AccountInput carries another program's shard"
-        );
-        data
     }
 }
 
-impl From<&AccountInput> for ProgramShardSelector {
-    fn from(input: &AccountInput) -> Self {
+impl From<&AccountMeta> for ProgramShardSelector {
+    fn from(account: &AccountMeta) -> Self {
         Self {
-            account_id: input.account_id,
-            program_account_id: input.program_account_id(),
+            account_id: account.account_id,
+            program_account_id: account.program_account_id,
         }
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ShardEffect {
+    pub selector: ProgramShardSelector,
+    pub data: EffectData,
+}
+
+impl ShardEffect {
+    #[must_use]
+    pub fn new<E: BorshSerialize>(account: &AccountMeta, effect: &E) -> Self {
+        Self {
+            selector: account.into(),
+            data: borsh::to_vec(effect).expect("borsh serialization is infallible"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ApplyInput {
+    pub self_account_id: AccountId,
+    pub selector: ProgramShardSelector,
+    pub pre_data: ShardData,
+    pub effect_data: EffectData,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ApplyOutput {
+    pub input: ApplyInput,
+    pub post_data: Option<ShardData>,
+}
+
 /// Struct encoding the input to an LEE program.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct ProgramInput<T> {
+#[derive(Debug, Clone, Eq, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct PlanInput {
     pub self_account_id: AccountId,
     pub caller_account_id: Option<AccountId>,
-    pub pre_states: Vec<AccountInput>,
-    pub instruction: T,
+    pub accounts: Vec<AccountMeta>,
+    pub instruction_data: InstructionData,
 }
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
@@ -335,12 +332,6 @@ impl AccountId {
     }
 }
 
-#[derive(Debug)]
-pub struct CallerData {
-    pub account_id: Option<AccountId>,
-    pub authorized_accounts: HashSet<AccountId>,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainedCall {
     /// The account ID of the program to execute.
@@ -428,34 +419,6 @@ impl ProgramSegment {
     }
 }
 
-/// An account's pre-state alongside the changes to be applied to it.
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct ShardStateDiff {
-    pub pre_state: AccountInput,
-    /// The new shard data, or `None` to leave it unchanged.
-    pub post_data: Option<ShardData>,
-}
-
-impl ShardStateDiff {
-    /// A diff that leaves `pre_state`'s selected shard untouched.
-    #[must_use]
-    pub const fn unchanged(pre_state: AccountInput) -> Self {
-        Self {
-            pre_state,
-            post_data: None,
-        }
-    }
-
-    #[must_use]
-    pub const fn new(pre_state: AccountInput, post_data: ShardData) -> Self {
-        Self {
-            pre_state,
-            post_data: Some(post_data),
-        }
-    }
-}
-
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
@@ -504,6 +467,18 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
     #[must_use]
     pub const fn end(&self) -> Option<T> {
         self.to
+    }
+
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow> {
+        let later = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b > a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        let earlier = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b < a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        (later(self.from, other.from), earlier(self.to, other.to)).try_into()
     }
 }
 
@@ -569,20 +544,10 @@ pub struct ProgramEvent {
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "ProgramOutput does nothing unless written"]
-pub struct ProgramOutput {
-    /// The account ID of the program that produced this output.
-    pub self_account_id: AccountId,
-    /// The account ID of the caller that invoked this program via a chained call,
-    /// or `None` if this is a top-level call.
-    pub caller_account_id: Option<AccountId>,
-    /// Which call kind actually ran to produce this output. A chained call must be `Execute`;
-    /// only a top-level call may legitimately be `Unknown`.
-    pub call_kind: CallKind,
-    /// The instruction data the program received to produce this output.
-    pub instruction_data: InstructionData,
-    /// Each account's pre-state paired with the diff the program's execution applies to it.
-    pub state_diffs: Vec<ShardStateDiff>,
+#[must_use = "PlanOutput does nothing unless written"]
+pub struct PlanOutput {
+    pub input: PlanInput,
+    pub effects: Vec<ShardEffect>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -594,19 +559,11 @@ pub struct ProgramOutput {
     pub events: Vec<ProgramEvent>,
 }
 
-impl ProgramOutput {
-    pub const fn new(
-        self_account_id: AccountId,
-        caller_account_id: Option<AccountId>,
-        instruction_data: InstructionData,
-        state_diffs: Vec<ShardStateDiff>,
-    ) -> Self {
+impl PlanOutput {
+    pub const fn new(input: PlanInput) -> Self {
         Self {
-            self_account_id,
-            caller_account_id,
-            call_kind: CallKind::Execute,
-            instruction_data,
-            state_diffs,
+            input,
+            effects: Vec::new(),
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
@@ -614,12 +571,8 @@ impl ProgramOutput {
         }
     }
 
-    pub fn write(self) {
-        env::commit_slice(&crate::to_borsh_frame(&self));
-    }
-
-    pub const fn with_call_kind(mut self, call_kind: CallKind) -> Self {
-        self.call_kind = call_kind;
+    pub fn with_effects(mut self, effects: Vec<ShardEffect>) -> Self {
+        self.effects = effects;
         self
     }
 
@@ -659,6 +612,32 @@ impl ProgramOutput {
         self.timestamp_validity_window = window.into();
         self
     }
+
+    /// Sets the timestamp validity window from a fallible range conversion (`4..7`).
+    /// Returns `Err` if the range is empty.
+    pub fn try_with_timestamp_validity_window<
+        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
+    >(
+        mut self,
+        window: W,
+    ) -> Result<Self, InvalidWindow> {
+        self.timestamp_validity_window = window.try_into()?;
+        Ok(self)
+    }
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "a GuestOutput does nothing unless written"]
+pub enum GuestOutput {
+    Plan(PlanOutput),
+    Apply(ApplyOutput),
+}
+
+impl GuestOutput {
+    pub fn write(&self) {
+        env::commit_slice(&crate::to_borsh_frame(self));
+    }
 }
 
 /// A struct holding an event-output of a program.
@@ -673,8 +652,27 @@ pub struct TransactionEvent {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Pre-state shard selectors are not unique")]
-    PreStateShardSelectorsNotUnique,
+    #[error("Account shard selectors are not unique")]
+    AccountShardSelectorsNotUnique,
+
+    #[error("An effect selects {selector:?}, which is not an input of the call")]
+    EffectOutsideInputs { selector: ProgramShardSelector },
+
+    #[error(
+        "A program's apply echoed an input it was not given: expected {expected:?}, actual {actual:?}"
+    )]
+    ApplyInputMismatch {
+        expected: Box<ApplyInput>,
+        actual: Box<ApplyInput>,
+    },
+
+    #[error(
+        "A program's plan echoed an input it was not given: expected {expected:?}, actual {actual:?}"
+    )]
+    PlanInputMismatch {
+        expected: Box<PlanInput>,
+        actual: Box<PlanInput>,
+    },
 
     #[error(
         "Program {executing_account_id} wrote data on a shard selector of {account_id} that does not name it"
@@ -688,87 +686,75 @@ pub enum ExecutionValidationError {
 /// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
 /// orchestrator only.
 ///
-/// `Execute` is index 0 and must stay index 0; future variants are appended only, never
-/// inserted or reordered.
-///
-/// Decoding is hand-written, not derived: an unrecognized discriminant decodes as `Unknown`
-/// rather than failing, so an already-deployed guest survives a call kind introduced after it
-/// was built.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Plan` is index 0 and must stay index 0; future variants are appended only, never
+/// inserted or reordered. An unrecognized discriminant is a decode error: no capability probe
+/// exists in this model, so an unknown required operation must not count as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum CallKind {
-    Execute,
-    /// An unrecognized discriminant, carrying the raw byte for diagnostics.
-    Unknown(u8),
+    Plan,
+    Apply,
 }
 
-impl BorshSerialize for CallKind {
-    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let discriminant: u8 = match *self {
-            Self::Execute => 0,
-            Self::Unknown(byte) => byte,
-        };
-        BorshSerialize::serialize(&discriminant, writer)
-    }
-}
-
-impl BorshDeserialize for CallKind {
-    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let discriminant = u8::deserialize_reader(reader)?;
-        Ok(match discriminant {
-            0 => Self::Execute,
-            other => Self::Unknown(other),
-        })
-    }
-}
-
-/// The guest-side view of a single invocation.
-///
-/// `#[non_exhaustive]`: any `match` outside this crate must include a wildcard arm, so a guest
-/// implementing more than `Execute` is forced to reconsider when a new variant is added.
-#[non_exhaustive]
 pub enum ProgramCall<T> {
-    Execute(ProgramInput<T>, InstructionData),
-    /// A call kind this build doesn't implement (an unrecognized `CallKind`), with the raw
-    /// discriminant and the envelope common to every call kind.
-    Unsupported(ProgramInput<InstructionData>, u8),
+    Plan(PlanInput, T),
+    Apply(ApplyInput),
 }
 
-/// Diagnostic event recorded when a call kind isn't implemented; the call itself is a no-op,
-/// not a rejection.
-#[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct UnsupportedCallKind {
-    /// The discriminant byte this build didn't recognize.
-    pub raw_discriminant: u8,
+#[must_use = "a Plan does nothing unless written"]
+pub struct Plan {
+    output: PlanOutput,
 }
 
-impl UnsupportedCallKind {
-    pub const SELECTOR: [u8; 8] = [0xb5, 0x9a, 0xac, 0x13, 0xbd, 0xb1, 0xa7, 0x3c];
-    pub const SELECTOR_NAME: &str = "lee_core::UnsupportedCallKind";
-
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("UnsupportedCallKind serializes")
+impl Plan {
+    pub fn new(input: &PlanInput) -> Self {
+        Self {
+            output: PlanOutput::new(input.clone()),
+        }
     }
-}
 
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
-///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
-#[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_account_id: Option<AccountId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_account_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
+    /// The plan as built so far, so a program can assert what it emitted without a zkVM.
+    pub const fn output(&self) -> &PlanOutput {
+        &self.output
+    }
+
+    pub fn effect<E: BorshSerialize>(&mut self, account: &AccountMeta, effect: &E) {
+        self.inspect(account, self.output.input.self_account_id, effect);
+    }
+
+    pub fn inspect<E: BorshSerialize>(
+        &mut self,
+        account: &AccountMeta,
+        owner: AccountId,
+        guard: &E,
+    ) {
+        assert_eq!(
+            account.program_account_id, owner,
+            "An effect on {} names the shard of {}, not of {owner}",
+            account.account_id, account.program_account_id
+        );
+        self.output.effects.push(ShardEffect::new(account, guard));
+    }
+
+    pub fn call(&mut self, call: ChainedCall) {
+        self.output.chained_calls.push(call);
+    }
+
+    pub fn event(&mut self, event: ProgramEvent) {
+        self.output.events.push(event);
+    }
+
+    pub fn block_window<W: Into<BlockValidityWindow>>(&mut self, window: W) {
+        self.output.block_validity_window = window.into();
+    }
+
+    pub fn timestamp_window<W: Into<TimestampValidityWindow>>(&mut self, window: W) {
+        self.output.timestamp_validity_window = window.into();
+    }
+
+    pub fn write(self) -> ! {
+        GuestOutput::Plan(self.output).write();
+        env::exit(0)
+    }
 }
 
 /// Reads first 4 bytes indicating the length in bytes of the program input bytes.
@@ -785,85 +771,92 @@ pub fn read_input_frame() -> Vec<u8> {
 
 /// Reads a single LEE guest invocation, dispatching on `CallKind`.
 #[must_use]
-pub fn read_lee_call<T: BorshDeserialize>() -> ProgramCall<T> {
+pub fn read_program_call<T: BorshDeserialize>() -> ProgramCall<T> {
     let call_kind: CallKind =
         borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
-
-    // The envelope's shape doesn't depend on call kind, so it's always readable -- even for a
-    // call kind this build doesn't recognize.
-    let envelope: ProgramInput<InstructionData> =
-        borsh::from_slice(&read_input_frame()).expect("guest input must be valid borsh");
+    let payload = read_input_frame();
 
     match call_kind {
-        CallKind::Execute => {
-            let ProgramInput {
-                self_account_id,
-                caller_account_id,
-                pre_states,
-                instruction: instruction_data,
-            } = envelope;
-            let instruction =
-                borsh::from_slice(&instruction_data).expect("instruction must decode from borsh");
-            ProgramCall::Execute(
-                ProgramInput {
-                    self_account_id,
-                    caller_account_id,
-                    pre_states,
-                    instruction,
-                },
-                instruction_data,
-            )
+        CallKind::Plan => {
+            let input: PlanInput =
+                borsh::from_slice(&payload).expect("guest input must be valid borsh");
+            let instruction = borsh::from_slice(&input.instruction_data)
+                .expect("instruction must decode from borsh");
+            ProgramCall::Plan(input, instruction)
         }
-        CallKind::Unknown(raw) => ProgramCall::Unsupported(envelope, raw),
+        CallKind::Apply => ProgramCall::Apply(
+            borsh::from_slice(&payload).expect("apply input must be valid borsh"),
+        ),
     }
 }
 
-/// Responds to a call kind this program doesn't implement with a no-op — a deliberate skip,
-/// not a failure.
-pub fn respond_unsupported_call<T>(call: ProgramCall<T>) -> ! {
-    let ProgramCall::Unsupported(envelope, raw_discriminant) = call else {
-        unreachable!("only reached after Execute was already ruled out by the caller");
-    };
-    let state_diffs = envelope
-        .pre_states
-        .iter()
-        .cloned()
-        .map(ShardStateDiff::unchanged)
-        .collect();
-    ProgramOutput::new(
-        envelope.self_account_id,
-        envelope.caller_account_id,
-        envelope.instruction,
-        state_diffs,
-    )
-    .with_call_kind(CallKind::Unknown(raw_discriminant))
-    .with_events(vec![ProgramEvent {
-        selector: UnsupportedCallKind::SELECTOR,
-        data: UnsupportedCallKind { raw_discriminant }.to_bytes(),
-    }])
+/// Handles one plan or apply call, then exits.
+///
+/// `plan` uses instruction data and account metadata to produce effects and chained calls.
+/// `apply` receives one effect and its shard's current data (`&[u8]` or `&ShardData`).
+/// Missing shards are empty. Return `None` to keep data, or `Some(data)` to replace it.
+/// Only the program's own shards may be replaced; empty data clears them.
+/// A panic fails the transaction.
+pub fn run_program<I, E, P, D>(
+    plan: impl FnOnce(&PlanInput, I) -> Plan,
+    apply: impl FnOnce(E, &P) -> Option<D>,
+) -> !
+where
+    I: BorshDeserialize,
+    E: BorshDeserialize,
+    P: ?Sized,
+    ShardData: Borrow<P>,
+    D: TryInto<ShardData, Error: std::fmt::Debug>,
+{
+    match read_program_call::<I>() {
+        ProgramCall::Plan(input, instruction) => plan(&input, instruction).write(),
+        ProgramCall::Apply(input) => {
+            let effect = borsh::from_slice(&input.effect_data)
+                .expect("a program only applies effects it planned");
+            match apply(effect, input.pre_data.borrow()) {
+                Some(data) => apply_write(
+                    input,
+                    data.try_into()
+                        .expect("an applied shard fits within the data limit"),
+                ),
+                None => apply_keep(input),
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
+    assert!(
+        pre_data.is_empty() || *pre_data == *data,
+        "shard already holds different data"
+    );
+    data
+}
+
+pub fn apply_keep(input: ApplyInput) -> ! {
+    GuestOutput::Apply(ApplyOutput {
+        input,
+        post_data: None,
+    })
     .write();
     env::exit(0)
 }
 
-/// Checks that the pre-states match the call's shard selectors in order.
-#[must_use]
-pub fn pre_states_match_shard_selectors(
-    shard_selectors: &[ProgramShardSelector],
-    diffs: &[ShardStateDiff],
-) -> bool {
-    shard_selectors.iter().copied().eq(diffs
-        .iter()
-        .map(|diff| ProgramShardSelector::from(&diff.pre_state)))
+pub fn apply_write(input: ApplyInput, data: ShardData) -> ! {
+    GuestOutput::Apply(ApplyOutput {
+        input,
+        post_data: Some(data),
+    })
+    .write();
+    env::exit(0)
 }
 
-/// Reads a deployed program's image ID and bytecode from loader shards using `lookup`.
-/// Returns `None` if a header or segment is missing or malformed, or the chain is too long.
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    lookup: impl Fn(AccountId) -> Option<&'state AccountData>,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let loader_shard = |id| lookup(id).map(|data| data.shard(PROGRAM_LOADER_ACCOUNT_ID));
     let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();
@@ -882,24 +875,28 @@ pub fn get_program_via<'state>(
     Some((header.image_id, elf))
 }
 
-/// Checks shard-selector uniqueness and shard writes for a program call.
-pub fn validate_execution(
-    state_diffs: &[ShardStateDiff],
-    executing_account_id: AccountId,
+pub fn validate_plan(
+    expected: &PlanInput,
+    output: &PlanOutput,
 ) -> Result<(), ExecutionValidationError> {
-    // Each account may appear at most once per shard it selects.
-    let mut named = HashSet::new();
-    for diff in state_diffs {
-        let pre = &diff.pre_state;
-        if !named.insert(ProgramShardSelector::from(pre)) {
-            return Err(ExecutionValidationError::PreStateShardSelectorsNotUnique);
-        }
+    if output.input != *expected {
+        return Err(ExecutionValidationError::PlanInputMismatch {
+            expected: Box::new(expected.clone()),
+            actual: Box::new(output.input.clone()),
+        });
+    }
 
-        // A program may only write to its own shards.
-        if diff.post_data.is_some() && pre.program_account_id() != executing_account_id {
-            return Err(ExecutionValidationError::ForeignShardWrite {
-                account_id: pre.account_id,
-                executing_account_id,
+    let mut named = HashSet::new();
+    for account in &expected.accounts {
+        if !named.insert(ProgramShardSelector::from(account)) {
+            return Err(ExecutionValidationError::AccountShardSelectorsNotUnique);
+        }
+    }
+
+    for effect in &output.effects {
+        if !named.contains(&effect.selector) {
+            return Err(ExecutionValidationError::EffectOutsideInputs {
+                selector: effect.selector,
             });
         }
     }
@@ -922,5 +919,30 @@ pub fn immutable_mirror_commitment(
     );
     Commitment::new(&mirror_account_id, &mirrored_account)
 }
+
+/// Checks that the output repeats the scheduled input exactly, then verifies
+/// that any write targets the executing program's shard.
+pub fn validate_apply_output(
+    expected: &ApplyInput,
+    output: &ApplyOutput,
+) -> Result<(), ExecutionValidationError> {
+    if output.input != *expected {
+        return Err(ExecutionValidationError::ApplyInputMismatch {
+            expected: Box::new(expected.clone()),
+            actual: Box::new(output.input.clone()),
+        });
+    }
+    if output.post_data.is_some()
+        && output.input.selector.program_account_id != output.input.self_account_id
+    {
+        return Err(ExecutionValidationError::ForeignShardWrite {
+            account_id: output.input.selector.account_id,
+            executing_account_id: output.input.self_account_id,
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

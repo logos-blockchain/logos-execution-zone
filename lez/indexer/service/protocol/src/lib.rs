@@ -261,11 +261,21 @@ pub struct FeeDeclaration {
 }
 
 pub type InstructionData = Vec<u8>;
+pub type EffectData = Vec<u8>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct DeferredPublicEffect {
+    pub program_account_id: AccountId,
+    pub shard_program_account_id: AccountId,
+    pub data: EffectData,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post: AccountData,
+    /// Ordered: settlement folds these onto the account's shards in this order, so any
+    /// representation of them has to keep it.
+    pub effects: Vec<DeferredPublicEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

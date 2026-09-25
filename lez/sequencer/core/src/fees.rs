@@ -70,7 +70,7 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let balance = state
         .get_account_by_id(payer)
         .data
-        .balance()
+        .native_balance()
         .or(Err(Error::PayerBalanceMalformed { payer }))?;
     if balance < fee_reserve {
         return Err(Error::PayerCannotFund {

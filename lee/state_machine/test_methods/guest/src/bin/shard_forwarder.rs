@@ -1,60 +1,28 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
-    program::{
-        AccountInput, ChainedCall, InstructionData, ProgramCall, ProgramInput, ProgramOutput,
-        ShardStateDiff, read_lee_call, respond_unsupported_call,
-    },
+    account::{AccountId, ProgramShardSelector},
+    program::{ChainedCall, InstructionData, Plan, ProgramCall, read_program_call},
 };
 
-type Instruction = (
-    Option<(AccountId, Vec<u8>)>,
-    Vec<(AccountId, ProgramShardSelector, InstructionData)>,
-);
+type Instruction = Vec<(AccountId, ProgramShardSelector, InstructionData)>;
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: (own_write, callees),
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("shard_forwarder emits no effect to apply")
+    };
+    let callees = instruction;
+
+    let Ok([_own]) = <[_; 1]>::try_from(input.accounts.clone()) else {
+        panic!("shard_forwarder requires exactly 1 account");
     };
 
-    let Ok([own]) = <[_; 1]>::try_from(pre_states) else {
-        return;
-    };
-
-    let mut state_diffs = vec![ShardStateDiff::unchanged(own)];
-    if let Some((target, data)) = own_write {
-        state_diffs.push(ShardStateDiff::new(
-            AccountInput::with_shard(target, false, self_account_id, ShardData::empty()),
-            data.try_into()
-                .expect("provided data should fit into data limit"),
-        ));
-    }
-
-    let chained_calls = callees
-        .into_iter()
-        .map(|(callee, shard_selector, callee_instruction)| ChainedCall {
+    let mut plan = Plan::new(&input);
+    for (callee, shard_selector, callee_instruction) in callees {
+        plan.call(ChainedCall {
             program_account_id: callee,
             instruction_data: callee_instruction,
             shard_selectors: vec![shard_selector],
             pda_seeds: vec![],
-        })
-        .collect();
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        state_diffs,
-    )
-    .with_chained_calls(chained_calls)
-    .write();
+        });
+    }
+    plan.write()
 }

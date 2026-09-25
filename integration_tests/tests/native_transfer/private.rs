@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
@@ -13,7 +13,7 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind, account::Account, encryption::ViewingPublicKey,
+    PrivateWitness, WitnessKind, encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -101,7 +101,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(from_acc.data.balance().unwrap(), 10000);
+    assert_eq!(from_acc.data.native_balance().unwrap(), 10000);
     let to_before = account_balance(&ctx, to).await?;
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
@@ -119,10 +119,99 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     // A deshielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so both sides move by exactly the amount.
-    assert_eq!(from_acc.data.balance().unwrap(), 9900);
+    assert_eq!(from_acc.data.native_balance().unwrap(), 9900);
     assert_eq!(acc_2_balance, to_before + 100);
 
     log::info!("Successfully deshielded transfer to public account");
+
+    Ok(())
+}
+
+/// Two senders deshield to one receiver without waiting for settlement.
+/// Settlement must retain both credits.
+#[test]
+async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let sender_1: AccountId = ctx.existing_private_accounts()[0];
+    let sender_2: AccountId = ctx.existing_private_accounts()[1];
+    let receiver: AccountId = ctx.existing_public_accounts()[2];
+
+    let sender_1_before = ctx
+        .wallet()
+        .get_account_private(sender_1)
+        .context("Failed to get sender_1's private account")?
+        .data
+        .native_balance()
+        .unwrap();
+    let sender_2_before = ctx
+        .wallet()
+        .get_account_private(sender_2)
+        .context("Failed to get sender_2's private account")?
+        .data
+        .native_balance()
+        .unwrap();
+    let receiver_before = account_balance(&ctx, receiver).await?;
+
+    // Submitted with no wait between them — both prove against the receiver's pre-transfer
+    // balance, exactly the concurrent scenario this branch's effect model exists to settle
+    // correctly.
+    send(
+        &mut ctx,
+        private_mention(sender_1),
+        public_mention(receiver),
+        30,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        private_mention(sender_2),
+        public_mention(receiver),
+        20,
+    )
+    .await?;
+
+    log::info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let sender_1_after = ctx
+        .wallet()
+        .get_account_private(sender_1)
+        .context("Failed to get sender_1's private account")?
+        .data
+        .native_balance()
+        .unwrap();
+    let sender_2_after = ctx
+        .wallet()
+        .get_account_private(sender_2)
+        .context("Failed to get sender_2's private account")?
+        .data
+        .native_balance()
+        .unwrap();
+    let receiver_after = account_balance(&ctx, receiver).await?;
+
+    assert_private_commitment_in_state(&ctx, sender_1, "sender_1").await?;
+    assert_private_commitment_in_state(&ctx, sender_2, "sender_2").await?;
+
+    // Deshielded transfers are fee-exempt under the interim policy, so each side moves by
+    // exactly the amount.
+    assert_eq!(
+        sender_1_after,
+        sender_1_before - 30,
+        "sender_1 must reflect its own debit"
+    );
+    assert_eq!(
+        sender_2_after,
+        sender_2_before - 20,
+        "sender_2 must reflect its own debit"
+    );
+    assert_eq!(
+        receiver_after,
+        receiver_before + 50,
+        "receiver must reflect both credits (30 + 20), not just whichever transfer settled last"
+    );
+
+    log::info!("Successfully settled two concurrent deshielded transfers against live state");
 
     Ok(())
 }
@@ -220,7 +309,7 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
+    assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
     log::info!("Successfully transferred over the foreign-keys path");
 
@@ -251,7 +340,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     // A shielded transfer is a privacy-preserving transaction — fee-exempt
     // under the interim policy — so the public sender pays exactly the amount.
     assert_eq!(acc_from_balance, from_before - 100);
-    assert_eq!(acc_to.data.balance().unwrap(), 20100);
+    assert_eq!(acc_to.data.native_balance().unwrap(), 20100);
 
     log::info!("Successfully shielded transfer to owned private account");
 
@@ -357,7 +446,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         .get_account_private(to_account_id)
         .context("Failed to get receiver account")?;
 
-    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
+    assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
     Ok(())
 }
@@ -464,14 +553,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
-    assert_eq!(acc_1.data.balance().unwrap(), 100);
+    assert_eq!(acc_1.data.native_balance().unwrap(), 100);
 
     let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
         .context("account for identifier 2 not found after sync")?;
-    assert_eq!(acc_2.data.balance().unwrap(), 200);
+    assert_eq!(acc_2.data.native_balance().unwrap(), 200);
 
     // Both account ids must resolve to the same key node.
     let found_acc1 = ctx
@@ -501,12 +590,11 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     Ok(())
 }
 
-async fn prove_init_with_commitment_root(
+fn prove_init_with_commitment_root(
     ctx: &TestContext,
     commitment_root: lee_core::CommitmentSetDigest,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let sender_id = ctx.existing_public_accounts()[0];
-    let sender_account = ctx.sequencer_client().get_account(sender_id).await?;
 
     let ask = lee_core::AuthorizationSecretKey([7; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
@@ -517,13 +605,11 @@ async fn prove_init_with_commitment_root(
     let (output, _) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_account_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: HashMap::from([(sender_id, sender_account)]),
             private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
                 vpk,
                 random_seed: [0; 32],
                 identifier: Identifier::ZERO,
@@ -556,7 +642,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
-    let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
+    let output = prove_init_with_commitment_root(&ctx, expected_digest)?;
 
     assert_eq!(output.private_actions.len(), 1);
     let action = &output.private_actions[0];
@@ -577,8 +663,8 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
 
     let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
-    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
-    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;
+    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest)?;
+    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH)?;
 
     assert_eq!(output_with_root.private_actions[0].root, expected_digest);
     assert_eq!(

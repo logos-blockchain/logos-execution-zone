@@ -1,9 +1,6 @@
 use lee_core::{
     account::{AccountId, ProgramShardSelector},
-    program::{
-        ChainedCall, ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{ChainedCall, Plan, ProgramCall, read_program_call},
 };
 
 // Tail Call example program.
@@ -17,53 +14,27 @@ use lee_core::{
 type Instruction = AccountId;
 
 fn main() {
-    // Read inputs
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: callee_account_id,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("simple_tail_call emits no effect to apply")
     };
+    let callee_account_id = instruction;
 
-    // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
+    // Unpack the single input account handle.
+    let [account] = <[_; 1]>::try_from(input.accounts.clone())
+        .unwrap_or_else(|_| panic!("Input accounts should consist of a single account"));
 
-    let pre_state_account_id = pre_state.account_id;
+    let greeting: Vec<u8> = b"Hello from tail call".to_vec();
 
-    // Create the (unchanged) post state
-    let post_state = ShardStateDiff::unchanged(pre_state);
-
-    // Create the chained call
-    let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
-    let chained_call_instruction_data = borsh::to_vec(&chained_call_greeting).unwrap();
-    let chained_call = ChainedCall {
-        program_account_id: callee_account_id,
-        instruction_data: chained_call_instruction_data,
-        shard_selectors: vec![ProgramShardSelector::new(
-            pre_state_account_id,
+    // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to commit
+    // it.
+    let mut plan = Plan::new(&input);
+    plan.call(ChainedCall::new(
+        callee_account_id,
+        vec![ProgramShardSelector::new(
+            account.account_id,
             callee_account_id,
         )],
-        pda_seeds: vec![],
-    };
-
-    // Write the outputs.
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        vec![post_state],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+        &greeting,
+    ));
+    plan.write()
 }

@@ -278,7 +278,7 @@ fn dispatch_accounts(
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
             inbox_id,
         ),
-        ProgramShardSelector::balance(inbox_source_marker_account_id(
+        ProgramShardSelector::native_balance(inbox_source_marker_account_id(
             inbox_id,
             &msg.src_zone,
             msg.src_account_id,
@@ -334,7 +334,7 @@ fn via_proxy(
         proxy_id,
         vec![
             ProgramShardSelector::new(config, target),
-            ProgramShardSelector::balance(authority),
+            ProgramShardSelector::native_balance(authority),
         ],
         vec![],
         (target, instruction_data, delegated),
@@ -369,7 +369,7 @@ fn chained_via_inbox(
             &msg,
             vec![
                 ProgramShardSelector::new(config_id, target),
-                ProgramShardSelector::balance(authority),
+                ProgramShardSelector::native_balance(authority),
             ],
         ),
         vec![],
@@ -569,7 +569,7 @@ fn update_sources_tx(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
             ),
-            ProgramShardSelector::balance(authority),
+            ProgramShardSelector::native_balance(authority),
         ],
         nonce,
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
@@ -639,23 +639,6 @@ fn an_uncapped_source_counts_but_never_refuses() {
     assert_eq!(
         source_minted(&state),
         2 * wrapped_token_core::MAX_MINT_AMOUNT
-    );
-}
-
-/// The inbox no-ops a replayed delivery without reaching the token, so a replay
-/// must not spend allowance.
-#[test]
-fn a_replayed_delivery_does_not_advance_the_counter() {
-    let mut state = capped_mint_state(Some(100), 0, None);
-    let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
-    drop(state.apply_state_diff(diff));
-
-    let replay = dispatch_mint_on(&state, 60, 0, 2).expect("the inbox no-ops a replay");
-    drop(state.apply_state_diff(replay));
-    assert_eq!(
-        source_minted(&state),
-        60,
-        "a replay must not spend allowance"
     );
 }
 
@@ -901,7 +884,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holding_after = public_diff[&holding_id_of(holder_id)]
         .data
-        .balance()
+        .native_balance()
         .unwrap();
     assert_eq!(
         holding_after,
@@ -909,7 +892,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         "holding debited"
     );
 
-    let escrow_after = public_diff[&escrow_id].data.balance().unwrap();
+    let escrow_after = public_diff[&escrow_id].data.native_balance().unwrap();
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
     let record = OutboxRecord::from_bytes(
@@ -996,10 +979,17 @@ fn lock_tx_to(
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance(holder_id),
-            ProgramShardSelector::balance(holding_id_of(holder_id)),
-            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance(outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal)),
+            ProgramShardSelector::native_balance(holder_id),
+            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
+            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
+                bridge_lock_id,
+            )),
+            ProgramShardSelector::native_balance(outbox_pda(
+                outbox_id,
+                bridge_lock_id,
+                &zone_b,
+                ordinal,
+            )),
         ],
         vec![nonce.into()],
         lock,
@@ -1082,7 +1072,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance(send_slot),
+            ProgramShardSelector::native_balance(send_slot),
         ],
         zone_b,
         ordinal,
@@ -1135,7 +1125,7 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance(foreign_slot),
+            ProgramShardSelector::native_balance(foreign_slot),
         ],
         zone_b,
         ordinal,
@@ -1187,7 +1177,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_BALANCE,
         "a refused lock leaves the holding's balance alone"
@@ -1238,7 +1228,7 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_BALANCE,
         "a refused lock leaves the holding's balance alone"
@@ -1290,10 +1280,17 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         bridge_lock_id,
         vec![
             ProgramShardSelector::new(decoy_id, bridge_lock_id),
-            ProgramShardSelector::balance(holder_id),
-            ProgramShardSelector::balance(holding_id_of(holder_id)),
-            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance(outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal)),
+            ProgramShardSelector::native_balance(holder_id),
+            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
+            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
+                bridge_lock_id,
+            )),
+            ProgramShardSelector::native_balance(outbox_pda(
+                outbox_id,
+                bridge_lock_id,
+                &zone_b,
+                ordinal,
+            )),
         ],
         vec![0_u128.into()],
         lock,
@@ -1324,8 +1321,10 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     let message = Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(holding_id_of(holder_id)),
-            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
+            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
+                bridge_lock_id,
+            )),
         ],
         vec![],
         lee_core::native_token::Instruction::Transfer {
@@ -1351,7 +1350,7 @@ fn a_direct_transfer_from_the_holding_is_refused() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_BALANCE
     );
@@ -1376,13 +1375,17 @@ fn lock_debits_the_holding_not_the_holder() {
         state
             .get_account_by_id(holding_id_of(holder_id))
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_BALANCE - LOCK_AMOUNT,
         "the holding is what a lock debits"
     );
     assert_eq!(
-        state.get_account_by_id(holder_id).data.balance().unwrap(),
+        state
+            .get_account_by_id(holder_id)
+            .data
+            .native_balance()
+            .unwrap(),
         55,
         "the holder's own balance is untouched"
     );
@@ -1415,10 +1418,12 @@ fn a_zero_amount_lock_is_refused() {
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance(holder_id),
-            ProgramShardSelector::balance(holding_id_of(holder_id)),
-            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance(outbox_pda(
+            ProgramShardSelector::native_balance(holder_id),
+            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
+            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
+                bridge_lock_id,
+            )),
+            ProgramShardSelector::native_balance(outbox_pda(
                 programs::cross_zone_outbox_account_id(),
                 bridge_lock_id,
                 &zone_b,
@@ -1465,10 +1470,12 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::balance(attacker_id),
-            ProgramShardSelector::balance(holding_id_of(victim_id)),
-            ProgramShardSelector::balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-            ProgramShardSelector::balance(outbox_pda(
+            ProgramShardSelector::native_balance(attacker_id),
+            ProgramShardSelector::native_balance(holding_id_of(victim_id)),
+            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
+                bridge_lock_id,
+            )),
+            ProgramShardSelector::native_balance(outbox_pda(
                 programs::cross_zone_outbox_account_id(),
                 bridge_lock_id,
                 &zone_b,
@@ -1488,7 +1495,7 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
         state
             .get_account_by_id(holding_id_of(victim_id))
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_BALANCE,
         "the victim's holding is untouched"
@@ -1603,7 +1610,7 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance(slot),
+            ProgramShardSelector::native_balance(slot),
         ],
         zone_b,
         ordinal,
@@ -1634,7 +1641,7 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     let send = send_tx(
         vec![
             ProgramShardSelector::new(ping_record_pda(sender_id), sender_id),
-            ProgramShardSelector::balance(slot),
+            ProgramShardSelector::native_balance(slot),
         ],
         zone_b,
         ordinal,
@@ -1728,7 +1735,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::balance(account),
+                ProgramShardSelector::native_balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
@@ -1742,7 +1749,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::balance(account),
+                ProgramShardSelector::native_balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
@@ -1803,7 +1810,7 @@ fn the_token_authority_path_holds() {
             wrapped_token_id,
             vec![
                 ProgramShardSelector::new(ping_record_pda(wrapped_token_id), wrapped_token_id),
-                ProgramShardSelector::balance(authority),
+                ProgramShardSelector::native_balance(authority),
             ],
             0,
             instruction_data,
@@ -1998,7 +2005,7 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
                 inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
                 inbox_id,
             ),
-            ProgramShardSelector::balance(inbox_source_marker_account_id(
+            ProgramShardSelector::native_balance(inbox_source_marker_account_id(
                 inbox_id,
                 &src_zone,
                 programs::bridge_lock_account_id(),
@@ -2040,7 +2047,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![
                 ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::balance(account),
+                ProgramShardSelector::native_balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
@@ -2054,7 +2061,7 @@ fn the_receiver_authority_path_holds() {
             receiver_id,
             vec![
                 ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::balance(account),
+                ProgramShardSelector::native_balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
@@ -2511,7 +2518,7 @@ fn the_remaining_authority_guards_hold() {
                 receiver_id,
                 vec![
                     ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
-                    ProgramShardSelector::balance(authority),
+                    ProgramShardSelector::native_balance(authority),
                 ],
                 0,
                 instruction_data,
@@ -2629,7 +2636,7 @@ fn a_top_level_mint_is_refused() {
     let message = Message::try_new(
         wrapped_token_id,
         vec![
-            ProgramShardSelector::balance(marker_id),
+            ProgramShardSelector::native_balance(marker_id),
             ProgramShardSelector::new(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
@@ -2801,9 +2808,8 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     assert_eq!(minted, LOCK_AMOUNT);
 }
 
-/// A dispatch whose message key is already in the seen-shard is an idempotent
-/// no-op: the inbox makes no chained call, so the wrapped token is not minted a
-/// second time. This is the bridge's replay defense.
+/// A dispatch whose message key is already in the seen-shard is refused, so the
+/// wrapped token is not minted a second time. This is the bridge's replay defense.
 #[test]
 fn mint_replay_rejected() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2822,10 +2828,9 @@ fn mint_replay_rejected() {
         &[(src_zone, AccountId::from_builtin_program([9_u32; 8]))],
     );
 
-    // Seed the seen-shard as already holding this delivery, so the inbox takes
-    // the replay no-op branch. The shard is inbox-owned (claimed on a prior
-    // delivery) and bound to the same source block, so the guest leaves it
-    // untouched.
+    // Seed the seen-shard as already holding this delivery. The shard is
+    // inbox-owned (claimed on a prior delivery) and bound to the same source
+    // block, so only the replay check stands in the way.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(SRC_BLOCK_HASH, src_tx_index);
@@ -2870,22 +2875,13 @@ fn mint_replay_rejected() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("a replayed dispatch is a valid no-op, not an error");
-    let public_diff = diff.public_diff();
-
-    // No mint: the holding is never credited on replay.
-    let minted = public_diff.get(&holding_id).map_or(0, |account| {
-        wrapped_token_core::read_balance(account.data.shard(wrapped_token_id).as_ref())
-    });
-    assert_eq!(minted, 0, "a replayed message must not mint again");
-
-    // The seen-shard is untouched by the no-op.
-    if let Some(seen) = public_diff.get(&seen_id) {
-        let shard_after =
-            SeenShard::from_bytes(seen.data.shard(inbox_id).as_ref()).expect("seen shard decodes");
-        assert_eq!(shard_after, shard, "replay must not modify the seen-shard");
-    }
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a replayed message must not mint again");
+    };
+    assert!(
+        format!("{err:?}").contains("This delivery is already recorded"),
+        "rejected for the wrong reason: {err:?}"
+    );
 }
 
 /// A peer publishing two blocks at one block id gets at most one delivered from.

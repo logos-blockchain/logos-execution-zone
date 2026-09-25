@@ -266,7 +266,7 @@ async fn watch_peer<S: StorageActorTrait>(
 
     // Resume from the delivery floor: the highest slot every message of which
     // was decoded and recorded. Re-reading a peer channel is safe (the dispatch
-    // key is content-addressed and the inbox no-ops a replay) but re-records
+    // key is content-addressed and the inbox refuses a replay) but re-records
     // every already-delivered message, so without this a restart replayed the
     // peer's whole history into the store.
     let floor = match get_cross_zone_peer_floor(&storage_ref, peer_zone).await {
@@ -1431,7 +1431,7 @@ mod tests {
         // The #677 suppression, end to end. The peer inscribes a block claiming
         // id 5 while its chain is at 1. Delivered, it would burn
         // message_key(PEER_ZONE, 5, 0), and the honest block 5 carrying a real
-        // message at index 0 would then be no-oped by the inbox as a replay,
+        // message at index 0 would then be refused by the inbox as a replay,
         // with the funds behind it already escrowed on the peer.
         //
         // The honest blocks behind it still deliver: stopping here would cost
@@ -1473,7 +1473,7 @@ mod tests {
     #[tokio::test]
     async fn a_second_block_at_a_delivered_id_is_not_delivered_from() {
         // Both claim id 2, so on chain both deliveries key on (PEER_ZONE, 2, 0)
-        // and the second is a replay the inbox no-ops.
+        // and the second is a replay the inbox refuses.
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
         let mut tip = None;

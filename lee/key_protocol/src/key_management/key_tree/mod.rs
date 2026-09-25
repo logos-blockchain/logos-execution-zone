@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(
             acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             2
         );
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(
             acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             3
         );
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(
             acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             5
         );
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(
             acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             6
         );

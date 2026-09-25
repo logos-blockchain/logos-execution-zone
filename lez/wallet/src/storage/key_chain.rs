@@ -1216,7 +1216,10 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.data.balance().unwrap(), 100);
+        assert_eq!(
+            retrieved_account.account.data.native_balance().unwrap(),
+            100
+        );
     }
 
     #[test]
@@ -1238,7 +1241,10 @@ mod tests {
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.data.balance().unwrap(), 100);
+        assert_eq!(
+            retrieved_account.account.data.native_balance().unwrap(),
+            100
+        );
     }
 
     #[test]

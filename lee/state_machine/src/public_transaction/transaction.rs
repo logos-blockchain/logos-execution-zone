@@ -95,8 +95,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
@@ -176,8 +176,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr1),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr1),
             ],
             nonces,
             instruction,
@@ -200,8 +200,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
@@ -226,8 +226,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
@@ -249,8 +249,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
@@ -273,8 +273,8 @@ pub mod tests {
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
@@ -308,8 +308,8 @@ pub mod tests {
         let message = Message::try_new(
             unknown_program_id,
             vec![
-                ProgramShardSelector::balance(addr1),
-                ProgramShardSelector::balance(addr2),
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
             ],
             nonces,
             instruction,
