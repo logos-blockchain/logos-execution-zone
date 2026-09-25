@@ -983,7 +983,7 @@ impl TokenProgramSubcommandPrivate {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
-                crate::cli::identifier_from_parts(recipient_identifier),
+                crate::cli::identifier_or_random(recipient_identifier),
                 balance_to_move,
             )
             .await?;
@@ -1058,7 +1058,7 @@ impl TokenProgramSubcommandPrivate {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
-                crate::cli::identifier_from_parts(holder_identifier),
+                crate::cli::identifier_or_random(holder_identifier),
                 amount,
             )
             .await?;
@@ -1282,7 +1282,7 @@ impl TokenProgramSubcommandShielded {
                 sender.expect("sender set during Send dispatch"),
                 recipient_npk,
                 recipient_vpk,
-                crate::cli::identifier_from_parts(recipient_identifier),
+                crate::cli::identifier_or_random(recipient_identifier),
                 balance_to_move,
             )
             .await?;
@@ -1363,7 +1363,7 @@ impl TokenProgramSubcommandShielded {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
-                crate::cli::identifier_from_parts(holder_identifier),
+                crate::cli::identifier_or_random(holder_identifier),
                 amount,
             )
             .await?;

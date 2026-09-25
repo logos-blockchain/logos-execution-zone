@@ -556,33 +556,37 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value
-            .1
-            .insert(PrivateAccountKind::Regular(Identifier::from_parts(0, 0)), lee::Account::funded(2));
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(Identifier::default()),
+            lee::Account::funded(2),
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value
-            .1
-            .insert(PrivateAccountKind::Regular(Identifier::from_parts(0, 0)), lee::Account::funded(3));
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(Identifier::default()),
+            lee::Account::funded(3),
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value
-            .1
-            .insert(PrivateAccountKind::Regular(Identifier::from_parts(0, 0)), lee::Account::funded(5));
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(Identifier::default()),
+            lee::Account::funded(5),
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value
-            .1
-            .insert(PrivateAccountKind::Regular(Identifier::from_parts(0, 0)), lee::Account::funded(6));
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(Identifier::default()),
+            lee::Account::funded(6),
+        );
 
         // Update account_id_map for nodes that now have entries
         for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {
@@ -615,7 +619,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::from_parts(0, 0))]
+            acc.value.1[&PrivateAccountKind::Regular(Identifier::default())]
                 .data
                 .balance()
                 .unwrap(),
@@ -624,7 +628,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::from_parts(0, 0))]
+            acc.value.1[&PrivateAccountKind::Regular(Identifier::default())]
                 .data
                 .balance()
                 .unwrap(),
@@ -633,7 +637,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::from_parts(0, 0))]
+            acc.value.1[&PrivateAccountKind::Regular(Identifier::default())]
                 .data
                 .balance()
                 .unwrap(),
@@ -642,7 +646,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::from_parts(0, 0))]
+            acc.value.1[&PrivateAccountKind::Regular(Identifier::default())]
                 .data
                 .balance()
                 .unwrap(),

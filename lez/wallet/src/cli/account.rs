@@ -262,14 +262,14 @@ impl NewSubcommand {
                     group.clone(),
                     pda_seed,
                     pid,
-                    crate::cli::identifier_from_parts(identifier),
+                    crate::cli::identifier_or_random(identifier),
                 )
                 .await?
         } else {
             wallet_core
                 .create_shared_regular_account_with_identifier(
                     group.clone(),
-                    crate::cli::identifier_from_parts(identifier),
+                    crate::cli::identifier_or_random(identifier),
                 )
                 .await?
         };
@@ -673,7 +673,7 @@ impl WalletSubcommand for ImportSubcommand {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let identifier = crate::cli::identifier_from_parts_or_zero(identifier);
+                let identifier = identifier.unwrap_or_default();
                 let account_id = lee::AccountId::from((
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,

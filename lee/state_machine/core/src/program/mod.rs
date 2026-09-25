@@ -290,8 +290,7 @@ impl AccountId {
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
         bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[128 + ViewingPublicKey::LEN..]
-            .copy_from_slice(identifier.value());
+        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()

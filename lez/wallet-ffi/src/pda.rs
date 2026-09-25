@@ -111,7 +111,7 @@ mod tests {
         let pda_seed = PdaSeed::new([42; 32]);
         let vpk = ViewingPublicKey::from_bytes(vec![43; 1184]).unwrap();
         let npk = NullifierPublicKey([44; 32]);
-        let identifier = lee_core::Identifier::from_parts(0, 100_000_u128);
+        let identifier = lee_core::Identifier::new([100; 32]);
 
         let pda_id =
             AccountId::for_private_pda(&program_account_id, &pda_seed, &npk, &vpk, identifier);

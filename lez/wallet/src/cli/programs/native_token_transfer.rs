@@ -329,7 +329,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
                 from,
                 to_npk,
                 to_vpk,
-                crate::cli::identifier_from_parts(to_identifier),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;
@@ -401,7 +401,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
                 from.expect("from set during Send dispatch"),
                 to_npk,
                 to_vpk,
-                crate::cli::identifier_from_parts(to_identifier),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;

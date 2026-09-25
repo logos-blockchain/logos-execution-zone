@@ -233,7 +233,7 @@ mod tests {
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular(Identifier::from_parts(0, 42)),
+            &PrivateAccountKind::Regular(Identifier::new([42; 32])),
             &secret,
             &nullifier,
             None,
@@ -243,7 +243,7 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: AccountId::new([1_u8; 32]),
                 seed: PdaSeed::new([2_u8; 32]),
-                identifier: Identifier::from_parts(0, 42),
+                identifier: Identifier::new([42; 32]),
             },
             &secret,
             &nullifier,
@@ -271,7 +271,7 @@ mod tests {
     fn encrypt_pads_short_plaintext_to_requested_length() {
         let secret = SharedSecretKey([0_u8; 32]);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::from_parts(0, 0));
+        let kind = PrivateAccountKind::Regular(Identifier::default());
 
         for data_len in [0, 10, 100, 300] {
             let account = account_with_data(data_len);
@@ -293,7 +293,7 @@ mod tests {
     fn encrypt_leaves_plaintext_longer_than_the_pad_alone() {
         let secret = SharedSecretKey([0_u8; 32]);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::from_parts(0, 0));
+        let kind = PrivateAccountKind::Regular(Identifier::default());
         let account = account_with_data(1000);
         let base = plaintext_len(&account);
 
@@ -324,7 +324,7 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([1_u8; 32]),
             seed: PdaSeed::new([2_u8; 32]),
-            identifier: Identifier::from_parts(0, 9),
+            identifier: Identifier::new([9; 32]),
         };
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
@@ -352,7 +352,7 @@ mod tests {
     fn encrypt_rejects_padding_above_the_maximum() {
         let _ct = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(Identifier::from_parts(0, 0)),
+            &PrivateAccountKind::Regular(Identifier::default()),
             &SharedSecretKey([0_u8; 32]),
             &Nullifier::for_account_initialization(&AccountId::new([0_u8; 32])),
             Some(MAX_CIPHERTEXT_PADDING.saturating_add(1)),
@@ -375,7 +375,7 @@ mod tests {
             AccountId::new([12; 32]),
             b"shard record".to_vec().try_into().unwrap(),
         );
-        let kind = PrivateAccountKind::Regular(Identifier::from_parts(0, 0));
+        let kind = PrivateAccountKind::Regular(Identifier::default());
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);

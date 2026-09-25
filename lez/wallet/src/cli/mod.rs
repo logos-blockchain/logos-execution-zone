@@ -321,15 +321,8 @@ pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> 
 }
 
 #[must_use]
-pub fn identifier_from_parts(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
+pub fn identifier_or_random(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
     identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
-}
-
-#[must_use]
-pub fn identifier_from_parts_or_zero(
-    identifier: Option<lee_core::Identifier>,
-) -> lee_core::Identifier {
-    identifier.unwrap_or_default()
 }
 
 pub fn read_password_from_stdin() -> Result<String> {

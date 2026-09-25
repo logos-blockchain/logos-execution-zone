@@ -148,7 +148,7 @@ async fn import_private_account() -> Result<()> {
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::from_parts(0, 0),
+        Identifier::default(),
     ));
     let account = lee::Account::funded(777);
 
@@ -189,7 +189,7 @@ async fn import_private_account() -> Result<()> {
 
     assert_eq!(imported_acc.chain_index, None);
 
-    assert_eq!(imported_acc.kind.identifier(), Identifier::from_parts(0, 0));
+    assert_eq!(imported_acc.kind.identifier(), Identifier::default());
 
     assert_eq!(imported_acc.account, &account);
 
@@ -204,7 +204,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::from_parts(0, 0),
+        Identifier::default(),
     ));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;

@@ -225,7 +225,7 @@ pub fn default_private_accounts_for_wallet() -> Vec<InitialPrivateAccountForWall
         .zip(INITIAL_PRIVATE_BALANCES_FOR_WALLET)
         .map(|(key_chain, balance)| InitialPrivateAccountForWallet {
             key_chain,
-            identifier: Identifier::from_parts(0, 0),
+            identifier: Identifier::default(),
             balance,
         })
         .collect()

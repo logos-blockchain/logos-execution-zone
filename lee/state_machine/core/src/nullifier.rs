@@ -39,21 +39,6 @@ impl Identifier {
         Self { value }
     }
 
-    /// Builds an identifier from `(high, low)` 128-bit halves, big-endian.
-    #[must_use]
-    pub const fn from_parts(high: u128, low: u128) -> Self {
-        let high = high.to_be_bytes();
-        let low = low.to_be_bytes();
-        let mut value = [0_u8; 32];
-        let mut i = 0;
-        while i < 16 {
-            value[i] = high[i];
-            value[16 + i] = low[i];
-            i += 1;
-        }
-        Self { value }
-    }
-
     #[must_use]
     pub const fn value(&self) -> &[u8; 32] {
         &self.value
@@ -62,12 +47,6 @@ impl Identifier {
     #[must_use]
     pub const fn into_value(self) -> [u8; 32] {
         self.value
-    }
-}
-
-impl From<(u128, u128)> for Identifier {
-    fn from((high, low): (u128, u128)) -> Self {
-        Self::from_parts(high, low)
     }
 }
 
@@ -326,14 +305,13 @@ mod tests {
             118, 187, 238, 65, 251, 54, 229, 89, 151, 17, 104, 62, 240,
         ]);
 
-        let account_id =
-            AccountId::for_regular_private_account(&npk, &vpk, Identifier::from_parts(0, 0));
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::default());
 
         assert_eq!(account_id, expected_account_id);
     }
 
     #[test]
-    fn account_id_from_nullifier_public_key_identifier_1() {
+    fn account_id_from_nullifier_public_key_nonzero_identifier() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -341,12 +319,12 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            248, 127, 237, 114, 29, 50, 62, 39, 47, 51, 122, 55, 34, 41, 29, 46, 200, 124, 190, 36,
-            6, 169, 81, 230, 64, 198, 122, 118, 16, 19, 132, 107,
+            219, 234, 210, 62, 137, 169, 241, 66, 19, 208, 42, 125, 253, 19, 55, 204, 144, 57, 22,
+            196, 199, 246, 104, 134, 232, 84, 164, 19, 42, 152, 118, 210,
         ]);
 
         let account_id =
-            AccountId::for_regular_private_account(&npk, &vpk, Identifier::from_parts(0, 1));
+            AccountId::for_regular_private_account(&npk, &vpk, Identifier::new([1; 32]));
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -354,10 +332,11 @@ mod tests {
     #[test]
     fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
         // Every byte position distinct, to catch a byte-order bug anywhere in the width.
-        let identifier = Identifier::from_parts(
-            0x0001_0203_0405_0607_0809_0A0B_0C0D_0E0F_u128,
-            0x1011_1213_1415_1617_1819_1A1B_1C1D_1E1F_u128,
-        );
+        let identifier = Identifier::new([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+            0x1C, 0x1D, 0x1E, 0x1F,
+        ]);
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,

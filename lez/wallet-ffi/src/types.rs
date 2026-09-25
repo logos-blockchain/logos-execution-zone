@@ -765,7 +765,7 @@ mod tests {
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
-        let identifier = lee_core::Identifier::from_parts(0, u128::from_le_bytes([45; 16]));
+        let identifier = lee_core::Identifier::new([45; 32]);
 
         let private_reg_acc_id =
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
@@ -900,7 +900,7 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([46; 32]),
             seed: PdaSeed::new([47; 32]),
-            identifier: Identifier::from_parts(0, 5),
+            identifier: Identifier::new([5; 32]),
         };
         let derived = AccountId::for_private_account(&npk, &vpk, &kind);
 
@@ -929,7 +929,7 @@ mod tests {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
-        let identifier = lee_core::Identifier::from_parts(0, u128::from_le_bytes([45; 16]));
+        let identifier = lee_core::Identifier::new([45; 32]);
 
         let shared = AccountIdentity::PrivateShared {
             ask,

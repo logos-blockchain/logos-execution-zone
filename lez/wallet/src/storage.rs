@@ -214,9 +214,12 @@ mod tests {
 
         let key_chain = key_protocol::key_management::KeyChain::new_os_random();
         let account = lee::Account::default();
-        storage
-            .key_chain_mut()
-            .add_imported_private_account(key_chain, None, Identifier::from_parts(0, 0), account);
+        storage.key_chain_mut().add_imported_private_account(
+            key_chain,
+            None,
+            Identifier::default(),
+            account,
+        );
 
         storage.set_last_synced_block(42);
 

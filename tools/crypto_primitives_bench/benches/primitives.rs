@@ -51,11 +51,11 @@ fn bench_encryption(c: &mut Criterion) {
     let account_id = AccountId::for_regular_private_account(
         &npk,
         &recipient_kc.viewing_public_key,
-        Identifier::from_parts(0, 0),
+        Identifier::default(),
     );
     let nullifier = Nullifier::for_account_initialization(&account_id);
     let (shared, _epk) = SharedSecretKey::encapsulate(&recipient_kc.viewing_public_key);
-    let kind = PrivateAccountKind::Regular(Identifier::from_parts(0, 0));
+    let kind = PrivateAccountKind::Regular(Identifier::default());
 
     let mut g = c.benchmark_group("encryption");
     g.sample_size(50).noise_threshold(0.05);

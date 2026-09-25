@@ -313,7 +313,7 @@ mod tests {
         let commitment = Commitment::for_dummy(&nullifier, &[tag; 32]);
         let ciphertext = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(Identifier::from_parts(0, 0)),
+            &PrivateAccountKind::Regular(Identifier::default()),
             &SharedSecretKey([0; 32]),
             &nullifier,
             None,
