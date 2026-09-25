@@ -85,6 +85,8 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         vec![
             AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
             AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+            AccountIdentity::PublicNoSign(system_accounts::clock_account_ids()[0])
+                .select_program_shard(programs::clock_account_id()),
         ],
         &sequencer_stake_core::Instruction::UnstakeRequest {
             amount: STAKE,

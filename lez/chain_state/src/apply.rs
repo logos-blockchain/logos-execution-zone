@@ -9,8 +9,7 @@ use common::{
     block::{Block, BlockMeta},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
-        fee_reserve_invocation, validate_bridge_account_modification,
-        validate_no_restricted_account_modification,
+        fee_reserve_invocation, validate_user_state_modification,
     },
 };
 use fee_core::{
@@ -344,39 +343,27 @@ pub fn settle_transaction(
                     reason: format!("{:#}", anyhow::Error::from(err)),
                 })?;
 
-            // The builder guards user transactions off the restricted accounts;
-            // the apply path must too, or a block author could drain them.
-            validate_no_restricted_account_modification(state, &diff).map_err(|err| {
+            // A deposit or dispatch forged in the injection shape still passes;
+            // only verifying it against its source can close that (#809).
+            validate_user_state_modification(transaction, state, &diff).map_err(|err| {
                 BlockIngestError::RestrictedAccountModification {
                     tx_index,
                     reason: err.to_string(),
                 }
             })?;
 
-            // Private transactions never legitimately touch the bridge, so any
-            // bridge diff from one is a drain attempt. Deposits legitimately
-            // debit the bridge, so they stay unguarded here — a forged
-            // empty-witness deposit still slips through by shape, which only
-            // L1 deposit verification can close (#809).
-            if matches!(transaction, LeeTransaction::PrivacyPreserving(_)) {
-                validate_bridge_account_modification(state, &diff, false).map_err(|err| {
-                    BlockIngestError::RestrictedAccountModification {
-                        tx_index,
-                        reason: err.to_string(),
-                    }
-                })?;
-            }
-
             state.apply_state_diff(diff)
         }
-        FeeClass::Charged(view) => {
-            let LeeTransaction::Public(public_tx) = transaction else {
-                unreachable!("only public transactions classify as charged");
-            };
-            settle_charged_transaction(
-                public_tx, &view, state, opening, block_id, timestamp, tx_index, summary,
-            )?
-        }
+        FeeClass::Charged(view) => settle_charged_transaction(
+            transaction,
+            &view,
+            state,
+            opening,
+            block_id,
+            timestamp,
+            tx_index,
+            summary,
+        )?,
     };
     Ok(events)
 }
@@ -395,7 +382,7 @@ pub fn settle_transaction(
     reason = "the settlement threads exactly the block-transition context the spec names"
 )]
 fn settle_charged_transaction(
-    public_tx: &lee::PublicTransaction,
+    transaction: &LeeTransaction,
     view: &FeeTxView,
     state: &mut V03State,
     opening: &FeeState,
@@ -405,8 +392,9 @@ fn settle_charged_transaction(
     summary: &mut BlockFeeSummary,
 ) -> Result<Vec<TransactionEvent>, BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
-    let fee_restricted =
-        |reason: String| BlockIngestError::RestrictedAccountModification { tx_index, reason };
+    let LeeTransaction::Public(public_tx) = transaction else {
+        unreachable!("only public transactions classify as charged");
+    };
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
     if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
@@ -468,15 +456,13 @@ fn settle_charged_transaction(
             }
         })?;
 
-    // A charged transaction whose program touches the fee/clock accounts
-    // is a drain attempt (the canonical fee invocation is the block tail,
-    // byte-compared separately). A reverted action's diff is nonce-only and
-    // passes trivially; a successful one is guarded here so followers do not
-    // accept a leader's drain.
-    validate_no_restricted_account_modification(state, &action_diff)
-        .map_err(|err| fee_restricted(err.to_string()))?;
-    validate_bridge_account_modification(state, &action_diff, true)
-        .map_err(|err| fee_restricted(err.to_string()))?;
+    // A reverted action's diff is nonce-only; a successful one is held to the user-state guard.
+    validate_user_state_modification(transaction, state, &action_diff).map_err(|err| {
+        BlockIngestError::RestrictedAccountModification {
+            tx_index,
+            reason: err.to_string(),
+        }
+    })?;
     // The action's events are the transaction's user-facing events.
     let action_events = state.apply_state_diff(action_diff);
 

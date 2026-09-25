@@ -249,6 +249,8 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             vec![
                 AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
                 AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
+                AccountIdentity::PublicNoSign(system_accounts::clock_account_ids()[0])
+                    .select_program_shard(programs::clock_account_id()),
             ],
             unstake_request_data,
             stake_id,

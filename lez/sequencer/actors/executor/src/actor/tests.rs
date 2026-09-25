@@ -179,6 +179,7 @@ fn prepare_mock_storage_with_stake(
                     minimum_sequencer_stake: 0,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                    exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries,

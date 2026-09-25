@@ -14,7 +14,8 @@
     "channel_params": {
       "minimum_sequencer_stake": 149,
       "posting_timeframe": 60,
-      "posting_timeout": 25
+      "posting_timeout": 25,
+      "exit_delay": 100
     }
   },
   "genesis": [

@@ -133,6 +133,8 @@ async fn main() -> Result<()> {
                             .select_program_shard(sequencer_stake_program_id),
                         AccountIdentity::PublicNoSign(config_id)
                             .select_program_shard(sequencer_stake_program_id),
+                        AccountIdentity::PublicNoSign(system_accounts::clock_account_ids()[0])
+                            .select_program_shard(programs::clock_account_id()),
                     ],
                     instruction_data,
                     sequencer_stake_program_id,
