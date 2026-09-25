@@ -3,8 +3,7 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! A follower inscribes a payload that is not a block and the leader burns its
-//! stake.
+//! A follower inscribes an offending payload and the leader burns its stake.
 //!
 //! Neither follower produces, so only the leader can slash. Three staked keys put
 //! the threshold at two, so the burn needs a peer's approval to arrive over gossip.
@@ -91,6 +90,42 @@ where
 
 #[test]
 async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Result<()> {
+    Box::pin(assert_offender_is_slashed(|_tip| GARBAGE.to_vec())).await
+}
+
+#[test]
+async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_an_invalid_block() -> Result<()> {
+    // Chains on the leader's tip, but its transaction omits its fee.
+    Box::pin(assert_offender_is_slashed(|tip| {
+        block_by_offender(
+            tip.header.block_id + 1,
+            tip,
+            vec![common::test_utils::produce_dummy_empty_transaction()],
+        )
+    }))
+    .await
+}
+
+#[test]
+async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_block_with_a_wrong_id() -> Result<()> {
+    Box::pin(assert_offender_is_slashed(|tip| {
+        block_by_offender(tip.header.block_id + 5, tip, vec![])
+    }))
+    .await
+}
+
+/// A block at `block_id` on `tip`, signed with a block key the leader does not hold.
+fn block_by_offender(block_id: u64, tip: &Block, transactions: Vec<LeeTransaction>) -> Vec<u8> {
+    let block =
+        common::test_utils::produce_dummy_block(block_id, Some(tip.header.hash), transactions);
+    let block = common::block::HashableBlockData::from(block)
+        .into_pending_block(&lee::PrivateKey::try_new([38; 32]).expect("a valid private key"));
+    borsh::to_vec(&block).expect("a block should serialize")
+}
+
+/// Has the offender inscribe `payload(leader's tip)` on its turns until the leader
+/// burns its stake, then checks the slash and that the chain kept going.
+async fn assert_offender_is_slashed(payload: impl Fn(&Block) -> Vec<u8>) -> Result<()> {
     init_logger();
 
     let channel = config::bedrock_channel_id();
@@ -191,13 +226,18 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         }
         // L1 rejects a write out of turn, so only offer on our turn.
         if offender.ask(CheckIsOurTurn).await? {
+            let height = leader_client.get_last_block_id().await?;
+            let tip = leader_client
+                .get_block(height)
+                .await?
+                .context("The leader has no block at its own height")?;
             let outcome = offender
                 .ask(PublishRawInscription {
-                    data: GARBAGE.to_vec(),
+                    data: payload(&tip),
                 })
                 .await
-                .context("Failed to inscribe a non-block payload")?;
-            info!("Offered a non-block payload as {}", outcome.this_msg);
+                .context("Failed to inscribe the offending payload")?;
+            info!("Offered an offending payload as {}", outcome.this_msg);
         }
         Ok(false)
     })
@@ -208,9 +248,9 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
         "the offender's whole tracked stake should be gone"
     );
 
-    // Garbage taking the channel tip sheds the leader's pending inscriptions, so
+    // The offence taking the channel tip sheds the leader's pending inscriptions, so
     // its height drops before it climbs again; only the climb proves liveness.
-    // That it produced *during* the garbage is already implied: attribution runs
+    // That it produced *during* the offence is already implied: attribution runs
     // on a production turn, so the slash above could not have landed otherwise.
     let height_after_slash = leader_client.get_last_block_id().await?;
     wait_until("the leader to produce again after the slash", || async {
@@ -218,12 +258,12 @@ async fn a_sequencer_is_slashed_by_its_peer_for_inscribing_a_non_block() -> Resu
     })
     .await?;
 
-    // A payload that is not a block never reaches chain state, so it takes no block id.
+    // An offending payload never applies, so it takes no block id.
     let height = leader_client.get_last_block_id().await?;
     let mut approvals = None;
     for id in 1..=height {
         let block = leader_client.get_block(id).await?.with_context(|| {
-            format!("block id {id} is missing: the garbage opened a gap in the chain")
+            format!("block id {id} is missing: the offence opened a gap in the chain")
         })?;
         approvals = approvals.or_else(|| slash_approvals_in(&block));
     }

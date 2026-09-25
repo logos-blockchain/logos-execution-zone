@@ -265,6 +265,7 @@ fn empty_channel_update() -> ChannelUpdate {
         deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
+        finalized_signers: Vec::new(),
     }
 }
 
@@ -5101,4 +5102,101 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     for account_id in cross_zone_ids {
         assert!(state.get_builtin_program(account_id).is_some());
     }
+}
+
+/// Whether the slasher has recorded any offence.
+async fn slash_recorded(sequencer: &SequencerCore<StorageActor, MockBedrockActor>) -> bool {
+    sequencer
+        .storage_ref
+        .ask(sequencer_storage_actor::protocol::GetSlashRecordBytes)
+        .await
+        .expect("Failed to read the slash record")
+        .is_some()
+}
+
+/// Finalizes `entry`, signed by a key this node does not hold.
+async fn finalize_signed(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    entry: ChannelEntry,
+) {
+    let signer = Ed25519Key::from_bytes(&[5; 32]).public_key();
+    sequencer
+        .on_channel_update(Arc::new(ChannelUpdate {
+            finalized_signers: vec![(entry.msg, signer)],
+            finalized: vec![entry],
+            ..empty_channel_update()
+        }))
+        .await;
+}
+
+/// Finalizes the stored genesis, so later entries are judged against it.
+async fn finalize_genesis(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+) -> (Block, ChannelEntry) {
+    let genesis = block_at(sequencer, GENESIS_BLOCK_ID).await.unwrap();
+    let entry = finalized_as_held(&sequencer.chain(), &genesis).await;
+    finalize_signed(sequencer, entry.clone()).await;
+    (genesis, entry)
+}
+
+#[tokio::test]
+async fn a_finalized_block_that_does_not_apply_is_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let (genesis, genesis_entry) = finalize_genesis(&mut sequencer).await;
+
+    // The final tip again is a re-delivery, not an offence.
+    finalize_signed(&mut sequencer, genesis_entry.clone()).await;
+    assert!(!slash_recorded(&sequencer).await);
+
+    // Chains on the tip, but its transaction omits its fee.
+    let invalid = common::test_utils::produce_dummy_block(
+        genesis.header.block_id + 1,
+        Some(genesis.header.hash),
+        vec![common::test_utils::produce_dummy_empty_transaction()],
+    );
+    finalize_signed(&mut sequencer, entry_of(&invalid, genesis_entry.msg)).await;
+    assert!(slash_recorded(&sequencer).await);
+}
+
+#[tokio::test]
+async fn a_finalized_block_with_a_wrong_id_is_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let (genesis, genesis_entry) = finalize_genesis(&mut sequencer).await;
+
+    let skips_ahead = common::test_utils::produce_dummy_block(
+        genesis.header.block_id + 2,
+        Some(genesis.header.hash),
+        vec![],
+    );
+    finalize_signed(&mut sequencer, entry_of(&skips_ahead, genesis_entry.msg)).await;
+    assert!(slash_recorded(&sequencer).await);
+}
+
+#[tokio::test]
+async fn a_finalized_block_off_the_lineage_is_not_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let (genesis, _) = finalize_genesis(&mut sequencer).await;
+
+    // Chained on an entry that is neither final nor held: a re-delivery.
+    let stray = common::test_utils::produce_dummy_block(
+        genesis.header.block_id + 2,
+        Some(genesis.header.hash),
+        vec![],
+    );
+    finalize_signed(&mut sequencer, entry_of(&stray, MsgId::from([0xEE; 32]))).await;
+    assert!(!slash_recorded(&sequencer).await);
+}
+
+#[tokio::test]
+async fn the_first_finalized_block_is_not_reported() {
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+
+    // Nothing is final yet, so there is no tip it failed to follow.
+    let invalid = common::test_utils::produce_dummy_block(
+        GENESIS_BLOCK_ID,
+        None,
+        vec![common::test_utils::produce_dummy_empty_transaction()],
+    );
+    finalize_signed(&mut sequencer, entry_of(&invalid, MsgId::root())).await;
+    assert!(!slash_recorded(&sequencer).await);
 }
