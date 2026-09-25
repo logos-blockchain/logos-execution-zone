@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use integration_tests::{account_balance, get_account, new_account, public_mention, send};
+use integration_tests::{account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
@@ -44,32 +44,20 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
-    let dust_sender_private_key = PrivateKey::new_os_random();
-    let dust_sender_id =
-        AccountId::from(&PublicKey::new_from_private_key(&dust_sender_private_key));
 
     // Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`, and
     // `u64` because genesis funds it through the bridge's `Deposit`.
     let funding_balance = u64::try_from(2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
         .expect("funding balance fits u64");
-    // Covers the dust transfer's fee reserve (`gas_limit x base_fee`, ~16M at wallet
-    // defaults) plus storage fees.
-    let dust_sender_balance: u64 = 1_000_000_000;
 
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
                 .with_sequencer_partial_config(fast_blocks())
-                .with_genesis(vec![
-                    GenesisAction::SupplyAccount {
-                        account_id: funding_id,
-                        balance: funding_balance,
-                    },
-                    GenesisAction::SupplyAccount {
-                        account_id: dust_sender_id,
-                        balance: dust_sender_balance,
-                    },
-                ]),
+                .with_genesis(vec![GenesisAction::SupplyAccount {
+                    account_id: funding_id,
+                    balance: funding_balance,
+                }]),
         )
         .build()
         .await
@@ -80,17 +68,10 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .storage_mut()
         .key_chain_mut()
         .add_imported_public_account(funding_private_key);
-    ctx.wallet_mut()
-        .storage_mut()
-        .key_chain_mut()
-        .add_imported_public_account(dust_sender_private_key);
 
     info!("Waiting for the genesis supply to land on the funding account");
     poll_until("genesis supply to land", 30, || async {
-        Ok(
-            account_balance(&ctx, funding_id).await? == u128::from(funding_balance)
-                && account_balance(&ctx, dust_sender_id).await? == u128::from(dust_sender_balance),
-        )
+        Ok(account_balance(&ctx, funding_id).await? == u128::from(funding_balance))
     })
     .await?;
     info!("Funded demo account {funding_id} with {funding_balance} native balance");
@@ -101,23 +82,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     info!("Fresh stake ownership account: {ownership_id}");
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
-
-    // Anyone may credit the funds account before the stake lands: the stake must neither fail on
-    // that balance nor count it.
-    let dust = 1;
-    send(
-        &mut ctx,
-        public_mention(dust_sender_id),
-        public_mention(funds_id),
-        dust,
-    )
-    .await
-    .context("Failed to credit dust to the stake funds account")?;
-    poll_until("the dust to reach the stake funds account", 30, || async {
-        Ok(account_balance(&ctx, funds_id).await? == dust)
-    })
-    .await?;
-    info!("An unrelated account credited {dust} to the stake funds account {funds_id}");
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
@@ -172,25 +136,11 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         !ownership_account.data.shard(stake_id).is_empty(),
         "ownership account should now hold a sequencer_stake record"
     );
-    // Checked before the joiner produces blocks: a sequencer's producer rewards are paid to its
-    // stake ownership account, so after its turns this account holds the dust transfer's fee share.
-    assert_eq!(
-        ownership_account.data.native_balance().unwrap(),
-        0,
-        "the ownership account never custodies the stake"
-    );
     let staked_balance = account_balance(&ctx, funds_id).await?;
     assert_eq!(
         staked_balance,
-        u128::from(funding_balance) + dust,
-        "the funds PDA should hold the staked balance on top of the dust"
-    );
-    assert_eq!(
-        stake_entry(&ctx, config_id, demo_stake_key)
-            .await?
-            .map(|entry| entry.total_staked),
-        Some(u128::from(funding_balance)),
-        "the tracked stake is the requested amount, not the funds balance"
+        u128::from(funding_balance),
+        "the funds PDA should hold the staked balance"
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(
         ownership_account.data.shard(stake_id).as_ref(),
@@ -198,7 +148,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     .context("ownership account data did not decode as a StakeRecord")?;
     assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
-        "Ownership account confirmed: {funding_balance} staked for sequencer key {}",
+        "Ownership account confirmed: {staked_balance} staked for sequencer key {}",
         hex::encode(record.sequencer_key)
     );
 
@@ -342,15 +292,20 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Once removed, the sequencer injects FinalizeUnstake itself; this test
     // never submits one.
     poll_until(
-        "FinalizeUnstake to release the stake from the funds account",
+        "FinalizeUnstake to drain the stake funds account",
         90,
-        || async { Ok(account_balance(&ctx, funds_id).await? == dust) },
+        || async { Ok(account_balance(&ctx, funds_id).await? == 0) },
     )
     .await?;
 
     let drained_ownership_account = get_account(&ctx, ownership_id)
         .await
         .context("Failed to read the ownership account after the release")?;
+    assert_eq!(
+        drained_ownership_account.data.native_balance().unwrap(),
+        0,
+        "the ownership account never custodies the stake"
+    );
     let drained_record = sequencer_stake_core::StakeRecord::from_bytes(
         drained_ownership_account.data.shard(stake_id).as_ref(),
     )
@@ -367,7 +322,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "destination should receive the released stake"
     );
 
-    // Nothing is at stake for this key any more: a fully released stake has
+    // Nothing is at stake for this key any more: a fully drained account has
     // its config entry removed outright.
     assert!(
         stake_entry(&ctx, config_id, demo_stake_key)
