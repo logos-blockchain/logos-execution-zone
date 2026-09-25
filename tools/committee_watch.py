@@ -130,6 +130,9 @@ def decode_stake_config(data: bytes) -> dict:
         minimum, timeframe, timeout = r.u128(), r.u32(), r.u32()
     else:
         minimum = timeframe = timeout = None
+    # `channel_id: Option<[u8; 32]>`.
+    if r.take(1)[0]:
+        r.take(32)
     entries = {}
     for _ in range(r.u32()):
         key = r.take(32).hex()

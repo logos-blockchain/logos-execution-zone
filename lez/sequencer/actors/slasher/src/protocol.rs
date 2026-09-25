@@ -3,7 +3,7 @@ use sequencer_stake_core::{
     ed25519_dalek::{Signature, VerifyingKey},
 };
 
-/// A non-block inscription and the key that wrote it.
+/// An invalid inscription and the key that wrote it.
 #[derive(
     Clone,
     Copy,
@@ -21,11 +21,24 @@ pub struct Offence {
     pub inscription: [u8; 32],
 }
 
-/// One finalized inscription that did not decode as a block.
+/// What a slashable inscription did wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// Its payload does not decode as a block.
+    NotABlock,
+    /// Its block is malformed, or chains on the final tip and does not apply.
+    InvalidBlock,
+    /// Its block does not follow the final tip: a wrong id or parent hash.
+    MisplacedBlock,
+}
+
+/// One finalized inscription that is not a valid block.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ReportedOffence {
     /// Ed25519 public key bytes, not yet checked for validity.
     pub signer: [u8; 32],
     pub inscription: [u8; 32],
+    pub fault: Fault,
 }
 
 /// Offences the follow path saw; await it before the checkpoint moves past them.

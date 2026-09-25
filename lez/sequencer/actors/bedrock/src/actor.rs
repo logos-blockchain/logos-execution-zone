@@ -187,23 +187,24 @@ impl BedrockActor {
                 let mut deposits = Vec::new();
                 let mut withdrawals = Vec::new();
                 let mut undecodable = Vec::new();
+                let mut finalized_signers = Vec::new();
                 for op in finalized.into_iter().flat_map(|item| item.ops) {
                     match op {
                         FinalizedOp::Inscription(inscription) => {
                             let entry = channel_entry(&inscription);
-                            // Empty payload: a missed turn for the liveness
-                            // fault. Signer-less entries are configs, via
-                            // `FinalizedOp::Config`.
-                            if entry.block.is_none()
-                                && !<Inscription as AsRef<[u8]>>::as_ref(&inscription.payload)
-                                    .is_empty()
-                            {
-                                undecodable.extend(
-                                    inscription
-                                        .signer
-                                        .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
-                                        .map(|signer| (inscription.this_msg, signer)),
-                                );
+                            let signed = inscription
+                                .signer
+                                .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
+                                .map(|signer| (inscription.this_msg, signer));
+                            let empty = <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload)
+                                .is_empty();
+                            match (&entry.block, empty) {
+                                (Some(_), _) => finalized_signers.extend(signed),
+                                // Empty payload: a missed turn for the liveness
+                                // fault. Signer-less entries are configs, via
+                                // `FinalizedOp::Config`.
+                                (None, true) => {}
+                                (None, false) => undecodable.extend(signed),
                             }
                             finalized_entries.push(entry);
                         }
@@ -229,6 +230,7 @@ impl BedrockActor {
                             deposits,
                             withdrawals,
                             undecodable,
+                            finalized_signers,
                         })),
                     })
                     .await
