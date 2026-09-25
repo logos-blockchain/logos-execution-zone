@@ -8,13 +8,13 @@ use log::info;
 use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state};
+use test_fixtures::{TestContext, verify_commitment_is_in_state};
 use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
         programs::{
-            native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
+            native_token_transfer::AuthTransferSubcommand
         },
     },
     storage::key_chain::FoundPrivateAccount,
@@ -129,48 +129,6 @@ pub async fn send(
         amount,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    Ok(())
-}
-
-/// Create a token (New) and wait for the block to be included.
-pub async fn create_token(
-    ctx: &mut TestContext,
-    definition_account_id: CliAccountMention,
-    supply_account_id: CliAccountMention,
-    name: impl Into<String>,
-    total_supply: u128,
-) -> anyhow::Result<()> {
-    let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id,
-        supply_account_id,
-        name: name.into(),
-        total_supply,
-    };
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-    Ok(())
-}
-
-/// Send tokens and wait for the block to be included.
-pub async fn token_send(
-    ctx: &mut TestContext,
-    from: CliAccountMention,
-    to: CliAccountMention,
-    amount: u128,
-) -> anyhow::Result<()> {
-    let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from,
-        to: Some(to),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount,
-    };
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
 
