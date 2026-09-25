@@ -10,7 +10,7 @@ use common::transaction::LeeTransaction;
 use integration_tests::{
     TestContext, private_mention, public_mention,
     utils::{
-        account_balance, create_token, get_account, get_account_view, new_account, send,
+        account_balance, get_account, get_account_view, new_account, send,
         wait_for_indexer_to_catch_up, wait_until,
     },
 };
