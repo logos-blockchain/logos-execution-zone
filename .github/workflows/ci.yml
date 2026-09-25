@@ -302,25 +302,20 @@ jobs:
         with:
           image: ${{ needs.ci-image.outputs.image }}
           env: RISC0_DEV_MODE=1
+          # Listed from the build just archived: unpacking the archive again
+          # overflows the runner's disk.
           run: |
               source .github/scripts/with_retry.sh
               with_retry 'cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager' 2
+              cargo nextest list -p integration_tests \
+                --message-format json \
+                --no-pager > integration-tests-binaries.json
 
       - name: Upload integration test archive
         uses: actions/upload-artifact@v4
         with:
           name: integration-tests-archive
           path: integration-tests.tar.zst
-
-      - name: List integration tests
-        uses: ./.github/actions/run-in-ci-image
-        with:
-          image: ${{ needs.ci-image.outputs.image }}
-          run: |
-            cargo nextest list \
-              --archive-file integration-tests.tar.zst \
-              --message-format json \
-              --no-pager > integration-tests-binaries.json
 
       # $GITHUB_OUTPUT is outside the mounted workspace, so the container cannot
       # write to it. Discover targets on the runner from the full nextest test
