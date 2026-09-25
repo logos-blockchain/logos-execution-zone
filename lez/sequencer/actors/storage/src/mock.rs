@@ -8,12 +8,13 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::{
-    Actor, Reply,
+    Actor,
     actor::ActorRef,
     message::{Context, Message},
 };
 use lee::V03State;
 use lee_core::BlockId;
+pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
 use crate::{
     Result, StorageActorTrait,
@@ -26,11 +27,11 @@ use crate::{
         GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
         GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
         GetPendingDepositEvents, GetPublishedHighWater, GetSlashRecordBytes, GetTransactionByHash,
-        GetZoneAnchor, GetZoneCheckpointBytes, MsgId, PendingCrossZoneDispatchRecord,
+        GetZoneAnchor, GetZoneCheckpoint, MsgId, PendingCrossZoneDispatchRecord,
         PendingDepositEventRecord, PutSlashRecordBytes, RaisePublishedHighWater,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ResetAllBlocksToPending,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, SetZoneCheckpointBytes,
-        StoreUpdateOutcome, ZoneAnchorRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -60,12 +61,6 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
-        pub fn handle_reset_all_blocks_to_pending(
-            &mut self,
-            msg: ResetAllBlocksToPending,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
         pub fn handle_get_first_block_id(
             &mut self,
             msg: GetFirstBlockId,
@@ -90,15 +85,15 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<V03State>>>
         ) -> Result<Option<V03State>>;
 
-        pub fn handle_get_zone_checkpoint_bytes(
+        pub fn handle_get_zone_checkpoint(
             &mut self,
-            msg: GetZoneCheckpointBytes,
-            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
-        ) -> Result<Option<Vec<u8>>>;
+            msg: GetZoneCheckpoint,
+            ctx: &mut Context<Self, Result<Option<ZoneCheckpointRecord>>>
+        ) -> Result<Option<ZoneCheckpointRecord>>;
 
-        pub fn handle_set_zone_checkpoint_bytes(
+        pub fn handle_update_zone_checkpoint(
             &mut self,
-            msg: SetZoneCheckpointBytes,
+            msg: UpdateZoneCheckpoint,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -271,9 +266,6 @@ impl Actor for MockStorageActor {
     }
 }
 
-/// Special message to trigger [`MockStorageActor::checkpoint()`].
-pub struct Checkpoint;
-
 impl Message<Checkpoint> for MockStorageActor {
     type Reply = ();
 
@@ -286,24 +278,12 @@ impl Message<Checkpoint> for MockStorageActor {
     }
 }
 
-/// Special message to [`std::mem::replace()`] the inner state of [`MockStorageActor`] with a new
-/// one, returning old state.
-/// This is useful for testing, to swap in a new mock with different expectations.
-pub struct Replace {
-    pub mock: MockStorageActor,
-}
-
-#[derive(Reply)]
-pub struct ReplaceReply {
-    pub old_mock: MockStorageActor,
-}
-
-impl Message<Replace> for MockStorageActor {
-    type Reply = ReplaceReply;
+impl Message<Replace<Self>> for MockStorageActor {
+    type Reply = ReplaceReply<Self>;
 
     async fn handle(
         &mut self,
-        Replace { mock }: Replace,
+        Replace { mock }: Replace<Self>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let old_mock = std::mem::replace(self, mock);
@@ -355,18 +335,6 @@ impl Message<DeleteBlock> for MockStorageActor {
     }
 }
 
-impl Message<ResetAllBlocksToPending> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: ResetAllBlocksToPending,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_reset_all_blocks_to_pending(msg, ctx)
-    }
-}
-
 impl Message<GetFirstBlockId> for MockStorageActor {
     type Reply = Result<Option<BlockId>>;
 
@@ -415,27 +383,27 @@ impl Message<GetLeeState> for MockStorageActor {
     }
 }
 
-impl Message<GetZoneCheckpointBytes> for MockStorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl Message<GetZoneCheckpoint> for MockStorageActor {
+    type Reply = Result<Option<ZoneCheckpointRecord>>;
 
     async fn handle(
         &mut self,
-        msg: GetZoneCheckpointBytes,
+        msg: GetZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_get_zone_checkpoint_bytes(msg, ctx)
+        self.handle_get_zone_checkpoint(msg, ctx)
     }
 }
 
-impl Message<SetZoneCheckpointBytes> for MockStorageActor {
+impl Message<UpdateZoneCheckpoint> for MockStorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: SetZoneCheckpointBytes,
+        msg: UpdateZoneCheckpoint,
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.handle_set_zone_checkpoint_bytes(msg, ctx)
+        self.handle_update_zone_checkpoint(msg, ctx)
     }
 }
 

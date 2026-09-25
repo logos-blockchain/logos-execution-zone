@@ -34,34 +34,6 @@ where
         Self { channel_id, node }
     }
 
-    /// Subscribe to live [`ZoneMessage`]s as they finalize.
-    pub async fn follow(&self) -> Result<impl Stream<Item = ZoneMessage> + '_, Error> {
-        let lib_stream = self.node.lib_stream().await?;
-
-        let channel_id = self.channel_id;
-        let stream = lib_stream.filter_map(move |block_info| {
-            let header_id = block_info.header_id;
-
-            async move {
-                let stream = match self
-                    .node
-                    .zone_messages_in_block(header_id, channel_id)
-                    .await
-                {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        log::warn!("Failed to fetch LIB block {header_id}: {e}");
-                        return None;
-                    }
-                };
-
-                Some(stream)
-            }
-        });
-
-        Ok(stream.flatten())
-    }
-
     /// Stream finalized [`ZoneMessage`]s from `last_slot` (exclusive) up to
     /// LIB.
     ///
