@@ -4,6 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, ShardData};
 use serde::{Deserialize, Serialize};
 
+pub const TOKEN_NAME: [u8; 5] = *b"token";
+
 /// Token Program Instruction.
 ///
 /// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
@@ -243,4 +245,9 @@ impl From<&TokenMetadata> for ShardData {
 
         Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
     }
+}
+
+#[must_use]
+pub fn token_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&TOKEN_NAME)
 }

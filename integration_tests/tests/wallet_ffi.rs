@@ -649,7 +649,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     );
     assert_eq!(balance_only.nonce.0, 2);
 
-    let program_id = AccountId::from_builtin_program(programs::token().id());
+    let program_id = programs::token_account_id();
     let mut out_program_full = FfiAccount::default();
     let program_full: Account = unsafe {
         let ffi_program_account = FfiBytes32::from(program_id);
@@ -1743,7 +1743,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     let definition_id = ctx.ctx().existing_private_accounts()[0];
     let definition: FfiBytes32 = definition_id.into();
     let holding: FfiBytes32 = ctx.ctx().existing_private_accounts()[1].into();
-    let token_program = AccountId::from_builtin_program(programs::token().id());
+    let token_program = programs::token_account_id();
     let total_supply = 100_u128;
 
     let mut transaction_result = FfiTransactionResult::default();

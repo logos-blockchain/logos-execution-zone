@@ -299,7 +299,7 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_in_the
                 instruction_data: Program::serialize_instruction(written).unwrap(),
                 ..Default::default()
             },
-            &program.clone().into(),
+            &synthetic_program(program.clone()),
         );
 
         assert_circuit_proving_failure(&result, "wrote data on a shard selector of");
@@ -328,7 +328,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
             instruction_data: Program::serialize_instruction(large_data).unwrap(),
             ..Default::default()
         },
-        &program.into(),
+        &synthetic_program(program),
     );
 
     assert_program_prove_failure(&result, "provided data should fit into data limit");

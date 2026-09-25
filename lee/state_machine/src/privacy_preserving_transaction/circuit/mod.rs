@@ -175,16 +175,6 @@ impl ProgramWithDependencies {
     }
 }
 
-impl From<Program> for ProgramWithDependencies {
-    /// Assumes `program` lives at its bijection address — the common case (genesis-seeded
-    /// builtins, or anything not yet moved by `program_loader`). Use [`Self::new`] directly for a
-    /// program deployed elsewhere.
-    fn from(program: Program) -> Self {
-        let self_account_id = AccountId::from_builtin_program(program.id());
-        Self::new(program, self_account_id, HashMap::new())
-    }
-}
-
 /// Inputs for proving an LEE program's execution.
 #[derive(Default)]
 pub struct ProvingInput {

@@ -276,10 +276,13 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
     // it actually ran rather than the whole budget.
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(crate::test_methods::exits_nonzero()));
-    let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
+        .with_named_programs(std::iter::once((
+            program_id,
+            crate::test_methods::exits_nonzero(),
+        )));
     let message = Message::try_new(
         program_id,
         vec![ProgramShardSelector::balance(from)],

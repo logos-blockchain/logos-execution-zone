@@ -13,7 +13,6 @@ use lee_core::{
     program::{
         AccountInput, BlockValidityWindow, ChainedCall, PROGRAM_LOADER_ACCOUNT_ID, ProgramEvent,
         ProgramOutput, TimestampValidityWindow, TransactionEvent, compute_public_authorized_pdas,
-        get_program_via,
     },
     validation::{AccountSource, Backend, CallContext, TrackedAccount},
 };
@@ -147,21 +146,22 @@ impl Backend for PublicBackend<'_> {
             self.new_commitments.extend(new_commitment);
             program_output
         } else {
-            let Some((program_id, user_elf)) = get_program_via(call.program_account_id, |id| {
-                accounts
-                    .get(&id)
-                    .map(|account| &account.current)
-                    .or_else(|| {
-                        self.state
-                            .get_account_by_id_ref(id)
-                            .map(|account| &account.data)
-                    })
-            }) else {
+            let Some((program_id, elf)) =
+                crate::program::resolve_program(call.program_account_id, |id| {
+                    accounts
+                        .get(&id)
+                        .map(|account| &account.current)
+                        .or_else(|| {
+                            self.state
+                                .get_account_by_id_ref(id)
+                                .map(|account| &account.data)
+                        })
+                })
+            else {
                 return Err(LeeError::UnknownProgram {
                     chained: ctx.caller_account_id.is_some(),
                 });
             };
-            let elf = crate::program::attach_kernel(&user_elf);
             let program = Program::new_unchecked(program_id, Cow::Owned(elf));
             let (program_output, call_cycles) = program.execute(
                 call.program_account_id,
