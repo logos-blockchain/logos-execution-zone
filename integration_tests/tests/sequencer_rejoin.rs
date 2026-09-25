@@ -13,12 +13,11 @@ use integration_tests::{
 };
 use lee::{AccountId, PublicKey, program::Program};
 use log::info;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::config::BedrockConfig;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{self, MultiNodeTestContextConfig, SequencerPartialConfig},
+    spawn_channel_observer,
 };
 use tokio::test;
 use wallet::{AccountIdentity, AccountMention};
@@ -51,18 +50,11 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .await
         .context("Failed to build the two-sequencer test context")?;
 
-    let key_b = Ed25519Key::from_bytes(&config::sequencer_signing_key_from_seed(1)).public_key();
+    let key_b = config::sequencer_signing_key_from_seed(1).public_key();
     let stake_key_b = sequencer_stake_core::SequencerKey::new(key_b.to_bytes())
         .context("Sequencer B's Bedrock key is not a valid Ed25519 point")?;
 
-    let bedrock_config = BedrockConfig {
-        channel_id: channel,
-        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 
     // B's genesis stake sits on an account only this key can sign for.
     let owner_b = config::founding_stake_owner_key(1)?;
@@ -74,17 +66,14 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         .add_imported_public_account(owner_b);
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
 
     let settlement = AccountId::from(&PublicKey::new_from_private_key(
         &config::default_public_accounts_for_wallet()[0].0,
     ));
 
     wait_until("both staked keys to be accredited", || async {
-        Ok(committee(&bedrock_config)
-            .await?
-            .0
-            .contains(&key_b.to_bytes()))
+        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
     })
     .await?;
     info!("Both sequencers accredited from channel creation");
@@ -107,10 +96,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B requested a full unstake");
 
     wait_until("B to leave the committee", || async {
-        Ok(!committee(&bedrock_config)
-            .await?
-            .0
-            .contains(&key_b.to_bytes()))
+        Ok(!committee(&observer).await?.0.contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B removed from the Bedrock committee");
@@ -160,17 +146,14 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B staked again");
 
     wait_until("B to be accredited again", || async {
-        Ok(committee(&bedrock_config)
-            .await?
-            .0
-            .contains(&key_b.to_bytes()))
+        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B back in the Bedrock committee");
 
     // Rejoining is only real if B writes to the channel again.
     wait_until("the round-robin turn to reach B again", || async {
-        Ok(committee(&bedrock_config).await?.1 == Some(key_b))
+        Ok(committee(&observer).await?.1 == Some(key_b))
     })
     .await?;
 
@@ -200,11 +183,7 @@ async fn send_stake_tx(
     let data = Program::serialize_instruction(instruction.clone())
         .context("Failed to serialize the sequencer_stake instruction")?;
     ctx.wallet()
-        .send_pub_tx(
-            accounts,
-            data,
-            AccountId::from_builtin_program(programs::sequencer_stake().id()),
-        )
+        .send_pub_tx(accounts, data, programs::sequencer_stake_account_id())
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())
@@ -221,9 +200,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(AccountId::from_builtin_program(
-                programs::sequencer_stake().id(),
-            ))
+            .shard(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

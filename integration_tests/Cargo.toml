@@ -14,6 +14,7 @@ test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["test_utils"] }
 lee.workspace = true
 sequencer_core.workspace = true
+sequencer_bedrock_actor = { workspace = true, features = ["actor"] }
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
@@ -29,7 +30,7 @@ wrapped_token_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
-sequencer_service.workspace = true
+sequencer_service = { workspace = true, features = ["rpc"] }
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 sequencer_ffi.workspace = true
@@ -53,6 +54,7 @@ testing-framework-core.workspace = true
 # External dependencies.
 anyhow.workspace = true
 async-trait.workspace = true
+kameo.workspace = true
 bytesize.workspace = true
 cucumber = { features = [
   "macros",
@@ -69,7 +71,11 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 fee_core.workspace = true
-sequencer_core = { workspace = true, features = ["test-utils"] }
+sequencer_core = { workspace = true }
+sequencer_bedrock_actor = { workspace = true, features = [
+  "actor",
+  "test-utils",
+] }
 
 [features]
 cucumber = ["dep:cucumber"]

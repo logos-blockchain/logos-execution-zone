@@ -9,6 +9,7 @@ pub enum OperationStatus {
     CastError = 0x4,
     NotSupported = 0x5,
     InvalidArgument = 0x6,
+    ResponseTooBig = 0x7,
 }
 
 impl OperationStatus {

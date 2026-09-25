@@ -583,7 +583,6 @@ mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
     use common::{HashType, block::HashableBlockData};
-    use lee::AccountId;
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
@@ -759,14 +758,14 @@ mod tests {
     /// An inbox dispatch transaction with fixed source coordinates, so blocks
     /// in these tests carry a decodable dispatch key.
     fn dispatch_tx() -> common::transaction::LeeTransaction {
-        let receiver_id = AccountId::from_builtin_program(programs::ping_receiver().id());
+        let receiver_id = programs::ping_receiver_account_id();
         common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
             &cross_zone::EmissionSource {
                 src_zone: [2; 32],
                 src_block_id: 5,
                 src_block_hash: [3; 32],
                 src_tx_index: 0,
-                src_account_id: AccountId::from_builtin_program(programs::ping_sender().id()),
+                src_account_id: programs::ping_sender_account_id(),
             },
             receiver_id,
             &[

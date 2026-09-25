@@ -18,6 +18,7 @@ pub mod vectors;
 #[repr(C)]
 pub enum FfiSequencerSyncStatus {
     Synced = 0x0,
+    Stalled = 0x1,
 }
 
 /// Struct which represents sequencer status on the moment of a call.
@@ -37,6 +38,17 @@ impl TryFrom<GetStatusReply> for FfiSequencerStatus {
     type Error = OperationStatus;
 
     fn try_from(value: GetStatusReply) -> Result<Self, Self::Error> {
+        // TODO: Figure out how to better represent sequencer sync status.
+        // The main issue is that running sequencer service already passed
+        // the moment of syncing up and in case if it fetching published non-finalized blocks,
+        // then it is not actually representing for catching up, because blocks can be dropped
+        // on a chain rearrangement.
+        let sync_status = if value.stall_reason.is_some() {
+            FfiSequencerSyncStatus::Stalled
+        } else {
+            FfiSequencerSyncStatus::Synced
+        };
+
         let json = match serde_json::to_string(&value.stall_reason) {
             Ok(json) => json,
             Err(e) => {
@@ -54,12 +66,7 @@ impl TryFrom<GetStatusReply> for FfiSequencerStatus {
         };
 
         Ok(Self {
-            // TODO: Figure out how to represent sequencer sync status.
-            // The main issue is that running sequencer service already passed
-            // the moment of syncing up and in case if it fetching published non-finalized blocks,
-            // then it is not actually representing for catching up, because blocks can be dropped
-            // on a chain rearrangement.
-            sync_status: FfiSequencerSyncStatus::Synced,
+            sync_status,
             chain_height: value.chain_height,
             failed_attempts: value.failed_attempts,
             blocked_attempts_count: value.blocked_attempts_count,
@@ -310,7 +317,10 @@ impl<T> From<Option<T>> for FfiOption<T> {
 
 impl<T> From<FfiOption<T>> for Option<T> {
     fn from(value: FfiOption<T>) -> Self {
-        value.is_some.then(|| unsafe { value.value.read() })
+        value.is_some.then(|| {
+            let boxed_val = unsafe { Box::from_raw(value.value) };
+            *boxed_val
+        })
     }
 }
 
@@ -332,7 +342,7 @@ impl<T> From<FfiOption<T>> for Option<T> {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiSequencerStatus` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_ffi_sequencer_status(val: *mut FfiSequencerStatus) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_sequencer_status(val: *mut FfiSequencerStatus) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

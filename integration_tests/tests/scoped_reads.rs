@@ -462,7 +462,7 @@ async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()>
     )
     .await?;
 
-    let token_program_id = AccountId::from_builtin_program(programs::token().id());
+    let token_program_id = programs::token_account_id();
     let definition_view = get_account_view(
         &ctx,
         ProgramShardSelector::new(definition, token_program_id),

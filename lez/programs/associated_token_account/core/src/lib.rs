@@ -2,6 +2,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{account::AccountId, program::AccountInput};
 
+pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 24] = *b"associated_token_account";
+
 /// Associated token account instructions.
 ///
 /// `token_program_id` selects the token definition and holding shards.
@@ -38,6 +40,11 @@ pub enum Instruction {
         token_program_id: AccountId,
         amount: u128,
     },
+}
+
+#[must_use]
+pub fn ata_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&ASSOCIATED_TOKEN_ACCOUNT_NAME)
 }
 
 pub fn compute_ata_seed(

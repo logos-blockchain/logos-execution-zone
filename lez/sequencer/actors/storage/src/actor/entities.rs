@@ -119,6 +119,8 @@ impl db::Storable<ColumnFamily> for FinalSnapshot {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct ZoneCheckpoint {
     pub bytes: Vec<u8>,
+    /// The channel sequence this checkpoint was minted at.
+    pub seq: u64,
 }
 
 impl db::Storable<ColumnFamily> for ZoneCheckpoint {
@@ -375,19 +377,6 @@ impl db::Storable<ColumnFamily> for BlockHashToBlockIdMappingDestination {
 
     const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
     const TYPE_NAME: &'static str = db::type_name!(BlockHashToBlockIdMappingDestination);
-}
-
-/// The map entry between tx hashes and block ids.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct TxHashToBlockIdMappingDestination {
-    pub id: u64,
-}
-
-impl db::Storable<ColumnFamily> for TxHashToBlockIdMappingDestination {
-    type Key = HashType;
-
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::BlockMeta;
-    const TYPE_NAME: &'static str = db::type_name!(TxHashToBlockIdMappingDestination);
 }
 
 /// The map key between account id and block id, which affect this account.

@@ -54,9 +54,9 @@ impl From<EventRecord> for FfiEventRecord {
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yetfreed.
+/// - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

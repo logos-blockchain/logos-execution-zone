@@ -1,6 +1,5 @@
 //! Discovery process for the `sequencer_stake` committee.
 
-use lee::AccountId;
 use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
 
@@ -146,8 +145,7 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         warn!("sequencer_stake config account is absent");
         return None;
     };
-    let sequencer_stake_program_id =
-        AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let config =
         SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
     if config.is_none() {
@@ -166,8 +164,7 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
 /// whatever release is pending against it.
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
-    let sequencer_stake_program_id =
-        AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
 }
 
@@ -175,6 +172,7 @@ fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<S
 mod tests {
 
     use lee_core::account::Account;
+    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
     use sequencer_stake_core::SequencerEntry;
 
     use super::*;
@@ -222,8 +220,7 @@ mod tests {
     /// LEZ state holding the config account plus one ownership account per key.
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
-        let sequencer_stake_program_id =
-            AccountId::from_builtin_program(programs::sequencer_stake().id());
+        let sequencer_stake_program_id = programs::sequencer_stake_account_id();
 
         let ownership_accounts = stakes.iter().map(|staked| {
             (
@@ -278,9 +275,7 @@ mod tests {
 
     /// A distinct valid key per `tag`.
     fn test_key(tag: u8) -> SequencerKey {
-        let bytes = crate::block_publisher::Ed25519Key::from_bytes(&[tag; 32])
-            .public_key()
-            .to_bytes();
+        let bytes = Ed25519Key::from_bytes(&[tag; 32]).public_key().to_bytes();
         SequencerKey::new(bytes).expect("a derived public key is a curve point")
     }
 

@@ -394,7 +394,7 @@ pub fn build_slash_tx(
     offence: &Offence,
     approvals: Vec<SlashApproval>,
 ) -> anyhow::Result<LeeTransaction> {
-    let program_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let program_id = programs::sequencer_stake_account_id();
     let message = LeeMessage::try_new(
         program_id,
         vec![

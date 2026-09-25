@@ -155,7 +155,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         "Staking sequencer key {}",
         hex::encode(joiner_key.to_bytes())
     );
-    let stake_id = AccountId::from_builtin_program(programs::sequencer_stake().id());
+    let stake_id = programs::sequencer_stake_account_id();
     ctx.wallet()
         .send_pub_tx(
             vec![

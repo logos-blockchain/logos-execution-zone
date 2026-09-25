@@ -17,10 +17,10 @@ use integration_tests::{
     init_logger, wait_until,
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::config::BedrockConfig;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+    spawn_channel_observer,
 };
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
@@ -61,22 +61,15 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     let indexer = ctx.indexer_client();
 
     let pub_a = Ed25519Key::from_bytes(&config::SEQUENCER_SIGNING_KEY).public_key();
-    let pub_b = Ed25519Key::from_bytes(&config::sequencer_signing_key_from_seed(1)).public_key();
+    let pub_b = config::sequencer_signing_key_from_seed(1).public_key();
 
-    let bedrock_config = BedrockConfig {
-        channel_id: channel,
-        node_url: config::addr_to_url(config::UrlProtocol::Http, ctx.bedrock_addr())?,
-        funding_key: config::bedrock_funding_key(),
-        auth: None,
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        channel_params: sequencer_core::config::default_channel_params(),
-    };
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
 
     // Phase 1: both keys accredited from channel creation.
     let mut want = vec![pub_a.to_bytes(), pub_b.to_bytes()];
     want.sort_unstable();
     wait_until("Bedrock to accredit both staked keys", || async {
-        Ok(committee(&bedrock_config).await?.0 == want)
+        Ok(committee(&observer).await?.0 == want)
     })
     .await?;
 
@@ -95,7 +88,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     .await?;
     wait_for_height(b, rotation_target, "B to follow across turn windows").await?;
     wait_until("the round-robin turn to reach B", || async {
-        Ok(committee(&bedrock_config).await?.1 == Some(pub_b))
+        Ok(committee(&observer).await?.1 == Some(pub_b))
     })
     .await?;
     assert_same_chain(a, b).await?;

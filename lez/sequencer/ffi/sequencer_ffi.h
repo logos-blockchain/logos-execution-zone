@@ -13,6 +13,7 @@ typedef enum OperationStatus {
   CastError = 4,
   NotSupported = 5,
   InvalidArgument = 6,
+  ResponseTooBig = 7,
 } OperationStatus;
 
 /**
@@ -20,6 +21,7 @@ typedef enum OperationStatus {
  */
 typedef enum FfiSequencerSyncStatus {
   Synced = 0,
+  Stalled = 1,
 } FfiSequencerSyncStatus;
 
 typedef enum FfiProgramImageClaimKind {
@@ -70,23 +72,12 @@ typedef struct Runtime {
 /**
  * FFI-owned sequencer.
  *
- * - `storage_ref`: an [`ActorRef<StorageActor>`] used to get acess to db.
- * - `slasher_ref`: an [`ActorRef<SlasherActor>`] right now is unused and exists only for gracial
- *   shutdown.
- * - `executor_ref`: an [`ActorRef<ExecutorActor<StorageActor, ZoneSdkPublisher>>`] used to query
- *   the node.
- * - `scheduler_ref`: an [`ActorRef<Scheduler>`] right now is unused and exists only for gracial
- *   shutdown.
- * - `gossip`: an [`Option<Gossip>`] right now is unused and exists only to pin gossip.
- * - `runtime`: the [`Runtime`] used to run async queries against the store (either owned or
+ * - `handle`: a [`SequencerHandle`] owning every actor the sequencer runs.
+ * - `runtime`: the [`Runtime`] used to run async queries against the node (either owned or
  *   borrowed), already FFI-safe.
  */
 typedef struct SequencerServiceFFI {
-  void *storage_ref;
-  void *slasher_ref;
-  void *executor_ref;
-  void *scheduler_ref;
-  void *gossip;
+  void *handle;
   struct Runtime runtime;
 } SequencerServiceFFI;
 
@@ -801,13 +792,32 @@ struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(c
                                                                                FfiHashType tx_hash);
 
 /**
+ * Frees the resources associated with the query for block id by transaction hash.
+ *
+ * # Arguments
+ *
+ * - `val`: Valid pointer into `u64`, received from `sequencer_ffi_query_block_by_tx_hash` as a
+ *   `PointerResult.value`
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid pointer into `u64`.
+ */
+void sequencer_ffi_free_query_block_id_by_transaction(uint64_t *val);
+
+/**
  * Query events emitted by programs, optionally filtered.
  *
  * Resolution mirrors the `getEvents` RPC: a non-null `tx_hash` makes this a point
  * lookup and the block range is ignored; otherwise the range from `from_block` to
  * `to_block` (defaulting to the current tip when none) is read, capped at
- * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks — `InvalidArgument` when exceeded, as are bounds
- * past the indexed tip and queries outside the sequencer's event-filter history.
+ * `MAX_EVENT_QUERY_BLOCK_SPAN` blocks, returning `InvalidArgument` when the span is
+ * exceeded or a bound is past the sequencer's tip.
  * `program_account_id` and `selector` are exact-match filters applied to the result.
  *
  * # Arguments
@@ -859,7 +869,7 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_que
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiSequencerStatus` produced by this library and not yet freed.
  */
-void free_ffi_sequencer_status(struct FfiSequencerStatus *val);
+void sequencer_ffi_free_ffi_sequencer_status(struct FfiSequencerStatus *val);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -970,9 +980,9 @@ void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yetfreed.
+ * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
  */
-void free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
+void sequencer_ffi_free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.

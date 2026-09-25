@@ -23,6 +23,7 @@ members = [
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
   "lez/sequencer/actors/channel_config",
+  "lez/sequencer/actors/common",
   "lez/sequencer/actors/executor",
   "lez/sequencer/actors/executor/metrics",
   "lez/sequencer/actors/gossip",
@@ -30,8 +31,8 @@ members = [
   "lez/sequencer/actors/rpc_server/metrics",
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
+  "lez/sequencer/actors/bedrock",
   "lez/sequencer/ffi",
-
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -96,6 +97,7 @@ sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
 sequencer_channel_config_actor = { path = "lez/sequencer/actors/channel_config" }
+sequencer_actors_common = { path = "lez/sequencer/actors/common" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
 sequencer_gossip_actor = { path = "lez/sequencer/actors/gossip" }
@@ -103,6 +105,7 @@ sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
 sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
+sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
 sequencer_service = { path = "lez/sequencer/service" }
 sequencer_ffi = { path = "lez/sequencer/ffi" }
 indexer_core = { path = "lez/indexer/core" }
@@ -266,6 +269,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
 enum-iterator = "2.3.0"
 cbindgen = "0.29"
+glob = "0.3.4"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]
