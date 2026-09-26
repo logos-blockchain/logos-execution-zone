@@ -83,17 +83,21 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
-    let mover_instruction_data =
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
-            amount: u128::from(funding_balance),
-        })
-        .context("Failed to serialize mover instruction")?;
+    let config_id = system_accounts::sequencer_stake_config_account_id();
+    let stake_id = programs::sequencer_stake_account_id();
+    // The proposal is read off the chain the stake is about to land on, the way `submit_stake`
+    // builds it: it is checked against the account it describes.
+    let has_record = !get_account(&ctx, ownership_id)
+        .await
+        .context("Failed to read the stake ownership account")?
+        .data
+        .shard(stake_id)
+        .is_empty();
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
-            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            mover_instruction_data,
+            has_record,
         })
         .context("Failed to serialize Stake instruction")?;
 
@@ -101,8 +105,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "Submitting Stake transaction for sequencer key {}",
         hex::encode(demo_sequencer_key.to_bytes())
     );
-    let config_id = system_accounts::sequencer_stake_config_account_id();
-    let stake_id = programs::sequencer_stake_account_id();
     ctx.wallet()
         .send_pub_tx(
             vec![
@@ -238,10 +240,17 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Unstake recipient is freely chosen during the request.
     let destination_id = funding_id;
 
+    let requested_at = ctx
+        .sequencer_client()
+        .get_last_block_id()
+        .await?
+        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     let unstake_request_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+            sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
             destination: destination_id,
+            requested_at,
         })
         .context("Failed to serialize UnstakeRequest instruction")?;
     ctx.wallet()
@@ -249,8 +258,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
             vec![
                 AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
                 AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-                AccountIdentity::PublicNoSign(system_accounts::clock_account_ids()[0])
-                    .select_program_shard(programs::clock_account_id()),
             ],
             unstake_request_data,
             stake_id,
@@ -295,7 +302,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await
         .context("Failed to read the ownership account after the release")?;
     assert_eq!(
-        drained_ownership_account.data.balance().unwrap(),
+        drained_ownership_account.data.native_balance().unwrap(),
         0,
         "the ownership account never custodies the stake"
     );

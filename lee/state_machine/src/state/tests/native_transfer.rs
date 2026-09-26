@@ -21,11 +21,11 @@ fn transition_from_native_transfer_invocation_credits_empty_and_funded_recipient
         state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         assert_eq!(
-            state.get_account_by_id(from).data.balance(),
+            state.get_account_by_id(from).data.native_balance(),
             Ok(200 - amount)
         );
         assert_eq!(
-            state.get_account_by_id(to).data.balance(),
+            state.get_account_by_id(to).data.native_balance(),
             Ok(recipient_balance + amount)
         );
         assert_eq!(state.get_account_by_id(from).nonce, Nonce(1));
@@ -67,9 +67,18 @@ fn transition_from_sequence_of_native_transfer_invocations() {
     );
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
-    assert_eq!(state.get_account_by_id(account_id1).data.balance(), Ok(95));
-    assert_eq!(state.get_account_by_id(account_id2).data.balance(), Ok(2));
-    assert_eq!(state.get_account_by_id(account_id3).data.balance(), Ok(3));
+    assert_eq!(
+        state.get_account_by_id(account_id1).data.native_balance(),
+        Ok(95)
+    );
+    assert_eq!(
+        state.get_account_by_id(account_id2).data.native_balance(),
+        Ok(2)
+    );
+    assert_eq!(
+        state.get_account_by_id(account_id3).data.native_balance(),
+        Ok(3)
+    );
     assert_eq!(state.get_account_by_id(account_id1).nonce, Nonce(1));
     assert_eq!(state.get_account_by_id(account_id2).nonce, Nonce(2));
     assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(1));
@@ -99,8 +108,8 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
         program_id,
         vec![
             ProgramShardSelector::new(sender, program_id),
-            ProgramShardSelector::balance(sender),
-            ProgramShardSelector::balance(recipient),
+            ProgramShardSelector::native_balance(sender),
+            ProgramShardSelector::native_balance(recipient),
         ],
         vec![Nonce(0)],
         (written.clone(), amount),
@@ -114,10 +123,13 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
 
     let sender_post = state.get_account_by_id(sender);
     assert_eq!(sender_post.data.shard(program_id).as_ref(), written);
-    assert_eq!(sender_post.data.balance(), Ok(70));
+    assert_eq!(sender_post.data.native_balance(), Ok(70));
     assert_eq!(sender_post.data.shard(stranger), &stranger_record);
     assert_eq!(sender_post.nonce, Nonce(1));
-    assert_eq!(state.get_account_by_id(recipient).data.balance(), Ok(30));
+    assert_eq!(
+        state.get_account_by_id(recipient).data.native_balance(),
+        Ok(30)
+    );
 }
 
 #[test]
@@ -128,8 +140,8 @@ fn a_repeated_shard_selector_is_rejected() {
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(account_id),
-            ProgramShardSelector::balance(account_id),
+            ProgramShardSelector::native_balance(account_id),
+            ProgramShardSelector::native_balance(account_id),
         ],
         vec![],
         NativeInstruction::Transfer { amount: 0 },
@@ -170,7 +182,10 @@ fn a_transfer_that_overflows_the_recipient_is_rejected() {
         panic!("an overflowing credit was accepted: {result:?}");
     };
     assert_eq!(account_id, to);
-    assert_eq!(state.get_account_by_id(to).data.balance(), Ok(Balance::MAX));
+    assert_eq!(
+        state.get_account_by_id(to).data.native_balance(),
+        Ok(Balance::MAX)
+    );
 }
 
 #[test]

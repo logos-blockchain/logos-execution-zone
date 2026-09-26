@@ -9,10 +9,12 @@ publish = false
 workspace = true
 
 [dependencies]
+amm_core.workspace = true
 common.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 lee.workspace = true
 lee_core.workspace = true
+programs.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 test_fixtures.workspace = true
 wallet.workspace = true

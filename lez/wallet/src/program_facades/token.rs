@@ -8,13 +8,31 @@ use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
     encryption::ViewingPublicKey,
 };
-use token_core::Instruction;
+use token_core::{Instruction, TokenDescriptor, TokenHolding};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, program_facades::token_holding};
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
 impl Token<'_> {
+    async fn holding(
+        &self,
+        holder: &AccountIdentity,
+    ) -> Result<TokenHolding, ExecutionFailureKind> {
+        token_holding(self.0, holder, programs::token_account_id()).await
+    }
+
+    async fn descriptor(
+        &self,
+        holder: &AccountIdentity,
+    ) -> Result<TokenDescriptor, ExecutionFailureKind> {
+        let holding = self.holding(holder).await?;
+        Ok(TokenDescriptor {
+            definition_id: holding.definition_id(),
+            kind: holding.kind(),
+        })
+    }
+
     pub async fn send_new_definition(
         &self,
         definition: AccountIdentity,
@@ -153,6 +171,7 @@ impl Token<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -176,8 +195,13 @@ impl Token<'_> {
         recipient_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
+        let sender = self
+            .0
+            .resolve_private_account(sender_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -186,10 +210,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    self.0
-                        .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .select_program_shard(token_program_id),
+                    sender.select_program_shard(token_program_id),
                     self.0
                         .resolve_private_account(recipient_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
@@ -215,8 +236,13 @@ impl Token<'_> {
         recipient_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
+        let sender = self
+            .0
+            .resolve_private_account(sender_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -225,10 +251,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    self.0
-                        .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .select_program_shard(token_program_id),
+                    sender.select_program_shard(token_program_id),
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
@@ -254,8 +277,13 @@ impl Token<'_> {
         recipient_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let sender = self
+            .0
+            .resolve_private_account(sender_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -264,10 +292,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    self.0
-                        .resolve_private_account(sender_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .select_program_shard(token_program_id),
+                    sender.select_program_shard(token_program_id),
                     AccountIdentity::Public(recipient_account_id)
                         .select_program_shard(token_program_id),
                 ],
@@ -292,6 +317,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -328,6 +354,7 @@ impl Token<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
+            descriptor: self.descriptor(&sender).await?,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -364,6 +391,7 @@ impl Token<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            kind: self.holding(&holder).await?.kind(),
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -388,8 +416,13 @@ impl Token<'_> {
         holder_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
+        let holder = self
+            .0
+            .resolve_private_account(holder_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            kind: self.holding(&holder).await?.kind(),
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -402,10 +435,7 @@ impl Token<'_> {
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
                         .select_program_shard(token_program_id),
-                    self.0
-                        .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .select_program_shard(token_program_id),
+                    holder.select_program_shard(token_program_id),
                 ],
                 instruction_data,
                 &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
@@ -425,8 +455,10 @@ impl Token<'_> {
         holder_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let holder = AccountIdentity::Public(holder_account_id);
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            kind: self.holding(&holder).await?.kind(),
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -439,8 +471,7 @@ impl Token<'_> {
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?
                         .select_program_shard(token_program_id),
-                    AccountIdentity::Public(holder_account_id)
-                        .select_program_shard(token_program_id),
+                    holder.select_program_shard(token_program_id),
                 ],
                 instruction_data,
                 &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),
@@ -461,8 +492,13 @@ impl Token<'_> {
         holder_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let holder = self
+            .0
+            .resolve_private_account(holder_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
+            kind: self.holding(&holder).await?.kind(),
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -473,10 +509,7 @@ impl Token<'_> {
                 vec![
                     AccountIdentity::Public(definition_account_id)
                         .select_program_shard(token_program_id),
-                    self.0
-                        .resolve_private_account(holder_account_id)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .select_program_shard(token_program_id),
+                    holder.select_program_shard(token_program_id),
                 ],
                 instruction_data,
                 &ProgramWithDependencies::new(programs::token(), token_program_id, HashMap::new()),

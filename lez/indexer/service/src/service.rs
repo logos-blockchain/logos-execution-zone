@@ -157,7 +157,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .map_err(db_error)?;
         Ok(AccountSummary {
             nonce: account.nonce.into(),
-            balance: account.data.balance().ok(),
+            balance: account.data.native_balance().ok(),
             shards: account
                 .data
                 .shards

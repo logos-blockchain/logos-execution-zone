@@ -2,7 +2,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Balance, ProgramShardSelector, ShardData},
-    program::{AccountInput, ChainedCall, InstructionData, PdaSeed, ProgramOutput, ShardStateDiff},
+    program::{
+        AccountMeta, ApplyInput, ApplyOutput, ChainedCall, InstructionData, PdaSeed, PlanInput,
+        PlanOutput, ShardEffect,
+    },
 };
 
 /// Hardcoded native token shard address.
@@ -13,6 +16,12 @@ pub enum Instruction {
     Transfer { amount: Balance },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Effect {
+    Debit(Balance),
+    Credit(Balance),
+}
+
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
 pub enum TransferError {
     #[error("native transfer instruction does not decode")]
@@ -21,6 +30,8 @@ pub enum TransferError {
     InvalidInputs,
     #[error("native transfer sender {account_id} is not authorized")]
     UnauthorizedSender { account_id: AccountId },
+    #[error("native effect does not decode")]
+    InvalidEffect,
     #[error(transparent)]
     InvalidBalance(#[from] InvalidBalanceEncoding),
     #[error("sender {account_id} holds less than the transferred amount")]
@@ -55,20 +66,20 @@ pub fn decode_balance(data: &[u8]) -> Result<Balance, InvalidBalanceEncoding> {
     }
 }
 
-pub fn execute(
+pub fn plan(
     caller_account_id: Option<AccountId>,
-    pre_states: &[AccountInput],
+    accounts: &[AccountMeta],
     instruction_data: &InstructionData,
-) -> Result<ProgramOutput, TransferError> {
+) -> Result<PlanOutput, TransferError> {
     let Ok(Instruction::Transfer { amount }) = borsh::from_slice(instruction_data) else {
         return Err(TransferError::InvalidInstruction);
     };
 
-    let [sender, recipient] = pre_states else {
+    let [sender, recipient] = accounts else {
         return Err(TransferError::InvalidInputs);
     };
-    if sender.program_account_id() != NATIVE_TOKEN_PROGRAM_ID
-        || recipient.program_account_id() != NATIVE_TOKEN_PROGRAM_ID
+    if sender.program_account_id != NATIVE_TOKEN_PROGRAM_ID
+        || recipient.program_account_id != NATIVE_TOKEN_PROGRAM_ID
         || sender.account_id == recipient.account_id
     {
         return Err(TransferError::InvalidInputs);
@@ -79,26 +90,41 @@ pub fn execute(
         });
     }
 
-    let sent = decode_balance(&sender.shard.1)?.checked_sub(amount).ok_or(
-        TransferError::InsufficientBalance {
-            account_id: sender.account_id,
-        },
-    )?;
-    let received = decode_balance(&recipient.shard.1)?
-        .checked_add(amount)
-        .ok_or(TransferError::BalanceOverflow {
-            account_id: recipient.account_id,
-        })?;
-
-    Ok(ProgramOutput::new(
-        NATIVE_TOKEN_PROGRAM_ID,
+    Ok(PlanOutput::new(PlanInput {
+        self_account_id: NATIVE_TOKEN_PROGRAM_ID,
         caller_account_id,
-        instruction_data.clone(),
-        vec![
-            ShardStateDiff::new(sender.clone(), encode_balance(sent)),
-            ShardStateDiff::new(recipient.clone(), encode_balance(received)),
-        ],
-    ))
+        accounts: accounts.to_vec(),
+        instruction_data: instruction_data.clone(),
+    })
+    .with_effects(vec![
+        ShardEffect::new(sender, &Effect::Debit(amount)),
+        ShardEffect::new(recipient, &Effect::Credit(amount)),
+    ]))
+}
+
+pub fn apply(input: &ApplyInput) -> Result<ShardData, TransferError> {
+    let Ok(effect) = borsh::from_slice::<Effect>(&input.effect_data) else {
+        return Err(TransferError::InvalidEffect);
+    };
+    let account_id = input.selector.account_id;
+    let balance = decode_balance(&input.pre_data)?;
+    let post = match effect {
+        Effect::Debit(amount) => balance
+            .checked_sub(amount)
+            .ok_or(TransferError::InsufficientBalance { account_id })?,
+        Effect::Credit(amount) => balance
+            .checked_add(amount)
+            .ok_or(TransferError::BalanceOverflow { account_id })?,
+    };
+
+    Ok(encode_balance(post))
+}
+
+pub fn apply_output(input: &ApplyInput) -> Result<ApplyOutput, TransferError> {
+    Ok(ApplyOutput {
+        post_data: Some(apply(input)?),
+        input: input.clone(),
+    })
 }
 
 /// A chained transfer out of an account the caller holds under `seed`.
@@ -112,8 +138,8 @@ pub fn custody_transfer(
     ChainedCall::new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(from),
-            ProgramShardSelector::balance(to),
+            ProgramShardSelector::native_balance(from),
+            ProgramShardSelector::native_balance(to),
         ],
         &Instruction::Transfer { amount },
     )
@@ -123,29 +149,35 @@ pub fn custody_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::CallKind;
+    use crate::program::validate_plan;
 
-    fn row(seed: u8, is_authorized: bool, balance: Balance) -> AccountInput {
-        AccountInput::native_balance(AccountId::new([seed; 32]), is_authorized, balance)
+    fn account_id(seed: u8) -> AccountId {
+        AccountId::new([seed; 32])
+    }
+
+    fn handle(seed: u8, is_authorized: bool) -> AccountMeta {
+        AccountMeta::native_balance(account_id(seed), is_authorized)
     }
 
     fn transfer(amount: Balance) -> InstructionData {
         borsh::to_vec(&Instruction::Transfer { amount }).expect("the instruction serializes")
     }
 
-    fn post_balances(output: &ProgramOutput) -> Vec<Balance> {
-        output
-            .state_diffs
-            .iter()
-            .map(|diff| {
-                decode_balance(
-                    diff.post_data
-                        .as_ref()
-                        .expect("the handler writes both rows"),
-                )
-                .expect("the handler writes canonical balances")
-            })
-            .collect()
+    fn apply_at(
+        seed: u8,
+        pre_data: ShardData,
+        effect_data: Vec<u8>,
+    ) -> Result<ShardData, TransferError> {
+        apply(&ApplyInput {
+            self_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            selector: ProgramShardSelector::native_balance(account_id(seed)),
+            pre_data,
+            effect_data,
+        })
+    }
+
+    fn effect_bytes(effect: &Effect) -> Vec<u8> {
+        borsh::to_vec(effect).expect("the effect serializes")
     }
 
     #[test]
@@ -170,21 +202,34 @@ mod tests {
     }
 
     #[test]
-    fn a_transfer_moves_the_amount_to_an_unauthorized_recipient() {
-        let caller = AccountId::new([9; 32]);
+    fn a_transfer_plans_a_debit_and_a_credit_on_an_unauthorized_recipient() {
+        let caller = account_id(9);
         let instruction = transfer(30);
-        let output = execute(
-            Some(caller),
-            &[row(1, true, 100), row(2, false, 5)],
-            &instruction,
-        )
-        .expect("the transfer succeeds");
+        let accounts = [handle(1, true), handle(2, false)];
+        let output = plan(Some(caller), &accounts, &instruction).expect("the transfer succeeds");
 
-        assert_eq!(post_balances(&output), vec![70, 35]);
-        assert_eq!(output.self_account_id, NATIVE_TOKEN_PROGRAM_ID);
-        assert_eq!(output.caller_account_id, Some(caller));
-        assert_eq!(output.call_kind, CallKind::Execute);
-        assert_eq!(output.instruction_data, instruction);
+        let [debit, credit] = output.effects.as_slice() else {
+            panic!(
+                "the planner emits exactly two effects: {:?}",
+                output.effects
+            );
+        };
+        assert_eq!(
+            debit.selector,
+            ProgramShardSelector::native_balance(account_id(1))
+        );
+        assert_eq!(debit.data, effect_bytes(&Effect::Debit(30)));
+        assert_eq!(
+            credit.selector,
+            ProgramShardSelector::native_balance(account_id(2))
+        );
+        assert_eq!(credit.data, effect_bytes(&Effect::Credit(30)));
+
+        assert_eq!(output.input.accounts, accounts);
+        assert!(validate_plan(&output.input, &output).is_ok());
+        assert_eq!(output.input.self_account_id, NATIVE_TOKEN_PROGRAM_ID);
+        assert_eq!(output.input.caller_account_id, Some(caller));
+        assert_eq!(output.input.instruction_data, instruction);
         assert!(output.chained_calls.is_empty());
         assert!(output.events.is_empty());
         assert_eq!(output.block_validity_window.start(), None);
@@ -194,39 +239,61 @@ mod tests {
     }
 
     #[test]
-    fn exact_depletion_prunes_the_sender_shard() {
-        let output = execute(None, &[row(1, true, 100), row(2, false, 0)], &transfer(100))
+    fn a_plan_applies_as_a_conserved_transfer() {
+        let output = plan(None, &[handle(1, true), handle(2, false)], &transfer(30))
             .expect("the transfer succeeds");
 
-        assert!(
-            output.state_diffs[0]
-                .post_data
-                .as_ref()
-                .expect("the sender row is written")
-                .is_empty()
-        );
-        assert_eq!(post_balances(&output), vec![0, 100]);
+        let post: Vec<Balance> = output
+            .effects
+            .iter()
+            .zip([encode_balance(100), encode_balance(5)])
+            .map(|(effect, pre_data)| {
+                let applied = apply(&ApplyInput {
+                    self_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                    selector: effect.selector,
+                    pre_data,
+                    effect_data: effect.data.clone(),
+                })
+                .expect("the effect applies");
+                decode_balance(&applied).expect("apply writes canonical balances")
+            })
+            .collect();
+
+        assert_eq!(post, vec![70, 35]);
+    }
+
+    #[test]
+    fn exact_depletion_prunes_the_sender_shard() {
+        let post = apply_at(1, encode_balance(100), effect_bytes(&Effect::Debit(100)))
+            .expect("the debit applies");
+
+        assert!(post.is_empty());
+        assert_eq!(decode_balance(&post), Ok(0));
     }
 
     #[test]
     fn a_zero_amount_leaves_both_balances() {
-        let output = execute(None, &[row(1, true, 100), row(2, false, 5)], &transfer(0))
-            .expect("the transfer succeeds");
-
-        assert_eq!(post_balances(&output), vec![100, 5]);
+        assert_eq!(
+            apply_at(1, encode_balance(100), effect_bytes(&Effect::Debit(0))),
+            Ok(encode_balance(100))
+        );
+        assert_eq!(
+            apply_at(2, encode_balance(5), effect_bytes(&Effect::Credit(0))),
+            Ok(encode_balance(5))
+        );
     }
 
     #[test]
     fn an_unauthorized_sender_is_rejected_even_for_a_zero_amount() {
         for amount in [0, 30] {
             assert_eq!(
-                execute(
+                plan(
                     None,
-                    &[row(1, false, 100), row(2, false, 0)],
+                    &[handle(1, false), handle(2, false)],
                     &transfer(amount)
                 ),
                 Err(TransferError::UnauthorizedSender {
-                    account_id: AccountId::new([1; 32])
+                    account_id: account_id(1)
                 })
             );
         }
@@ -235,9 +302,9 @@ mod tests {
     #[test]
     fn a_transfer_beyond_the_senders_balance_is_rejected() {
         assert_eq!(
-            execute(None, &[row(1, true, 100), row(2, false, 0)], &transfer(101)),
+            apply_at(1, encode_balance(100), effect_bytes(&Effect::Debit(101))),
             Err(TransferError::InsufficientBalance {
-                account_id: AccountId::new([1; 32])
+                account_id: account_id(1)
             })
         );
     }
@@ -245,54 +312,44 @@ mod tests {
     #[test]
     fn a_transfer_that_overflows_the_recipient_is_rejected() {
         assert_eq!(
-            execute(
-                None,
-                &[row(1, true, 2), row(2, false, Balance::MAX - 1)],
-                &transfer(2)
+            apply_at(
+                2,
+                encode_balance(Balance::MAX - 1),
+                effect_bytes(&Effect::Credit(2))
             ),
             Err(TransferError::BalanceOverflow {
-                account_id: AccountId::new([2; 32])
+                account_id: account_id(2)
             })
         );
     }
 
     #[test]
     fn a_non_canonical_pre_state_is_rejected() {
-        let malformed = AccountInput::with_shard(
-            AccountId::new([1; 32]),
-            true,
-            NATIVE_TOKEN_PROGRAM_ID,
-            ShardData::try_from(vec![0; 16]).expect("fits the shard limit"),
-        );
+        let malformed = ShardData::try_from(vec![0; 16]).expect("fits the shard limit");
 
         assert_eq!(
-            execute(None, &[malformed, row(2, false, 0)], &transfer(0)),
+            apply_at(1, malformed, effect_bytes(&Effect::Debit(0))),
             Err(TransferError::InvalidBalance(InvalidBalanceEncoding))
         );
     }
 
     #[test]
     fn inputs_that_are_not_an_ordered_pair_of_native_rows_are_rejected() {
-        let application_row = AccountInput::with_shard(
-            AccountId::new([1; 32]),
-            true,
-            AccountId::new([7; 32]),
-            ShardData::empty(),
-        );
+        let application_row = AccountMeta::new(account_id(1), true, account_id(7));
         let cases = vec![
             vec![],
-            vec![row(1, true, 100)],
-            vec![row(1, true, 100), row(2, false, 0), row(3, false, 0)],
-            vec![row(1, true, 100), row(1, true, 100)],
-            vec![application_row.clone(), row(2, false, 0)],
-            vec![row(1, true, 100), application_row],
+            vec![handle(1, true)],
+            vec![handle(1, true), handle(2, false), handle(3, false)],
+            vec![handle(1, true), handle(1, true)],
+            vec![application_row.clone(), handle(2, false)],
+            vec![handle(1, true), application_row],
         ];
 
-        for pre_states in cases {
+        for accounts in cases {
             assert_eq!(
-                execute(None, &pre_states, &transfer(0)),
+                plan(None, &accounts, &transfer(0)),
                 Err(TransferError::InvalidInputs),
-                "{pre_states:?} was accepted"
+                "{accounts:?} was accepted"
             );
         }
     }
@@ -301,8 +358,22 @@ mod tests {
     fn an_undecodable_instruction_is_rejected() {
         for instruction in [vec![], vec![0xFF], transfer(1)[..3].to_vec()] {
             assert_eq!(
-                execute(None, &[row(1, true, 100), row(2, false, 0)], &instruction),
+                plan(None, &[handle(1, true), handle(2, false)], &instruction),
                 Err(TransferError::InvalidInstruction)
+            );
+        }
+    }
+
+    #[test]
+    fn an_undecodable_effect_is_rejected() {
+        for effect_data in [
+            vec![],
+            vec![0xFF],
+            effect_bytes(&Effect::Debit(1))[..3].to_vec(),
+        ] {
+            assert_eq!(
+                apply_at(1, encode_balance(100), effect_data),
+                Err(TransferError::InvalidEffect)
             );
         }
     }

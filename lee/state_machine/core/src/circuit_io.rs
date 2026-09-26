@@ -3,11 +3,12 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountData, AccountId, ProgramShardSelector},
+    account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
+    execution_state::{DeferredPublicEffect, RootCall},
     program::{
-        BlockValidityWindow, PdaSeed, ProgramHeader, ProgramId, ProgramOutput,
+        ApplyOutput, BlockValidityWindow, PdaSeed, PlanOutput, ProgramHeader, ProgramId,
         TimestampValidityWindow, immutable_mirror_commitment,
     },
 };
@@ -101,28 +102,36 @@ pub struct ShadowProgramWitness {
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
-    /// Outputs of the program execution.
-    pub program_outputs: Vec<ProgramOutput>,
+    pub root: RootCall,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
-    /// The top-level call's own dispatch address.
-    pub program_account_id: AccountId,
     pub dummy_inputs: Vec<DummyInput>,
     /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
     /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
     pub ciphertext_padding: Option<u32>,
-    /// Shard selectors passed to the initial call.
-    pub initial_shard_selectors: Vec<ProgramShardSelector>,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id.
     pub program_image_witnesses: Vec<ProgramImageWitness>,
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
+    /// One entry per scheduled guest call, in traversal order.
+    pub calls: Vec<ProvenCall>,
+}
+
+/// One scheduled guest call's transcript: its plan output, and the apply outputs of the private
+/// effects that planner emitted, in effect order.
+///
+/// Native-token calls are recomputed from the protocol's own implementation, so they carry no
+/// receipt and have no transcript.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProvenCall {
+    pub plan: PlanOutput,
+    pub private_apply_outputs: Vec<ApplyOutput>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct PrivateWitness {
-    pub account: Account,
     pub vpk: ViewingPublicKey,
     pub random_seed: [u8; 32],
     pub identifier: Identifier,
@@ -134,7 +143,7 @@ pub struct PrivateWitness {
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
-    /// `pre_state.account_id`. An honest authorized account's `npk` for Id computation gets
+    /// the handle's `account_id`. An honest authorized account's `npk` for Id computation gets
     /// derived from the supplied `ask`.
     Regular { ask: Option<AuthorizationSecretKey> },
     /// A private PDA with its authority's account ID and seed.
@@ -151,6 +160,7 @@ pub enum NullifierWitness {
     /// Update of a private account: existing on-chain commitment, with membership proof. `npk`
     /// is derived from `nsk`.
     Update {
+        account: Account,
         view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
@@ -225,14 +235,14 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-/// A public account's first observed and final states.
-#[derive(BorshSerialize, BorshDeserialize)]
+/// A public account's root-authorization bit and the effects the execution deferred to
+/// settlement, in the order its traversal emitted them.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
     pub account_id: AccountId,
     pub is_authorized: bool,
-    pub pre: AccountData,
-    pub post: AccountData,
+    pub effects: Vec<DeferredPublicEffect>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -281,7 +291,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountData, AccountId, ShardData},
+        account::{Account, AccountId},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
@@ -294,26 +304,23 @@ mod tests {
                 PublicAction {
                     account_id: AccountId::new([0; 32]),
                     is_authorized: true,
-                    pre: AccountData {
-                        shards: [
-                            (touched, b"test data".to_vec().try_into().unwrap()),
-                            (also_touched, ShardData::empty()),
-                        ]
-                        .into(),
-                    },
-                    post: AccountData {
-                        shards: [
-                            (touched, b"post state data".to_vec().try_into().unwrap()),
-                            (also_touched, b"fresh record".to_vec().try_into().unwrap()),
-                        ]
-                        .into(),
-                    },
+                    effects: vec![
+                        DeferredPublicEffect {
+                            program_account_id: touched,
+                            shard_program_account_id: touched,
+                            data: b"post state data".to_vec(),
+                        },
+                        DeferredPublicEffect {
+                            program_account_id: touched,
+                            shard_program_account_id: also_touched,
+                            data: b"fresh record".to_vec(),
+                        },
+                    ],
                 },
                 PublicAction {
                     account_id: AccountId::new([1; 32]),
                     is_authorized: false,
-                    pre: Account::funded(123_123_123_456_456_567_112).data,
-                    post: Account::funded(200).data,
+                    effects: Vec::new(),
                 },
             ],
             private_actions: vec![PrivateAction {
@@ -350,7 +357,6 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[1; 32], &[2; 32]);
         let identifier = Identifier::new([77; 32]);
         let witness = |kind| PrivateWitness {
-            account: Account::default(),
             vpk: vpk.clone(),
             random_seed: [4; 32],
             identifier,

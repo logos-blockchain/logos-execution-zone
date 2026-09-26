@@ -5,8 +5,8 @@
 
 pub use circuit_io::{
     DummyInput, NullifierWitness, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateAction, PrivateWitness, ProgramImageClaim, ProgramImageWitness, PublicAction,
-    ShadowProgramWitness, WitnessKind,
+    PrivateAction, PrivateWitness, ProgramImageClaim, ProgramImageWitness, ProvenCall,
+    PublicAction, ShadowProgramWitness, WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
@@ -29,11 +29,11 @@ mod commitment;
 mod encoding;
 pub mod encryption;
 pub mod error;
+pub mod execution_state;
 mod frame;
 pub mod native_token;
 mod nullifier;
 pub mod program;
-pub mod validation;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;
 

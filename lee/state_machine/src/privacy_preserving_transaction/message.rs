@@ -2,7 +2,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
     ProgramImageClaim,
-    account::{AccountData, Nonce},
+    account::Nonce,
+    execution_state::DeferredPublicEffect,
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
@@ -15,7 +16,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post: AccountData,
+    pub effects: Vec<DeferredPublicEffect>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -69,7 +70,7 @@ impl Message {
             .into_iter()
             .map(|action| PublicActionWithID {
                 account_id: action.account_id,
-                post: action.post,
+                effects: action.effects,
             })
             .collect();
         Self {
@@ -127,7 +128,7 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
         Nullifier, NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
-        account::{Account, AccountData, AccountId, Nonce},
+        account::{Account, AccountId, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
@@ -167,7 +168,7 @@ pub mod tests {
         Message {
             public_actions: vec![PublicActionWithID {
                 account_id: AccountId::new([1; 32]),
-                post: AccountData::default(),
+                effects: Vec::new(),
             }],
             nonces,
             private_actions: vec![PrivateAction {

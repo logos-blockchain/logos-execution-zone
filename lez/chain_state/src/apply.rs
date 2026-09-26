@@ -154,7 +154,7 @@ pub fn apply_block_to_state(
     let LeeTransaction::Public(clock_tx) = clock_entry else {
         return Err(BlockIngestError::InvalidClockTransaction);
     };
-    if *clock_tx != clock_invocation(block.header.timestamp) {
+    if *clock_tx != clock_invocation(block.header.block_id, block.header.timestamp) {
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
@@ -216,7 +216,7 @@ pub fn apply_block_to_state(
     // balance from L1 deposits.
     let producer_account = common::transaction::fee_invocation_producer(fee_tx)
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
-    if *fee_tx != fee_invocation(summary, producer_account) {
+    if *fee_tx != fee_invocation(summary, block_payout(&opening, &summary), producer_account) {
         return Err(BlockIngestError::InvalidFeeTransaction);
     }
     common::transaction::validate_reward_target(producer_account)
@@ -283,16 +283,22 @@ pub fn opening_fee_state(state: &V03State) -> FeeState {
     )
 }
 
-/// Derives the block fee summary the given user transactions settle to.
+/// The producer payout a block settling to `summary` pays out of the escrow.
 ///
-/// Runs the settlement on a scratch clone of `state`. What block builders
-/// (and block-building tests) use to construct the forced fee transaction.
+/// The fee state is written only by the forced fee transaction, so the state a block opens on
+/// is still the state that transaction applies against; the fee guest recomputes this against
+/// it and refuses a proposal that does not match.
+#[must_use]
+pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
+    opening.clone().apply_block(summary)
+}
+
 pub fn derive_block_summary(
     state: &V03State,
     transactions: &[LeeTransaction],
     block_id: BlockId,
     timestamp: Timestamp,
-) -> Result<BlockFeeSummary, BlockIngestError> {
+) -> Result<(BlockFeeSummary, u128), BlockIngestError> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
     let mut summary = BlockFeeSummary::default();
@@ -307,7 +313,8 @@ pub fn derive_block_summary(
             &mut summary,
         )?;
     }
-    Ok(summary)
+    let payout = block_payout(&opening, &summary);
+    Ok((summary, payout))
 }
 
 /// Classifies and applies one user transaction at its turn, accumulating the
@@ -434,12 +441,12 @@ fn settle_charged_transaction(
     // revert; either way the reserved fee stays committed. An authentication
     // failure is a malformed transaction that invalidates the whole block.
     let gas_limit = view.gas_limit();
-    let (outcome, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
+    let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
         public_tx, state, block_id, timestamp, gas_limit,
     );
     let action_diff = result.map_err(|err| fee_validity(format!("fee action failed: {err}")))?;
     // r0 cycle count can overshoot, clamp to `gas_limit`
-    let charged_cycles = outcome.cycles.min(gas_limit);
+    let charged_cycles = charge.cycles.min(gas_limit);
 
     summary.gas_used_exec =
         accumulate_exec_gas(summary.gas_used_exec, charged_cycles).map_err(|err| {
@@ -672,7 +679,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_escrow_account_id())
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             0
         );
@@ -680,7 +687,7 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_inbox_account_id())
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             0
         );
@@ -696,7 +703,7 @@ mod tests {
             timestamp: 100,
             transactions: vec![
                 produce_dummy_empty_transaction(),
-                LeeTransaction::Public(clock_invocation(100)),
+                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());
@@ -718,11 +725,12 @@ mod tests {
             transactions: vec![
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
+                    0,
                     lee::AccountId::from(&lee::PublicKey::new_from_private_key(
                         &sequencer_sign_key_for_testing(),
                     )),
                 )),
-                LeeTransaction::Public(clock_invocation(100)),
+                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());
@@ -756,8 +764,8 @@ mod tests {
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
         let sign_key = accounts[0].pub_sign_key.clone();
-        let initial_from = state.get_account_by_id(from).data.balance().unwrap();
-        let initial_to = state.get_account_by_id(to).data.balance().unwrap();
+        let initial_from = state.get_account_by_id(from).data.native_balance().unwrap();
+        let initial_to = state.get_account_by_id(to).data.native_balance().unwrap();
 
         // Genesis (block 1): fee/clock only.
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -777,10 +785,10 @@ mod tests {
         // the inbox drained each block, so all revenue sits in escrow plus what
         // the guest already paid the producer.
         assert_eq!(
-            state.get_account_by_id(to).data.balance().unwrap(),
+            state.get_account_by_id(to).data.native_balance().unwrap(),
             initial_to + 100
         );
-        let from_final = state.get_account_by_id(from).data.balance().unwrap();
+        let from_final = state.get_account_by_id(from).data.native_balance().unwrap();
         let fees_paid = initial_from - 100 - from_final;
         assert!(fees_paid > 0, "charged transfers must pay a nonzero fee");
 
@@ -790,13 +798,17 @@ mod tests {
         let escrow = state
             .get_account_by_id(system_accounts::fee_escrow_account_id())
             .data
-            .balance()
+            .native_balance()
             .unwrap();
-        let producer_balance = state.get_account_by_id(producer).data.balance().unwrap();
+        let producer_balance = state
+            .get_account_by_id(producer)
+            .data
+            .native_balance()
+            .unwrap();
         let inbox = state
             .get_account_by_id(system_accounts::fee_inbox_account_id())
             .data
-            .balance()
+            .native_balance()
             .unwrap();
         assert_eq!(inbox, 0, "the inbox must drain every block");
         assert_eq!(
@@ -843,7 +855,7 @@ mod tests {
         let inbox_revenue = state
             .get_account_by_id(system_accounts::fee_inbox_account_id())
             .data
-            .balance()
+            .native_balance()
             .unwrap();
         assert!(inbox_revenue > 0, "the transfer must have funded the inbox");
 
@@ -851,14 +863,14 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let fee_program_id = fee_invocation(BlockFeeSummary::default(), attacker)
+        let fee_program_id = fee_invocation(BlockFeeSummary::default(), 0, attacker)
             .message()
             .program_account_id;
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_program_id,
             vec![
-                lee::ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
-                lee::ProgramShardSelector::balance(attacker),
+                lee::ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
+                lee::ProgramShardSelector::native_balance(attacker),
             ],
             vec![state.get_account_by_id(attacker).nonce],
             fee_core::Instruction::Refund {
@@ -900,8 +912,16 @@ mod tests {
                 .data
                 .shard(system_accounts::fee_program_id()),
         );
-        let sender_before = state.get_account_by_id(sender).data.balance().unwrap();
-        let recipient_before = state.get_account_by_id(recipient).data.balance().unwrap();
+        let sender_before = state
+            .get_account_by_id(sender)
+            .data
+            .native_balance()
+            .unwrap();
+        let recipient_before = state
+            .get_account_by_id(recipient)
+            .data
+            .native_balance()
+            .unwrap();
 
         let free = common::test_utils::create_transaction_native_token_transfer_without_fee(
             sender,
@@ -919,11 +939,19 @@ mod tests {
         );
         // The rejection happens before any state mutation: nothing moved.
         assert_eq!(
-            state.get_account_by_id(sender).data.balance().unwrap(),
+            state
+                .get_account_by_id(sender)
+                .data
+                .native_balance()
+                .unwrap(),
             sender_before
         );
         assert_eq!(
-            state.get_account_by_id(recipient).data.balance().unwrap(),
+            state
+                .get_account_by_id(recipient)
+                .data
+                .native_balance()
+                .unwrap(),
             recipient_before
         );
     }
@@ -946,9 +974,17 @@ mod tests {
                 .shard(system_accounts::fee_program_id()),
         );
 
-        let payer_before = state.get_account_by_id(payer).data.balance().unwrap();
+        let payer_before = state
+            .get_account_by_id(payer)
+            .data
+            .native_balance()
+            .unwrap();
         let payer_nonce_before = u128::from(state.get_account_by_id(payer).nonce);
-        let recipient_before = state.get_account_by_id(recipient).data.balance().unwrap();
+        let recipient_before = state
+            .get_account_by_id(recipient)
+            .data
+            .native_balance()
+            .unwrap();
 
         // Move more than the payer owns: the guest's `checked_sub` panics, so the
         // action reverts after the reserve has already been taken.
@@ -968,7 +1004,11 @@ mod tests {
 
         // The transfer moved nothing.
         assert_eq!(
-            state.get_account_by_id(recipient).data.balance().unwrap(),
+            state
+                .get_account_by_id(recipient)
+                .data
+                .native_balance()
+                .unwrap(),
             recipient_before
         );
         // The nonce advanced, so the transaction cannot be replayed.
@@ -980,7 +1020,12 @@ mod tests {
         );
         // The fee was charged: the payer paid, and it accrued as real revenue.
         assert!(
-            state.get_account_by_id(payer).data.balance().unwrap() < payer_before,
+            state
+                .get_account_by_id(payer)
+                .data
+                .native_balance()
+                .unwrap()
+                < payer_before,
             "the reverted action still pays a fee",
         );
         assert!(
@@ -1031,7 +1076,7 @@ mod tests {
 
         let message = public_transaction::Message::try_new_with_fees(
             emitter_id,
-            vec![ProgramShardSelector::balance(from)],
+            vec![ProgramShardSelector::native_balance(from)],
             vec![Nonce(0)],
             EmitterInstruction {
                 events: vec![emitted(5)],
@@ -1083,10 +1128,12 @@ mod tests {
         reward: lee::AccountId,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
-        let summary = super::derive_block_summary(state, &transactions, id, timestamp)
+        let (summary, payout) = super::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle");
-        transactions.push(LeeTransaction::Public(fee_invocation(summary, reward)));
-        transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+        transactions.push(LeeTransaction::Public(fee_invocation(
+            summary, payout, reward,
+        )));
+        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev_hash,

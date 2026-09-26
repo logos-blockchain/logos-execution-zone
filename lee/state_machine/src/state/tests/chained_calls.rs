@@ -27,8 +27,8 @@ fn public_chained_call() {
         AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance(to),
-            ProgramShardSelector::balance(from),
+            ProgramShardSelector::native_balance(to),
+            ProgramShardSelector::native_balance(from),
         ],
         vec![Nonce(0)],
         instruction,
@@ -42,7 +42,10 @@ fn public_chained_call() {
     let from_post = state.get_account_by_id(from);
     let to_post = state.get_account_by_id(to);
     // The `chain_caller` program calls the program twice
-    assert_eq!(from_post.data.balance(), Ok(initial_balance - 2 * amount));
+    assert_eq!(
+        from_post.data.native_balance(),
+        Ok(initial_balance - 2 * amount)
+    );
     assert_eq!(to_post, expected_to_post);
 }
 
@@ -70,8 +73,8 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance(to),
-            ProgramShardSelector::balance(from),
+            ProgramShardSelector::native_balance(to),
+            ProgramShardSelector::native_balance(from),
         ],
         vec![Nonce(0)],
         instruction,
@@ -112,8 +115,8 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance(to),
-            ProgramShardSelector::balance(from),
+            ProgramShardSelector::native_balance(to),
+            ProgramShardSelector::native_balance(from),
         ],
         vec![],
         instruction,
@@ -126,8 +129,58 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
 
     let from_post = state.get_account_by_id(from);
     let to_post = state.get_account_by_id(to);
-    assert_eq!(from_post.data.balance(), Ok(initial_balance - amount));
+    assert_eq!(
+        from_post.data.native_balance(),
+        Ok(initial_balance - amount)
+    );
     assert_eq!(to_post, expected_to_post);
+}
+
+#[test]
+fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
+    let delegator = crate::test_methods::selective_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let sibling = crate::test_methods::auth_asserting_noop();
+
+    let seed = PdaSeed::new([77; 32]);
+    let delegator_id = AccountId::from_builtin_program(delegator.id());
+    let pda_id = AccountId::for_public_pda(&delegator_id, &seed);
+
+    let mut state = V03State::new()
+        .with_public_account_balances([(pda_id, 0)])
+        .with_test_programs();
+
+    // `callee` gets the PDA's account_id *and* the matching `pda_seeds` — real delegation.
+    // `sibling` gets only the account_id (via `include_pda = true`), no `pda_seeds` — it sees
+    // `is_authorized == false` and panics on it (`auth_asserting_noop`).
+    let instruction: (
+        PdaSeed,
+        ProgramId,
+        InstructionData,
+        Option<(ProgramId, bool)>,
+    ) = (
+        seed,
+        callee.id(),
+        Program::serialize_instruction(()).unwrap(),
+        Some((sibling.id(), true)),
+    );
+
+    let message = public_transaction::Message::try_new(
+        delegator_id,
+        vec![ProgramShardSelector::native_balance(pda_id)],
+        vec![],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    assert!(
+        result.is_err(),
+        "a sibling handed the PDA's account_id but no pda_seeds must not see it as authorized, \
+         but got: {result:?}"
+    );
 }
 
 #[test]
@@ -161,8 +214,8 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
         AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
         vec![
-            ProgramShardSelector::balance(to),
-            ProgramShardSelector::balance(from),
+            ProgramShardSelector::native_balance(to),
+            ProgramShardSelector::native_balance(from),
         ],
         vec![Nonce(0), Nonce(0)],
         instruction,
@@ -174,7 +227,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert_eq!(
-        state.get_account_by_id(from).data.balance(),
+        state.get_account_by_id(from).data.native_balance(),
         Ok(initial_balance - amount)
     );
     assert_eq!(
@@ -246,8 +299,8 @@ fn private_chained_call(number_of_calls: u32) {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(to_account_id),
-                ProgramShardSelector::balance(from_account_id),
+                ProgramShardSelector::native_balance(to_account_id),
+                ProgramShardSelector::native_balance(from_account_id),
             ],
             private_witnesses: vec![
                 update_witness(

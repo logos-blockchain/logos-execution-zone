@@ -1,37 +1,51 @@
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, ShardStateDiff},
+    program::{AccountMeta, Plan},
 };
 use token_core::TokenHolding;
 
-#[must_use]
+use crate::Effect;
+
 pub fn print_nft(
-    master_account: &AccountInput,
-    printed_account: &AccountInput,
-    self_account_id: AccountId,
-) -> Vec<ShardStateDiff> {
+    plan: &mut Plan,
+    master_account: &AccountMeta,
+    printed_account: &AccountMeta,
+    definition_id: AccountId,
+) {
     assert!(
         master_account.is_authorized,
         "Master NFT Account must be authorized"
     );
 
-    assert!(
-        printed_account.shard_of(self_account_id).is_empty(),
-        "Printed Account must not already hold data"
+    // The printed copy's collection identity comes from the master, whose shard the printed
+    // account's `apply` never sees; the master's own effect is what pins it.
+    plan.effect(master_account, &Effect::PrintCopy { definition_id });
+    plan.effect(
+        printed_account,
+        &Effect::Create(ShardData::from(&TokenHolding::NftPrintedCopy {
+            definition_id,
+            owned: true,
+        })),
     );
+}
 
-    let mut master_account_data = TokenHolding::try_from(master_account.shard_of(self_account_id))
-        .expect("Invalid Token Holding data");
+#[must_use]
+pub fn print_copy(pre_data: &ShardData, definition_id: AccountId) -> ShardData {
+    let mut master_account_data =
+        TokenHolding::try_from(pre_data).expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
-        definition_id,
+        definition_id: master_definition_id,
         print_balance,
     } = &mut master_account_data
     else {
         panic!("Invalid Token Holding provided as NFT Master Account");
     };
 
-    let definition_id = *definition_id;
+    assert_eq!(
+        *master_definition_id, definition_id,
+        "Printed copy does not belong to the master's Token Definition"
+    );
 
     assert!(
         *print_balance > 1,
@@ -39,18 +53,5 @@ pub fn print_nft(
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    let master_diff = ShardStateDiff::new(
-        master_account.clone(),
-        ShardData::from(&master_account_data),
-    );
-
-    let printed_diff = ShardStateDiff::new(
-        printed_account.clone(),
-        ShardData::from(&TokenHolding::NftPrintedCopy {
-            definition_id,
-            owned: true,
-        }),
-    );
-
-    vec![master_diff, printed_diff]
+    ShardData::from(&master_account_data)
 }

@@ -90,8 +90,8 @@ impl TpsTestManager {
                 let message = putx::Message::try_new_with_fees(
                     lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
                     vec![
-                        ProgramShardSelector::balance(pair[0].1),
-                        ProgramShardSelector::balance(pair[1].1),
+                        ProgramShardSelector::native_balance(pair[0].1),
+                        ProgramShardSelector::native_balance(pair[1].1),
                     ],
                     [Nonce(0_u128)].to_vec(),
                     lee_core::native_token::Instruction::Transfer { amount },
@@ -265,12 +265,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 PrivateWitness {
-                    account: sender_account,
                     vpk: sender_vpk,
                     random_seed: [0; 32],
                     identifier: Identifier::ZERO,
@@ -278,13 +277,13 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                         ask: Some(sender_ask),
                     },
                     nullifier: NullifierWitness::Update {
+                        account: sender_account,
                         view_tag: 0,
                         nsk: sender_nsk,
                         membership_proof: proof,
                     },
                 },
                 PrivateWitness {
-                    account: Account::default(),
                     vpk: recipient_vpk,
                     random_seed: [0; 32],
                     identifier: Identifier::ZERO,

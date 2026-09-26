@@ -4,8 +4,8 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{AccountId, Cycles, ShardData},
-    program::ProgramInput,
+    account::{AccountId, Cycles},
+    program::{AccountMeta, PlanInput},
     to_borsh_frame, to_frame,
 };
 use risc0_binfmt::ProgramBinary;
@@ -13,15 +13,14 @@ use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
 
 use crate::{
     error::LeeError,
-    program::{AccountInput, DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
-fn data_changer_target() -> AccountInput {
-    AccountInput::with_shard(
+fn data_changer_target() -> AccountMeta {
+    AccountMeta::new(
         AccountId::new([3; 32]),
         true,
         AccountId::from_builtin_program(crate::test_methods::data_changer().id()),
-        ShardData::empty(),
     )
 }
 
@@ -29,10 +28,10 @@ fn data_changer_instruction() -> Vec<u8> {
     Program::serialize_instruction(vec![1_u8; 4]).expect("the instruction serializes")
 }
 
-fn balance_pre_states() -> Vec<AccountInput> {
+fn balance_handles() -> Vec<AccountMeta> {
     vec![
-        AccountInput::native_balance(AccountId::new([0; 32]), true, 77_665_544_332_211),
-        AccountInput::native_balance(AccountId::new([1; 32]), false, 0),
+        AccountMeta::native_balance(AccountId::new([0; 32]), true),
+        AccountMeta::native_balance(AccountId::new([1; 32]), false),
     ]
 }
 
@@ -46,21 +45,22 @@ fn bare_env(budget: Cycles) -> ExecutorEnv<'static> {
 /// A fresh `ExecutorEnv` carrying the same inputs `Program::execute` would write.
 fn env_for(
     program: &Program,
-    pre_states: &[AccountInput],
+    handles: &[AccountMeta],
     instruction: &[u8],
     budget: Cycles,
 ) -> ExecutorEnv<'static> {
     let mut builder = ExecutorEnv::builder();
     builder.session_limit(Some(budget));
-    program
-        .write_inputs(
-            AccountId::from_builtin_program(program.id()),
-            None,
-            pre_states,
-            instruction,
-            &mut builder,
-        )
-        .expect("inputs write");
+    Program::write_plan_inputs(
+        &PlanInput {
+            self_account_id: AccountId::from_builtin_program(program.id()),
+            caller_account_id: None,
+            accounts: handles.to_vec(),
+            instruction_data: instruction.to_vec(),
+        },
+        &mut builder,
+    )
+    .expect("inputs write");
     builder.build().expect("env builds")
 }
 
@@ -78,11 +78,11 @@ fn baseline(env: ExecutorEnv<'_>, elf: &[u8]) -> anyhow::Result<SessionOutcome> 
 /// real programs with several shapes of input.
 #[test]
 fn cached_path_matches_rebuild_path() {
-    let cases: Vec<(&str, Program, Vec<AccountInput>, Vec<u8>)> = vec![
+    let cases: Vec<(&str, Program, Vec<AccountMeta>, Vec<u8>)> = vec![
         (
             "noop",
             crate::test_methods::noop(),
-            balance_pre_states(),
+            balance_handles(),
             Vec::new(),
         ),
         (
@@ -99,11 +99,11 @@ fn cached_path_matches_rebuild_path() {
         ),
     ];
 
-    for (name, program, pre_states, instruction) in cases {
+    for (name, program, handles, instruction) in cases {
         let a = baseline(
             env_for(
                 &program,
-                &pre_states,
+                &handles,
                 &instruction,
                 DEFAULT_PUBLIC_CYCLE_BUDGET,
             ),
@@ -112,7 +112,7 @@ fn cached_path_matches_rebuild_path() {
         let b = super::execute(
             env_for(
                 &program,
-                &pre_states,
+                &handles,
                 &instruction,
                 DEFAULT_PUBLIC_CYCLE_BUDGET,
             ),
@@ -139,18 +139,18 @@ fn cached_path_matches_rebuild_path() {
 #[test]
 fn session_limit_still_maps_to_out_of_gas() {
     let program = crate::test_methods::data_changer();
-    let pre_states = vec![data_changer_target()];
+    let handles = vec![data_changer_target()];
     let instruction = data_changer_instruction();
     let budget: Cycles = 1_024;
 
     let base_err = baseline(
-        env_for(&program, &pre_states, &instruction, budget),
+        env_for(&program, &handles, &instruction, budget),
         program.elf(),
     )
     .expect_err("tiny budget must bail");
 
     let cached_err = super::execute(
-        env_for(&program, &pre_states, &instruction, budget),
+        env_for(&program, &handles, &instruction, budget),
         program.elf(),
     )
     .expect_err("tiny budget must bail");
@@ -164,7 +164,7 @@ fn session_limit_still_maps_to_out_of_gas() {
 
     // The mapping itself, through the real function.
     let mapped = Program::execute_session(
-        env_for(&program, &pre_states, &instruction, budget),
+        env_for(&program, &handles, &instruction, budget),
         program.elf(),
         budget,
     )
@@ -181,7 +181,7 @@ fn session_limit_still_maps_to_out_of_gas() {
 fn guest_panic_is_not_out_of_gas() {
     let program = crate::test_methods::data_changer();
 
-    // No input at all: `read_lee_call` panics inside the guest.
+    // No input at all: `read_program_call` panics inside the guest.
     let cached_panic = super::execute(bare_env(DEFAULT_PUBLIC_CYCLE_BUDGET), program.elf())
         .expect_err("guest must panic on missing input");
 
@@ -211,12 +211,12 @@ fn guest_panic_is_not_out_of_gas() {
     let spoof = crate::test_methods::panics_with_session_limit_text();
     let mut builder = ExecutorEnv::builder();
     builder.session_limit(Some(DEFAULT_PUBLIC_CYCLE_BUDGET));
-    builder.write_slice(&to_borsh_frame(&lee_core::program::CallKind::Execute));
-    let input = ProgramInput {
+    builder.write_slice(&to_borsh_frame(&lee_core::program::CallKind::Plan));
+    let input = PlanInput {
         self_account_id: AccountId::from_builtin_program(spoof.id()),
         caller_account_id: None,
-        pre_states: Vec::new(),
-        instruction: Vec::<u8>::new(),
+        accounts: Vec::new(),
+        instruction_data: Vec::<u8>::new(),
     };
     builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
     let spoofed = Program::execute_session(
@@ -258,14 +258,14 @@ fn cache_is_keyed_on_elf_bytes_not_program_id() {
     .unwrap();
     std::hint::black_box(warm);
 
-    let pre_states = balance_pre_states();
+    let handles = balance_handles();
     let honest = super::execute(
-        env_for(&b, &pre_states, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&b, &handles, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         b.elf(),
     )
     .unwrap();
     let via_liar = super::execute(
-        env_for(&b, &pre_states, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&b, &handles, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         liar.elf(),
     )
     .unwrap();
@@ -321,12 +321,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     let blob = bad.encode();
 
     let upstream = ExecutorImpl::from_elf(
-        env_for(
-            &good,
-            &balance_pre_states(),
-            &[],
-            DEFAULT_PUBLIC_CYCLE_BUDGET,
-        ),
+        env_for(&good, &balance_handles(), &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         &blob,
     );
     assert!(
@@ -335,12 +330,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     );
 
     let ours = super::execute(
-        env_for(
-            &good,
-            &balance_pre_states(),
-            &[],
-            DEFAULT_PUBLIC_CYCLE_BUDGET,
-        ),
+        env_for(&good, &balance_handles(), &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         &blob,
     );
     assert!(

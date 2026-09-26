@@ -14,11 +14,11 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
-    BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData, EventRecord,
-    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
+    BlockId, Commitment, CommitmentSetDigest, DeferredPublicEffect, EncryptedAccountData,
+    EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
+    IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
+    Selector, ShardData, ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -546,12 +546,11 @@ fn mock_privacy_preserving_tx(
         message: PrivacyPreservingMessage {
             public_actions: vec![PublicActionWithID {
                 account_id: account_ids[tx_idx as usize % account_ids.len()],
-                post: AccountData {
-                    shards: BTreeMap::from([(
-                        AccountId { value: [1_u8; 32] },
-                        ShardData(vec![0xdd, 0xee]),
-                    )]),
-                },
+                effects: vec![DeferredPublicEffect {
+                    program_account_id: AccountId { value: [1_u8; 32] },
+                    shard_program_account_id: AccountId { value: [1_u8; 32] },
+                    data: vec![0xdd, 0xee],
+                }],
             }],
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {

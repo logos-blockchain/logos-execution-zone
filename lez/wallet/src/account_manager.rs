@@ -11,13 +11,13 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, Nonce, ProgramShardSelector},
+    account::{Account, Nonce, ProgramShardSelector, ShardData},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
     },
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{AccountInput, PdaSeed},
+    program::PdaSeed,
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -207,6 +207,26 @@ pub struct AccountMention {
     pub program_account_id: AccountId,
 }
 
+/// A shard the wallet read. Execution binds the account handle and applies against live state,
+/// never this copy.
+pub struct SelectedShard {
+    pub selector: ProgramShardSelector,
+    pub is_authorized: bool,
+    pub data: ShardData,
+}
+
+impl SelectedShard {
+    /// Returns the shard data. Panics unless this row selects `program`'s shard.
+    #[must_use]
+    pub fn shard_of(&self, program: AccountId) -> &ShardData {
+        assert_eq!(
+            self.selector.program_account_id, program,
+            "SelectedShard carries another program's shard"
+        );
+        &self.data
+    }
+}
+
 pub struct PrivateAccountKeys {
     pub ssk: SharedSecretKey,
 }
@@ -254,12 +274,17 @@ impl State {
         }
     }
 
-    fn input(&self, shard_selector: ProgramShardSelector) -> AccountInput {
-        AccountInput::at(
-            shard_selector,
-            self.is_authorized(),
-            &self.account().account.data,
-        )
+    fn selected(&self, selector: ProgramShardSelector) -> SelectedShard {
+        SelectedShard {
+            selector,
+            is_authorized: self.is_authorized(),
+            data: self
+                .account()
+                .account
+                .data
+                .shard(selector.program_account_id)
+                .clone(),
+        }
     }
 }
 
@@ -346,11 +371,11 @@ impl AccountManager {
         )
     }
 
-    /// The selected account inputs, in declaration order.
-    pub fn pre_states(&self) -> Vec<AccountInput> {
+    /// The selected shards, in declaration order.
+    pub fn selected_shards(&self) -> Vec<SelectedShard> {
         self.rows
             .iter()
-            .map(|row| self.states[row.account].input(self.row_selector(row)))
+            .map(|row| self.states[row.account].selected(self.row_selector(row)))
             .collect()
     }
 
@@ -370,19 +395,6 @@ impl AccountManager {
                 }
                 | State::PublicKeycard { account, .. } => Some(account.account_id),
                 State::Public { sk: None, .. } | State::Private(_) => None,
-            })
-            .collect()
-    }
-
-    /// The fetched public account views, keyed by account ID.
-    pub fn public_accounts(&self) -> HashMap<AccountId, Account> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some((account.account_id, account.account.clone()))
-                }
-                State::Private(_) => None,
             })
             .collect()
     }
@@ -470,32 +482,37 @@ impl AccountManager {
     }
 
     /// Builds a witness for each private account, including all its shards.
-    pub fn private_witnesses(&self) -> Vec<PrivateWitness> {
+    pub fn private_witnesses(&self) -> Result<Vec<PrivateWitness>, ExecutionFailureKind> {
         self.private_states()
-            .map(|pre| PrivateWitness {
-                account: pre.pre_state.account.clone(),
-                vpk: pre.vpk.clone(),
-                random_seed: pre.random_seed,
-                identifier: pre.identifier,
-                kind: pre.kind.clone(),
-                nullifier: match (pre.nsk, pre.proof.clone()) {
-                    (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
-                        view_tag: random_view_tag(),
-                        nsk,
-                        membership_proof,
-                    },
-                    (nsk, _) => NullifierWitness::Init {
-                        // A regular init recomputes the npk from the key the wallet holds;
-                        // a PDA's stored npk is the owner's, so it is passed through.
-                        npk: match nsk {
-                            Some(nsk) if matches!(pre.kind, WitnessKind::Regular { .. }) => {
-                                NullifierPublicKey::from(&nsk)
-                            }
-                            _ => pre.npk,
+            .map(|pre| {
+                Ok(PrivateWitness {
+                    vpk: pre.vpk.clone(),
+                    random_seed: pre.random_seed,
+                    identifier: pre.identifier,
+                    kind: pre.kind.clone(),
+                    nullifier: match (pre.nsk, pre.proof.clone()) {
+                        (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
+                            account: pre.pre_state.account.clone(),
+                            view_tag: random_view_tag(),
+                            nsk,
+                            membership_proof,
                         },
-                        commitment_root: self.dummy_commitment_root,
+                        _ if pre.pre_state.account != Account::default() => {
+                            return Err(ExecutionFailureKind::MissingMembershipProof(
+                                pre.pre_state.account_id,
+                            ));
+                        }
+                        (nsk, _) => NullifierWitness::Init {
+                            npk: match nsk {
+                                Some(nsk) if matches!(pre.kind, WitnessKind::Regular { .. }) => {
+                                    NullifierPublicKey::from(&nsk)
+                                }
+                                _ => pre.npk,
+                            },
+                            commitment_root: self.dummy_commitment_root,
+                        },
                     },
-                },
+                })
             })
             .collect()
     }
@@ -545,13 +562,14 @@ impl AccountManager {
                 .shards
                 .contains_key(&NATIVE_TOKEN_PROGRAM_ID)
             {
-                let view = fetch_view(ProgramShardSelector::balance(account.account_id)).await?;
+                let view =
+                    fetch_view(ProgramShardSelector::native_balance(account.account_id)).await?;
                 merge_public_view(account, &view)?;
             }
             if account
                 .account
                 .data
-                .balance()
+                .native_balance()
                 .is_ok_and(|balance| balance > 0)
             {
                 return Ok(Some(account.account_id));
@@ -675,7 +693,7 @@ fn merge_public_view(
             prepared.account_id,
         )));
     }
-    prepared.account.data.apply(&view.data);
+    prepared.account.data.update(&view.data);
     Ok(())
 }
 
@@ -1144,7 +1162,7 @@ mod tests {
         );
         let merged = &manager.states[0].account().account;
         assert_eq!(
-            merged.data.balance(),
+            merged.data.native_balance(),
             Ok(500),
             "the read balance is merged in"
         );
@@ -1211,9 +1229,9 @@ mod tests {
         assert!(matches!(pre.kind, WitnessKind::Regular { ask: None }));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.pre_states()[0].is_authorized);
+        assert!(!manager.selected_shards()[0].is_authorized);
         assert!(matches!(
-            manager.private_witnesses()[0].kind,
+            manager.private_witnesses().unwrap()[0].kind,
             WitnessKind::Regular { ask: None }
         ));
     }
@@ -1269,8 +1287,8 @@ mod tests {
         assert_eq!(pre.identifier, Identifier::new([9; 32]));
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
-        assert!(!manager.pre_states()[0].is_authorized);
-        let witnesses = manager.private_witnesses();
+        assert!(!manager.selected_shards()[0].is_authorized);
+        let witnesses = manager.private_witnesses().unwrap();
         assert!(
             matches!(&witnesses[0].kind, WitnessKind::Pda { binding } if *binding == (authority, seed))
         );
@@ -1278,6 +1296,27 @@ mod tests {
             &witnesses[0].nullifier,
             NullifierWitness::Init { npk: init_npk, .. } if *init_npk == npk
         ));
+    }
+
+    #[test]
+    fn an_account_holding_state_without_a_membership_proof_is_refused() {
+        let nonce_only = Account {
+            nonce: Nonce(1),
+            ..Account::default()
+        };
+        for account in [Account::funded(5), nonce_only] {
+            let State::Private(mut pre) = private_state() else {
+                panic!("private_state builds a private account")
+            };
+            pre.nsk = Some([1; 32]);
+            pre.pre_state.account = account;
+            let account_id = pre.pre_state.account_id;
+
+            assert!(matches!(
+                manager(vec![State::Private(pre)]).private_witnesses(),
+                Err(ExecutionFailureKind::MissingMembershipProof(refused)) if refused == account_id
+            ));
+        }
     }
 
     #[test]

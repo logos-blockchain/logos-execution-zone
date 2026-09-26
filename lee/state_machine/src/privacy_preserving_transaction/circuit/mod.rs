@@ -1,25 +1,27 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ShadowProgramWitness, WitnessKind,
-    account::{Account, AccountData, AccountId, ProgramShardSelector, ShardData},
+    PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
+    account::{AccountId, ProgramShardSelector},
+    execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        AccountInput, ChainedCall, InstructionData, ProgramHeader, ProgramOutput,
-        compute_public_authorized_pdas,
+        ApplyInput, ApplyOutput, InstructionData, PlanInput, PlanOutput, ProgramEvent,
+        ProgramHeader,
     },
     to_frame,
 };
-use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+use risc0_zkvm::{
+    ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, ProverOpts, Receipt, default_prover,
+};
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, ensure,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::{Program, check_exit_code},
-    state::MAX_NUMBER_CHAINED_CALLS,
+    program::{Program, apply_journal, check_exit_code, plan_journal},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -180,7 +182,6 @@ impl ProgramWithDependencies {
 pub struct ProvingInput {
     pub shard_selectors: Vec<ProgramShardSelector>,
     pub signers: HashSet<AccountId>,
-    pub public_accounts: HashMap<AccountId, Account>,
     pub private_witnesses: Vec<PrivateWitness>,
     pub instruction_data: InstructionData,
     pub dummy_inputs: Vec<DummyInput>,
@@ -189,26 +190,87 @@ pub struct ProvingInput {
     pub ciphertext_padding: Option<u32>,
 }
 
+struct Prover<'programs> {
+    programs: &'programs HashMap<AccountId, Dependency>,
+    env_builder: ExecutorEnvBuilder<'static>,
+    calls: Vec<ProvenCall>,
+}
+
+impl<'programs> Backend for Prover<'programs> {
+    type Call = Option<(&'programs Program, ProvenCall)>;
+    type Error = LeeError;
+    type PublicEffects = DeferPublicEffects;
+
+    fn plan(
+        &mut self,
+        input: &PlanInput,
+        _execution: &ExecutionState<'_>,
+    ) -> Result<(PlanOutput, Self::Call), LeeError> {
+        let self_account_id = input.self_account_id;
+        // The native token program is recomputed by the circuit from the protocol's own
+        // implementation, so it has neither an ELF to prove nor a transcript to carry.
+        if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            let plan = native_token::plan(
+                input.caller_account_id,
+                &input.accounts,
+                &input.instruction_data,
+            )
+            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
+            return Ok((plan, None));
+        }
+        let program = &self
+            .programs
+            .get(&self_account_id)
+            .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                program_account_id: self_account_id,
+            })?
+            .program;
+        let receipt = prove_session(program, |env| Program::write_plan_inputs(input, env))?;
+        let plan = plan_journal(&receipt.journal.bytes)?;
+        self.env_builder.add_assumption(receipt);
+        let proven = ProvenCall {
+            plan: plan.clone(),
+            private_apply_outputs: Vec::new(),
+        };
+        Ok((plan, Some((program, proven))))
+    }
+
+    fn apply(
+        &mut self,
+        call: &mut Self::Call,
+        input: &ApplyInput,
+    ) -> Result<ApplyOutput, LeeError> {
+        let Some((program, proven)) = call else {
+            return Ok(native_token::apply_output(input)
+                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
+        };
+        let receipt = prove_session(program, |env| Program::write_apply_inputs(input, env))?;
+        let output = apply_journal(&receipt.journal.bytes)?;
+        self.env_builder.add_assumption(receipt);
+        proven.private_apply_outputs.push(output.clone());
+        Ok(output)
+    }
+
+    fn complete(
+        &mut self,
+        call: Self::Call,
+        _events: Vec<ProgramEvent>,
+        _execution: &ExecutionState<'_>,
+    ) -> Result<(), LeeError> {
+        self.calls.extend(call.map(|(_, proven)| proven));
+        Ok(())
+    }
+}
+
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
 pub fn execute_and_prove(
     input: ProvingInput,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    execute_and_prove_with(input, program_with_dependencies, &mut |_| Ok(None))
-}
-
-/// Like [`execute_and_prove`], with `resolve` for additional public shards used by chained calls.
-/// `resolve` is called at most once per selector; `None` keeps the local value.
-pub fn execute_and_prove_with(
-    input: ProvingInput,
-    program_with_dependencies: &ProgramWithDependencies,
-    resolve: &mut dyn FnMut(ProgramShardSelector) -> Result<Option<ShardData>, LeeError>,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProvingInput {
         shard_selectors,
         signers,
-        public_accounts,
         private_witnesses,
         instruction_data,
         dummy_inputs,
@@ -218,225 +280,24 @@ pub fn execute_and_prove_with(
         self_account_id: initial_account_id,
         programs,
     } = program_with_dependencies;
-    ensure!(
-        shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
-        LeeError::InvalidInput("Duplicate shard selectors found in the initial inputs".into())
-    );
-    ensure!(
-        !programs.contains_key(&NATIVE_TOKEN_PROGRAM_ID),
-        LeeError::InvalidInput(
-            "The native token program has no deployable bytecode to supply".into()
-        )
-    );
-    let mut env_builder = ExecutorEnv::builder();
-    let mut program_outputs = Vec::new();
 
-    // Identify private accounts by their witnesses.
-    let witness_by_account: HashMap<AccountId, usize> = private_witnesses
-        .iter()
-        .enumerate()
-        .map(|(index, witness)| (witness.account_id(), index))
-        .collect();
-    let witness_at = |account_id: &AccountId| {
-        witness_by_account
-            .get(account_id)
-            .map(|index| &private_witnesses[*index])
-    };
-
-    let mut materialized: HashMap<AccountId, AccountData> = HashMap::new();
-    for shard_selector in &shard_selectors {
-        materialized
-            .entry(shard_selector.account_id)
-            .or_insert_with(|| {
-                witness_at(&shard_selector.account_id).map_or_else(
-                    || {
-                        public_accounts
-                            .get(&shard_selector.account_id)
-                            .map(|account| account.data.clone())
-                            .unwrap_or_default()
-                    },
-                    |witness| witness.account.data.clone(),
-                )
-            });
-    }
-
-    let is_authorized_top = |account_id: &AccountId| {
-        signers.contains(account_id)
-            || matches!(
-                witness_at(account_id).map(|witness| &witness.kind),
-                Some(&WitnessKind::Regular { ask: Some(_) })
-            )
-    };
-
-    // Accounts authorized by credentials remain authorized across calls.
-    let mut globally_authorized: HashSet<AccountId> = shard_selectors
-        .iter()
-        .map(|shard_selector| shard_selector.account_id)
-        .filter(|account_id| {
-            is_authorized_top(account_id)
-                && !witness_at(account_id).is_some_and(PrivateWitness::is_pda)
-        })
-        .collect();
-
-    // Accounts the traversal has already reached, so a later sighting is not a first one.
-    let mut seen: HashSet<AccountId> = HashSet::new();
-
-    // Shard selectors whose values must not be fetched again.
-    let mut covered: HashSet<ProgramShardSelector> = shard_selectors.iter().copied().collect();
-
-    let top_level_pre_states: Vec<AccountInput> = shard_selectors
-        .iter()
-        .map(|shard_selector| {
-            AccountInput::at(
-                *shard_selector,
-                is_authorized_top(&shard_selector.account_id),
-                &materialized[&shard_selector.account_id],
-            )
-        })
-        .collect();
-
-    let initial_call = ChainedCall {
+    let root = RootCall {
         program_account_id: *initial_account_id,
+        shard_selectors,
         instruction_data,
-        shard_selectors: shard_selectors.clone(),
-        pda_seeds: vec![],
+        authorized_accounts: signers.into_iter().collect(),
     };
-
-    let mut chained_calls = VecDeque::from_iter([(initial_call, None, HashSet::new())]);
-    let mut chain_calls_counter = 0;
-    while let Some((chained_call, caller_account_id, caller_authorized_accounts)) =
-        chained_calls.pop_front()
-    {
-        if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
-            return Err(LeeError::MaxChainedCallsDepthExceeded);
-        }
-
-        // Best-effort mirror of what the circuit will independently authorize, used only to build
-        // this callee's input. The top-level call's shard selectors were resolved against the
-        // prover's own accounts above and are used as-is.
-        let authorized_pdas =
-            compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
-        let seed_derives_private_pda = |account_id: &AccountId| {
-            let Some(caller_id) = caller_account_id else {
-                return false;
-            };
-            witness_at(account_id)
-                .and_then(PrivateWitness::pda_binding)
-                .is_some_and(|(bound_program, bound_seed)| {
-                    bound_program == caller_id && chained_call.pda_seeds.contains(&bound_seed)
-                })
-        };
-
-        let real_pre_states: Vec<AccountInput> = if caller_account_id.is_some() {
-            let mut resolved = Vec::with_capacity(chained_call.shard_selectors.len());
-            for shard_selector in &chained_call.shard_selectors {
-                let account_id = shard_selector.account_id;
-                let is_authorized = caller_authorized_accounts.contains(&account_id)
-                    || globally_authorized.contains(&account_id)
-                    || authorized_pdas.contains(&account_id)
-                    || seed_derives_private_pda(&account_id);
-                let witnessed = witness_at(&account_id).is_some();
-
-                let account = materialized
-                    .get_mut(&account_id)
-                    .ok_or(InvalidProgramBehaviorError::UnknownChainedCallAccount { account_id })?;
-
-                // Fetch unseen public shards without overwriting earlier writes.
-                if !witnessed
-                    && covered.insert(*shard_selector)
-                    && let Some(data) = resolve(*shard_selector)?
-                {
-                    account.set_shard(shard_selector.program_account_id, data);
-                }
-
-                resolved.push(AccountInput::at(*shard_selector, is_authorized, account));
-                seen.insert(account_id);
-            }
-            resolved
-        } else {
-            top_level_pre_states.clone()
-        };
-
-        let program_output: ProgramOutput = if chained_call.program_account_id
-            == NATIVE_TOKEN_PROGRAM_ID
-        {
-            native_token::execute(
-                caller_account_id,
-                &real_pre_states,
-                &chained_call.instruction_data,
-            )
-            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
-        } else {
-            let program = &programs
-                .get(&chained_call.program_account_id)
-                .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                    program_account_id: chained_call.program_account_id,
-                })?
-                .program;
-            let inner_receipt = execute_and_prove_program(
-                program,
-                chained_call.program_account_id,
-                caller_account_id,
-                &real_pre_states,
-                &chained_call.instruction_data,
-            )?;
-            let output =
-                borsh::from_slice(from_frame(&inner_receipt.journal.bytes).ok_or_else(|| {
-                    LeeError::ProgramOutputDeserializationError(
-                        "malformed inner-receipt journal frame".to_owned(),
-                    )
-                })?)
-                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
-            env_builder.add_assumption(inner_receipt);
-            output
-        };
-
-        // Authorization scoped to this call's own subtree: starts from what this call itself
-        // inherited from its caller, plus every account this call's own output reports
-        // authorized — handed to this call's children only, never to its siblings. Mirrors
-        // `authorized_accounts.extend(authorized_output_accounts)` in-circuit.
-        let mut authorized_output_accounts = caller_authorized_accounts;
-
-        for diff in &program_output.state_diffs {
-            let pre = &diff.pre_state;
-            let account_id = pre.account_id;
-
-            let first_sighting = seen.insert(account_id);
-            let pda_match =
-                authorized_pdas.contains(&account_id) || seed_derives_private_pda(&account_id);
-
-            let account = materialized.entry(account_id).or_default();
-            if covered.insert(ProgramShardSelector::from(pre)) && witness_at(&account_id).is_none()
-            {
-                account.set_shard(pre.shard.0, pre.shard.1.clone());
-            }
-            account.apply_diff(diff);
-
-            if pre.is_authorized {
-                authorized_output_accounts.insert(account_id);
-                // Keep authorization from credentials available across calls.
-                if first_sighting && !pda_match {
-                    globally_authorized.insert(account_id);
-                }
-            }
-        }
-
-        // Keep chained calls in the output for the circuit.
-        let new_calls = program_output.chained_calls.clone();
-        program_outputs.push(program_output);
-
-        for new_call in new_calls.into_iter().rev() {
-            chained_calls.push_front((
-                new_call,
-                Some(chained_call.program_account_id),
-                authorized_output_accounts.clone(),
-            ));
-        }
-
-        chain_calls_counter = chain_calls_counter
-            .checked_add(1)
-            .expect("we check the max depth at the beginning of the loop");
-    }
+    let mut backend = Prover {
+        programs,
+        env_builder: ExecutorEnv::builder(),
+        calls: Vec::new(),
+    };
+    ExecutionState::initialize(root.clone(), &private_witnesses)?.run(&mut backend)?;
+    let Prover {
+        mut env_builder,
+        calls,
+        ..
+    } = backend;
 
     // Every program actually invoked, claimed against its real bytecode identity — the guest
     // circuit uses these for `env::verify`, unchecked; the sequencer verifies each `Disclosed` one
@@ -471,14 +332,13 @@ pub fn execute_and_prove_with(
     }
 
     let circuit_input = PrivacyPreservingCircuitInput {
-        program_outputs,
+        root,
         private_witnesses,
-        program_account_id: *initial_account_id,
         dummy_inputs,
         ciphertext_padding,
-        initial_shard_selectors: shard_selectors,
         program_image_witnesses,
         shadow_program_witnesses,
+        calls,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;
@@ -504,22 +364,12 @@ pub fn execute_and_prove_with(
     Ok((circuit_output, proof))
 }
 
-fn execute_and_prove_program(
+fn prove_session(
     program: &Program,
-    self_account_id: AccountId,
-    caller_account_id: Option<AccountId>,
-    pre_states: &[AccountInput],
-    instruction_data: &InstructionData,
+    write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
 ) -> Result<Receipt, LeeError> {
-    // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    program.write_inputs(
-        self_account_id,
-        caller_account_id,
-        pre_states,
-        instruction_data,
-        &mut env_builder,
-    )?;
+    write(&mut env_builder)?;
     let env = env_builder.build().unwrap();
 
     // Prove the program

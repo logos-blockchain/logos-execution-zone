@@ -35,7 +35,11 @@ const GARBAGE: &[u8] = b"this is not a block";
 const OFFENDER_SEED: usize = 1;
 
 async fn balance(ctx: &TestContext, account: AccountId) -> Result<u128> {
-    Ok(get_account(ctx, account).await?.data.balance().unwrap())
+    Ok(get_account(ctx, account)
+        .await?
+        .data
+        .native_balance()
+        .unwrap())
 }
 
 /// The sequencer stake config, decoded.

@@ -701,7 +701,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         program_view.data,
-        Account::funded(program_full.data.balance().unwrap()).data
+        Account::funded(program_full.data.native_balance().unwrap()).data
     );
 
     let mut out_named_shard = FfiAccount::default();

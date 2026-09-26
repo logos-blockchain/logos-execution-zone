@@ -12,7 +12,7 @@ use std::{
     path::PathBuf,
 };
 
-pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE};
+pub use account_manager::{AccountIdentity, AccountMention, CIPHERTEXT_PAD_SIZE, SelectedShard};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, block::Block, transaction::LeeTransaction};
@@ -28,7 +28,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Nonce, ProgramShardSelector},
-    program::{AccountInput, InstructionData},
+    program::InstructionData,
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -100,6 +100,8 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Account {0} is mentioned with conflicting identities")]
     ConflictingAccountIdentity(AccountId),
+    #[error("Account {0} holds state but has no membership proof to update it")]
+    MissingMembershipProof(AccountId),
     #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
     SegmentCountMismatch { expected: usize, actual: usize },
     #[error("Program bytecode is not a valid RISC0 program binary")]
@@ -670,9 +672,8 @@ impl WalletCore {
     }
 
     #[must_use]
-    pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let account = self
-            .storage
+    pub fn private_account_state(&self, account_id: AccountId) -> Option<&Account> {
+        self.storage
             .key_chain()
             .private_account(account_id)
             .map(|acc| acc.account)
@@ -681,8 +682,13 @@ impl WalletCore {
                     .key_chain()
                     .shared_private_account(account_id)
                     .map(|entry| &entry.account)
-            })?;
-        Some(Commitment::new(&account_id, account))
+            })
+    }
+
+    #[must_use]
+    pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
+        self.private_account_state(account_id)
+            .map(|account| Commitment::new(&account_id, account))
     }
 
     pub async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>> {
@@ -803,11 +809,11 @@ impl WalletCore {
         accounts: Vec<AccountMention>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        tx_pre_check(&acc_manager.pre_states())?;
+        tx_pre_check(&acc_manager.selected_shards())?;
 
         for account_id in acc_manager.accounts_outgrowing_pad() {
             warn!(
@@ -820,33 +826,15 @@ impl WalletCore {
         let input = ProvingInput {
             shard_selectors: acc_manager.shard_selectors(),
             signers: acc_manager.signers(),
-            public_accounts: acc_manager.public_accounts(),
-            private_witnesses: acc_manager.private_witnesses(),
+            private_witnesses: acc_manager.private_witnesses()?,
             instruction_data,
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
-        // Prove on a blocking thread and use `block_on` for async shard lookups.
-        let handle = tokio::runtime::Handle::current();
-        let client = self.multi_sequencer_client.clone();
         let program = program.clone();
         let (output, proof) = tokio::task::spawn_blocking(move || {
-            lee::privacy_preserving_transaction::circuit::execute_and_prove_with(
-                input,
-                &program,
-                &mut |shard_selector: ProgramShardSelector| {
-                    let account = handle
-                        .block_on(client.metered_get(async |client: &SequencerClient| {
-                            client.get_account_view(shard_selector).await
-                        }))
-                        .map_err(|e| lee::error::LeeError::AccountResolution(e.to_string()))?;
-                    // Missing accounts and missing shards both resolve to empty data.
-                    Ok(Some(
-                        account.data.shards.into_values().next().unwrap_or_default(),
-                    ))
-                },
-            )
+            lee::privacy_preserving_transaction::circuit::execute_and_prove(input, &program)
         })
         .await??;
 
@@ -927,7 +915,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         program_account_id: AccountId,
         payer: Option<AccountId>,
-        tx_pre_check: impl FnOnce(&[AccountInput]) -> Result<(), ExecutionFailureKind>,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(|mention| mention.identity.is_private()) {
@@ -940,7 +928,7 @@ impl WalletCore {
 
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        tx_pre_check(&acc_manager.pre_states())?;
+        tx_pre_check(&acc_manager.selected_shards())?;
 
         let shard_selectors = acc_manager.shard_selectors();
         let account_ids = acc_manager.public_account_ids();
@@ -972,7 +960,7 @@ impl WalletCore {
                     invalid_input("Fee payer's signing key is not held by this wallet")
                 })?;
                 let account = self
-                    .get_account_view(ProgramShardSelector::balance(payer))
+                    .get_account_view(ProgramShardSelector::native_balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 nonces.push(account.nonce);

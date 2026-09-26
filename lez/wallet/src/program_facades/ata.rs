@@ -1,13 +1,19 @@
 use std::collections::HashMap;
 
-use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{
+    AtaContents, compute_ata_seed, get_associated_token_account_id,
+};
 use common::HashType;
 use lee::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::SharedSecretKey;
+use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{
+    AccountIdentity, ExecutionFailureKind, WalletCore,
+    program_facades::{shard, token_holding},
+};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -27,7 +33,13 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
-        let instruction = associated_token_account_core::Instruction::Create { token_program_id };
+        let (kind, contents) =
+            create_proposal(self.0, definition_id, ata_id, token_program_id).await?;
+        let instruction = associated_token_account_core::Instruction::Create {
+            token_program_id,
+            kind,
+            contents,
+        };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -64,6 +76,10 @@ impl Ata<'_> {
         );
         let instruction = associated_token_account_core::Instruction::Transfer {
             token_program_id,
+            descriptor: TokenDescriptor {
+                definition_id,
+                kind: holding_kind(self.0, sender_ata_id, token_program_id).await?,
+            },
             amount,
         };
         let instruction_data =
@@ -102,6 +118,7 @@ impl Ata<'_> {
         );
         let instruction = associated_token_account_core::Instruction::Burn {
             token_program_id,
+            kind: holding_kind(self.0, holder_ata_id, token_program_id).await?,
             amount,
         };
         let instruction_data =
@@ -134,7 +151,13 @@ impl Ata<'_> {
             &compute_ata_seed(owner_id, definition_id, token_program_id),
         );
 
-        let instruction = associated_token_account_core::Instruction::Create { token_program_id };
+        let (kind, contents) =
+            create_proposal(self.0, definition_id, ata_id, token_program_id).await?;
+        let instruction = associated_token_account_core::Instruction::Create {
+            token_program_id,
+            kind,
+            contents,
+        };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -172,6 +195,10 @@ impl Ata<'_> {
 
         let instruction = associated_token_account_core::Instruction::Transfer {
             token_program_id,
+            descriptor: TokenDescriptor {
+                definition_id,
+                kind: holding_kind(self.0, sender_ata_id, token_program_id).await?,
+            },
             amount,
         };
         let instruction_data =
@@ -210,6 +237,7 @@ impl Ata<'_> {
 
         let instruction = associated_token_account_core::Instruction::Burn {
             token_program_id,
+            kind: holding_kind(self.0, holder_ata_id, token_program_id).await?,
             amount,
         };
         let instruction_data =
@@ -232,6 +260,53 @@ impl Ata<'_> {
                 (hash, secret)
             })
     }
+}
+
+async fn holding_kind(
+    wallet: &WalletCore,
+    account_id: AccountId,
+    token_program_id: AccountId,
+) -> Result<TokenKind, ExecutionFailureKind> {
+    Ok(token_holding(
+        wallet,
+        &AccountIdentity::PublicNoSign(account_id),
+        token_program_id,
+    )
+    .await?
+    .kind())
+}
+
+async fn create_proposal(
+    wallet: &WalletCore,
+    definition_id: AccountId,
+    ata_id: AccountId,
+    token_program_id: AccountId,
+) -> Result<(TokenKind, AtaContents), ExecutionFailureKind> {
+    let definition_shard = shard(
+        wallet,
+        &AccountIdentity::PublicNoSign(definition_id),
+        token_program_id,
+    )
+    .await?;
+    let definition = TokenDefinition::try_from(&definition_shard)
+        .map_err(|_err| ExecutionFailureKind::AccountDataError(definition_id))?;
+    let kind = TokenKind::from_definition(&definition);
+
+    let ata_shard = shard(
+        wallet,
+        &AccountIdentity::PublicNoSign(ata_id),
+        token_program_id,
+    )
+    .await?;
+    let contents = associated_token_account_core::classify(
+        &ata_shard,
+        &TokenDescriptor {
+            definition_id,
+            kind,
+        },
+    );
+
+    Ok((kind, contents))
 }
 
 fn ata_with_token_dependency() -> ProgramWithDependencies {

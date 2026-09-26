@@ -91,7 +91,7 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
 /// Fixed, public key behind a genesis-only funding account: the bridge can
-/// only be called top-level, not as `Stake`'s mover, so this account is a
+/// only be called top-level, not from `Stake`, so this account is a
 /// pass-through that receives the genesis deposit and then moves it into the
 /// real stake account. Not a secret: every node derives the same account, and
 /// it holds nothing once genesis has run.
@@ -1479,7 +1479,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 };
 
                 // Bridge deposits are deduped by their receipt PDA in chain
-                // state (drained only when unminted, no-op on replay), so no
+                // state (drained only when unminted, refused on replay), so no
                 // node-local guard is needed here.
                 //
                 // Skip-and-log rather than propagate: a drained deposit is
@@ -1682,13 +1682,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let opening = chain_state::apply::opening_fee_state(&working_state);
         let mut summary = fee_core::BlockFeeSummary::default();
         let mut gas_budget = DeclaredGasBudget::default();
-        // The fee tx's summary is only known after the loop; a default-summary
-        // placeholder sizes identically (the summary struct is fixed-size).
+        // The fee tx's summary and payout are only known after the loop; a default-summary,
+        // zero-payout placeholder sizes identically (both are fixed-size).
         let placeholder_fee_lee_tx = LeeTransaction::Public(fee_invocation(
             fee_core::BlockFeeSummary::default(),
+            0,
             producer_account,
         ));
-        let clock_tx = clock_invocation(new_block_timestamp);
+        let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
         sequencer_core_metrics::record_mempool_size(self.mempool.len());
@@ -1699,8 +1700,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut mempool_transactions = Vec::new();
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
-        pending_from_store.extend(finalize_unstake_txs);
         pending_from_store.extend(slash_txs);
+        pending_from_store.extend(finalize_unstake_txs);
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -1854,7 +1855,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
         }
 
-        let fee_tx = fee_invocation(summary, producer_account);
+        let fee_tx = fee_invocation(
+            summary,
+            chain_state::apply::block_payout(&opening, &summary),
+            producer_account,
+        );
         working_state
             .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
             .context("Fee transaction failed. Aborting block production.")?;
@@ -2177,7 +2182,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 /// Whether a cross-zone delivery is already on the chain we are building on.
 ///
 /// The inbox records each peer block's delivered indices in that block's seen
-/// shard and no-ops a replay, so the shard is the same kind of answer the
+/// shard and refuses a replay, so the shard is the same kind of answer the
 /// deposit receipt gives: state, not bookkeeping. An orphan reverts the entry
 /// with the block, so the next turn re-delivers with nothing to unwind.
 ///
@@ -2370,6 +2375,7 @@ fn build_genesis_state(
 ) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
     let mut state = build_initial_state(config);
     let mut events = vec![];
+    let genesis_opening = chain_state::apply::opening_fee_state(&state);
 
     // Config txs seed the config accounts by transaction, so every node
     // reconstructs them by replaying the genesis block. Every cross-zone config
@@ -2444,6 +2450,8 @@ fn build_genesis_state(
         |stake| lee::AccountId::from(&stake.owner),
     );
 
+    let genesis_summary = fee_core::BlockFeeSummary::default();
+    let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
     let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
         config.bedrock_config.channel_params,
         *config.bedrock_config.channel_id.as_ref(),
@@ -2453,10 +2461,11 @@ fn build_genesis_state(
     .chain(supply_txs)
     .chain(bootstrap_stake_txs)
     .chain(std::iter::once(fee_invocation(
-        fee_core::BlockFeeSummary::default(),
+        genesis_summary,
+        genesis_payout,
         producer,
     )))
-    .chain(std::iter::once(clock_invocation(0)))
+    .chain(std::iter::once(clock_invocation(GENESIS_BLOCK_ID, 0)))
     .collect();
 
     for (idx, tx) in genesis_txs.iter().enumerate() {
@@ -2581,10 +2590,6 @@ fn genesis_stake_message(
     minimum_stake: u128,
 ) -> Message {
     let amount = minimum_stake;
-    let mover_instruction_data = lee::program::Program::serialize_instruction(
-        lee_core::native_token::Instruction::Transfer { amount },
-    )
-    .expect("Failed to serialize genesis mover instruction");
     // A nonce counts how many times an account has signed. The deposit that
     // funds this account needs no signature from it, so its count starts at 0.
     let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
@@ -2593,9 +2598,11 @@ fn genesis_stake_message(
     Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::balance(genesis_stake_funding_account()),
+            ProgramShardSelector::native_balance(genesis_stake_funding_account()),
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
+                &ownership_id,
+            )),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
@@ -2608,8 +2615,7 @@ fn genesis_stake_message(
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
-            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            mover_instruction_data,
+            has_record: false,
         },
     )
     .expect("Failed to build genesis Stake message")
@@ -2755,8 +2761,8 @@ fn build_supply_account_genesis_transaction(
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::balance(*account_id),
+            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::native_balance(*account_id),
             ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
@@ -2794,8 +2800,8 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::balance(metadata.recipient_id),
+            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::native_balance(metadata.recipient_id),
             ProgramShardSelector::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
@@ -2816,10 +2822,13 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 
 /// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
+    let Some(params) = committee_discovery::channel_params(state) else {
+        return VecDeque::new();
+    };
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
-        .filter_map(|(ownership_id, pending)| {
-            build_finalize_unstake_tx(ownership_id, pending)
+        .filter_map(|(ownership_id, sequencer_key, pending)| {
+            build_finalize_unstake_tx(ownership_id, sequencer_key, pending, params.exit_delay)
                 .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
                 .ok()
         })
@@ -2829,26 +2838,31 @@ fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction>
 // Unsigned: FinalizeUnstake needs no authorization, per the program.
 fn build_finalize_unstake_tx(
     ownership_id: AccountId,
+    sequencer_key: sequencer_stake_core::SequencerKey,
     pending: sequencer_stake_core::PendingUnstake,
+    exit_delay: u64,
 ) -> Result<LeeTransaction> {
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = Message::try_new(
         sequencer_stake_program_id,
         vec![
             ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::balance(system_accounts::stake_funds_account_id(&ownership_id)),
-            ProgramShardSelector::balance(pending.destination),
+            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
+                &ownership_id,
+            )),
+            ProgramShardSelector::native_balance(pending.destination),
             ProgramShardSelector::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),
-            ProgramShardSelector::new(
-                system_accounts::clock_account_ids()[0],
-                programs::clock_account_id(),
-            ),
         ],
         vec![],
-        sequencer_stake_core::Instruction::FinalizeUnstake,
+        sequencer_stake_core::Instruction::FinalizeUnstake {
+            sequencer_key,
+            amount: pending.amount,
+            requested_at: pending.requested_at,
+            exit_delay,
+        },
     )
     .context("Failed to build FinalizeUnstake message")?;
 

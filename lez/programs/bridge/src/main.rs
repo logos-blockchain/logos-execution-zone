@@ -1,118 +1,105 @@
 use bridge_core::Instruction;
 use lee_core::{
     native_token::custody_transfer,
-    program::{
-        ProgramCall, ProgramEvent, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{Plan, PlanInput, ProgramEvent, run_program},
 };
 
-fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
+/// The receipt shard is the L1-deposit replay guard.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum Effect {
+    RecordDeposit,
+}
 
+/// A written receipt is one marker byte; crediting the receipt's balance does not affect this.
+const RECEIPT_MARKER: [u8; 1] = [1];
+
+fn main() {
+    run_program(plan, apply)
+}
+
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "run_program's apply returns None to keep a shard"
+)]
+fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
+    let Effect::RecordDeposit = effect;
     assert!(
-        caller_account_id.is_none(),
+        pre_data.is_empty(),
+        "Deposit was already processed: its receipt is written"
+    );
+    Some(RECEIPT_MARKER.to_vec())
+}
+
+fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
+    assert!(
+        input.caller_account_id.is_none(),
         "Bridge cannot be invoked through chain calls"
     );
 
-    let (post_diffs, chained_calls, events) = match instruction {
-        Instruction::Deposit {
+    let Instruction::Deposit {
+        l1_deposit_op_id,
+        recipient_id,
+        amount,
+    } = instruction
+    else {
+        panic!("Withdraws are disabled in the current version of LEZ");
+    };
+
+    let [bridge, recipient, receipt] = <&[_; 3]>::try_from(input.accounts.as_slice())
+        .expect("Deposit requires exactly 3 accounts");
+
+    assert_eq!(
+        bridge.account_id,
+        bridge_core::compute_bridge_account_id(input.self_account_id),
+        "First account must be bridge PDA"
+    );
+    assert_eq!(
+        recipient.account_id, recipient_id,
+        "Second account must be the recipient"
+    );
+    assert_eq!(
+        receipt.account_id,
+        bridge_core::deposit_receipt_account_id(input.self_account_id, l1_deposit_op_id),
+        "Third account must be the deposit-receipt PDA"
+    );
+
+    let mut plan = Plan::new(input);
+    plan.effect(receipt, &Effect::RecordDeposit);
+    plan.call(custody_transfer(
+        bridge.account_id,
+        bridge_core::compute_bridge_seed(),
+        recipient.account_id,
+        u128::from(amount),
+    ));
+    plan.event(ProgramEvent {
+        selector: bridge_core::event::Deposit::SELECTOR,
+        data: bridge_core::event::Deposit {
             l1_deposit_op_id,
             recipient_id,
             amount,
-        } => {
-            let [bridge, recipient, receipt] = pre_states
-                .try_into()
-                .expect("Deposit requires exactly 3 accounts");
-
-            assert_eq!(
-                bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_account_id),
-                "First account must be bridge PDA"
-            );
-
-            assert_eq!(
-                recipient.account_id, recipient_id,
-                "Second account must be the recipient"
-            );
-
-            assert_eq!(
-                receipt.account_id,
-                bridge_core::deposit_receipt_account_id(self_account_id, l1_deposit_op_id),
-                "Third account must be the deposit-receipt PDA"
-            );
-
-            // A nonempty receipt shard marks this deposit as already processed.
-            // Crediting the receipt's balance does not affect this check.
-            if !receipt.shard_of(self_account_id).is_empty() {
-                (
-                    vec![
-                        ShardStateDiff::unchanged(bridge),
-                        ShardStateDiff::unchanged(recipient),
-                        ShardStateDiff::unchanged(receipt),
-                    ],
-                    vec![],
-                    vec![],
-                )
-            } else {
-                let chained_calls = vec![custody_transfer(
-                    bridge.account_id,
-                    bridge_core::compute_bridge_seed(),
-                    recipient.account_id,
-                    u128::from(amount),
-                )];
-
-                // First mint: write the marker byte into the receipt. The write
-                // is what records the mint.
-                let post_diffs = vec![
-                    ShardStateDiff::unchanged(bridge),
-                    ShardStateDiff::unchanged(recipient),
-                    ShardStateDiff::new(
-                        receipt,
-                        vec![1].try_into().expect("1 byte fits in account data"),
-                    ),
-                ];
-
-                let events = vec![ProgramEvent {
-                    selector: bridge_core::event::Deposit::SELECTOR,
-                    data: bridge_core::event::Deposit {
-                        l1_deposit_op_id,
-                        recipient_id,
-                        amount,
-                    }
-                    .to_bytes(),
-                }];
-
-                (post_diffs, chained_calls, events)
-            }
         }
-        Instruction::Withdraw {
-            amount: _,
-            bedrock_account_pk: _,
-        } => {
-            panic!("Withdraws are disabled in the current version of LEZ");
-        }
-    };
+        .to_bytes(),
+    });
+    plan
+}
 
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        post_diffs,
-    )
-    .with_chained_calls(chained_calls)
-    .with_events(events)
-    .write();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_first_deposit_writes_the_receipt() {
+        assert_eq!(
+            apply(Effect::RecordDeposit, &[]),
+            Some(RECEIPT_MARKER.to_vec())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Deposit was already processed")]
+    fn a_replayed_deposit_cannot_claim_to_be_the_first() {
+        // The whole point: a second delivery of one `l1_deposit_op_id` would otherwise mint
+        // `amount` again out of bridge custody.
+        apply(Effect::RecordDeposit, &RECEIPT_MARKER);
+    }
 }

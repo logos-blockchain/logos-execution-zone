@@ -28,7 +28,7 @@ fn program_transaction<T: borsh::BorshSerialize>(
 ) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         program_account_id,
-        vec![ProgramShardSelector::balance(account_id)],
+        vec![ProgramShardSelector::native_balance(account_id)],
         vec![],
         instruction,
     )
@@ -151,6 +151,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: AccountId::from_builtin_program(emitter.id()),
         amount_out: 0,
+        vault_balance: 1000,
         callback_instruction_data,
     };
 
@@ -275,8 +276,8 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(&keys, Identifier::ZERO, Account::default())],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(EmitterInstruction {
                 events: vec![emitted(0), emitted(1)],
                 chain: vec![],

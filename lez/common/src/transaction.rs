@@ -1,7 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
 use lee_core::{
-    BlockId, Timestamp, native_token::NATIVE_TOKEN_PROGRAM_ID, program::TransactionEvent,
+    BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::TransactionEvent,
 };
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -196,17 +197,22 @@ pub struct TxEvents {
     pub events: Vec<TransactionEvent>,
 }
 
-/// Returns the canonical Clock Program invocation transaction for the given block timestamp.
-/// Every valid block must end with exactly one occurrence of this transaction.
+/// Builds the clock transaction required exactly once, at the end of each block.
+///
+/// Uses the header's ID and timestamp so followers reconstruct the same transaction.
+/// The clock checks that the proposed block ID advances its stored ID by one.
 #[must_use]
-pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
+pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
         programs::clock_account_id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
             .map(|id| ProgramShardSelector::new(id, programs::clock_account_id()))
             .to_vec(),
         vec![],
-        timestamp,
+        clock_core::Instruction {
+            timestamp,
+            block_id,
+        },
     )
     .expect("Clock invocation message should always be constructable");
     lee::PublicTransaction::new(
@@ -300,24 +306,29 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
 /// Every valid block must contain exactly one occurrence of this transaction as its
 /// second-to-last transaction, immediately before the clock invocation. The producer
 /// account rides as the fourth account so the guest can pay it.
+///
+/// `payout` is the producer's smoothed share, proposed here and required by the fee-state
+/// effect to equal what the real state's own market update returns; derive it with
+/// `chain_state::apply::block_payout`.
 #[must_use]
 pub fn fee_invocation(
     summary: fee_core::BlockFeeSummary,
+    payout: Balance,
     producer: lee::AccountId,
 ) -> lee::PublicTransaction {
     let fee_program_id = programs::fee_account_id();
     // Select the fee state shard and balances for the escrow, inbox, and producer.
     let shard_selectors = vec![
         ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
-        ProgramShardSelector::balance(system_accounts::fee_escrow_account_id()),
-        ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
-        ProgramShardSelector::balance(producer),
+        ProgramShardSelector::native_balance(system_accounts::fee_escrow_account_id()),
+        ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
+        ProgramShardSelector::native_balance(producer),
     ];
     let message = lee::public_transaction::Message::try_new(
         fee_program_id,
         shard_selectors,
         vec![],
-        fee_core::Instruction::Distribute(summary),
+        fee_core::Instruction::Distribute { summary, payout },
     )
     .expect("Fee invocation message should always be constructable");
     lee::PublicTransaction::new(
@@ -365,8 +376,8 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     lee::public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(payer),
-            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
+            ProgramShardSelector::native_balance(payer),
+            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
         ],
         vec![],
         lee_core::native_token::Instruction::Transfer { amount },
@@ -380,8 +391,8 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
     lee::public_transaction::Message::try_new(
         programs::fee_account_id(),
         vec![
-            ProgramShardSelector::balance(system_accounts::fee_inbox_account_id()),
-            ProgramShardSelector::balance(payer),
+            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
+            ProgramShardSelector::native_balance(payer),
         ],
         vec![],
         fee_core::Instruction::Refund { amount },
@@ -514,7 +525,7 @@ fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> boo
             .filter(|(program, _)| **program != NATIVE_TOKEN_PROGRAM_ID)
     }
     matches!(
-        (pre.data.balance(), post.data.balance()),
+        (pre.data.native_balance(), post.data.native_balance()),
         (Ok(before), Ok(after)) if before < after
     ) && pre.nonce == post.nonce
         && non_native(pre).eq(non_native(post))

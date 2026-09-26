@@ -45,6 +45,21 @@ const BLOAT_WRITERS: usize = 30;
 // shard writes use plain filler rather than real program data.
 const SEGMENT_FILLER_BYTES: usize = 1024;
 
+#[track_caller]
+fn assert_bloat_shard(shard: Option<&[u8]>) {
+    let shard = shard.expect("bloat shard missing from scoped response");
+    assert_eq!(shard.len(), BLOAT_SHARD_BYTES, "bloat shard length");
+    let mismatch = shard
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| *byte != 0xFF);
+    assert_eq!(
+        mismatch, None,
+        "expected 0xFF throughout; first mismatch (offset, byte)"
+    );
+}
+
 fn is_oversized_response(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<sequencer_service_rpc::ClientError>(),
@@ -195,11 +210,7 @@ async fn bloat_account(
         )
         .await?;
         let view = get_account_view(ctx, ProgramShardSelector::new(victim, *writer_id)).await?;
-        assert_eq!(
-            view.data.shards[writer_id].as_ref(),
-            shard.as_slice(),
-            "the bloat write must have taken effect, not merely been included"
-        );
+        assert_bloat_shard(view.data.shards.get(writer_id).map(AsRef::as_ref));
     }
 
     writers
@@ -216,6 +227,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
 
     let error = get_account(&ctx, victim)
         .await
+        .map(|_| ())
         .expect_err("the whole-account read must fail once the account is bloated");
     assert!(
         is_oversized_response(&error),
@@ -231,7 +243,7 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
         assert_eq!(view.data.shards.len(), 1, "a scoped read carries one shard");
     }
 
-    let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
+    let balance_only = get_account_view(&ctx, ProgramShardSelector::native_balance(victim)).await?;
     assert_eq!(
         balance_only.data.shards.keys().copied().collect::<Vec<_>>(),
         vec![NATIVE_TOKEN_PROGRAM_ID],
@@ -279,17 +291,16 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     let height_before_bloat = ctx.sequencer_client().get_last_block_id().await?;
     let writers = bloat_account(&mut ctx, victim).await?;
     let last_writer = writers[BLOAT_WRITERS - 1];
-    let balance_only = get_account_view(&ctx, ProgramShardSelector::balance(victim)).await?;
+    let balance_only = get_account_view(&ctx, ProgramShardSelector::native_balance(victim)).await?;
 
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
     let selector: indexer_service_protocol::ProgramShardSelector =
         ProgramShardSelector::new(victim, last_writer).into();
     let native_selector: indexer_service_protocol::ProgramShardSelector =
-        ProgramShardSelector::balance(victim).into();
+        ProgramShardSelector::native_balance(victim).into();
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
 
     let indexer = &**ctx.indexer_client();
-    let expected_shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
 
     let current = indexer_service_rpc::RpcClient::get_account_view(indexer, selector).await?;
     assert_eq!(
@@ -297,7 +308,13 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         1,
         "the indexer view must carry only the selected shard"
     );
-    assert_eq!(current.data.shards[&last_writer_key].0, expected_shard);
+    assert_bloat_shard(
+        current
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
+    );
     assert_eq!(current.nonce, balance_only.nonce.0);
 
     let before_population = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -318,7 +335,7 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     .await?;
     assert_eq!(
         native_before.data.balance().unwrap(),
-        balance_only.data.balance().unwrap(),
+        balance_only.data.native_balance().unwrap(),
         "the historical view must be the real account at that height, not a default"
     );
 
@@ -328,9 +345,12 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
         indexer_height,
     )
     .await?;
-    assert_eq!(
-        after_population.data.shards[&last_writer_key].0, expected_shard,
-        "the historical view must serve real shard data, not always empty"
+    assert_bloat_shard(
+        after_population
+            .data
+            .shards
+            .get(&last_writer_key)
+            .map(|shard| shard.0.as_slice()),
     );
     assert_eq!(after_population.nonce, balance_only.nonce.0);
     let native_after = indexer_service_rpc::RpcClient::get_account_view_at_block(
@@ -341,7 +361,7 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     .await?;
     assert_eq!(
         native_after.data.balance().unwrap(),
-        balance_only.data.balance().unwrap()
+        balance_only.data.native_balance().unwrap()
     );
 
     // The explorer renders shard counts and sizes, so it needs to enumerate shards on
@@ -371,12 +391,12 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
             .all(|shard| shard.len == expected_shard_len),
         "the summary must carry each shard's real size"
     );
-    assert_eq!(summary.balance, balance_only.data.balance().ok());
+    assert_eq!(summary.balance, balance_only.data.native_balance().ok());
     assert_eq!(summary.nonce, balance_only.nonce.0);
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
-        ProgramShardSelector::balance(AccountId::new([0x5A; 32])).into(),
+        ProgramShardSelector::native_balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
     assert_eq!(missing.data.balance().unwrap(), 0);
@@ -599,14 +619,11 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         .wallet()
         .send_privacy_preserving_tx(
             vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
-            Program::serialize_instruction((
-                None::<(AccountId, Vec<u8>)>,
-                vec![(
-                    q_id,
-                    ProgramShardSelector::new(account_id, q_id),
-                    Program::serialize_instruction(rewritten.clone())?,
-                )],
-            ))?,
+            Program::serialize_instruction(vec![(
+                q_id,
+                ProgramShardSelector::new(account_id, q_id),
+                Program::serialize_instruction(rewritten.clone())?,
+            )])?,
             &program,
         )
         .await

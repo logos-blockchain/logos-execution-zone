@@ -1,1022 +1,1046 @@
 #![cfg(test)]
-#![expect(
-    clippy::shadow_unrelated,
-    clippy::arithmetic_side_effects,
-    reason = "We don't care about it in tests"
-)]
+
+use std::collections::HashMap;
 
 use lee_core::{
     account::{AccountId, ShardData},
-    program::{AccountInput, ShardStateDiff},
+    program::{AccountMeta, Plan, PlanInput},
 };
 use token_core::{
-    MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
+    Instruction, MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition,
+    TokenDescriptor, TokenHolding, TokenKind, TokenMetadata,
 };
 
-use crate::{
-    burn::burn,
-    initialize::initialize_account,
-    mint::mint,
-    new_definition::{new_definition_with_metadata, new_fungible_definition},
-    print_nft::print_nft,
-    transfer::transfer,
-};
-
-// TODO: Move tests to a proper modules like burn, mint, transfer, etc, so that they are more
-// unit-test.
+use crate::Effect;
 
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([5; 32]);
+const DEFINITION_ID: AccountId = AccountId::new([15; 32]);
+const OTHER_DEFINITION_ID: AccountId = AccountId::new([16; 32]);
+const HOLDING_ID: AccountId = AccountId::new([17; 32]);
+const HOLDING_ID_2: AccountId = AccountId::new([42; 32]);
+const METADATA_ID: AccountId = AccountId::new([43; 32]);
 
-struct BalanceForTests;
-struct IdForTests;
+const INIT_SUPPLY: u128 = 100_000;
+const HOLDING_BALANCE: u128 = 1_000;
+const INIT_SUPPLY_BURNED: u128 = 99_500;
+const HOLDING_BALANCE_BURNED: u128 = 500;
+const BURN_SUCCESS: u128 = 500;
+const BURN_INSUFFICIENT: u128 = 1_500;
+const MINT_SUCCESS: u128 = 50_000;
+const HOLDING_BALANCE_MINT: u128 = 51_000;
+const MINT_OVERFLOW: u128 = u128::MAX - 40_000;
+const INIT_SUPPLY_MINT: u128 = 150_000;
+const SENDER_POST_TRANSFER: u128 = 95_000;
+const RECIPIENT_POST_TRANSFER: u128 = 105_000;
+const TRANSFER_AMOUNT: u128 = 5_000;
+const PRINTABLE_COPIES: u128 = 10;
+const PRINTABLE_COPIES_AFTER_PRINT: u128 = 9;
 
-struct AccountForTests;
+const FUNGIBLE: TokenDescriptor = TokenDescriptor {
+    definition_id: DEFINITION_ID,
+    kind: TokenKind::Fungible,
+};
+const MASTER: TokenDescriptor = TokenDescriptor {
+    definition_id: DEFINITION_ID,
+    kind: TokenKind::NftMaster,
+};
+const PRINTED: TokenDescriptor = TokenDescriptor {
+    definition_id: DEFINITION_ID,
+    kind: TokenKind::NftPrintedCopy,
+};
 
-impl AccountForTests {
-    fn holding(account_id: AccountId, is_authorized: bool, holding: &TokenHolding) -> AccountInput {
-        AccountInput::with_shard(
-            account_id,
-            is_authorized,
-            TOKEN_PROGRAM_ID,
-            ShardData::from(holding),
-        )
-    }
-
-    fn definition(
-        account_id: AccountId,
-        is_authorized: bool,
-        definition: &TokenDefinition,
-    ) -> AccountInput {
-        AccountInput::with_shard(
-            account_id,
-            is_authorized,
-            TOKEN_PROGRAM_ID,
-            ShardData::from(definition),
-        )
-    }
-
-    fn definition_account_auth() -> AccountInput {
-        Self::definition(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenDefinition::Fungible {
-                name: String::from("test"),
-                total_supply: BalanceForTests::init_supply(),
-                metadata_id: None,
-            },
-        )
-    }
-
-    fn definition_account_without_auth() -> AccountInput {
-        Self::definition(
-            IdForTests::pool_definition_id(),
-            false,
-            &TokenDefinition::Fungible {
-                name: String::from("test"),
-                total_supply: BalanceForTests::init_supply(),
-                metadata_id: None,
-            },
-        )
-    }
-
-    fn holding_different_definition() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id_diff(),
-                balance: BalanceForTests::holding_balance(),
-            },
-        )
-    }
-
-    fn holding_same_definition_with_authorization() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::holding_balance(),
-            },
-        )
-    }
-
-    fn holding_same_definition_without_authorization() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            false,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::holding_balance(),
-            },
-        )
-    }
-
-    fn holding_same_definition_without_authorization_overflow() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            false,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::init_supply(),
-            },
-        )
-    }
-
-    fn definition_account_post_burn() -> AccountInput {
-        Self::definition(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenDefinition::Fungible {
-                name: String::from("test"),
-                total_supply: BalanceForTests::init_supply_burned(),
-                metadata_id: None,
-            },
-        )
-    }
-
-    fn holding_account_post_burn() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            false,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::holding_balance_burned(),
-            },
-        )
-    }
-
-    fn holding_account_uninit() -> AccountInput {
-        AccountInput::with_shard(
-            IdForTests::holding_id_2(),
-            false,
-            TOKEN_PROGRAM_ID,
-            ShardData::empty(),
-        )
-    }
-
-    fn init_mint() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            false,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::mint_success(),
-            },
-        )
-    }
-
-    fn holding_account_same_definition_mint() -> AccountInput {
-        Self::holding(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::holding_balance_mint(),
-            },
-        )
-    }
-
-    fn definition_account_mint() -> AccountInput {
-        Self::definition(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenDefinition::Fungible {
-                name: String::from("test"),
-                total_supply: BalanceForTests::init_supply_mint(),
-                metadata_id: None,
-            },
-        )
-    }
-
-    fn holding_same_definition_with_authorization_and_large_balance() -> AccountInput {
-        Self::holding(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::mint_overflow(),
-            },
-        )
-    }
-
-    fn definition_account_with_authorization_nonfungible() -> AccountInput {
-        Self::definition(
-            IdForTests::pool_definition_id(),
-            true,
-            &TokenDefinition::NonFungible {
-                name: String::from("test"),
-                printable_supply: BalanceForTests::printable_copies(),
-                metadata_id: AccountId::new([0; 32]),
-            },
-        )
-    }
-
-    fn definition_account_uninit() -> AccountInput {
-        AccountInput::with_shard(
-            IdForTests::pool_definition_id(),
-            false,
-            TOKEN_PROGRAM_ID,
-            ShardData::empty(),
-        )
-    }
-
-    fn holding_account_init() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::init_supply(),
-            },
-        )
-    }
-
-    fn holding_account2_init() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id_2(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::init_supply(),
-            },
-        )
-    }
-
-    fn holding_account2_init_post_transfer() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id_2(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::recipient_post_transfer(),
-            },
-        )
-    }
-
-    fn holding_account_init_post_transfer() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id(),
-                balance: BalanceForTests::sender_post_transfer(),
-            },
-        )
-    }
-
-    fn holding_account_master_nft() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::NftMaster {
-                definition_id: IdForTests::pool_definition_id(),
-                print_balance: BalanceForTests::printable_copies(),
-            },
-        )
-    }
-
-    fn holding_account_master_nft_insufficient_balance() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::NftMaster {
-                definition_id: IdForTests::pool_definition_id(),
-                print_balance: 1,
-            },
-        )
-    }
-
-    fn holding_account_master_nft_after_print() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::NftMaster {
-                definition_id: IdForTests::pool_definition_id(),
-                print_balance: BalanceForTests::printable_copies() - 1,
-            },
-        )
-    }
-
-    fn holding_account_printed_nft() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            false,
-            &TokenHolding::NftPrintedCopy {
-                definition_id: IdForTests::pool_definition_id(),
-                owned: true,
-            },
-        )
-    }
-
-    fn holding_account_with_master_nft_transferred_to() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id_2(),
-            true,
-            &TokenHolding::NftMaster {
-                definition_id: IdForTests::pool_definition_id(),
-                print_balance: BalanceForTests::printable_copies(),
-            },
-        )
-    }
-
-    fn holding_account_master_nft_post_transfer() -> AccountInput {
-        Self::holding(
-            IdForTests::holding_id(),
-            true,
-            &TokenHolding::NftMaster {
-                definition_id: IdForTests::pool_definition_id(),
-                print_balance: 0,
-            },
-        )
+const fn fungible(balance: u128) -> TokenHolding {
+    TokenHolding::Fungible {
+        definition_id: DEFINITION_ID,
+        balance,
     }
 }
 
-impl BalanceForTests {
-    fn init_supply() -> u128 {
-        100_000
-    }
-
-    fn holding_balance() -> u128 {
-        1_000
-    }
-
-    fn init_supply_burned() -> u128 {
-        99_500
-    }
-
-    fn holding_balance_burned() -> u128 {
-        500
-    }
-
-    fn burn_success() -> u128 {
-        500
-    }
-
-    fn burn_insufficient() -> u128 {
-        1_500
-    }
-
-    fn mint_success() -> u128 {
-        50_000
-    }
-
-    fn holding_balance_mint() -> u128 {
-        51_000
-    }
-
-    fn mint_overflow() -> u128 {
-        u128::MAX - 40_000
-    }
-
-    fn init_supply_mint() -> u128 {
-        150_000
-    }
-
-    fn sender_post_transfer() -> u128 {
-        95_000
-    }
-
-    fn recipient_post_transfer() -> u128 {
-        105_000
-    }
-
-    fn transfer_amount() -> u128 {
-        5_000
-    }
-
-    fn printable_copies() -> u128 {
-        10
+const fn master(print_balance: u128) -> TokenHolding {
+    TokenHolding::NftMaster {
+        definition_id: DEFINITION_ID,
+        print_balance,
     }
 }
 
-impl IdForTests {
-    fn pool_definition_id() -> AccountId {
-        AccountId::new([15; 32])
-    }
-
-    fn pool_definition_id_diff() -> AccountId {
-        AccountId::new([16; 32])
-    }
-
-    fn holding_id() -> AccountId {
-        AccountId::new([17; 32])
-    }
-
-    fn holding_id_2() -> AccountId {
-        AccountId::new([42; 32])
+const fn printed(owned: bool) -> TokenHolding {
+    TokenHolding::NftPrintedCopy {
+        definition_id: DEFINITION_ID,
+        owned,
     }
 }
 
-/// Asserts the diff leaves the native balance untouched and sets data to exactly `expected`'s.
-fn assert_data_diff(diff_output: &ShardStateDiff, expected: &AccountInput) {
-    let effective_data = diff_output
-        .post_data
-        .clone()
-        .unwrap_or_else(|| diff_output.pre_state.shard_of(TOKEN_PROGRAM_ID).clone());
-    assert_eq!(&effective_data, expected.shard_of(TOKEN_PROGRAM_ID));
+fn fungible_definition(total_supply: u128) -> TokenDefinition {
+    TokenDefinition::Fungible {
+        name: String::from("test"),
+        total_supply,
+        metadata_id: None,
+    }
 }
 
-#[should_panic(expected = "Definition target account must not already hold data")]
-#[test]
-fn new_definition_data_bearing_first_account_should_fail() {
-    let definition_account = AccountInput::with_shard(
-        AccountId::new([1; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::from(&TokenDefinition::Fungible {
-            name: String::from("taken"),
-            total_supply: 1,
-            metadata_id: None,
-        }),
-    );
-    let holding_account = AccountInput::with_shard(
-        AccountId::new([2; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let _post_diffs = new_fungible_definition(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        String::from("test"),
-        10,
-    );
+fn non_fungible_definition(printable_supply: u128) -> TokenDefinition {
+    TokenDefinition::NonFungible {
+        name: String::from("test"),
+        printable_supply,
+        metadata_id: METADATA_ID,
+    }
 }
 
-#[should_panic(expected = "Holding target account must not already hold data")]
-#[test]
-fn new_definition_data_bearing_second_account_should_fail() {
-    let definition_account = AccountInput::with_shard(
-        AccountId::new([1; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let holding_account = AccountInput::with_shard(
-        AccountId::new([2; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::from(&TokenHolding::Fungible {
-            definition_id: AccountId::new([1; 32]),
-            balance: 1,
-        }),
-    );
-    let _post_diffs = new_fungible_definition(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        String::from("test"),
-        10,
-    );
+fn new_metadata() -> NewTokenMetadata {
+    NewTokenMetadata {
+        standard: MetadataStandard::Simple,
+        uri: String::from("test_uri"),
+        creators: String::from("test_creators"),
+    }
 }
+
+fn metadata() -> TokenMetadata {
+    TokenMetadata {
+        definition_id: DEFINITION_ID,
+        standard: MetadataStandard::Simple,
+        uri: String::from("test_uri"),
+        creators: String::from("test_creators"),
+        primary_sale_date: 0_u64,
+    }
+}
+
+fn handle(account_id: AccountId, is_authorized: bool) -> AccountMeta {
+    AccountMeta::new(account_id, is_authorized, TOKEN_PROGRAM_ID)
+}
+
+fn plan_for(accounts: Vec<AccountMeta>, instruction: Instruction) -> Plan {
+    crate::plan(
+        &PlanInput {
+            self_account_id: TOKEN_PROGRAM_ID,
+            caller_account_id: None,
+            accounts,
+            instruction_data: borsh::to_vec(&instruction).expect("the instruction serializes"),
+        },
+        instruction,
+    )
+}
+
+fn rejection(effect: Effect, pre_data: &ShardData) -> String {
+    let payload = std::panic::catch_unwind(|| crate::apply(effect, pre_data))
+        .expect_err("the effect accepted the proposal");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .expect("a panic carries its message")
+}
+
+fn holding_at(effect: Effect, pre_data: &ShardData) -> TokenHolding {
+    let written = crate::apply(effect, pre_data).expect("the effect writes its shard");
+    TokenHolding::try_from(&written).expect("apply wrote a holding")
+}
+
+fn definition_at(effect: Effect, pre_data: &ShardData) -> TokenDefinition {
+    let written = crate::apply(effect, pre_data).expect("the effect writes its shard");
+    TokenDefinition::try_from(&written).expect("apply wrote a definition")
+}
+
+fn settle(plan: &Plan, initial: &[(AccountId, ShardData)]) -> HashMap<AccountId, ShardData> {
+    let mut state: HashMap<AccountId, ShardData> = initial.iter().cloned().collect();
+
+    for effect in &plan.output().effects {
+        let pre_data = state
+            .get(&effect.selector.account_id)
+            .cloned()
+            .unwrap_or_default();
+        let post_data = crate::apply(
+            borsh::from_slice(&effect.data).expect("the plan wrote a token effect"),
+            &pre_data,
+        );
+        if let Some(post_data) = post_data {
+            state.insert(effect.selector.account_id, post_data);
+        }
+    }
+
+    state
+}
+
+fn settled_holding(state: &HashMap<AccountId, ShardData>, account_id: AccountId) -> TokenHolding {
+    TokenHolding::try_from(state.get(&account_id).expect("the account was settled"))
+        .expect("apply wrote a holding")
+}
+
+fn settled_definition(
+    state: &HashMap<AccountId, ShardData>,
+    account_id: AccountId,
+) -> TokenDefinition {
+    TokenDefinition::try_from(state.get(&account_id).expect("the account was settled"))
+        .expect("apply wrote a definition")
+}
+
+// --- new definitions -------------------------------------------------------------------------
 
 #[test]
 fn new_definition_with_valid_inputs_succeeds() {
-    let definition_account = AccountForTests::definition_account_uninit();
-    let holding_account = AccountForTests::holding_account_uninit();
-
-    let post_diffs = new_fungible_definition(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        String::from("test"),
-        BalanceForTests::init_supply(),
+    let plan = plan_for(
+        vec![handle(DEFINITION_ID, true), handle(HOLDING_ID, true)],
+        Instruction::NewFungibleDefinition {
+            name: String::from("test"),
+            total_supply: INIT_SUPPLY,
+        },
     );
+    let state = settle(&plan, &[]);
 
-    let [definition_account, holding_account] = post_diffs.try_into().unwrap();
-    assert_data_diff(
-        &definition_account,
-        &AccountForTests::definition_account_auth(),
-    );
-    assert_data_diff(&holding_account, &AccountForTests::holding_account_init());
+    let definition = settled_definition(&state, DEFINITION_ID);
+    let holding = settled_holding(&state, HOLDING_ID);
+    assert_eq!(definition, fungible_definition(INIT_SUPPLY));
+    assert_eq!(holding, fungible(INIT_SUPPLY));
 }
 
-#[should_panic(expected = "Sender and recipient definition id mismatch")]
+#[test]
+fn new_definition_with_metadata_creates_a_master_copy_for_a_non_fungible() {
+    let plan = plan_for(
+        vec![
+            handle(DEFINITION_ID, true),
+            handle(HOLDING_ID, true),
+            handle(METADATA_ID, true),
+        ],
+        Instruction::NewDefinitionWithMetadata {
+            new_definition: NewTokenDefinition::NonFungible {
+                name: String::from("test"),
+                printable_supply: PRINTABLE_COPIES,
+            },
+            metadata: Box::new(new_metadata()),
+        },
+    );
+    let state = settle(&plan, &[]);
+
+    let definition = settled_definition(&state, DEFINITION_ID);
+    let holding = settled_holding(&state, HOLDING_ID);
+    assert_eq!(definition, non_fungible_definition(PRINTABLE_COPIES));
+    assert_eq!(holding, master(PRINTABLE_COPIES));
+    assert_eq!(state.get(&METADATA_ID), Some(&ShardData::from(&metadata())));
+}
+
+#[test]
+fn every_planned_creation_writes_only_into_an_empty_target() {
+    let fungible_with_metadata = NewTokenDefinition::Fungible {
+        name: String::from("test"),
+        total_supply: INIT_SUPPLY,
+    };
+    let non_fungible_with_metadata = NewTokenDefinition::NonFungible {
+        name: String::from("test"),
+        printable_supply: PRINTABLE_COPIES,
+    };
+    let definition_accounts = || {
+        vec![
+            handle(DEFINITION_ID, true),
+            handle(HOLDING_ID, true),
+            handle(METADATA_ID, true),
+        ]
+    };
+    let cases = [
+        (
+            "NewFungibleDefinition",
+            vec![handle(DEFINITION_ID, true), handle(HOLDING_ID, true)],
+            Instruction::NewFungibleDefinition {
+                name: String::from("test"),
+                total_supply: INIT_SUPPLY,
+            },
+            vec![DEFINITION_ID, HOLDING_ID],
+        ),
+        (
+            "NewDefinitionWithMetadata (fungible)",
+            definition_accounts(),
+            Instruction::NewDefinitionWithMetadata {
+                new_definition: fungible_with_metadata,
+                metadata: Box::new(new_metadata()),
+            },
+            vec![DEFINITION_ID, HOLDING_ID, METADATA_ID],
+        ),
+        (
+            "NewDefinitionWithMetadata (non-fungible)",
+            definition_accounts(),
+            Instruction::NewDefinitionWithMetadata {
+                new_definition: non_fungible_with_metadata,
+                metadata: Box::new(new_metadata()),
+            },
+            vec![DEFINITION_ID, HOLDING_ID, METADATA_ID],
+        ),
+        (
+            "PrintNft",
+            vec![handle(HOLDING_ID, true), handle(HOLDING_ID_2, false)],
+            Instruction::PrintNft {
+                definition_id: DEFINITION_ID,
+            },
+            vec![HOLDING_ID_2],
+        ),
+    ];
+
+    for (operation, accounts, instruction, targets) in cases {
+        let plan = plan_for(accounts, instruction);
+        let creations: Vec<(AccountId, ShardData)> = plan
+            .output()
+            .effects
+            .iter()
+            .filter_map(|effect| {
+                let Effect::Create(data) =
+                    borsh::from_slice(&effect.data).expect("the plan wrote a token effect")
+                else {
+                    return None;
+                };
+                Some((effect.selector.account_id, data))
+            })
+            .collect();
+        assert_eq!(
+            creations
+                .iter()
+                .map(|(account_id, _)| *account_id)
+                .collect::<Vec<_>>(),
+            targets,
+            "{operation} creates a different set of accounts"
+        );
+
+        for (account_id, data) in creations {
+            let create = Effect::Create(data.clone());
+            assert_eq!(
+                crate::apply(create.clone(), &ShardData::empty()).as_ref(),
+                Some(&data),
+                "{operation} wrote something other than its plan into {account_id}"
+            );
+            // Even the very data it would write: a creation never lands twice.
+            for occupant in [data, ShardData::from(&fungible(1))] {
+                assert!(
+                    rejection(create.clone(), &occupant)
+                        .contains("Target account must not already hold data"),
+                    "{operation} overwrote the occupied account {account_id}"
+                );
+            }
+        }
+    }
+}
+
+// --- transfer --------------------------------------------------------------------------------
+
+#[should_panic(expected = "Sender authorization is missing")]
+#[test]
+fn transfer_without_sender_authorization_should_fail() {
+    let _plan = plan_for(
+        vec![handle(HOLDING_ID, false), handle(HOLDING_ID_2, false)],
+        Instruction::Transfer {
+            amount_to_transfer: TRANSFER_AMOUNT,
+            descriptor: FUNGIBLE,
+        },
+    );
+}
+
+#[should_panic(expected = "Mismatch Token Definition and Token Holding")]
 #[test]
 fn transfer_with_different_definition_ids_should_fail() {
-    let sender = AccountForTests::holding_same_definition_with_authorization();
-    let recipient = AccountForTests::holding_different_definition();
-    let _post_diffs = transfer(&sender, &recipient, TOKEN_PROGRAM_ID, 10);
+    let recipient = TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    };
+    let _written = crate::apply(
+        Effect::Deposit {
+            descriptor: FUNGIBLE,
+            amount: TRANSFER_AMOUNT,
+        },
+        &ShardData::from(&recipient),
+    );
+}
+
+#[should_panic(expected = "Mismatched Token Definition and Token Holding types")]
+#[test]
+fn transfer_with_mismatched_holding_kinds_should_fail() {
+    let _written = crate::apply(
+        Effect::Withdraw {
+            descriptor: FUNGIBLE,
+            amount: PRINTABLE_COPIES,
+        },
+        &ShardData::from(&master(PRINTABLE_COPIES)),
+    );
 }
 
 #[should_panic(expected = "Insufficient balance")]
 #[test]
 fn transfer_with_insufficient_balance_should_fail() {
-    let sender = AccountForTests::holding_same_definition_with_authorization();
-    let recipient = AccountForTests::holding_account_same_definition_mint();
-    // Attempt to transfer more than balance
-    let _post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::burn_insufficient(),
+    let _written = crate::apply(
+        Effect::Withdraw {
+            descriptor: FUNGIBLE,
+            amount: BURN_INSUFFICIENT,
+        },
+        &ShardData::from(&fungible(HOLDING_BALANCE)),
     );
-}
-
-#[should_panic(expected = "Sender authorization is missing")]
-#[test]
-fn transfer_without_sender_authorization_should_fail() {
-    let sender = AccountForTests::holding_same_definition_without_authorization();
-    let recipient = AccountForTests::holding_account_uninit();
-    let _post_diffs = transfer(&sender, &recipient, TOKEN_PROGRAM_ID, 37);
 }
 
 #[test]
 fn transfer_with_valid_inputs_succeeds() {
-    let sender = AccountForTests::holding_account_init();
-    let recipient = AccountForTests::holding_account2_init();
-    let post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::transfer_amount(),
+    let plan = plan_for(
+        vec![handle(HOLDING_ID, true), handle(HOLDING_ID_2, false)],
+        Instruction::Transfer {
+            amount_to_transfer: TRANSFER_AMOUNT,
+            descriptor: FUNGIBLE,
+        },
     );
-    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
+    let state = settle(
+        &plan,
+        &[
+            (HOLDING_ID, ShardData::from(&fungible(INIT_SUPPLY))),
+            (HOLDING_ID_2, ShardData::from(&fungible(INIT_SUPPLY))),
+        ],
+    );
 
-    assert_data_diff(
-        &sender_post,
-        &AccountForTests::holding_account_init_post_transfer(),
-    );
-    assert_data_diff(
-        &recipient_post,
-        &AccountForTests::holding_account2_init_post_transfer(),
+    let sender = settled_holding(&state, HOLDING_ID);
+    let recipient = settled_holding(&state, HOLDING_ID_2);
+    assert_eq!(sender, fungible(SENDER_POST_TRANSFER));
+    assert_eq!(recipient, fungible(RECIPIENT_POST_TRANSFER));
+}
+
+#[test]
+fn transfer_into_an_empty_recipient_uses_the_bound_descriptor() {
+    assert_eq!(
+        holding_at(
+            Effect::Deposit {
+                descriptor: FUNGIBLE,
+                amount: TRANSFER_AMOUNT,
+            },
+            &ShardData::empty(),
+        ),
+        fungible(TRANSFER_AMOUNT)
     );
 }
 
-#[should_panic(expected = "Invalid balance for NFT Master transfer")]
 #[test]
 fn transfer_with_master_nft_invalid_balance() {
-    let sender = AccountForTests::holding_account_master_nft();
-    let recipient = AccountForTests::holding_account_uninit();
-    let _post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::transfer_amount(),
-    );
+    // The whole print balance must move, and the instruction only *claims* how much that is.
+    // Every claim other than the master's real print balance is refused by the sender's own
+    // effect, so a forged claim cannot mint print capacity into the recipient.
+    for claimed in [
+        0,
+        1,
+        PRINTABLE_COPIES_AFTER_PRINT,
+        TRANSFER_AMOUNT,
+        u128::MAX,
+    ] {
+        assert!(
+            rejection(
+                Effect::Withdraw {
+                    descriptor: MASTER,
+                    amount: claimed,
+                },
+                &ShardData::from(&master(PRINTABLE_COPIES)),
+            )
+            .contains("Invalid balance for NFT Master transfer"),
+            "Withdraw accepted a claimed print balance of {claimed}"
+        );
+    }
 }
 
 #[should_panic(expected = "Invalid balance in recipient account for NFT transfer")]
 #[test]
 fn transfer_with_master_nft_invalid_recipient_balance() {
-    let sender = AccountForTests::holding_account_master_nft();
-    let recipient = AccountForTests::holding_account_with_master_nft_transferred_to();
-    let _post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::printable_copies(),
+    let _written = crate::apply(
+        Effect::Deposit {
+            descriptor: MASTER,
+            amount: PRINTABLE_COPIES,
+        },
+        &ShardData::from(&master(PRINTABLE_COPIES)),
     );
 }
 
 #[test]
 fn transfer_with_master_nft_success() {
-    let sender = AccountForTests::holding_account_master_nft();
-    let recipient = AccountForTests::holding_account_uninit();
-    let post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::printable_copies(),
+    assert_eq!(
+        holding_at(
+            Effect::Withdraw {
+                descriptor: MASTER,
+                amount: PRINTABLE_COPIES,
+            },
+            &ShardData::from(&master(PRINTABLE_COPIES)),
+        ),
+        master(0)
     );
-    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(
-        &sender_post,
-        &AccountForTests::holding_account_master_nft_post_transfer(),
-    );
-    assert_data_diff(
-        &recipient_post,
-        &AccountForTests::holding_account_with_master_nft_transferred_to(),
-    );
-}
-
-#[test]
-fn token_initialize_account_succeeds() {
-    let sender = AccountForTests::holding_account_init();
-    let recipient = AccountForTests::holding_account2_init();
-    let post_diffs = transfer(
-        &sender,
-        &recipient,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::transfer_amount(),
-    );
-    let [sender_post, recipient_post] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(
-        &sender_post,
-        &AccountForTests::holding_account_init_post_transfer(),
-    );
-    assert_data_diff(
-        &recipient_post,
-        &AccountForTests::holding_account2_init_post_transfer(),
+    assert_eq!(
+        holding_at(
+            Effect::Deposit {
+                descriptor: MASTER,
+                amount: PRINTABLE_COPIES,
+            },
+            &ShardData::empty(),
+        ),
+        master(PRINTABLE_COPIES)
     );
 }
 
 #[test]
-#[should_panic(expected = "Mismatch Token Definition and Token Holding")]
-fn burn_mismatch_def() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_different_definition();
-    let _post_diffs = burn(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::burn_success(),
+fn transfer_of_a_printed_copy_moves_ownership() {
+    assert_eq!(
+        holding_at(
+            Effect::Withdraw {
+                descriptor: PRINTED,
+                amount: 1,
+            },
+            &ShardData::from(&printed(true)),
+        ),
+        printed(false)
+    );
+    assert_eq!(
+        holding_at(
+            Effect::Deposit {
+                descriptor: PRINTED,
+                amount: 1,
+            },
+            &ShardData::from(&printed(false)),
+        ),
+        printed(true)
     );
 }
 
+#[should_panic(expected = "Sender does not own the NFT Printed Copy")]
 #[test]
-#[should_panic(expected = "Authorization is missing")]
-fn burn_missing_authorization() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_diffs = burn(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::burn_success(),
+fn transfer_of_an_unowned_printed_copy_should_fail() {
+    let _written = crate::apply(
+        Effect::Withdraw {
+            descriptor: PRINTED,
+            amount: 1,
+        },
+        &ShardData::from(&printed(false)),
     );
 }
 
-#[test]
-#[should_panic(expected = "Insufficient balance to burn")]
-fn burn_insufficient_balance() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_with_authorization();
-    let _post_diffs = burn(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::burn_insufficient(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Total supply underflow")]
-fn burn_total_supply_underflow() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account =
-        AccountForTests::holding_same_definition_with_authorization_and_large_balance();
-    let _post_diffs = burn(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_overflow(),
-    );
-}
-
-#[test]
-fn burn_success() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_with_authorization();
-    let post_diffs = burn(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::burn_success(),
-    );
-
-    let [def_post, holding_post] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(&def_post, &AccountForTests::definition_account_post_burn());
-    assert_data_diff(&holding_post, &AccountForTests::holding_account_post_burn());
-}
-
-#[test]
-#[should_panic(expected = "Holding account must be valid")]
-fn mint_not_valid_holding_account() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::definition_account_without_auth();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Definition account must be valid")]
-fn mint_not_valid_definition_account() {
-    let definition_account = AccountForTests::holding_same_definition_with_authorization();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Definition authorization is missing")]
-fn mint_missing_authorization() {
-    let definition_account = AccountForTests::definition_account_without_auth();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Mismatch Token Definition and Token Holding")]
-fn mint_mismatched_token_definition() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_different_definition();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-}
-
-#[test]
-fn mint_success() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-
-    let [def_post, holding_post] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
-    assert_data_diff(
-        &holding_post,
-        &AccountForTests::holding_account_same_definition_mint(),
-    );
-}
-
-#[test]
-fn mint_uninit_holding_success() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_account_uninit();
-    let post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-
-    let [def_post, holding_post] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(&def_post, &AccountForTests::definition_account_mint());
-    assert_data_diff(&holding_post, &AccountForTests::init_mint());
-}
-
-#[test]
-#[should_panic(expected = "Total supply overflow")]
-fn mint_total_supply_overflow() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_overflow(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Balance overflow on minting")]
-fn mint_holding_account_overflow() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let holding_account = AccountForTests::holding_same_definition_without_authorization_overflow();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_overflow(),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Cannot mint additional supply for Non-Fungible Tokens")]
-fn mint_cannot_mint_unmintable_tokens() {
-    let definition_account = AccountForTests::definition_account_with_authorization_nonfungible();
-    let holding_account = AccountForTests::holding_account_master_nft();
-    let _post_diffs = mint(
-        &definition_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        BalanceForTests::mint_success(),
-    );
-}
-
-#[should_panic(expected = "Definition target account must not already hold data")]
-#[test]
-fn call_new_definition_metadata_with_init_definition() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let metadata_account = AccountInput::with_shard(
-        AccountId::new([2; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let holding_account = AccountInput::with_shard(
-        AccountId::new([3; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let new_definition = NewTokenDefinition::Fungible {
-        name: String::from("test"),
-        total_supply: 15_u128,
-    };
-    let metadata = NewTokenMetadata {
-        standard: MetadataStandard::Simple,
-        uri: "test_uri".to_owned(),
-        creators: "test_creators".to_owned(),
-    };
-    let _post_diffs = new_definition_with_metadata(
-        &definition_account,
-        &metadata_account,
-        &holding_account,
-        TOKEN_PROGRAM_ID,
-        new_definition,
-        metadata,
-    );
-}
-
-#[should_panic(expected = "Metadata target account must not already hold data")]
-#[test]
-fn call_new_definition_metadata_with_init_metadata() {
-    let definition_account = AccountInput::with_shard(
-        AccountId::new([1; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let holding_account = AccountInput::with_shard(
-        AccountId::new([3; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let metadata_account = AccountForTests::holding_account_same_definition_mint();
-    let new_definition = NewTokenDefinition::Fungible {
-        name: String::from("test"),
-        total_supply: 15_u128,
-    };
-    let metadata = NewTokenMetadata {
-        standard: MetadataStandard::Simple,
-        uri: "test_uri".to_owned(),
-        creators: "test_creators".to_owned(),
-    };
-    let _post_diffs = new_definition_with_metadata(
-        &definition_account,
-        &holding_account,
-        &metadata_account,
-        TOKEN_PROGRAM_ID,
-        new_definition,
-        metadata,
-    );
-}
-
-#[should_panic(expected = "Holding target account must not already hold data")]
-#[test]
-fn call_new_definition_metadata_with_init_holding() {
-    let definition_account = AccountInput::with_shard(
-        AccountId::new([1; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let metadata_account = AccountInput::with_shard(
-        AccountId::new([2; 32]),
-        true,
-        TOKEN_PROGRAM_ID,
-        ShardData::empty(),
-    );
-    let holding_account = AccountForTests::holding_account_same_definition_mint();
-    let new_definition = NewTokenDefinition::Fungible {
-        name: String::from("test"),
-        total_supply: 15_u128,
-    };
-    let metadata = NewTokenMetadata {
-        standard: MetadataStandard::Simple,
-        uri: "test_uri".to_owned(),
-        creators: "test_creators".to_owned(),
-    };
-    let _post_diffs = new_definition_with_metadata(
-        &definition_account,
-        &holding_account,
-        &metadata_account,
-        TOKEN_PROGRAM_ID,
-        new_definition,
-        metadata,
-    );
-}
-
-#[should_panic(expected = "Master NFT Account must be authorized")]
-#[test]
-fn print_nft_master_account_must_be_authorized() {
-    let master_account = AccountForTests::holding_account_uninit();
-    let printed_account = AccountForTests::holding_account_uninit();
-    let _post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-}
-
-#[should_panic(expected = "Printed Account must not already hold data")]
-#[test]
-fn print_nft_print_account_initialized() {
-    let master_account = AccountForTests::holding_account_master_nft();
-    let printed_account = AccountForTests::holding_account_init();
-    let _post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-}
-
-#[should_panic(expected = "Invalid Token Holding data")]
-#[test]
-fn print_nft_master_nft_invalid_token_holding() {
-    let master_account = AccountForTests::definition_account_auth();
-    let printed_account = AccountForTests::holding_account_uninit();
-    let _post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-}
-
-#[should_panic(expected = "Invalid Token Holding provided as NFT Master Account")]
-#[test]
-fn print_nft_master_nft_not_nft_master_account() {
-    let master_account = AccountForTests::holding_account_init();
-    let printed_account = AccountForTests::holding_account_uninit();
-    let _post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-}
-
-#[should_panic(expected = "Insufficient balance to print another NFT copy")]
-#[test]
-fn print_nft_master_nft_insufficient_balance() {
-    let master_account = AccountForTests::holding_account_master_nft_insufficient_balance();
-    let printed_account = AccountForTests::holding_account_uninit();
-    let _post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-}
-
-#[test]
-fn print_nft_success() {
-    let master_account = AccountForTests::holding_account_master_nft();
-    let printed_account = AccountForTests::holding_account_uninit();
-    let post_diffs = print_nft(&master_account, &printed_account, TOKEN_PROGRAM_ID);
-
-    let [post_master_nft, post_printed] = post_diffs.try_into().unwrap();
-
-    assert_data_diff(
-        &post_master_nft,
-        &AccountForTests::holding_account_master_nft_after_print(),
-    );
-    assert_data_diff(
-        &post_printed,
-        &AccountForTests::holding_account_printed_nft(),
-    );
-}
+// --- initialize ------------------------------------------------------------------------------
 
 #[test]
 fn initialize_account_writes_the_zeroized_holding_regardless_of_prior_content() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let expected = AccountForTests::holding(
-        IdForTests::holding_id_2(),
-        true,
-        &TokenHolding::Fungible {
-            definition_id: IdForTests::pool_definition_id(),
-            balance: 0,
+    let plan = plan_for(
+        vec![handle(DEFINITION_ID, false), handle(HOLDING_ID, true)],
+        Instruction::InitializeAccount {
+            kind: TokenKind::Fungible,
         },
     );
+    let other_definition = TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    };
     let targets = [
-        AccountForTests::holding_account_uninit(),
-        AccountInput::with_shard(
-            IdForTests::holding_id_2(),
-            true,
-            TOKEN_PROGRAM_ID,
-            ShardData::from(&TokenHolding::Fungible {
-                definition_id: IdForTests::pool_definition_id_diff(),
-                balance: BalanceForTests::holding_balance(),
-            }),
-        ),
-        AccountInput::with_shard(
-            IdForTests::holding_id_2(),
-            true,
-            TOKEN_PROGRAM_ID,
-            ShardData::try_from(vec![0xFF; 4]).unwrap(),
-        ),
+        ShardData::empty(),
+        ShardData::from(&other_definition),
+        ShardData::try_from(vec![0xFF; 4]).expect("fits the shard limit"),
     ];
 
     for target in targets {
-        let post_diffs = initialize_account(&definition_account, &target, TOKEN_PROGRAM_ID);
-        let [_, holding_post] = post_diffs.try_into().unwrap();
-        assert_data_diff(&holding_post, &expected);
+        let state = settle(
+            &plan,
+            &[
+                (
+                    DEFINITION_ID,
+                    ShardData::from(&fungible_definition(INIT_SUPPLY)),
+                ),
+                (HOLDING_ID, target),
+            ],
+        );
+        assert_eq!(settled_holding(&state, HOLDING_ID), fungible(0));
     }
 }
 
 #[should_panic(expected = "Only Uninitialized or authorized accounts can be initialized")]
 #[test]
 fn initialize_account_rejects_occupied_unauthorized_target() {
-    let definition_account = AccountForTests::definition_account_auth();
-    let target = AccountForTests::holding_same_definition_without_authorization();
-    let _post_diffs = initialize_account(&definition_account, &target, TOKEN_PROGRAM_ID);
+    let _written = crate::apply(
+        Effect::InitializeHolding {
+            descriptor: FUNGIBLE,
+            is_authorized: false,
+        },
+        &ShardData::from(&fungible(HOLDING_BALANCE)),
+    );
+}
+
+#[test]
+fn initialize_account_keeps_the_definition_it_checked() {
+    assert_eq!(
+        crate::apply(
+            Effect::CheckHoldingKind(TokenKind::Fungible),
+            &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        ),
+        None
+    );
+    assert_eq!(
+        crate::apply(
+            Effect::CheckHoldingKind(TokenKind::NftPrintedCopy),
+            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+        ),
+        None
+    );
+}
+
+#[test]
+fn initialize_account_rejects_a_forged_token_kind() {
+    // The kind the holding is created with comes from the instruction, and the holding's own
+    // `apply` never sees the definition. `CheckHoldingKind` on the definition is the only
+    // thing standing between a claimed kind and a holding that carries it.
+    let cases = [
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftMaster,
+        ),
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftPrintedCopy,
+        ),
+        (
+            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            TokenKind::Fungible,
+        ),
+        (
+            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            TokenKind::NftMaster,
+        ),
+    ];
+
+    for (definition, claimed) in cases {
+        assert!(
+            rejection(Effect::CheckHoldingKind(claimed), &definition)
+                .contains("Token Definition does not initialize this Token Holding kind"),
+            "CheckHoldingKind accepted a claimed kind of {claimed:?}"
+        );
+    }
+}
+
+// --- mint ------------------------------------------------------------------------------------
+
+#[should_panic(expected = "Definition authorization is missing")]
+#[test]
+fn mint_missing_authorization() {
+    let _plan = plan_for(
+        vec![handle(DEFINITION_ID, false), handle(HOLDING_ID, false)],
+        Instruction::Mint {
+            amount_to_mint: MINT_SUCCESS,
+        },
+    );
+}
+
+#[should_panic(expected = "Invalid recipient data")]
+#[test]
+fn mint_not_valid_holding_account() {
+    let _written = crate::apply(
+        Effect::Deposit {
+            descriptor: FUNGIBLE,
+            amount: MINT_SUCCESS,
+        },
+        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+    );
+}
+
+#[should_panic(expected = "Definition account must be valid")]
+#[test]
+fn mint_not_valid_definition_account() {
+    let _written = crate::apply(
+        Effect::MintSupply {
+            amount: MINT_SUCCESS,
+        },
+        &ShardData::from(&fungible(HOLDING_BALANCE)),
+    );
+}
+
+#[test]
+fn mint_success() {
+    let plan = plan_for(
+        vec![handle(DEFINITION_ID, true), handle(HOLDING_ID, false)],
+        Instruction::Mint {
+            amount_to_mint: MINT_SUCCESS,
+        },
+    );
+    let state = settle(
+        &plan,
+        &[
+            (
+                DEFINITION_ID,
+                ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ),
+            (HOLDING_ID, ShardData::from(&fungible(HOLDING_BALANCE))),
+        ],
+    );
+
+    let definition = settled_definition(&state, DEFINITION_ID);
+    let holding = settled_holding(&state, HOLDING_ID);
+    assert_eq!(definition, fungible_definition(INIT_SUPPLY_MINT));
+    assert_eq!(holding, fungible(HOLDING_BALANCE_MINT));
+}
+
+#[test]
+fn mint_uninit_holding_success() {
+    let plan = plan_for(
+        vec![handle(DEFINITION_ID, true), handle(HOLDING_ID, false)],
+        Instruction::Mint {
+            amount_to_mint: MINT_SUCCESS,
+        },
+    );
+    let state = settle(
+        &plan,
+        &[(
+            DEFINITION_ID,
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        )],
+    );
+
+    assert_eq!(settled_holding(&state, HOLDING_ID), fungible(MINT_SUCCESS));
+    assert_eq!(
+        settled_definition(&state, DEFINITION_ID),
+        fungible_definition(INIT_SUPPLY_MINT)
+    );
+}
+
+#[should_panic(expected = "Total supply overflow")]
+#[test]
+fn mint_total_supply_overflow() {
+    let _written = crate::apply(
+        Effect::MintSupply {
+            amount: MINT_OVERFLOW,
+        },
+        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+    );
+}
+
+#[should_panic(expected = "Recipient balance overflow")]
+#[test]
+fn mint_holding_account_overflow() {
+    let _written = crate::apply(
+        Effect::Deposit {
+            descriptor: FUNGIBLE,
+            amount: MINT_OVERFLOW,
+        },
+        &ShardData::from(&fungible(INIT_SUPPLY)),
+    );
+}
+
+#[should_panic(expected = "Cannot mint additional supply for Non-Fungible Tokens")]
+#[test]
+fn mint_cannot_mint_unmintable_tokens() {
+    let _written = crate::apply(
+        Effect::MintSupply {
+            amount: MINT_SUCCESS,
+        },
+        &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+    );
+}
+
+#[should_panic(expected = "Mismatched Token Definition and Token Holding types")]
+#[test]
+fn mint_into_a_non_fungible_holding_is_rejected() {
+    let _written = crate::apply(
+        Effect::Deposit {
+            descriptor: FUNGIBLE,
+            amount: MINT_SUCCESS,
+        },
+        &ShardData::from(&master(PRINTABLE_COPIES)),
+    );
+}
+
+// --- burn ------------------------------------------------------------------------------------
+
+#[should_panic(expected = "Authorization is missing")]
+#[test]
+fn burn_missing_authorization() {
+    let _plan = plan_for(
+        vec![handle(DEFINITION_ID, true), handle(HOLDING_ID, false)],
+        Instruction::Burn {
+            amount_to_burn: BURN_SUCCESS,
+            kind: TokenKind::Fungible,
+        },
+    );
+}
+
+#[should_panic(expected = "Mismatch Token Definition and Token Holding")]
+#[test]
+fn burn_mismatch_def() {
+    let other_definition = TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    };
+    let _written = crate::apply(
+        Effect::BurnHolding {
+            descriptor: FUNGIBLE,
+            amount: BURN_SUCCESS,
+        },
+        &ShardData::from(&other_definition),
+    );
+}
+
+#[should_panic(expected = "Insufficient balance to burn")]
+#[test]
+fn burn_insufficient_balance() {
+    let _written = crate::apply(
+        Effect::BurnHolding {
+            descriptor: FUNGIBLE,
+            amount: BURN_INSUFFICIENT,
+        },
+        &ShardData::from(&fungible(HOLDING_BALANCE)),
+    );
+}
+
+#[should_panic(expected = "Total supply underflow")]
+#[test]
+fn burn_total_supply_underflow() {
+    let _written = crate::apply(
+        Effect::BurnSupply {
+            kind: TokenKind::Fungible,
+            amount: MINT_OVERFLOW,
+        },
+        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+    );
+}
+
+#[test]
+fn burn_success() {
+    let plan = plan_for(
+        vec![handle(DEFINITION_ID, false), handle(HOLDING_ID, true)],
+        Instruction::Burn {
+            amount_to_burn: BURN_SUCCESS,
+            kind: TokenKind::Fungible,
+        },
+    );
+    let state = settle(
+        &plan,
+        &[
+            (
+                DEFINITION_ID,
+                ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ),
+            (HOLDING_ID, ShardData::from(&fungible(HOLDING_BALANCE))),
+        ],
+    );
+
+    let definition = settled_definition(&state, DEFINITION_ID);
+    let holding = settled_holding(&state, HOLDING_ID);
+    assert_eq!(definition, fungible_definition(INIT_SUPPLY_BURNED));
+    assert_eq!(holding, fungible(HOLDING_BALANCE_BURNED));
+}
+
+#[test]
+fn burn_of_an_nft_master_drops_both_supplies() {
+    assert_eq!(
+        definition_at(
+            Effect::BurnSupply {
+                kind: TokenKind::NftMaster,
+                amount: 1,
+            },
+            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+        ),
+        non_fungible_definition(PRINTABLE_COPIES_AFTER_PRINT)
+    );
+    assert_eq!(
+        holding_at(
+            Effect::BurnHolding {
+                descriptor: MASTER,
+                amount: 1,
+            },
+            &ShardData::from(&master(PRINTABLE_COPIES)),
+        ),
+        master(PRINTABLE_COPIES_AFTER_PRINT)
+    );
+}
+
+#[test]
+fn burn_of_a_printed_copy_drops_ownership() {
+    assert_eq!(
+        definition_at(
+            Effect::BurnSupply {
+                kind: TokenKind::NftPrintedCopy,
+                amount: 1,
+            },
+            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+        ),
+        non_fungible_definition(PRINTABLE_COPIES_AFTER_PRINT)
+    );
+    assert_eq!(
+        holding_at(
+            Effect::BurnHolding {
+                descriptor: PRINTED,
+                amount: 1,
+            },
+            &ShardData::from(&printed(true)),
+        ),
+        printed(false)
+    );
+}
+
+#[should_panic(expected = "Cannot burn unowned NFT Printed Copy")]
+#[test]
+fn burn_of_an_unowned_printed_copy_is_rejected() {
+    let _written = crate::apply(
+        Effect::BurnHolding {
+            descriptor: PRINTED,
+            amount: 1,
+        },
+        &ShardData::from(&printed(false)),
+    );
+}
+
+#[test]
+fn burn_rejects_a_forged_holding_kind() {
+    // The claimed kind picks which of the definition's two supplies is decremented, and the
+    // definition's `apply` never sees the holding. Both effects check the same claim against
+    // their own contents.
+    let definitions = [
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftMaster,
+        ),
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftPrintedCopy,
+        ),
+        (
+            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            TokenKind::Fungible,
+        ),
+    ];
+    for (definition, claimed) in definitions {
+        assert!(
+            rejection(
+                Effect::BurnSupply {
+                    kind: claimed,
+                    amount: 1,
+                },
+                &definition,
+            )
+            .contains("Mismatched Token Definition and Token Holding types"),
+            "BurnSupply accepted a claimed kind of {claimed:?}"
+        );
+    }
+
+    let holdings = [
+        (ShardData::from(&fungible(HOLDING_BALANCE)), MASTER),
+        (ShardData::from(&master(PRINTABLE_COPIES)), FUNGIBLE),
+        (ShardData::from(&printed(true)), MASTER),
+    ];
+    for (holding, claimed) in holdings {
+        assert!(
+            rejection(
+                Effect::BurnHolding {
+                    descriptor: claimed,
+                    amount: 1,
+                },
+                &holding,
+            )
+            .contains("Mismatched Token Definition and Token Holding types"),
+            "BurnHolding accepted a claimed kind of {:?}",
+            claimed.kind
+        );
+    }
+}
+
+// --- print nft -------------------------------------------------------------------------------
+
+#[should_panic(expected = "Master NFT Account must be authorized")]
+#[test]
+fn print_nft_master_account_must_be_authorized() {
+    let _plan = plan_for(
+        vec![handle(HOLDING_ID, false), handle(HOLDING_ID_2, false)],
+        Instruction::PrintNft {
+            definition_id: DEFINITION_ID,
+        },
+    );
+}
+
+#[should_panic(expected = "Invalid Token Holding data")]
+#[test]
+fn print_nft_master_nft_invalid_token_holding() {
+    let _written = crate::apply(
+        Effect::PrintCopy {
+            definition_id: DEFINITION_ID,
+        },
+        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+    );
+}
+
+#[should_panic(expected = "Invalid Token Holding provided as NFT Master Account")]
+#[test]
+fn print_nft_master_nft_not_nft_master_account() {
+    let _written = crate::apply(
+        Effect::PrintCopy {
+            definition_id: DEFINITION_ID,
+        },
+        &ShardData::from(&fungible(INIT_SUPPLY)),
+    );
+}
+
+#[should_panic(expected = "Insufficient balance to print another NFT copy")]
+#[test]
+fn print_nft_master_nft_insufficient_balance() {
+    let _written = crate::apply(
+        Effect::PrintCopy {
+            definition_id: DEFINITION_ID,
+        },
+        &ShardData::from(&master(1)),
+    );
+}
+
+#[should_panic(expected = "Printed copy does not belong to the master's Token Definition")]
+#[test]
+fn print_nft_rejects_a_forged_definition_id() {
+    // The collection the new copy claims is instruction data, and the printed account's
+    // `apply` never sees the master. Without this check a master of any collection could
+    // print a copy of a more valuable one.
+    let _written = crate::apply(
+        Effect::PrintCopy {
+            definition_id: OTHER_DEFINITION_ID,
+        },
+        &ShardData::from(&master(PRINTABLE_COPIES)),
+    );
+}
+
+#[test]
+fn print_nft_success() {
+    let plan = plan_for(
+        vec![handle(HOLDING_ID, true), handle(HOLDING_ID_2, false)],
+        Instruction::PrintNft {
+            definition_id: DEFINITION_ID,
+        },
+    );
+    let state = settle(
+        &plan,
+        &[(HOLDING_ID, ShardData::from(&master(PRINTABLE_COPIES)))],
+    );
+
+    let master_holding = settled_holding(&state, HOLDING_ID);
+    let copy = settled_holding(&state, HOLDING_ID_2);
+    assert_eq!(master_holding, master(PRINTABLE_COPIES_AFTER_PRINT));
+    assert_eq!(copy, printed(true));
+    assert_eq!(
+        master_holding.definition_id(),
+        copy.definition_id(),
+        "the plan printed a copy of a collection the master does not hold"
+    );
+}
+
+// --- dispatch --------------------------------------------------------------------------------
+
+#[should_panic(expected = "names the shard of")]
+#[test]
+fn a_handle_selecting_another_programs_shard_is_rejected() {
+    let foreign = AccountMeta::native_balance(HOLDING_ID_2, false);
+    let _plan = plan_for(
+        vec![handle(HOLDING_ID, true), foreign],
+        Instruction::Transfer {
+            amount_to_transfer: TRANSFER_AMOUNT,
+            descriptor: FUNGIBLE,
+        },
+    );
+}
+
+#[should_panic(expected = "Transfer instruction requires exactly two accounts")]
+#[test]
+fn a_transfer_with_a_third_account_is_rejected() {
+    let _plan = plan_for(
+        vec![
+            handle(HOLDING_ID, true),
+            handle(HOLDING_ID_2, false),
+            handle(DEFINITION_ID, false),
+        ],
+        Instruction::Transfer {
+            amount_to_transfer: TRANSFER_AMOUNT,
+            descriptor: FUNGIBLE,
+        },
+    );
 }

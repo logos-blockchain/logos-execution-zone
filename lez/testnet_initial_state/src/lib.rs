@@ -400,7 +400,7 @@ mod tests {
                 assert_ne!(id, other);
             }
             let account = state.get_account_by_id(*id);
-            assert_eq!(account.data.balance().unwrap(), 0);
+            assert_eq!(account.data.native_balance().unwrap(), 0);
         }
 
         // The fee-state account carries the genesis market state; escrow and
@@ -434,7 +434,7 @@ mod tests {
 
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
-            bridge.data.balance().unwrap(),
+            bridge.data.native_balance().unwrap(),
             u128::MAX,
             "the bridge holds the whole supply"
         );

@@ -1,44 +1,34 @@
 use lee_core::{
     account::ShardData,
-    program::{
-        ProgramCall, ProgramInput, ProgramOutput, ShardStateDiff, read_lee_call,
-        respond_unsupported_call,
-    },
+    program::{Plan, ProgramCall, apply_write, read_program_call},
 };
 
-/// Writes its own shard on both accounts, but reports its two diffs in the opposite order from
-/// `pre_states`.
+/// Writes its own shard on both accounts, emitting the second handle's effect first — effects
+/// are applied in emission order, which need not follow the order of the handles.
 type Instruction = Vec<u8>;
 
 fn main() {
-    let call = read_lee_call::<Instruction>();
-    let ProgramCall::Execute(
-        ProgramInput {
-            self_account_id,
-            caller_account_id,
-            pre_states,
-            instruction: data,
-        },
-        instruction_data,
-    ) = call
-    else {
-        respond_unsupported_call(call);
-    };
-
-    let Ok([first_pre, second_pre]) = <[_; 2]>::try_from(pre_states) else {
-        return;
-    };
-
-    let written = data.try_into().expect("written data fits the data limit");
-    let first_diff = ShardStateDiff::new(first_pre, written);
-    let second_diff = ShardStateDiff::new(second_pre, ShardData::empty());
-
-    ProgramOutput::new(
-        self_account_id,
-        caller_account_id,
-        instruction_data,
-        // Swapped.
-        vec![second_diff, first_diff],
-    )
-    .write();
+    match read_program_call::<Instruction>() {
+        ProgramCall::Plan(input, instruction) => {
+            let Ok([first, second]) = <[_; 2]>::try_from(input.accounts.clone()) else {
+                return;
+            };
+            let mut plan = Plan::new(&input);
+            plan.effect(&second, &Vec::<u8>::new());
+            plan.effect(&first, &instruction);
+            plan.write()
+        }
+        ProgramCall::Apply(input) => {
+            let written: Vec<u8> = borsh::from_slice(&input.effect_data)
+                .expect("reordering_writer wrote its own effect");
+            let data = if written.is_empty() {
+                ShardData::empty()
+            } else {
+                written
+                    .try_into()
+                    .expect("written data fits the data limit")
+            };
+            apply_write(input, data)
+        }
+    }
 }

@@ -216,42 +216,25 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
-/**
- * One program's shard on an account.
- */
-typedef struct FfiShard {
-  struct FfiBytes32 program;
-  /**
-   * Pointer to shard data bytes.
-   */
-  uint8_t *data;
-  /**
-   * Length of shard data.
-   */
-  uintptr_t data_len;
-  /**
-   * Capacity of shard data.
-   */
-  uintptr_t data_cap;
-} FfiShard;
+typedef struct FfiVec_u8 FfiVecU8;
 
-/**
- * An account's program shards, the native balance among them.
- */
-typedef struct FfiAccountData {
-  /**
-   * Pointer to the account's shards.
-   */
-  struct FfiShard *shards;
-  /**
-   * Number of shards.
-   */
-  uintptr_t shards_len;
-} FfiAccountData;
+typedef struct FfiPublicEffect {
+  FfiAccountId program_account_id;
+  FfiAccountId shard_program_account_id;
+  FfiVecU8 data;
+} FfiPublicEffect;
+
+typedef struct FfiVec_FfiPublicEffect {
+  struct FfiPublicEffect *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicEffect;
+
+typedef struct FfiVec_FfiPublicEffect FfiPublicEffectList;
 
 typedef struct FfiPublicAction {
   FfiAccountId account_id;
-  struct FfiAccountData post;
+  FfiPublicEffectList effects;
 } FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction {
@@ -261,8 +244,6 @@ typedef struct FfiVec_FfiPublicAction {
 } FfiVec_FfiPublicAction;
 
 typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;
@@ -343,6 +324,25 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
   FfiBlockOpt *value;
   enum OperationStatus error;
 } PointerResult_FfiBlockOpt__OperationStatus;
+
+/**
+ * One program's shard on an account.
+ */
+typedef struct FfiShard {
+  struct FfiBytes32 program;
+  /**
+   * Pointer to shard data bytes.
+   */
+  uint8_t *data;
+  /**
+   * Length of shard data.
+   */
+  uintptr_t data_len;
+  /**
+   * Capacity of shard data.
+   */
+  uintptr_t data_cap;
+} FfiShard;
 
 /**
  * Account data structure - C-compatible version of lee Account.

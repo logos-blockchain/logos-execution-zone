@@ -154,10 +154,10 @@ mod inner {
             let message = public_transaction::Message::try_new(
                 bridge_account_id(),
                 vec![
-                    ProgramShardSelector::balance(bridge_core::compute_bridge_account_id(
+                    ProgramShardSelector::native_balance(bridge_core::compute_bridge_account_id(
                         bridge_account_id(),
                     )),
-                    ProgramShardSelector::balance(recipient_id),
+                    ProgramShardSelector::native_balance(recipient_id),
                     ProgramShardSelector::new(
                         bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
                         bridge_account_id(),
@@ -208,9 +208,13 @@ mod inner {
                 }
             );
 
-            let replayed = state.transition_from_public_transaction(&tx, 2, 0).unwrap();
+            let replayed = state.transition_from_public_transaction(&tx, 2, 0);
 
-            assert_eq!(replayed.len(), 0);
+            assert!(matches!(
+                &replayed,
+                Err(lee::error::LeeError::ProgramExecutionFailed(msg))
+                    if msg.contains("Deposit was already processed")
+            ));
         }
 
         #[test]

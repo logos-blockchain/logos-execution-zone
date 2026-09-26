@@ -12,11 +12,13 @@ use lee_core::{
     PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
     encryption::ViewingPublicKey,
+    execution_state::{DeferredPublicEffect, ExecutionError},
     native_token::{
-        Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
+        Effect as NativeEffect, Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID,
+        TransferError, encode_balance,
     },
     program::{
-        AccountInput, BlockValidityWindow, ExecutionValidationError, InstructionData,
+        AccountMeta, BlockValidityWindow, ExecutionValidationError, InstructionData,
         MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId,
         ProgramSegment, TimestampValidityWindow, TransactionEvent,
     },
@@ -44,9 +46,36 @@ mod genesis;
 mod native_transfer;
 mod privacy_preserving;
 mod public_program_rules;
+mod run_program;
 mod validity_window;
 
 impl V03State {
+    #[must_use]
+    pub fn with_test_programs(mut self) -> Self {
+        self.insert_program(&crate::test_methods::dropped_account(), true);
+        self.insert_program(&crate::test_methods::data_changer(), true);
+        self.insert_program(&crate::test_methods::native_spender(), true);
+        self.insert_program(&crate::test_methods::forges_apply_echo(), true);
+        self.insert_program(&crate::test_methods::auth_asserting_noop(), true);
+        self.insert_program(&crate::test_methods::private_pda_delegator(), true);
+        self.insert_program(&crate::test_methods::noop(), true);
+        self.insert_program(&crate::test_methods::shard_forwarder(), true);
+        self.insert_program(&crate::test_methods::chain_caller(), true);
+        self.insert_program(&crate::test_methods::non_delegating_forwarder(), true);
+        self.insert_program(&crate::test_methods::event_emitter(), true);
+        self.insert_program(&crate::test_methods::validity_window(), true);
+        self.insert_program(&crate::test_methods::flash_swap_initiator(), true);
+        self.insert_program(&crate::test_methods::flash_swap_callback(), true);
+        self.insert_program(&crate::test_methods::malicious_self_program_id(), true);
+        self.insert_program(&crate::test_methods::malicious_caller_program_id(), true);
+        self.insert_program(&crate::test_methods::pda_spend_proxy(), true);
+        self.insert_program(&crate::test_methods::validity_window_chain_caller(), true);
+        self.insert_program(&crate::test_methods::references_undeclared_account(), true);
+        self.insert_program(&crate::test_methods::injects_undeclared_pre_state(), true);
+        self.insert_program(&crate::test_methods::reordering_writer(), true);
+        self
+    }
+
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
         let account_id =
@@ -100,6 +129,7 @@ enum FlashSwapInstruction {
     Initiate {
         callback_program_id: AccountId,
         amount_out: u128,
+        vault_balance: u128,
         callback_instruction_data: Vec<u8>,
     },
     InvariantCheck {
@@ -118,6 +148,31 @@ pub fn synthetic_program(program: Program) -> ProgramWithDependencies {
     ProgramWithDependencies::new(program, self_account_id, HashMap::new())
 }
 
+pub fn native_debit(amount: Balance) -> DeferredPublicEffect {
+    native_effect(&NativeEffect::Debit(amount))
+}
+
+pub fn native_credit(amount: Balance) -> DeferredPublicEffect {
+    native_effect(&NativeEffect::Credit(amount))
+}
+
+fn native_effect(effect: &NativeEffect) -> DeferredPublicEffect {
+    DeferredPublicEffect {
+        program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+        shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+        data: borsh::to_vec(effect).expect("the effect serializes"),
+    }
+}
+
+pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> ExecutionError {
+    match result {
+        Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(error))) => {
+            error
+        }
+        other => panic!("expected an execution-state rejection, got {other:?}"),
+    }
+}
+
 fn transfer_transaction(
     from: AccountId,
     from_key: &PrivateKey,
@@ -128,8 +183,8 @@ fn transfer_transaction(
     balance: u128,
 ) -> PublicTransaction {
     let shard_selectors = vec![
-        ProgramShardSelector::balance(from),
-        ProgramShardSelector::balance(to),
+        ProgramShardSelector::native_balance(from),
+        ProgramShardSelector::native_balance(to),
     ];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let message = public_transaction::Message::try_new(
@@ -152,8 +207,8 @@ fn build_flash_swap_tx(
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(initiator.id()),
         vec![
-            ProgramShardSelector::balance(vault_id),
-            ProgramShardSelector::balance(receiver_id),
+            ProgramShardSelector::native_balance(vault_id),
+            ProgramShardSelector::native_balance(receiver_id),
         ],
         vec![], // no signers — vault is PDA-authorised
         instruction,
@@ -232,10 +287,8 @@ pub fn init_pda_witness(
     keys: &TestPrivateKeys,
     identifier: Identifier,
     binding: (AccountId, PdaSeed),
-    account: Account,
 ) -> PrivateWitness {
     PrivateWitness {
-        account,
         vpk: keys.vpk(),
         random_seed: [0; 32],
         identifier,
@@ -255,12 +308,12 @@ pub fn update_pda_witness(
     membership_proof: MembershipProof,
 ) -> PrivateWitness {
     PrivateWitness {
-        account,
         vpk: keys.vpk(),
         random_seed: [0; 32],
         identifier,
         kind: WitnessKind::Pda { binding },
         nullifier: NullifierWitness::Update {
+            account,
             view_tag: 0,
             nsk: keys.nsk(),
             membership_proof,
@@ -268,13 +321,8 @@ pub fn update_pda_witness(
     }
 }
 
-pub fn init_witness(
-    keys: &TestPrivateKeys,
-    identifier: Identifier,
-    account: Account,
-) -> PrivateWitness {
+pub fn init_witness(keys: &TestPrivateKeys, identifier: Identifier) -> PrivateWitness {
     PrivateWitness {
-        account,
         vpk: keys.vpk(),
         random_seed: [0; 32],
         identifier,
@@ -295,7 +343,6 @@ pub fn update_witness(
     membership_proof: MembershipProof,
 ) -> PrivateWitness {
     PrivateWitness {
-        account,
         vpk: keys.vpk(),
         random_seed: [0; 32],
         identifier,
@@ -303,6 +350,7 @@ pub fn update_witness(
             ask: Some(keys.ask),
         },
         nullifier: NullifierWitness::Update {
+            account,
             view_tag: 0,
             nsk: keys.nsk(),
             membership_proof,
@@ -328,16 +376,11 @@ fn shielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![init_witness(
-                recipient_keys,
-                Identifier::ZERO,
-                Account::default(),
-            )],
+            private_witnesses: vec![init_witness(recipient_keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
             })
@@ -376,8 +419,8 @@ fn private_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 update_witness(
@@ -388,7 +431,7 @@ fn private_balance_transfer_for_tests(
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
                 ),
-                init_witness(recipient_keys, Identifier::ZERO, Account::default()),
+                init_witness(recipient_keys, Identifier::ZERO),
             ],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -424,14 +467,9 @@ fn deshielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(*recipient_account_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(*recipient_account_id),
             ],
-            public_accounts: [(
-                *recipient_account_id,
-                state.get_account_by_id(*recipient_account_id),
-            )]
-            .into(),
             private_witnesses: vec![update_witness(
                 sender_keys,
                 Identifier::ZERO,

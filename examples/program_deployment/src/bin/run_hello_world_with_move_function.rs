@@ -69,6 +69,21 @@ enum Command {
     },
 }
 
+async fn shard_bytes(
+    wallet_core: &WalletCore,
+    account_id: AccountId,
+    program_account_id: AccountId,
+) -> Vec<u8> {
+    wallet_core
+        .get_account_view(ProgramShardSelector::new(account_id, program_account_id))
+        .await
+        .unwrap()
+        .data
+        .shard(program_account_id)
+        .as_ref()
+        .to_vec()
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -131,9 +146,10 @@ async fn main() {
                 .unwrap();
         }
         Command::MoveDataPublicToPublic { from, to } => {
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
+            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
+            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program_account_id,
@@ -156,9 +172,10 @@ async fn main() {
                 .unwrap();
         }
         Command::MoveDataPublicToPrivate { from, to } => {
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, vec![]);
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
+            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
+            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
 
             let accounts = vec![
                 AccountIdentity::Public(from).select_program_shard(program_account_id),

@@ -320,7 +320,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
             .with_state(|state| {
                 state
                     .get_account_by_id_ref(account_id)
-                    .map_or(0, |account| account.data.balance().unwrap_or_default())
+                    .map_or(0, |account| {
+                        account.data.native_balance().unwrap_or_default()
+                    })
             })
             .await
     }

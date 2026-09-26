@@ -7,7 +7,7 @@
 //! per-peer delivery floor instead of re-reading the peer channel from genesis.
 //!
 //! Re-reading is safe (the dispatch key is content-addressed and the inbox
-//! no-ops a replay) so on-chain state cannot tell the two apart. What does tell
+//! refuses a replay) so on-chain state cannot tell the two apart. What does tell
 //! them apart is the transactions: a watcher that lost its cursor re-injects
 //! every already-delivered dispatch, which shows up as inbox transactions in
 //! blocks produced after the restart. This is the only test that covers the
@@ -214,7 +214,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         sender_id,
         vec![
             ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::balance(outbox_account),
+            ProgramShardSelector::new(outbox_account, outbox_id),
         ],
         vec![],
         send,

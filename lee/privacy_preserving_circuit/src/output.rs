@@ -2,46 +2,26 @@ use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
-    ProgramImageClaim, PublicAction, SharedSecretKey, WitnessKind,
+    ProgramImageClaim, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, TimestampValidityWindow},
-    validation::ThreadedDiff,
+    execution_state::{DeferPublicEffects, ExecutionOutcome},
 };
 
 pub fn compute_circuit_output(
-    threaded: ThreadedDiff,
-    block_validity_window: BlockValidityWindow,
-    timestamp_validity_window: TimestampValidityWindow,
+    outcome: ExecutionOutcome<DeferPublicEffects>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
     program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let ThreadedDiff {
-        mut accounts,
-        claim_order,
-    } = threaded;
-    // Public accounts are exposed in journal in appropriate order.
-    let public_actions = claim_order
-        .into_iter()
-        .map(|account_id| {
-            let account = accounts
-                .remove(&account_id)
-                .expect("every claim-backed account is tracked");
-            let pre = account
-                .claimed_initial
-                .expect("a claim-backed account records its claims");
-            let post = account.current.project(pre.shards.keys().copied());
-            PublicAction {
-                account_id,
-                is_authorized: account.exported_authorization,
-                pre,
-                post,
-            }
-        })
-        .collect();
+    let ExecutionOutcome {
+        block_validity_window,
+        timestamp_validity_window,
+        public: public_actions,
+        mut private_accounts,
+    } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
         public_actions,
         private_actions: Vec::new(),
@@ -53,7 +33,6 @@ pub fn compute_circuit_output(
     // Emit one action per private account, covering all its shards.
     for witness in private_witnesses {
         let PrivateWitness {
-            account,
             vpk,
             random_seed,
             identifier,
@@ -61,34 +40,24 @@ pub fn compute_circuit_output(
             nullifier,
         } = witness;
         let account_id = witness.account_id();
-        let post_data = accounts
-            .remove(&account_id)
-            .unwrap_or_else(|| {
-                panic!("Every witness's account must be touched by the execution: {account_id}")
-            })
-            .current;
+        let post_data = private_accounts.remove(&account_id).expect(
+            "initialize admits only root witnesses and finish emits every root private account",
+        );
 
         let (new_nullifier, new_nonce, view_tag) = match nullifier {
             NullifierWitness::Init {
                 npk,
                 commitment_root,
-            } => {
-                assert_eq!(
-                    *account,
-                    Account::default(),
-                    "Private account init requires a default pre-state"
-                );
-
+            } => (
                 (
-                    (
-                        Nullifier::for_account_initialization(&account_id),
-                        *commitment_root,
-                    ),
-                    Nonce::private_account_nonce_init(&account_id),
-                    EncryptedAccountData::compute_view_tag(npk, vpk),
-                )
-            }
+                    Nullifier::for_account_initialization(&account_id),
+                    *commitment_root,
+                ),
+                Nonce::private_account_nonce_init(&account_id),
+                EncryptedAccountData::compute_view_tag(npk, vpk),
+            ),
             NullifierWitness::Update {
+                account,
                 view_tag,
                 nsk,
                 membership_proof,
@@ -244,67 +213,137 @@ mod tests {
     use std::collections::HashMap;
 
     use lee_core::{
-        DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier, PublicAction,
+        AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier,
+        NullifierPublicKey, PublicAction,
         account::{AccountData, ShardData},
-        validation::TrackedAccount,
+        program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
     use super::*;
 
     const SHARD_A: AccountId = AccountId::new([10; 32]);
-    const SHARD_C: AccountId = AccountId::new([12; 32]);
+    const SHARD_B: AccountId = AccountId::new([11; 32]);
 
-    fn data(bytes: &[u8]) -> ShardData {
-        bytes.to_vec().try_into().expect("test data is small")
+    struct Owner {
+        ask: AuthorizationSecretKey,
+        d: [u8; 32],
+        z: [u8; 32],
+    }
+
+    impl Owner {
+        fn new(tag: u8) -> Self {
+            Self {
+                ask: AuthorizationSecretKey([tag; 32]),
+                d: [tag; 32],
+                z: [tag.wrapping_add(1); 32],
+            }
+        }
+
+        fn nsk(&self) -> NullifierSecretKey {
+            NullifierSecretKey::from(&self.ask)
+        }
+
+        fn vpk(&self) -> ViewingPublicKey {
+            ViewingPublicKey::from_seed(&self.d, &self.z)
+        }
+
+        fn account_id(&self) -> AccountId {
+            AccountId::for_regular_private_account(
+                &NullifierPublicKey::from(&self.nsk()),
+                &self.vpk(),
+                Identifier::ZERO,
+            )
+        }
+
+        fn update_witness(&self, account: Account) -> PrivateWitness {
+            PrivateWitness {
+                vpk: self.vpk(),
+                random_seed: [0; 32],
+                identifier: Identifier::ZERO,
+                kind: WitnessKind::Regular {
+                    ask: Some(self.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    account,
+                    view_tag: 0,
+                    nsk: self.nsk(),
+                    membership_proof: (0, Vec::new()),
+                },
+            }
+        }
+
+        fn decrypt(&self, action: &PrivateAction) -> (PrivateAccountKind, Account) {
+            let shared =
+                SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &self.d, &self.z)
+                    .expect("the note's ephemeral key decapsulates");
+            EncryptionScheme::decrypt(
+                &action.encrypted_post_state.ciphertext,
+                &shared,
+                &action.nullifier,
+            )
+            .expect("the note decrypts")
+        }
     }
 
     fn emit(
-        account_id: AccountId,
-        pre: AccountData,
-        current: AccountData,
+        public_actions: Vec<PublicAction>,
+        private: Vec<(AccountId, AccountData)>,
+        witnesses: &[PrivateWitness],
     ) -> PrivacyPreservingCircuitOutput {
-        let account = TrackedAccount {
-            current,
-            claimed_initial: Some(pre),
-            exported_authorization: true,
-        };
         compute_circuit_output(
-            ThreadedDiff {
-                accounts: [(account_id, account)].into(),
-                claim_order: vec![account_id],
+            ExecutionOutcome {
+                block_validity_window: BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+                public: public_actions,
+                private_accounts: private.into_iter().collect(),
             },
-            BlockValidityWindow::new_unbounded(),
-            TimestampValidityWindow::new_unbounded(),
-            &[],
+            witnesses,
             Vec::new(),
             None,
             Vec::new(),
         )
     }
 
+    fn data(bytes: &[u8]) -> ShardData {
+        bytes.to_vec().try_into().expect("test data is small")
+    }
+
     #[test]
-    fn public_action_post_is_projected_onto_the_touched_shards() {
-        let account_id = AccountId::new([9; 32]);
-        let pre = AccountData {
-            shards: [(SHARD_A, data(b"a"))].into(),
+    fn one_note_per_private_account_carries_its_touched_shards() {
+        let owner = Owner::new(3);
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(100)
+                .with_shard(SHARD_A, data(b"a"))
+                .with_shard(SHARD_B, data(b"b"))
         };
-        let post_state = Account::funded(7)
-            .with_shard(SHARD_A, data(b"a-rewritten"))
-            .with_shard(SHARD_C, data(b"c"))
-            .data;
+        let rewritten = Account::funded(60)
+            .data
+            .with_shard(SHARD_A, data(b"a"))
+            .with_shard(SHARD_B, data(b"b-rewritten"));
 
-        let output = emit(account_id, pre.clone(), post_state);
+        let output = emit(
+            Vec::new(),
+            vec![(owner.account_id(), rewritten.clone())],
+            &[owner.update_witness(account.clone())],
+        );
 
+        assert_eq!(output.private_actions.len(), 1, "one account, one note");
+        let expected = Account {
+            nonce: account.nonce.private_account_nonce_increment(&owner.nsk()),
+            data: rewritten,
+        };
+        let action = &output.private_actions[0];
         assert_eq!(
-            output.public_actions,
-            vec![PublicAction {
-                account_id,
-                is_authorized: true,
-                pre,
-                post: AccountData {
-                    shards: [(SHARD_A, data(b"a-rewritten"))].into(),
-                },
-            }]
+            owner.decrypt(action),
+            (
+                PrivateAccountKind::Regular(Identifier::ZERO),
+                expected.clone()
+            )
+        );
+        assert_eq!(
+            action.commitment,
+            Commitment::new(&owner.account_id(), &expected)
         );
     }
 

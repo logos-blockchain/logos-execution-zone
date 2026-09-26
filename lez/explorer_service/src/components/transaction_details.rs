@@ -103,16 +103,16 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     } = message;
     let private_action_count = private_actions.len();
     let public_account_count = public_actions.len();
+    // One row per effect, in the order settlement folds them: the same shard can appear twice.
     let public_shard_selectors: Vec<_> = public_actions
         .into_iter()
         .flat_map(|action| {
             action
-                .post
-                .shards
-                .into_keys()
-                .map(move |program_account_id| ProgramShardSelector {
+                .effects
+                .into_iter()
+                .map(move |effect| ProgramShardSelector {
                     account_id: action.account_id,
-                    program_account_id,
+                    program_account_id: effect.shard_program_account_id,
                 })
         })
         .collect();
@@ -159,7 +159,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 </div>
             </div>
 
-            <h3>"Public Accounts"</h3>
+            <h3>"Public Effects"</h3>
             <ShardSelectorList shard_selectors=public_shard_selectors />
         </div>
     }

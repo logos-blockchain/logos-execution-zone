@@ -258,7 +258,7 @@ pub struct PendingDepositEventRecord {
 /// The watcher's delivery floor is durable, so once it advances past a peer
 /// block that block is never re-read; this record stands in its place. It
 /// carries no "submitted" mark: it is dropped when the delivery finalizes, and
-/// re-including one meanwhile is harmless because the inbox no-ops a replay on
+/// re-including one meanwhile is harmless because the inbox refuses a replay on
 /// chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingCrossZoneDispatchRecord {

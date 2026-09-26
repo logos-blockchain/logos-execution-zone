@@ -61,16 +61,23 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         })
         .await?;
 
+    let pool = amm_core::compute_pool_pda(
+        programs::amm_account_id(),
+        def_a,
+        def_b,
+        programs::token_account_id(),
+    );
+    // The full quote on the 300/300 pool, so the swap leaves the pool where the old bench did.
     output
-        .step(ctx, "amm_swap_exact_input", async |ctx| {
+        .step(ctx, "amm_swap", async |ctx| {
             wallet::cli::execute_subcommand(
                 ctx.wallet_mut(),
-                Command::AMM(AmmProgramAgnosticSubcommand::SwapExactInput {
-                    user_holding_a: public_mention(user_a),
-                    user_holding_b: public_mention(user_b),
+                Command::AMM(AmmProgramAgnosticSubcommand::Swap {
+                    pool,
+                    from: public_mention(user_a),
+                    to: public_mention(user_b),
                     amount_in: 50,
-                    min_amount_out: 1,
-                    token_definition: def_a,
+                    amount_out: 42,
                 }),
             )
             .await
