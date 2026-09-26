@@ -2583,7 +2583,8 @@ fn genesis_stake_funding_account() -> AccountId {
 
 /// The exact `Stake` message the founding sequencer at `index` must sign. Shared
 /// offchain by the genesis sequencer.
-fn genesis_stake_message(
+#[must_use]
+pub fn genesis_stake_message(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,
     ownership_id: AccountId,

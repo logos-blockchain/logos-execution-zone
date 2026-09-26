@@ -161,3 +161,47 @@ fn write_keys(dir: &Path, signing_key: [u8; 32]) -> Result<()> {
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
+
+#[cfg(test)]
+mod tests {
+    use lee::AccountId;
+    use sequencer_core::genesis_stake_message;
+
+    use super::*;
+
+    /// The committed stakes are signed over the genesis `Stake` message, so any
+    /// change to its format leaves them stale until `just regenerate-devnet-configs`.
+    #[test]
+    fn committed_genesis_stake_signatures_are_valid() -> Result<()> {
+        let path = repo_root()
+            .join(CONFIGS_DIR)
+            .join("devnet")
+            .join(CONFIG_NAME);
+        let config = SequencerConfig::from_path(&path)?;
+        let minimum_stake = config.bedrock_config.channel_params.minimum_sequencer_stake;
+
+        let stakes = config.genesis.iter().filter_map(|action| match action {
+            GenesisAction::StakeSequencer {
+                sequencer_key,
+                ownership_public_key,
+                stake_signature,
+            } => Some((sequencer_key, ownership_public_key, stake_signature)),
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeLockHolding { .. } => {
+                None
+            }
+        });
+        for (index, (sequencer_key, ownership_public_key, stake_signature)) in stakes.enumerate() {
+            let message = genesis_stake_message(
+                index,
+                *sequencer_key,
+                AccountId::from(ownership_public_key),
+                minimum_stake,
+            );
+            anyhow::ensure!(
+                stake_signature.is_valid_for(&message.hash(), ownership_public_key),
+                "Stake signature of founding sequencer {index} is stale, run `just regenerate-devnet-configs`"
+            );
+        }
+        Ok(())
+    }
+}
