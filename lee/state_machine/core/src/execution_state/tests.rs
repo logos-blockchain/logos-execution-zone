@@ -126,12 +126,7 @@ impl<'script, P> Script<'script, P> {
     fn scripted(plans: impl IntoIterator<Item = Planner<'script>>) -> Self {
         Self {
             plans: plans.into_iter().collect(),
-            answer: Box::new(|input: &ApplyInput| {
-                Ok(ApplyOutput {
-                    input: input.clone(),
-                    post_data: None,
-                })
-            }),
+            answer: Box::new(|input: &ApplyInput| Ok(ApplyOutput::new(input.clone(), None))),
             rejection: None,
             trace: Vec::new(),
             shards: PublicShards::new(),
@@ -146,12 +141,7 @@ impl<'script, P> Script<'script, P> {
     }
 
     fn applying(self, mut apply: impl FnMut(&ApplyInput) -> Option<ShardData> + 'script) -> Self {
-        self.answering(move |input| {
-            Ok(ApplyOutput {
-                input: input.clone(),
-                post_data: apply(input),
-            })
-        })
+        self.answering(move |input| Ok(ApplyOutput::new(input.clone(), apply(input))))
     }
 
     fn answering(
@@ -570,10 +560,7 @@ fn an_apply_output_must_echo_the_input_the_engine_computed() {
             .answering(|input| {
                 let mut input = input.clone();
                 mutate(&mut input);
-                Ok(ApplyOutput {
-                    input,
-                    post_data: None,
-                })
+                Ok(ApplyOutput::new(input, None))
             })
             .reading([(ALICE, funded(4).with_shard(PROGRAM, data(b"a")))]),
         )

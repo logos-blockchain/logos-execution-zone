@@ -65,10 +65,10 @@ fn main() {
                     ..input
                 },
             };
-            GuestOutput::Apply(ApplyOutput {
-                input: forged_input,
-                post_data: Some(encode_balance(1_000_000)),
-            })
+            GuestOutput::Apply(ApplyOutput::new(
+                forged_input,
+                Some(encode_balance(1_000_000)),
+            ))
             .write();
         }
     }

@@ -183,15 +183,15 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 // ---- validation tests ----
 
 fn output_of(evaluator: AccountId, post_data: Option<ShardData>) -> ApplyOutput {
-    ApplyOutput {
-        input: ApplyInput {
+    ApplyOutput::new(
+        ApplyInput {
             self_account_id: evaluator,
             selector: ProgramShardSelector::new(AccountId::new([7; 32]), evaluator),
             pre_data: ShardData::empty(),
             effect_data: Vec::new(),
         },
         post_data,
-    }
+    )
 }
 
 #[test]
