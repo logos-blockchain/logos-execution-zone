@@ -21,8 +21,15 @@ pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
 
 pub const CLOCK_NAME: [u8; 5] = *b"clock";
 
-/// The instruction type for the Clock Program. The sequencer passes the current block timestamp.
-pub type Instruction = Timestamp;
+/// The instruction type for the Clock Program.
+///
+/// The instruction type for the Clock Program. The sequencer passes the current block timestamp and
+/// block ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Instruction {
+    pub timestamp: Timestamp,
+    pub block_id: u64,
+}
 
 /// The data stored in a clock account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

@@ -24,7 +24,7 @@ const AMOUNT_PER_TRANSFER: u128 = 20_000_000;
 pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     let mut output = ScenarioOutput::new("parallel_fanout");
 
-    // Setup: preconfigured supply, master supply, N parallel supplies, N recipients.
+    // Setup: preconfigured master supply, N parallel supplies, N recipients.
     // Preconfigured account with a lot of native tokens.
     let master_id = *ctx
         .existing_public_accounts()
@@ -54,23 +54,13 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
-                        to_identifier: Some(0),
-                        amount: AMOUNT_PER_TRANSFER * 10,
+                        to_identifier: Some(lee_core::Identifier::ZERO),
+                        amount: AMOUNT_PER_TRANSFER * 5,
                     }),
                 )
                 .await
             })
             .await?;
-
-        let sender_balance = ctx
-            .wallet()
-            .get_account(wallet::account::AccountIdWithPrivacy::Public(sender_id))
-            .await?
-            .data
-            .balance()
-            .unwrap();
-
-        println!("Now sender_{i} have balance of {sender_balance}");
     }
 
     // The measured phase: submit N transfers as fast as possible, do not wait
@@ -93,8 +83,8 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(0),
-                amount: 1,
+                to_identifier: Some(lee_core::Identifier::ZERO),
+                amount: AMOUNT_PER_TRANSFER,
             }),
         )
         .await?;

@@ -120,6 +120,7 @@ impl StoredChain {
                 .expect("cross-zone config initializes");
         }
         let genesis = genesis();
+        let state = applied(&state, &genesis);
         Self {
             final_snapshot: Some((state.clone(), BlockMeta::from(&genesis))),
             head_state: state,
@@ -328,9 +329,10 @@ fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
         transactions: vec![
             LeeTransaction::Public(fee_invocation(
                 fee_core::BlockFeeSummary::default(),
+                0,
                 producer_account_for_testing(),
             )),
-            LeeTransaction::Public(clock_invocation(timestamp)),
+            LeeTransaction::Public(clock_invocation(id, timestamp)),
         ],
     }
     .into_pending_block(&sequencer_sign_key_for_testing())
@@ -401,8 +403,8 @@ fn deposit_tx(op_id: [u8; 32], recipient: AccountId, amount: u64) -> LeeTransact
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::balance(recipient),
+            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
+            ProgramShardSelector::native_balance(recipient),
             // The receipt PDA carries the exactly-once check, so the program
             // needs it in the account list.
             ProgramShardSelector::new(
@@ -869,7 +871,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
                     .head_state
                     .get_account_by_id(recipient)
                     .data
-                    .balance()
+                    .native_balance()
                     .expect("Failed to get balance")
                     == funded + u128::from(deposit_amount)
                 && !update

@@ -70,6 +70,22 @@ pub struct FfiU128 {
     pub data: [u8; 16],
 }
 
+pub type FfiIdentifier = FfiBytes32;
+
+impl From<lee_core::Identifier> for FfiIdentifier {
+    fn from(value: lee_core::Identifier) -> Self {
+        Self {
+            data: value.into_value(),
+        }
+    }
+}
+
+impl From<FfiIdentifier> for lee_core::Identifier {
+    fn from(value: FfiIdentifier) -> Self {
+        Self::new(value.data)
+    }
+}
+
 /// One program's shard on an account.
 #[repr(C)]
 pub struct FfiShard {
@@ -282,7 +298,7 @@ pub struct FfiAccountIdentity {
     pub nullifier_public_key: FfiBytes32,
     pub viewing_public_key: *const u8,
     pub viewing_public_key_len: usize,
-    pub identifier: FfiU128,
+    pub identifier: FfiIdentifier,
 }
 
 impl Default for FfiAccountIdentity {
@@ -298,7 +314,7 @@ impl Default for FfiAccountIdentity {
             nullifier_public_key: FfiBytes32::default(),
             viewing_public_key: std::ptr::null(),
             viewing_public_key_len: 0,
-            identifier: FfiU128::default(),
+            identifier: FfiIdentifier::default(),
         }
     }
 }
@@ -732,8 +748,8 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
     use lee_core::{
-        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierPublicKey,
-        NullifierSecretKey, PrivateAccountKind,
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, Identifier,
+        NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
     };
     use wallet::AccountIdentity;
 
@@ -749,7 +765,7 @@ mod tests {
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
-        let identifier = u128::from_le_bytes([45; 16]);
+        let identifier = lee_core::Identifier::new([45; 32]);
 
         let private_reg_acc_id =
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
@@ -884,7 +900,7 @@ mod tests {
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([46; 32]),
             seed: PdaSeed::new([47; 32]),
-            identifier: 5,
+            identifier: Identifier::new([5; 32]),
         };
         let derived = AccountId::for_private_account(&npk, &vpk, &kind);
 
@@ -913,7 +929,7 @@ mod tests {
         let ask = AuthorizationSecretKey([43; 32]);
         let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
-        let identifier = u128::from_le_bytes([45; 16]);
+        let identifier = lee_core::Identifier::new([45; 32]);
 
         let shared = AccountIdentity::PrivateShared {
             ask,

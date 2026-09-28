@@ -31,8 +31,8 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = public_transaction::Message::try_new(
         programs::bridge_account_id(),
         vec![
-            ProgramShardSelector::balance(bridge_account_id),
-            ProgramShardSelector::balance(recipient_id),
+            ProgramShardSelector::native_balance(bridge_account_id),
+            ProgramShardSelector::native_balance(recipient_id),
             ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
@@ -82,8 +82,8 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let message = public_transaction::Message::try_new(
         programs::bridge_account_id(),
         vec![
-            ProgramShardSelector::balance(bridge_account_id),
-            ProgramShardSelector::balance(recipient_id),
+            ProgramShardSelector::native_balance(bridge_account_id),
+            ProgramShardSelector::native_balance(recipient_id),
             ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
@@ -165,8 +165,8 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     .context("Failed to serialize bridge deposit instruction")?;
 
     let shard_selectors = vec![
-        ProgramShardSelector::balance(bridge_account_id),
-        ProgramShardSelector::balance(recipient_id),
+        ProgramShardSelector::native_balance(bridge_account_id),
+        ProgramShardSelector::native_balance(recipient_id),
         ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
     ];
     let nonces = vec![
@@ -179,11 +179,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let (output, proof) = execute_and_prove(
         lee::ProvingInput {
             shard_selectors,
-            public_accounts: HashMap::from([
-                (bridge_account_id, bridge_account),
-                (recipient_id, recipient_account),
-                (receipt_id, receipt_account),
-            ]),
             instruction_data: instruction,
             ..Default::default()
         },
@@ -415,7 +410,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //     let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 //     let recipient_id = ctx.existing_public_accounts()[0];
 //     let amount = 1_u64;
-//     let vault_program_id = AccountId::from_builtin_program(programs::vault().id());
+//     let vault_program_id = programs::vault_account_id();
 //     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id,
 // recipient_id);
 

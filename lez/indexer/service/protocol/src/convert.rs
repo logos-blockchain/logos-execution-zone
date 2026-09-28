@@ -5,11 +5,11 @@ use lee_core::account::Nonce;
 use crate::{
     Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
     BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
-    EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus,
-    IndexerSyncState, Nullifier, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Selector, ShardData, Signature, StallReason,
-    Transaction, ValidityWindow, WitnessSet,
+    DeferredPublicEffect, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
+    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
+    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
+    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -343,11 +343,41 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
+impl From<lee_core::execution_state::DeferredPublicEffect> for DeferredPublicEffect {
+    fn from(value: lee_core::execution_state::DeferredPublicEffect) -> Self {
+        let lee_core::execution_state::DeferredPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+        Self {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data,
+        }
+    }
+}
+
+impl From<DeferredPublicEffect> for lee_core::execution_state::DeferredPublicEffect {
+    fn from(value: DeferredPublicEffect) -> Self {
+        let DeferredPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+        Self {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data,
+        }
+    }
+}
+
 impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
     fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
         Self {
             account_id: value.account_id.into(),
-            post: value.post.into(),
+            effects: value.effects.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -386,19 +416,12 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
     }
 }
 
-impl TryFrom<PublicActionWithID>
-    for lee::privacy_preserving_transaction::message::PublicActionWithID
-{
-    type Error = lee::error::LeeError;
-
-    fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
-        Ok(Self {
+impl From<PublicActionWithID> for lee::privacy_preserving_transaction::message::PublicActionWithID {
+    fn from(value: PublicActionWithID) -> Self {
+        Self {
             account_id: value.account_id.into(),
-            post: value
-                .post
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-        })
+            effects: value.effects.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -425,10 +448,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window,
         } = value;
 
-        let public_actions = public_actions
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()?;
+        let public_actions = public_actions.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
@@ -1005,6 +1025,30 @@ mod tests {
     }
 
     #[test]
+    fn public_action_effects_keep_their_order_through_the_mirror() {
+        // A repeated write to one shard, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and settlement folds them in emission order.
+        let apply = |data: u8| lee_core::execution_state::DeferredPublicEffect {
+            program_account_id: lee_core::account::AccountId::new([1; 32]),
+            shard_program_account_id: lee_core::account::AccountId::new([2; 32]),
+            data: vec![data],
+        };
+        let action = lee::privacy_preserving_transaction::message::PublicActionWithID {
+            account_id: lee_core::account::AccountId::new([3; 32]),
+            effects: vec![apply(7), apply(8), apply(9), apply(7)],
+        };
+
+        let mirrored = PublicActionWithID::from(action.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PublicActionWithID = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::PublicActionWithID::from(restored),
+            action
+        );
+    }
+
+    #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
             account_id: lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
@@ -1042,7 +1086,7 @@ mod tests {
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
             lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::balance(signer_id)],
+            vec![lee::ProgramShardSelector::native_balance(signer_id)],
             vec![0_u128.into()],
             0_u32,
             fee,
@@ -1076,7 +1120,7 @@ mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::balance(signer_id)],
+            vec![lee::ProgramShardSelector::native_balance(signer_id)],
             vec![0_u128.into()],
             0_u32,
         )

@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{borrow::Borrow, ops::Deref};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
@@ -55,6 +55,12 @@ impl Deref for ShardData {
 
 impl AsRef<[u8]> for ShardData {
     fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Borrow<[u8]> for ShardData {
+    fn borrow(&self) -> &[u8] {
         &self.0
     }
 }

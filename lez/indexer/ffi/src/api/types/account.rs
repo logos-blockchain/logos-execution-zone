@@ -28,15 +28,6 @@ pub struct FfiAccount {
     pub shards_len: usize,
 }
 
-/// An account's program shards, the native balance among them.
-#[repr(C)]
-pub struct FfiAccountData {
-    /// Pointer to the account's shards.
-    pub shards: *mut FfiShard,
-    /// Number of shards.
-    pub shards_len: usize,
-}
-
 // Helper functions to convert between Rust and FFI types
 
 impl From<(lee::AccountId, lee::ShardData)> for FfiShard {
@@ -74,16 +65,6 @@ impl From<lee::Account> for FfiAccount {
     }
 }
 
-impl From<lee::AccountData> for FfiAccountData {
-    fn from(value: lee::AccountData) -> Self {
-        let lee::AccountData { shards } = value;
-
-        let (shards, shards_len) = shards_into_raw(shards);
-
-        Self { shards, shards_len }
-    }
-}
-
 impl From<FfiAccount> for indexer_service_protocol::Account {
     fn from(value: FfiAccount) -> Self {
         let FfiAccount {
@@ -114,16 +95,6 @@ impl From<&FfiAccount> for indexer_service_protocol::Account {
             data: indexer_service_protocol::AccountData {
                 shards: unsafe { shards_from_raw(shards, shards_len) },
             },
-        }
-    }
-}
-
-impl From<FfiAccountData> for indexer_service_protocol::AccountData {
-    fn from(value: FfiAccountData) -> Self {
-        let FfiAccountData { shards, shards_len } = value;
-
-        Self {
-            shards: unsafe { shards_from_raw(shards, shards_len) },
         }
     }
 }

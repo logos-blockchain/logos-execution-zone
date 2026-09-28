@@ -1,17 +1,16 @@
 use indexer_service_protocol::{
-    AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
-    EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector, Proof, PublicActionWithID,
-    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
-    WitnessSet,
+    AccountId, Ciphertext, Commitment, CommitmentSetDigest, DeferredPublicEffect,
+    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, Nullifier,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
+    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
-    account::FfiAccountData,
     vectors::{
         FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramShardSelectorList,
-        FfiProof, FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiProof, FfiPublicActionList, FfiPublicEffectList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -245,7 +244,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                             account_id: AccountId {
                                 value: ffi_val.account_id.data,
                             },
-                            post: ffi_val.post.into(),
+                            effects: {
+                                let ffi_effects: Vec<FfiPublicEffect> = ffi_val.effects.into();
+                                ffi_effects.into_iter().map(Into::into).collect()
+                            },
                         })
                         .collect()
                 },
@@ -298,20 +300,64 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
+pub struct FfiPublicEffect {
+    pub program_account_id: FfiAccountId,
+    pub shard_program_account_id: FfiAccountId,
+    pub data: FfiVecU8,
+}
+
+impl From<DeferredPublicEffect> for FfiPublicEffect {
+    fn from(value: DeferredPublicEffect) -> Self {
+        let DeferredPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data: data.into(),
+        }
+    }
+}
+
+impl From<FfiPublicEffect> for DeferredPublicEffect {
+    fn from(value: FfiPublicEffect) -> Self {
+        let FfiPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self {
+            program_account_id: AccountId {
+                value: program_account_id.data,
+            },
+            shard_program_account_id: AccountId {
+                value: shard_program_account_id.data,
+            },
+            data: data.into(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
-    pub post: FfiAccountData,
+    pub effects: FfiPublicEffectList,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
-        let post: lee::AccountData = value
-            .post
-            .try_into()
-            .expect("Source is in blocks, must fit");
         Self {
             account_id: value.account_id.into(),
-            post: post.into(),
+            effects: value
+                .effects
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -593,6 +639,37 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_action_effects_keep_their_order_over_the_ffi() {
+        let apply = |data: u8| DeferredPublicEffect {
+            program_account_id: AccountId { value: [1; 32] },
+            shard_program_account_id: AccountId { value: [2; 32] },
+            data: vec![data],
+        };
+        let original = PrivacyPreservingTransaction {
+            hash: HashType([4; 32]),
+            message: PrivacyPreservingMessage {
+                public_actions: vec![PublicActionWithID {
+                    account_id: AccountId { value: [3; 32] },
+                    effects: vec![apply(7), apply(8), apply(9), apply(7)],
+                }],
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow((None, None)),
+                timestamp_validity_window: ValidityWindow((None, None)),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: Some(Proof(vec![])),
+            },
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
+
+        assert_eq!(back.message.public_actions, original.message.public_actions);
+    }
 
     #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {

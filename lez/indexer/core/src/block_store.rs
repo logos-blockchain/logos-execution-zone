@@ -506,14 +506,16 @@ fn settled_test_block(
         transaction::{LeeTransaction, clock_invocation, fee_invocation},
     };
     let timestamp = id.saturating_mul(100);
-    let summary = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
+    let (summary, payout) = chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
         .expect("test transactions settle");
     let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
         &sequencer_sign_key_for_testing(),
     ));
     let mut transactions = txs;
-    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        summary, payout, producer,
+    )));
+    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
@@ -680,7 +682,9 @@ mod tests {
         let payer_nonce = u128::try_from(chunk_count.saturating_add(1)).unwrap();
         let message = lee::public_transaction::Message::try_new_with_fees(
             emitter_header_account_id(),
-            vec![ProgramShardSelector::balance(AccountId::new([42; 32]))],
+            vec![ProgramShardSelector::native_balance(AccountId::new(
+                [42; 32],
+            ))],
             vec![payer_nonce.into()],
             EmitterInstruction {
                 events,
@@ -766,8 +770,16 @@ mod tests {
 
         // Genesis (block 1): fee/clock only.
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
-        let initial_to = build_state.get_account_by_id(to).data.balance().unwrap();
+        let initial_from = build_state
+            .get_account_by_id(from)
+            .data
+            .native_balance()
+            .unwrap();
+        let initial_to = build_state
+            .get_account_by_id(to)
+            .data
+            .native_balance()
+            .unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -795,7 +807,7 @@ mod tests {
                 .await
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap()
                 < initial_from - 100
         );
@@ -805,7 +817,7 @@ mod tests {
                 .await
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             initial_to + 100
         );
@@ -825,8 +837,16 @@ mod tests {
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
-        let initial_to = build_state.get_account_by_id(to).data.balance().unwrap();
+        let initial_from = build_state
+            .get_account_by_id(from)
+            .data
+            .native_balance()
+            .unwrap();
+        let initial_to = build_state
+            .get_account_by_id(to)
+            .data
+            .native_balance()
+            .unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -847,7 +867,7 @@ mod tests {
                 .account_state_at_block(&from, 1)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             initial_from
         );
@@ -856,7 +876,7 @@ mod tests {
                 .account_state_at_block(&to, 1)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             initial_to
         );
@@ -867,7 +887,7 @@ mod tests {
                 .account_state_at_block(&from, 5)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap()
                 < initial_from - 40
         );
@@ -876,7 +896,7 @@ mod tests {
                 .account_state_at_block(&to, 5)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             initial_to + 40
         );
@@ -886,7 +906,7 @@ mod tests {
                 .account_state_at_block(&from, 9)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap()
                 < initial_from - 80
         );
@@ -895,7 +915,7 @@ mod tests {
                 .account_state_at_block(&to, 9)
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             initial_to + 80
         );
@@ -1540,7 +1560,7 @@ mod accept_tests {
             .await
             .unwrap()
             .data
-            .balance()
+            .native_balance()
             .unwrap();
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
@@ -1554,7 +1574,7 @@ mod accept_tests {
                 .await
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             balance_after,
             "re-delivered block must not be applied twice"
@@ -1625,7 +1645,7 @@ mod accept_tests {
             .await
             .unwrap()
             .data
-            .balance()
+            .native_balance()
             .unwrap();
 
         // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
@@ -1639,7 +1659,7 @@ mod accept_tests {
                 .await
                 .unwrap()
                 .data
-                .balance()
+                .native_balance()
                 .unwrap(),
             balance_after,
             "re-delivered block below the tip must not be applied again"
@@ -1668,7 +1688,11 @@ mod accept_tests {
         let sign_key = accounts[0].pub_sign_key.clone();
 
         let mut build_state = claimed_build_state();
-        let initial_from = build_state.get_account_by_id(from).data.balance().unwrap();
+        let initial_from = build_state
+            .get_account_by_id(from)
+            .data
+            .native_balance()
+            .unwrap();
         let genesis = produce_dummy_block(1, None, vec![]);
         chain_state::apply::apply_block_to_state(&genesis, &mut build_state)
             .expect("genesis applies");
@@ -1704,7 +1728,7 @@ mod accept_tests {
         // Snapshot at block 100 = genesis + 99 transfers (plus their fees),
         // written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
-        assert!(bp1.get_account_by_id(from).data.balance().unwrap() < initial_from - 99);
+        assert!(bp1.get_account_by_id(from).data.native_balance().unwrap() < initial_from - 99);
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);
@@ -1731,8 +1755,8 @@ mod accept_tests {
             let message = lee::public_transaction::Message::try_new(
                 programs::bridge_account_id(),
                 vec![
-                    ProgramShardSelector::balance(lee::AccountId::new([1_u8; 32])),
-                    ProgramShardSelector::balance(lee::AccountId::new([2_u8; 32])),
+                    ProgramShardSelector::native_balance(lee::AccountId::new([1_u8; 32])),
+                    ProgramShardSelector::native_balance(lee::AccountId::new([2_u8; 32])),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {

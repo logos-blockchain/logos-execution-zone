@@ -154,7 +154,7 @@ impl WalletActor {
                                 let balance = components
                                     .wallet
                                     .get_account_private(account_id)
-                                    .map(|account| account.data.balance().unwrap_or_default());
+                                    .map(|account| account.data.native_balance().unwrap_or_default());
                                 let _unused = response.send(Ok(balance));
                             }
                             WalletRequest::PrivateAccountCommitment {
@@ -204,7 +204,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(0),
+                                        to_identifier: Some(lee_core::Identifier::ZERO),
                                         amount,
                                     }),
                                 )
@@ -261,7 +261,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(0),
+                                        to_identifier: Some(lee_core::Identifier::ZERO),
                                         amount,
                                     }),
                                 )
@@ -367,7 +367,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(0),
+                                        to_identifier: Some(lee_core::Identifier::ZERO),
                                         amount,
                                     }),
                                 )

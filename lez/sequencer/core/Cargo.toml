@@ -23,6 +23,7 @@ testnet_initial_state.workspace = true
 fee_core.workspace = true
 bridge_core.workspace = true
 programs.workspace = true
+clock_core.workspace = true
 system_accounts.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true

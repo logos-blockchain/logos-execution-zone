@@ -9,7 +9,7 @@ use lee::{
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, ProgramImageClaim, encryption::Ciphertext,
-    program::ValidityWindow,
+    execution_state::DeferredPublicEffect, program::ValidityWindow,
 };
 use sequencer_executor_actor::protocol::Transaction;
 
@@ -18,10 +18,9 @@ use crate::{
     api::types::{
         FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
         FfiVec,
-        account::FfiAccountData,
         vectors::{
             FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
-            FfiPublicActionList, FfiSignaturePubKeyList, FfiVecU8,
+            FfiPublicActionList, FfiPublicEffectList, FfiSignaturePubKeyList, FfiVecU8,
         },
     },
 };
@@ -306,7 +305,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     for ffi_val in std_vec {
                         cast_vec.push(PublicActionWithID {
                             account_id: AccountId::new(ffi_val.account_id.data),
-                            post: ffi_val.post.try_into()?,
+                            effects: {
+                                let ffi_effects: Vec<FfiPublicEffect> = ffi_val.effects.into();
+                                ffi_effects.into_iter().map(Into::into).collect()
+                            },
                         });
                     }
 
@@ -371,16 +373,60 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
+pub struct FfiPublicEffect {
+    pub program_account_id: FfiAccountId,
+    pub shard_program_account_id: FfiAccountId,
+    pub data: FfiVecU8,
+}
+
+impl From<DeferredPublicEffect> for FfiPublicEffect {
+    fn from(value: DeferredPublicEffect) -> Self {
+        let DeferredPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self {
+            program_account_id: program_account_id.into(),
+            shard_program_account_id: shard_program_account_id.into(),
+            data: data.into(),
+        }
+    }
+}
+
+impl From<FfiPublicEffect> for DeferredPublicEffect {
+    fn from(value: FfiPublicEffect) -> Self {
+        let FfiPublicEffect {
+            program_account_id,
+            shard_program_account_id,
+            data,
+        } = value;
+
+        Self {
+            program_account_id: AccountId::new(program_account_id.data),
+            shard_program_account_id: AccountId::new(shard_program_account_id.data),
+            data: data.into(),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiPublicAction {
     pub account_id: FfiAccountId,
-    pub post: FfiAccountData,
+    pub effects: FfiPublicEffectList,
 }
 
 impl From<PublicActionWithID> for FfiPublicAction {
     fn from(value: PublicActionWithID) -> Self {
         Self {
             account_id: value.account_id.into(),
-            post: value.post.into(),
+            effects: value
+                .effects
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }

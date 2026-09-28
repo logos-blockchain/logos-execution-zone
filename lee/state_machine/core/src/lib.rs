@@ -5,8 +5,8 @@
 
 pub use circuit_io::{
     DummyInput, NullifierWitness, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateAction, PrivateWitness, ProgramImageClaim, ProgramImageWitness, PublicAction,
-    ShadowProgramWitness, WitnessKind,
+    PrivateAction, PrivateWitness, ProgramImageClaim, ProgramImageWitness, ProvenCall,
+    PublicAction, ShadowProgramWitness, WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
@@ -18,7 +18,8 @@ pub use encryption::{
 };
 pub use frame::{from_frame, to_borsh_frame, to_frame};
 pub use nullifier::{
-    AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, Identifier, IdentifierError, Nullifier, NullifierPublicKey,
+    NullifierSecretKey,
 };
 pub use program::PrivateAccountKind;
 
@@ -28,11 +29,11 @@ mod commitment;
 mod encoding;
 pub mod encryption;
 pub mod error;
+pub mod execution_state;
 mod frame;
 pub mod native_token;
 mod nullifier;
 pub mod program;
-pub mod validation;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;
 

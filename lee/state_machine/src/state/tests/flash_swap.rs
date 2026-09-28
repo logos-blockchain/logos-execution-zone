@@ -37,6 +37,7 @@ fn flash_swap_successful() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
@@ -46,10 +47,13 @@ fn flash_swap_successful() {
 
     // Vault balance restored, receiver back to 0
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance(),
+        state.get_account_by_id(vault_id).data.native_balance(),
         Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
+    assert_eq!(
+        state.get_account_by_id(receiver_id).data.native_balance(),
+        Ok(0)
+    );
 }
 
 #[test]
@@ -89,6 +93,7 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
@@ -103,10 +108,140 @@ fn flash_swap_callback_keeps_funds_rollback() {
 
     // State unchanged (rollback)
     assert_eq!(
-        state.get_account_by_id(vault_id).data.balance(),
+        state.get_account_by_id(vault_id).data.native_balance(),
         Ok(initial_balance)
     );
-    assert_eq!(state.get_account_by_id(receiver_id).data.balance(), Ok(0));
+    assert_eq!(
+        state.get_account_by_id(receiver_id).data.native_balance(),
+        Ok(0)
+    );
+}
+
+#[test]
+fn flash_swap_stale_vault_balance_proposal_rejected() {
+    let initiator = crate::test_methods::flash_swap_initiator();
+    let callback = crate::test_methods::flash_swap_callback();
+
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(callback.id()),
+        &PdaSeed::new([1; 32]),
+    );
+
+    let initial_balance: u128 = 1000;
+    let amount_out: u128 = 100;
+
+    let vault_account = Account::funded(initial_balance);
+    let receiver_account = Account::default();
+
+    let mut state = V03State::new().with_test_programs();
+    state.force_insert_account(vault_id, vault_account);
+    state.force_insert_account(receiver_id, receiver_account);
+
+    // Callback returns funds correctly — only the proposed vault balance is wrong.
+    let cb_instruction = CallbackInstruction {
+        return_funds: true,
+        amount: amount_out,
+    };
+    let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
+
+    let instruction = FlashSwapInstruction::Initiate {
+        callback_program_id: AccountId::from_builtin_program(callback.id()),
+        amount_out,
+        vault_balance: initial_balance + 1, // does not match the vault's real balance
+        callback_instruction_data: cb_data,
+    };
+
+    let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    // The guard rejects the mismatched proposal → entire tx rolls back.
+    assert!(
+        result.is_err(),
+        "flash swap should fail when the proposed vault balance is stale"
+    );
+
+    // State unchanged (rollback)
+    assert_eq!(
+        state.get_account_by_id(vault_id).data.native_balance(),
+        Ok(initial_balance)
+    );
+    assert_eq!(
+        state.get_account_by_id(receiver_id).data.native_balance(),
+        Ok(0)
+    );
+}
+
+#[test]
+fn flash_swap_rejects_a_vault_row_that_names_a_foreign_shard() {
+    let initiator = crate::test_methods::flash_swap_initiator();
+    let callback = crate::test_methods::flash_swap_callback();
+
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(callback.id()),
+        &PdaSeed::new([1; 32]),
+    );
+    let foreign = AccountId::new([7; 32]);
+
+    let initial_balance: u128 = 1000;
+    let amount_out: u128 = 100;
+
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::flash_swap_callback(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
+    state.force_insert_account(vault_id, Account::funded(initial_balance));
+    state.force_insert_account(receiver_id, Account::default());
+
+    // The vault's foreign shard is empty, so a zero proposal and a zero floor would both hold
+    // there while the lent funds leave its native balance and the callback keeps them.
+    let cb_instruction = CallbackInstruction {
+        return_funds: false,
+        amount: amount_out,
+    };
+    let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
+    let message = public_transaction::Message::try_new(
+        AccountId::from_builtin_program(initiator.id()),
+        vec![
+            ProgramShardSelector::new(vault_id, foreign),
+            ProgramShardSelector::native_balance(receiver_id),
+        ],
+        vec![],
+        FlashSwapInstruction::Initiate {
+            callback_program_id: AccountId::from_builtin_program(callback.id()),
+            amount_out,
+            vault_balance: 0,
+            callback_instruction_data: cb_data,
+        },
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    let expected = format!(
+        "An effect on {vault_id} names the shard of {foreign}, not of {NATIVE_TOKEN_PROGRAM_ID}"
+    );
+    assert!(
+        matches!(&result, Err(LeeError::ProgramExecutionFailed(message)) if message.contains(&expected)),
+        "the owner check must reject the vault guard at planning: {result:?}"
+    );
+
+    assert_eq!(
+        state.get_account_by_id(vault_id).data.native_balance(),
+        Ok(initial_balance)
+    );
+    assert_eq!(
+        state.get_account_by_id(receiver_id).data.native_balance(),
+        Ok(0)
+    );
 }
 
 #[test]
@@ -146,6 +281,7 @@ fn flash_swap_self_call_targets_correct_program() {
     let instruction = FlashSwapInstruction::Initiate {
         callback_program_id: AccountId::from_builtin_program(callback.id()),
         amount_out: 0,
+        vault_balance: initial_balance,
         callback_instruction_data: cb_data,
     };
 
@@ -179,7 +315,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(initiator.id()),
-        vec![ProgramShardSelector::balance(vault_id)],
+        vec![ProgramShardSelector::native_balance(vault_id)],
         vec![],
         instruction,
     )
@@ -206,7 +342,7 @@ fn malicious_self_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
-        vec![ProgramShardSelector::balance(acc_id)],
+        vec![ProgramShardSelector::native_balance(acc_id)],
         vec![],
         (),
     )
@@ -233,7 +369,7 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
-        vec![ProgramShardSelector::balance(acc_id)],
+        vec![ProgramShardSelector::native_balance(acc_id)],
         vec![],
         (),
     )

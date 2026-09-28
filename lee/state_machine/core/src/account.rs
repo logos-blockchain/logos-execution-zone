@@ -10,7 +10,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use crate::{
     NullifierSecretKey,
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::ShardStateDiff,
+    program::ApplyOutput,
 };
 
 pub mod data;
@@ -164,13 +164,13 @@ impl AccountData {
         self
     }
 
-    pub fn balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
+    pub fn native_balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
         decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    pub fn apply_diff(&mut self, diff: &ShardStateDiff) {
-        if let Some(data) = &diff.post_data {
-            self.set_shard(diff.pre_state.shard.0, data.clone());
+    pub fn apply_output(&mut self, output: &ApplyOutput) {
+        if let Some(data) = &output.post_data {
+            self.set_shard(output.input.selector.program_account_id, data.clone());
         }
     }
 
@@ -186,7 +186,7 @@ impl AccountData {
     }
 
     /// Updates the supplied shards. Empty data removes a shard.
-    pub fn apply(&mut self, projection: &Self) {
+    pub fn update(&mut self, projection: &Self) {
         for (program, data) in &projection.shards {
             self.set_shard(*program, data.clone());
         }
@@ -221,7 +221,7 @@ impl ProgramShardSelector {
     }
 
     #[must_use]
-    pub const fn balance(account_id: AccountId) -> Self {
+    pub const fn native_balance(account_id: AccountId) -> Self {
         Self::new(account_id, NATIVE_TOKEN_PROGRAM_ID)
     }
 }
@@ -304,14 +304,14 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::AccountInput;
+    use crate::program::ApplyInput;
 
     #[test]
     fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
         let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
             .expect("the stored shape loads");
         assert_eq!(current.nonce, Nonce(7));
-        assert_eq!(current.data.balance(), Ok(0));
+        assert_eq!(current.data.native_balance(), Ok(0));
 
         let legacy =
             serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
@@ -323,7 +323,7 @@ mod tests {
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.data.balance(), Ok(0));
+        assert_eq!(new_acc.data.native_balance(), Ok(0));
     }
 
     #[test]
@@ -428,52 +428,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_diff_prunes_an_emptied_shard() {
+    fn apply_output_prunes_an_emptied_shard() {
         let program = AccountId::new([3; 32]);
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.data.apply_diff(&ShardStateDiff::new(
-            AccountInput::with_shard(
-                AccountId::new([1; 32]),
-                true,
-                program,
-                b"record".to_vec().try_into().unwrap(),
-            ),
-            ShardData::empty(),
-        ));
+        account.data.apply_output(&ApplyOutput {
+            input: ApplyInput {
+                self_account_id: program,
+                selector: ProgramShardSelector::new(AccountId::new([1; 32]), program),
+                pre_data: b"record".to_vec().try_into().unwrap(),
+                effect_data: Vec::new(),
+            },
+            post_data: Some(ShardData::empty()),
+        });
 
         assert!(!account.data.shards.contains_key(&program));
         assert_eq!(account, Account::funded(10));
-    }
-
-    #[test]
-    fn input_at_reads_a_vacant_shard_as_empty() {
-        let account_id = AccountId::new([1; 32]);
-        let program = AccountId::new([3; 32]);
-        let data = Account::funded(42).data;
-
-        let input = AccountInput::at(ProgramShardSelector::new(account_id, program), true, &data);
-
-        assert_eq!(input.program_account_id(), program);
-        assert!(input.shard_of(program).is_empty());
-    }
-
-    #[test]
-    fn input_at_of_a_balance_shard_selector_carries_the_native_shard() {
-        let account_id = AccountId::new([1; 32]);
-        let data = Account::funded(42).data.with_shard(
-            AccountId::new([3; 32]),
-            b"record".to_vec().try_into().unwrap(),
-        );
-
-        let input = AccountInput::at(ProgramShardSelector::balance(account_id), false, &data);
-
-        assert_eq!(input.program_account_id(), NATIVE_TOKEN_PROGRAM_ID);
-        assert_eq!(
-            decode_balance(input.shard_of(NATIVE_TOKEN_PROGRAM_ID)),
-            Ok(42)
-        );
     }
 
     #[test]
@@ -486,7 +457,7 @@ mod tests {
 
         let projection = data.project([held, absent]);
 
-        assert_eq!(projection.balance(), Ok(0));
+        assert_eq!(projection.native_balance(), Ok(0));
         assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
         assert_eq!(projection.shards.len(), 2);
     }
@@ -499,12 +470,12 @@ mod tests {
             ..Account::funded(9).with_shard(program, b"record".to_vec().try_into().unwrap())
         };
 
-        account.data.apply(&AccountData {
+        account.data.update(&AccountData {
             shards: [(program, ShardData::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));
-        assert_eq!(account.data.balance(), Ok(9));
+        assert_eq!(account.data.native_balance(), Ok(9));
         assert_eq!(account.data.shards.len(), 1);
     }
 
@@ -518,7 +489,7 @@ mod tests {
             .with_shard(untouched, b"other".to_vec().try_into().unwrap());
 
         let mut applied = data.clone();
-        applied.apply(&data.project([touched]));
+        applied.update(&data.project([touched]));
 
         assert_eq!(applied, data);
     }
@@ -538,7 +509,7 @@ mod tests {
 
         assert_eq!(account, restored);
         assert_eq!(restored.nonce, Nonce(u128::MAX));
-        assert_eq!(restored.data.balance(), Ok(u128::MAX));
+        assert_eq!(restored.data.native_balance(), Ok(u128::MAX));
     }
 
     #[test]

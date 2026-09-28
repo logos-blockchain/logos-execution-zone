@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
+use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
-use lee_core::{account::AccountId, program::InstructionData};
 use serde::{Deserialize, Serialize};
 
 const INVALID_KEY: &str = "invalid Ed25519 public key";
@@ -14,6 +14,8 @@ const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 pub const SEQUENCER_STAKE_NAME: [u8; 15] = *b"sequencer_stake";
+/// Blocks before `requested_at` in which an `UnstakeRequest` may land.
+pub const UNSTAKE_REQUEST_WINDOW: u64 = 16;
 
 /// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
 /// public key.
@@ -75,23 +77,27 @@ pub enum Instruction {
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
-        mover_account_id: AccountId,
-        mover_instruction_data: InstructionData,
+        has_record: bool,
     },
-
-    /// Self-chained only: verifies the mover deposited `expected_balance_after`.
-    ConfirmStake { expected_balance_after: u128 },
 
     /// Records a request to release `amount` to `destination`; no balance
     /// moves yet. Must leave the account at zero or at/above the minimum.
     UnstakeRequest {
+        sequencer_key: SequencerKey,
         amount: u128,
         destination: AccountId,
+        /// The latest block the request may land in, dating the exit delay.
+        requested_at: u64,
     },
 
-    /// Unsigned, permissionless: releases a pending `UnstakeRequest`.
-    /// Block-inclusion validity is enforced outside this program.
-    FinalizeUnstake,
+    /// Unsigned, permissionless: releases a pending `UnstakeRequest` once
+    /// [`ChannelParams::exit_delay`] blocks have passed since it.
+    FinalizeUnstake {
+        sequencer_key: SequencerKey,
+        amount: u128,
+        requested_at: u64,
+        exit_delay: u64,
+    },
 
     /// Sets the channel params and the channel id once, at genesis. Rejected
     /// once they are set, so nothing can move them afterwards.
@@ -104,11 +110,15 @@ pub enum Instruction {
     /// Burns the key's whole stake to the sink and removes its entry.
     ///
     /// Only `approvals` authorize this. The reason for the offence is not checked.
+    ///
+    /// `total_staked` is the burn amount, proposed here and required by the config effect to
+    /// be the entry's actual tracked stake.
     Slash {
         sequencer_key: SequencerKey,
         /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
         inscription: [u8; 32],
         approvals: Vec<SlashApproval>,
+        total_staked: u128,
     },
 }
 
@@ -146,6 +156,16 @@ impl StakeRecord {
 pub struct PendingUnstake {
     pub amount: u128,
     pub destination: AccountId,
+    /// The latest block the request could land in.
+    pub requested_at: u64,
+}
+
+impl PendingUnstake {
+    /// The first block `FinalizeUnstake` may land in.
+    #[must_use]
+    pub const fn releasable_at(&self, exit_delay: u64) -> u64 {
+        self.requested_at.saturating_add(exit_delay)
+    }
 }
 
 /// The values genesis fixes for the chain's life.
@@ -171,6 +191,8 @@ pub struct ChannelParams {
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
+    /// Blocks an unstake waits before `FinalizeUnstake` may release it.
+    pub exit_delay: u64,
 }
 
 /// Minimum stake and per-key standing, stored in this program's config shard.
@@ -376,6 +398,7 @@ mod tests {
             pending_unstake: Some(PendingUnstake {
                 amount: 42,
                 destination: test_destination(),
+                requested_at: 3,
             }),
         };
         let bytes = record.to_bytes();
@@ -397,6 +420,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                exit_delay: 10,
             }),
             channel_id: Some([0xC1; 32]),
             entries,
@@ -418,6 +442,7 @@ mod tests {
             Some(PendingUnstake {
                 amount: 0,
                 destination: AccountId::new([0; 32]),
+                requested_at: 0,
             }),
         ] {
             let bytes = StakeRecord {
@@ -577,6 +602,7 @@ mod tests {
                 minimum_sequencer_stake: 1_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
+                exit_delay: 10,
             }),
             channel_id: Some([0xC1; 32]),
             entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),

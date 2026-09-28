@@ -1,360 +1,123 @@
-pub use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
+use amm_core::{PoolDefinition, compute_vault_pda_seed};
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
-    program::{AccountInput, ChainedCall, ShardStateDiff},
+    account::{AccountId, ShardData},
+    program::{AccountMeta, Plan},
 };
 
-/// Validates swap setup: checks pool is active, vaults match, and reserves are sufficient.
-fn validate_swap_setup(
-    pool: &AccountInput,
-    vault_a: &AccountInput,
-    vault_b: &AccountInput,
-    self_account_id: AccountId,
-) -> PoolDefinition {
-    let pool_def_data = PoolDefinition::try_from(pool.shard_of(self_account_id))
+use crate::{Effect, transfer_call};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SwapBinding {
+    pub token_program_id: AccountId,
+    pub input_vault_id: AccountId,
+    pub output_vault_id: AccountId,
+    pub definition_id_in: AccountId,
+    pub definition_id_out: AccountId,
+    pub amount_in: u128,
+    pub amount_out: u128,
+}
+
+pub fn swap(plan: &mut Plan, accounts: &[AccountMeta; 5], binding: SwapBinding) {
+    let [pool, input_vault, output_vault, user_input, user_output] = accounts;
+
+    assert!(
+        binding.amount_in != 0 && binding.amount_out != 0,
+        "Swap amounts must be nonzero"
+    );
+    // A trader holding that is also a vault would turn a self-transfer into new funding.
+    for user in [user_input, user_output] {
+        assert!(
+            user.account_id != input_vault.account_id && user.account_id != output_vault.account_id,
+            "A trader holding cannot be a pool vault"
+        );
+    }
+
+    // An `amount_out` the pool cannot afford is a vault drain: the withdraw leg pays it out of
+    // reserves that never backed it. `Effect::Swap` checks the offer against the live pool
+    // before any leg runs.
+    plan.effect(pool, &Effect::Swap(binding));
+
+    plan.call(transfer_call(
+        binding.token_program_id,
+        user_input,
+        input_vault,
+        binding.definition_id_in,
+        binding.amount_in,
+    ));
+    plan.call(
+        transfer_call(
+            binding.token_program_id,
+            output_vault,
+            user_output,
+            binding.definition_id_out,
+            binding.amount_out,
+        )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
+            pool.account_id,
+            binding.definition_id_out,
+        )]),
+    );
+}
+
+// Accepts any offer the live curve can afford and keeps the rest of the quote in the reserves.
+// Vault backing, not a guard here, keeps the paid-out reserve real: only this program can debit
+// a vault, and every reserve change it records is paired with an equal transfer.
+#[must_use]
+pub fn pool_after_swap(pre_data: &ShardData, binding: &SwapBinding) -> ShardData {
+    let pool = PoolDefinition::try_from(pre_data)
         .expect("AMM Program expects a valid Pool Definition Account");
 
-    assert!(pool_def_data.active, "Pool is inactive");
+    assert!(pool.active, "Pool is inactive");
     assert_eq!(
-        vault_a.account_id, pool_def_data.vault_a_id,
-        "Vault A was not provided"
+        pool.token_program_id, binding.token_program_id,
+        "Swap routes through a token program the pool does not use"
+    );
+
+    let (input, output) = pool
+        .sides(binding.definition_id_in)
+        .expect("AccountId is not a token type for the pool");
+    assert_eq!(
+        binding.definition_id_out, output.definition_id,
+        "AccountId is not a token type for the pool"
     );
     assert_eq!(
-        vault_b.account_id, pool_def_data.vault_b_id,
-        "Vault B was not provided"
+        binding.input_vault_id, input.vault_id,
+        "Input vault was not provided"
+    );
+    assert_eq!(
+        binding.output_vault_id, output.vault_id,
+        "Output vault was not provided"
+    );
+    let (reserve_in, reserve_out) = (input.reserve, output.reserve);
+
+    assert!(
+        reserve_in != 0 && reserve_out != 0,
+        "Pool reserves must be nonzero"
+    );
+    assert!(
+        binding.amount_out < reserve_out,
+        "Swap output exhausts the reserve"
+    );
+    let quote = amm_core::quote_exact_input(reserve_in, reserve_out, binding.amount_in)
+        .expect("reserve * amount_in overflows u128");
+    assert!(
+        binding.amount_out <= quote,
+        "The pool cannot afford this offer at its live price"
     );
 
-    let vault_a_token_holding =
-        token_core::TokenHolding::try_from(vault_a.shard_of(pool_def_data.token_program_id))
-            .expect("AMM Program expects a valid Token Holding Account for Vault A");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_a_balance,
-    } = vault_a_token_holding
-    else {
-        panic!("AMM Program expects a valid Fungible Token Holding Account for Vault A");
+    // The quote already summed the input reserve and refused an overflow.
+    let reserve_in = reserve_in + binding.amount_in;
+    let reserve_out = reserve_out - binding.amount_out;
+    let (reserve_a, reserve_b) = if input.definition_id == pool.definition_token_a_id {
+        (reserve_in, reserve_out)
+    } else {
+        (reserve_out, reserve_in)
     };
 
-    assert!(
-        vault_a_balance >= pool_def_data.reserve_a,
-        "Reserve for Token A exceeds vault balance"
-    );
-
-    let vault_b_token_holding =
-        token_core::TokenHolding::try_from(vault_b.shard_of(pool_def_data.token_program_id))
-            .expect("AMM Program expects a valid Token Holding Account for Vault B");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_b_balance,
-    } = vault_b_token_holding
-    else {
-        panic!("AMM Program expects a valid Fungible Token Holding Account for Vault B");
-    };
-
-    assert!(
-        vault_b_balance >= pool_def_data.reserve_b,
-        "Reserve for Token B exceeds vault balance"
-    );
-
-    pool_def_data
-}
-
-/// Creates post-state and returns reserves after swap.
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "consistent with codebase style"
-)]
-fn create_swap_post_diffs(
-    pool: AccountInput,
-    pool_def_data: PoolDefinition,
-    vault_a: AccountInput,
-    vault_b: AccountInput,
-    user_holding_a: AccountInput,
-    user_holding_b: AccountInput,
-    deposit_a: u128,
-    withdraw_a: u128,
-    deposit_b: u128,
-    withdraw_b: u128,
-) -> Vec<ShardStateDiff> {
-    let pool_post_definition = PoolDefinition {
-        reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
-        reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
-        ..pool_def_data
-    };
-
-    vec![
-        ShardStateDiff::new(pool, ShardData::from(&pool_post_definition)),
-        ShardStateDiff::unchanged(vault_a),
-        ShardStateDiff::unchanged(vault_b),
-        ShardStateDiff::unchanged(user_holding_a),
-        ShardStateDiff::unchanged(user_holding_b),
-    ]
-}
-
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-#[must_use]
-pub fn swap_exact_input(
-    pool: AccountInput,
-    vault_a: AccountInput,
-    vault_b: AccountInput,
-    user_holding_a: AccountInput,
-    user_holding_b: AccountInput,
-    swap_amount_in: u128,
-    min_amount_out: u128,
-    token_in_id: AccountId,
-    self_account_id: AccountId,
-) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_account_id);
-
-    let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
-        if token_in_id == pool_def_data.definition_token_a_id {
-            let (chained_calls, deposit_a, withdraw_b) = swap_logic(
-                &user_holding_a,
-                &vault_a,
-                &vault_b,
-                &user_holding_b,
-                swap_amount_in,
-                min_amount_out,
-                pool_def_data.reserve_a,
-                pool_def_data.reserve_b,
-                pool.account_id,
-                pool_def_data.token_program_id,
-            );
-
-            (chained_calls, [deposit_a, 0], [0, withdraw_b])
-        } else if token_in_id == pool_def_data.definition_token_b_id {
-            let (chained_calls, deposit_b, withdraw_a) = swap_logic(
-                &user_holding_b,
-                &vault_b,
-                &vault_a,
-                &user_holding_a,
-                swap_amount_in,
-                min_amount_out,
-                pool_def_data.reserve_b,
-                pool_def_data.reserve_a,
-                pool.account_id,
-                pool_def_data.token_program_id,
-            );
-
-            (chained_calls, [0, withdraw_a], [deposit_b, 0])
-        } else {
-            panic!("AccountId is not a token type for the pool");
-        };
-
-    let post_diffs = create_swap_post_diffs(
-        pool,
-        pool_def_data,
-        vault_a,
-        vault_b,
-        user_holding_a,
-        user_holding_b,
-        deposit_a,
-        withdraw_a,
-        deposit_b,
-        withdraw_b,
-    );
-
-    (post_diffs, chained_calls)
-}
-
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-fn swap_logic(
-    user_deposit: &AccountInput,
-    vault_deposit: &AccountInput,
-    vault_withdraw: &AccountInput,
-    user_withdraw: &AccountInput,
-    swap_amount_in: u128,
-    min_amount_out: u128,
-    reserve_deposit_vault_amount: u128,
-    reserve_withdraw_vault_amount: u128,
-    pool_id: AccountId,
-    token_program_id: AccountId,
-) -> (Vec<ChainedCall>, u128, u128) {
-    // Compute withdraw amount
-    // Maintains pool constant product
-    // k = pool_def_data.reserve_a * pool_def_data.reserve_b;
-    let withdraw_amount = reserve_withdraw_vault_amount
-        .checked_mul(swap_amount_in)
-        .expect("reserve * amount_in overflows u128")
-        / (reserve_deposit_vault_amount + swap_amount_in);
-
-    // Slippage check
-    assert!(
-        min_amount_out <= withdraw_amount,
-        "Withdraw amount is less than minimal amount out"
-    );
-    assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
-
-    let mut chained_calls = Vec::new();
-    chained_calls.push(ChainedCall::new(
-        token_program_id,
-        vec![
-            ProgramShardSelector::from(user_deposit),
-            ProgramShardSelector::from(vault_deposit),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: swap_amount_in,
-        },
-    ));
-
-    let pda_seed = compute_vault_pda_seed(
-        pool_id,
-        token_core::TokenHolding::try_from(vault_withdraw.shard_of(token_program_id))
-            .expect("Swap Logic: AMM Program expects valid token data")
-            .definition_id(),
-    );
-
-    chained_calls.push(
-        ChainedCall::new(
-            token_program_id,
-            vec![
-                ProgramShardSelector::from(vault_withdraw),
-                ProgramShardSelector::from(user_withdraw),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: withdraw_amount,
-            },
-        )
-        .with_pda_seeds(vec![pda_seed]),
-    );
-
-    (chained_calls, swap_amount_in, withdraw_amount)
-}
-
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-#[must_use]
-pub fn swap_exact_output(
-    pool: AccountInput,
-    vault_a: AccountInput,
-    vault_b: AccountInput,
-    user_holding_a: AccountInput,
-    user_holding_b: AccountInput,
-    exact_amount_out: u128,
-    max_amount_in: u128,
-    token_in_id: AccountId,
-    self_account_id: AccountId,
-) -> (Vec<ShardStateDiff>, Vec<ChainedCall>) {
-    let pool_def_data = validate_swap_setup(&pool, &vault_a, &vault_b, self_account_id);
-
-    let (chained_calls, [deposit_a, withdraw_a], [deposit_b, withdraw_b]) =
-        if token_in_id == pool_def_data.definition_token_a_id {
-            let (chained_calls, deposit_a, withdraw_b) = exact_output_swap_logic(
-                &user_holding_a,
-                &vault_a,
-                &vault_b,
-                &user_holding_b,
-                exact_amount_out,
-                max_amount_in,
-                pool_def_data.reserve_a,
-                pool_def_data.reserve_b,
-                pool.account_id,
-                pool_def_data.token_program_id,
-            );
-
-            (chained_calls, [deposit_a, 0], [0, withdraw_b])
-        } else if token_in_id == pool_def_data.definition_token_b_id {
-            let (chained_calls, deposit_b, withdraw_a) = exact_output_swap_logic(
-                &user_holding_b,
-                &vault_b,
-                &vault_a,
-                &user_holding_a,
-                exact_amount_out,
-                max_amount_in,
-                pool_def_data.reserve_b,
-                pool_def_data.reserve_a,
-                pool.account_id,
-                pool_def_data.token_program_id,
-            );
-
-            (chained_calls, [0, withdraw_a], [deposit_b, 0])
-        } else {
-            panic!("AccountId is not a token type for the pool");
-        };
-
-    let post_diffs = create_swap_post_diffs(
-        pool,
-        pool_def_data,
-        vault_a,
-        vault_b,
-        user_holding_a,
-        user_holding_b,
-        deposit_a,
-        withdraw_a,
-        deposit_b,
-        withdraw_b,
-    );
-
-    (post_diffs, chained_calls)
-}
-
-#[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
-fn exact_output_swap_logic(
-    user_deposit: &AccountInput,
-    vault_deposit: &AccountInput,
-    vault_withdraw: &AccountInput,
-    user_withdraw: &AccountInput,
-    exact_amount_out: u128,
-    max_amount_in: u128,
-    reserve_deposit_vault_amount: u128,
-    reserve_withdraw_vault_amount: u128,
-    pool_id: AccountId,
-    token_program_id: AccountId,
-) -> (Vec<ChainedCall>, u128, u128) {
-    // Guard: exact_amount_out must be nonzero
-    assert_ne!(exact_amount_out, 0, "Exact amount out must be nonzero");
-
-    // Guard: exact_amount_out must be less than reserve_withdraw_vault_amount
-    assert!(
-        exact_amount_out < reserve_withdraw_vault_amount,
-        "Exact amount out exceeds reserve"
-    );
-
-    // Compute deposit amount using ceiling division
-    // Formula: amount_in = ceil(reserve_in * exact_amount_out / (reserve_out - exact_amount_out))
-    let deposit_amount = reserve_deposit_vault_amount
-        .checked_mul(exact_amount_out)
-        .expect("reserve * amount_out overflows u128")
-        .div_ceil(reserve_withdraw_vault_amount - exact_amount_out);
-
-    // Slippage check
-    assert!(
-        deposit_amount <= max_amount_in,
-        "Required input exceeds maximum amount in"
-    );
-
-    let mut chained_calls = Vec::new();
-    chained_calls.push(ChainedCall::new(
-        token_program_id,
-        vec![
-            ProgramShardSelector::from(user_deposit),
-            ProgramShardSelector::from(vault_deposit),
-        ],
-        &token_core::Instruction::Transfer {
-            amount_to_transfer: deposit_amount,
-        },
-    ));
-
-    let pda_seed = compute_vault_pda_seed(
-        pool_id,
-        token_core::TokenHolding::try_from(vault_withdraw.shard_of(token_program_id))
-            .expect("Exact Output Swap Logic: AMM Program expects valid token data")
-            .definition_id(),
-    );
-
-    chained_calls.push(
-        ChainedCall::new(
-            token_program_id,
-            vec![
-                ProgramShardSelector::from(vault_withdraw),
-                ProgramShardSelector::from(user_withdraw),
-            ],
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: exact_amount_out,
-            },
-        )
-        .with_pda_seeds(vec![pda_seed]),
-    );
-
-    (chained_calls, deposit_amount, exact_amount_out)
+    ShardData::from(&PoolDefinition {
+        reserve_a,
+        reserve_b,
+        ..pool
+    })
 }
