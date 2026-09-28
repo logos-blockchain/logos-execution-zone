@@ -203,6 +203,8 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use lee_core::Identifier;
 
     use super::*;
@@ -240,6 +242,29 @@ mod tests {
 
         storage.set_last_synced_block(42);
 
+        let program_account = lee::AccountId::new([9; 32]);
+        let participant = lee::AccountId::new([5; 32]);
+        let reference = [7; 32];
+        let mut intent = referral::ReferralIntent::new(program_account);
+        intent.registration = Some(referral::PendingRegistration {
+            node: referral_core::NodeId::new([7; 32]),
+            referrer: Some(referral_core::NodeId::new([8; 32])),
+            signature: Some(referral_core::ed25519_dalek::Signature::from_bytes(
+                &[3; 64],
+            )),
+        });
+        intent.invitation = Some(referral_core::Invitation::new(
+            referral_core::NodeId::new([8; 32]),
+            lee_core::NullifierPublicKey([1; 32]),
+            lee_core::encryption::ViewingPublicKey::from_seed(&[2; 32], &[3; 32]),
+        ));
+        storage.referral_mut().intents.insert(participant, intent);
+        storage.referral_mut().record_operation(register_operation(
+            reference,
+            program_account,
+            participant,
+        ));
+
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");
 
@@ -247,6 +272,40 @@ mod tests {
         let loaded_store = Storage::from_path(&storage_path).unwrap();
 
         assert_eq!(loaded_store, storage);
+    }
+
+    fn register_operation(
+        reference: [u8; 32],
+        program_account: lee::AccountId,
+        participant: lee::AccountId,
+    ) -> referral::PendingOperation {
+        let key = lee::PrivateKey::new_os_random();
+        let message = lee::public_transaction::Message::try_new(
+            program_account,
+            vec![lee::ProgramShardSelector::native_balance(
+                lee::AccountId::new([4; 32]),
+            )],
+            vec![lee_core::account::Nonce::default()],
+            referral_core::Instruction::Publish {
+                epoch: 0,
+                active: BTreeSet::new(),
+            },
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&key]);
+        let transaction = common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            witness_set,
+        ));
+
+        referral::PendingOperation {
+            reference,
+            program_account,
+            operation: referral::OperationKind::Register { participant },
+            transaction,
+            input_commitments: Vec::new(),
+            status: referral::SubmissionStatus::Pending,
+        }
     }
 
     #[test]
