@@ -123,6 +123,18 @@ pub struct ApplyInput {
 pub struct ApplyOutput {
     pub input: ApplyInput,
     pub post_data: Option<ShardData>,
+    pub chained_calls: Vec<ChainedCall>,
+}
+
+impl ApplyOutput {
+    #[must_use]
+    pub const fn new(input: ApplyInput, post_data: Option<ShardData>) -> Self {
+        Self {
+            input,
+            post_data,
+            chained_calls: Vec::new(),
+        }
+    }
 }
 
 /// Struct encoding the input to an LEE program.
@@ -681,6 +693,9 @@ pub enum ExecutionValidationError {
         account_id: AccountId,
         executing_account_id: AccountId,
     },
+
+    #[error("A program's apply returned chained calls, which are not supported")]
+    ChainedCallsFromApply,
 }
 
 /// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
@@ -835,20 +850,12 @@ pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
 }
 
 pub fn apply_keep(input: ApplyInput) -> ! {
-    GuestOutput::Apply(ApplyOutput {
-        input,
-        post_data: None,
-    })
-    .write();
+    GuestOutput::Apply(ApplyOutput::new(input, None)).write();
     env::exit(0)
 }
 
 pub fn apply_write(input: ApplyInput, data: ShardData) -> ! {
-    GuestOutput::Apply(ApplyOutput {
-        input,
-        post_data: Some(data),
-    })
-    .write();
+    GuestOutput::Apply(ApplyOutput::new(input, Some(data))).write();
     env::exit(0)
 }
 
@@ -921,7 +928,7 @@ pub fn immutable_mirror_commitment(
 }
 
 /// Checks that the output repeats the scheduled input exactly, then verifies
-/// that any write targets the executing program's shard.
+/// that any write targets the executing program's shard and that no chained calls are returned.
 pub fn validate_apply_output(
     expected: &ApplyInput,
     output: &ApplyOutput,
@@ -939,6 +946,9 @@ pub fn validate_apply_output(
             account_id: output.input.selector.account_id,
             executing_account_id: output.input.self_account_id,
         });
+    }
+    if !output.chained_calls.is_empty() {
+        return Err(ExecutionValidationError::ChainedCallsFromApply);
     }
 
     Ok(())

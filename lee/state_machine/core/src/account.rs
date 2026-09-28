@@ -433,15 +433,15 @@ mod tests {
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.data.apply_output(&ApplyOutput {
-            input: ApplyInput {
+        account.data.apply_output(&ApplyOutput::new(
+            ApplyInput {
                 self_account_id: program,
                 selector: ProgramShardSelector::new(AccountId::new([1; 32]), program),
                 pre_data: b"record".to_vec().try_into().unwrap(),
                 effect_data: Vec::new(),
             },
-            post_data: Some(ShardData::empty()),
-        });
+            Some(ShardData::empty()),
+        ));
 
         assert!(!account.data.shards.contains_key(&program));
         assert_eq!(account, Account::funded(10));
