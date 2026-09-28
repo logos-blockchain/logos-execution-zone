@@ -212,3 +212,5 @@ fn assert_registry(registry: &AccountMeta) {
         "account must be the registry"
     );
 }
+
+mod tests;
