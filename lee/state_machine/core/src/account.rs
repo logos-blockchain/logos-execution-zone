@@ -30,8 +30,13 @@ impl Nonce {
     pub fn private_account_nonce_init(account_id: &AccountId) -> Self {
         let mut bytes: [u8; 64] = [0_u8; 64];
         bytes[..32].copy_from_slice(account_id.value());
-        let result: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
-        let result = result.first_chunk::<16>().unwrap();
+        let result: [u8; 32] = Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Hash output must be exactly 32 bytes long");
+        let result = result
+            .first_chunk::<16>()
+            .expect("A 32-byte hash always has a 16-byte prefix");
 
         Self(u128::from_le_bytes(*result))
     }
@@ -41,8 +46,13 @@ impl Nonce {
         let mut bytes: [u8; 64] = [0_u8; 64];
         bytes[..32].copy_from_slice(nsk);
         bytes[32..48].copy_from_slice(&self.0.to_le_bytes());
-        let result: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
-        let result = result.first_chunk::<16>().unwrap();
+        let result: [u8; 32] = Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Hash output must be exactly 32 bytes long");
+        let result = result
+            .first_chunk::<16>()
+            .expect("A 32-byte hash always has a 16-byte prefix");
 
         Self(u128::from_le_bytes(*result))
     }

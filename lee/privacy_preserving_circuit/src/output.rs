@@ -50,7 +50,7 @@ pub fn compute_circuit_output(
                 commitment_root,
             } => (
                 (
-                    Nullifier::for_account_initialization(&account_id),
+                    Nullifier::for_account_initialization(account_id),
                     *commitment_root,
                 ),
                 Nonce::private_account_nonce_init(&account_id),
@@ -171,7 +171,7 @@ fn emit_private_output(
     new_nullifier: (Nullifier, CommitmentSetDigest),
     ciphertext_padding: Option<u32>,
 ) {
-    let commitment_post = Commitment::new(account_id, post_state);
+    let commitment_post = Commitment::new(*account_id, post_state);
 
     let esk = EphemeralSecretKey::new(account_id, random_seed, &post_state.nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
@@ -202,7 +202,7 @@ fn compute_update_nullifier_and_set_digest(
     account_id: &AccountId,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
-    let commitment_pre = Commitment::new(account_id, pre_account);
+    let commitment_pre = Commitment::new(*account_id, pre_account);
     let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
     let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
     (nullifier, set_digest)
@@ -343,7 +343,7 @@ mod tests {
         );
         assert_eq!(
             action.commitment,
-            Commitment::new(&owner.account_id(), &expected)
+            Commitment::new(owner.account_id(), &expected)
         );
     }
 

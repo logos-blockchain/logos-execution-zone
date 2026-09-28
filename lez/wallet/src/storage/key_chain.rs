@@ -72,7 +72,7 @@ impl NullifierIndex {
         account: &Account,
         nsk: &NullifierSecretKey,
     ) -> Nullifier {
-        Nullifier::for_account_update(&Commitment::new(&account_id, account), nsk)
+        Nullifier::for_account_update(&Commitment::new(account_id, account), nsk)
     }
 
     /// Returns the account whose next update would publish `nullifier`.
@@ -92,7 +92,7 @@ impl NullifierIndex {
     /// Indexes `account_id` by the nullifier its initialization publishes.
     pub fn track_initialization(&mut self, account_id: AccountId) {
         self.0.insert(
-            Nullifier::for_account_initialization(&account_id),
+            Nullifier::for_account_initialization(account_id),
             account_id,
         );
     }
@@ -472,7 +472,7 @@ impl UserKeyChain {
 
     #[must_use]
     pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
-        let init = Nullifier::for_account_initialization(&account_id);
+        let init = Nullifier::for_account_initialization(account_id);
         let update = self.next_update_nullifier(account_id);
         message.private_actions.iter().position(|action| {
             action.nullifier == init || Some(&action.nullifier) == update.as_ref()
@@ -911,12 +911,12 @@ mod tests {
         kc.add_imported_private_account(key_chain.clone(), None, identifier, old_account.clone());
 
         let old_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+            Nullifier::for_account_update(&Commitment::new(account_id, &old_account), &nsk);
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
         let new_account = Account::funded(150);
-        let new_commitment = Commitment::new(&account_id, &new_account);
+        let new_commitment = Commitment::new(account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&key_chain.viewing_public_key);
         let ciphertext = EncryptionScheme::encrypt(
             &new_account,
@@ -950,7 +950,7 @@ mod tests {
             &new_account
         );
         let new_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+            Nullifier::for_account_update(&Commitment::new(account_id, &new_account), &nsk);
         assert_eq!(index.account_for(&new_nullifier), Some(account_id));
         assert!(index.account_for(&old_nullifier).is_none());
     }
@@ -982,12 +982,12 @@ mod tests {
         );
 
         let old_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+            Nullifier::for_account_update(&Commitment::new(account_id, &old_account), &nsk);
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
         let new_account = Account::funded(250);
-        let new_commitment = Commitment::new(&account_id, &new_account);
+        let new_commitment = Commitment::new(account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let ciphertext = EncryptionScheme::encrypt(
             &new_account,
@@ -1015,7 +1015,7 @@ mod tests {
             new_account
         );
         let new_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+            Nullifier::for_account_update(&Commitment::new(account_id, &new_account), &nsk);
         assert_eq!(index.account_for(&new_nullifier), Some(account_id));
         assert!(index.account_for(&old_nullifier).is_none());
     }
@@ -1053,7 +1053,7 @@ mod tests {
 
         // A note publishing `spent` and carrying the state `next`.
         let make_message = |spent: Nullifier, next: &Account| {
-            let commitment = Commitment::new(&account_id, next);
+            let commitment = Commitment::new(account_id, next);
             let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
             let ciphertext = EncryptionScheme::encrypt(
                 next,
@@ -1077,7 +1077,7 @@ mod tests {
         // Init: default -> initialized, discovered via the seeded init nullifier.
         let initialized = Account::funded(250);
         let init_msg = make_message(
-            Nullifier::for_account_initialization(&account_id),
+            Nullifier::for_account_initialization(account_id),
             &initialized,
         );
         assert_eq!(
@@ -1092,7 +1092,7 @@ mod tests {
         // Update: initialized -> updated, discovered via the now-tracked update nullifier.
         let updated = Account::funded(500);
         let update_spent =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk);
+            Nullifier::for_account_update(&Commitment::new(account_id, &initialized), &nsk);
         let update_msg = make_message(update_spent, &updated);
         assert_eq!(
             kc.sync_updates_via_nullifiers(&update_msg, &mut index),
@@ -1120,7 +1120,7 @@ mod tests {
 
         let mut index = kc.build_latest_nullifier_index();
         let unindexed = Nullifier::for_account_update(
-            &Commitment::new(&AccountId::new([9; 32]), &Account::default()),
+            &Commitment::new(AccountId::new([9; 32]), &Account::default()),
             &[9; 32],
         );
         let message = Message {
