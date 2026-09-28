@@ -47,14 +47,6 @@ pub fn run_all() -> Vec<PpeBenchResult> {
     eprintln!("PPE: running native execution (native Transfer in PPE)");
     results.push(ppe_impl::run_native_transfer_in_ppe());
 
-    eprintln!("PPE: running composition cost (token Transfer in PPE)");
-    results.push(ppe_impl::run_token_transfer_in_ppe());
-
-    for depth in [1_u32, 3, 5, 9] {
-        eprintln!("PPE: running chain_caller to token Transfer depth={depth}");
-        results.push(ppe_impl::run_chain_caller(depth));
-    }
-
     results
 }
 

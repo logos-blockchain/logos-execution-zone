@@ -222,26 +222,12 @@ pub async fn execute_subcommand(
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
-            let Some(token_id) = remote_program_ids.get("token") else {
-                panic!("Missing token program ID from remote");
-            };
-            assert!(
-                token_id == &::programs::token().id(),
-                "Local ID for token program is different from remote"
-            );
             let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
                 panic!("Missing privacy preserving circuit ID from remote");
             };
             assert!(
                 circuit_id == &lee::PRIVACY_PRESERVING_CIRCUIT_ID,
                 "Local ID for privacy preserving circuit is different from remote"
-            );
-            let Some(amm_id) = remote_program_ids.get("amm") else {
-                panic!("Missing AMM program ID from remote");
-            };
-            assert!(
-                amm_id == &::programs::amm().id(),
-                "Local ID for AMM program is different from remote"
             );
 
             println!("\u{2705}All looks good!");
