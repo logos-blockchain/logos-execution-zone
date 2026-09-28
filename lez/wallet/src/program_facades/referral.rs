@@ -703,3 +703,77 @@ fn foreign_note(invitation: &Invitation) -> AccountIdentity {
 fn instruction_data(instruction: Instruction) -> InstructionData {
     Program::serialize_instruction(instruction).expect("Instruction should serialize")
 }
+
+#[cfg(test)]
+mod tests {
+    use lee::privacy_preserving_transaction::{
+        circuit::Proof,
+        message::{Message, PublicActionWithID},
+        witness_set::WitnessSet,
+    };
+    use lee_core::execution_state::DeferredPublicEffect;
+
+    use super::*;
+
+    #[test]
+    fn reconciliation_reads_the_recorded_deployment() {
+        let ours = AccountId::new([1; 32]);
+        let other = AccountId::new([2; 32]);
+        let active = BTreeSet::from([NodeId::new([9; 32])]);
+
+        let message = Message {
+            public_actions: vec![PublicActionWithID {
+                account_id: ORACLE_ACCOUNT_ID,
+                effects: vec![DeferredPublicEffect {
+                    program_account_id: ours,
+                    shard_program_account_id: ours,
+                    data: borsh::to_vec(&Effect::CheckEpoch {
+                        epoch: 1,
+                        active_digest: active_digest(&active),
+                    })
+                    .unwrap(),
+                }],
+            }],
+            ..Message::default()
+        };
+        let witness_set = WitnessSet::for_message(&message, Proof::from_inner(Vec::new()), &[]);
+        let transaction = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            witness_set,
+        ));
+
+        let recorded = PendingOperation {
+            reference: [0; 32],
+            program_account: ours,
+            operation: OperationKind::Claim {
+                participant: AccountId::new([3; 32]),
+                notes: vec![],
+            },
+            transaction,
+            input_commitments: Vec::new(),
+            status: SubmissionStatus::Pending,
+        };
+
+        let registry = Account::default()
+            .with_shard(
+                ours,
+                State::Registry(Registry {
+                    epoch: 2,
+                    active: active.clone(),
+                    ..Registry::default()
+                })
+                .to_data(),
+            )
+            .with_shard(
+                other,
+                State::Registry(Registry {
+                    epoch: 1,
+                    active,
+                    ..Registry::default()
+                })
+                .to_data(),
+            );
+
+        assert!(is_superseded(&recorded, &registry).expect("registry decodes"));
+    }
+}
