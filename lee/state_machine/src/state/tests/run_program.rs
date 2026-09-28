@@ -30,6 +30,6 @@ fn the_runner_echoes_its_input_and_keeps_clears_or_writes_as_apply_returns() {
     ] {
         let (input, output) = apply_with(returned.as_deref());
 
-        assert_eq!(output, ApplyOutput { input, post_data });
+        assert_eq!(output, ApplyOutput::new(input, post_data));
     }
 }

@@ -172,15 +172,15 @@ fn a_plan_journal_is_not_accepted_where_an_apply_was_scheduled() {
 
 #[test]
 fn an_apply_journal_is_not_accepted_where_a_plan_was_scheduled() {
-    let output = GuestOutput::Apply(ApplyOutput {
-        input: ApplyInput {
+    let output = GuestOutput::Apply(ApplyOutput::new(
+        ApplyInput {
             self_account_id: AccountId::new([1; 32]),
             selector: ProgramShardSelector::native_balance(AccountId::new([2; 32])),
             pre_data: ShardData::empty(),
             effect_data: Vec::new(),
         },
-        post_data: None,
-    });
+        None,
+    ));
 
     let err = plan_journal(&to_borsh_frame(&output)).unwrap_err();
 

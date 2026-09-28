@@ -121,10 +121,7 @@ pub fn apply(input: &ApplyInput) -> Result<ShardData, TransferError> {
 }
 
 pub fn apply_output(input: &ApplyInput) -> Result<ApplyOutput, TransferError> {
-    Ok(ApplyOutput {
-        post_data: Some(apply(input)?),
-        input: input.clone(),
-    })
+    Ok(ApplyOutput::new(input.clone(), Some(apply(input)?)))
 }
 
 /// A chained transfer out of an account the caller holds under `seed`.
