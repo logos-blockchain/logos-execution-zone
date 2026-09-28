@@ -15,17 +15,19 @@ use lee_core::BlockId;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    storage::persistent::PersistentStorage,
+    storage::{persistent::PersistentStorage, referral::ReferralStore},
 };
 
 pub mod key_chain;
 mod persistent;
+pub mod referral;
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Storage {
     key_chain: UserKeyChain,
     labels: BTreeMap<Label, AccountIdWithPrivacy>,
     last_synced_block: BlockId,
+    referral: ReferralStore,
 }
 
 impl Storage {
@@ -42,6 +44,7 @@ impl Storage {
                 key_chain: UserKeyChain::new_with_accounts(public_tree, private_tree),
                 labels: BTreeMap::new(),
                 last_synced_block: 0,
+                referral: ReferralStore::default(),
             },
             mnemonic,
         ))
@@ -95,8 +98,18 @@ impl Storage {
         self.key_chain = UserKeyChain::new_with_accounts(public_tree, private_tree);
         self.labels = BTreeMap::new();
         self.last_synced_block = 0;
+        self.referral = ReferralStore::default();
 
         Ok(())
+    }
+
+    #[must_use]
+    pub const fn referral(&self) -> &ReferralStore {
+        &self.referral
+    }
+
+    pub const fn referral_mut(&mut self) -> &mut ReferralStore {
+        &mut self.referral
     }
 
     #[must_use]
@@ -159,6 +172,7 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = self;
         let key_chain_data = key_chain.to_persistent();
 
@@ -166,6 +180,7 @@ impl Storage {
             key_chain: key_chain_data,
             last_synced_block: *last_synced_block,
             labels: labels.clone(),
+            referral: referral.clone(),
         }
     }
 
@@ -174,12 +189,14 @@ impl Storage {
             key_chain,
             last_synced_block,
             labels,
+            referral,
         } = persistent;
 
         Ok(Self {
             key_chain: UserKeyChain::from_persistent(key_chain)?,
             last_synced_block,
             labels,
+            referral,
         })
     }
 }
