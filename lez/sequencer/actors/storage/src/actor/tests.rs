@@ -157,7 +157,7 @@ async fn stored_balance(storage_ref: &ActorRef<StorageActor>) -> u128 {
         .expect("The store holds a chain")
         .get_account_by_id(marker_id())
         .data
-        .balance()
+        .native_balance()
         .expect("The marker balance is canonical")
 }
 
@@ -537,10 +537,10 @@ async fn net_shortening_reorg_drops_acc_maps() {
     )
     .await;
 
-    let genesis_clock_tx = clock_invocation(0_u64.saturating_mul(100));
-    let block_1a_clock_tx = clock_invocation(1_u64.saturating_mul(100));
-    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
-    let block_1b_clock_tx = clock_invocation(1_u64.saturating_mul(100));
+    let genesis_clock_tx = clock_invocation(0, 0_u64.saturating_mul(100));
+    let block_1a_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
+    let block_1b_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
 
     let clock_1_acc = genesis_clock_tx.message.shard_selectors[0].account_id;
 
@@ -1047,7 +1047,7 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
         final_state
             .get_account_by_id(marker_id())
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         200
     );
@@ -1233,8 +1233,8 @@ async fn the_first_block_written_starts_the_chain() {
     let genesis = produce_dummy_block(1, None, vec![]);
     let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
 
-    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
-    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
+    let block_1_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
 
     let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 
@@ -1327,10 +1327,10 @@ async fn acc_id_to_tx_map_corectness() {
     let genesis = produce_dummy_block(1, None, vec![]);
     let storage_ref = spawn_with_blocks(dir.path(), vec![genesis.clone()]).await;
 
-    let block_1_clock_tx = clock_invocation(1_u64.saturating_mul(100));
-    let block_2_clock_tx = clock_invocation(2_u64.saturating_mul(100));
-    let block_3_clock_tx = clock_invocation(3_u64.saturating_mul(100));
-    let block_4_clock_tx = clock_invocation(4_u64.saturating_mul(100));
+    let block_1_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
+    let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
+    let block_3_clock_tx = clock_invocation(3, 3_u64.saturating_mul(100));
+    let block_4_clock_tx = clock_invocation(4, 4_u64.saturating_mul(100));
 
     let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
 

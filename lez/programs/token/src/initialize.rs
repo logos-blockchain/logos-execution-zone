@@ -1,31 +1,52 @@
 use lee_core::{
-    account::{AccountId, ShardData},
-    program::{AccountInput, ShardStateDiff},
+    account::ShardData,
+    program::{AccountMeta, Plan},
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
+
+use crate::Effect;
+
+pub fn initialize_account(
+    plan: &mut Plan,
+    definition_account: &AccountMeta,
+    account_to_initialize: &AccountMeta,
+    kind: TokenKind,
+) {
+    // The definition decides what the holding becomes, and the holding's `apply` never sees it.
+    // The guard on the definition is what turns the instruction's claimed kind into a fact.
+    plan.effect(definition_account, &Effect::CheckHoldingKind(kind));
+    plan.effect(
+        account_to_initialize,
+        &Effect::InitializeHolding {
+            descriptor: TokenDescriptor {
+                definition_id: definition_account.account_id,
+                kind,
+            },
+            is_authorized: account_to_initialize.is_authorized,
+        },
+    );
+}
+
+pub fn check_holding_kind(pre_data: &ShardData, kind: TokenKind) {
+    let definition = TokenDefinition::try_from(pre_data).expect("Definition account must be valid");
+
+    assert_eq!(
+        TokenKind::from_definition(&definition),
+        kind,
+        "Token Definition does not initialize this Token Holding kind"
+    );
+}
 
 #[must_use]
-pub fn initialize_account(
-    definition_account: &AccountInput,
-    account_to_initialize: &AccountInput,
-    self_account_id: AccountId,
-) -> Vec<ShardStateDiff> {
+pub fn initialize_holding(
+    pre_data: &ShardData,
+    descriptor: &TokenDescriptor,
+    is_authorized: bool,
+) -> ShardData {
     assert!(
-        account_to_initialize.shard_of(self_account_id).is_empty()
-            || account_to_initialize.is_authorized,
+        pre_data.is_empty() || is_authorized,
         "Only Uninitialized or authorized accounts can be initialized"
     );
 
-    let definition = TokenDefinition::try_from(definition_account.shard_of(self_account_id))
-        .expect("Definition account must be valid");
-    let holding =
-        TokenHolding::zeroized_from_definition(definition_account.account_id, &definition);
-
-    let holding_diff =
-        ShardStateDiff::new(account_to_initialize.clone(), ShardData::from(&holding));
-
-    vec![
-        ShardStateDiff::unchanged(definition_account.clone()),
-        holding_diff,
-    ]
+    ShardData::from(&descriptor.zeroized())
 }

@@ -2,26 +2,33 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness, SharedSecretKey,
-    WitnessKind,
-    account::{Account, AccountId, Nonce},
-    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, TransferError},
-    program::{PdaSeed, PrivateAccountKind},
+    Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
+    PublicAction, SharedSecretKey, WitnessKind,
+    account::{Account, AccountId, Nonce, ShardData},
+    execution_state::{DeferredPublicEffect, ExecutionError},
+    native_token::Instruction as NativeInstruction,
+    program::{
+        AccountMeta, ApplyInput, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PlanInput, PrivateAccountKind,
+    },
 };
 
 use super::*;
 use crate::{
-    error::{InvalidProgramBehaviorError, LeeError},
+    error::LeeError,
     privacy_preserving_transaction::circuit::execute_and_prove,
     program::Program,
     state::{
         CommitmentSet,
         tests::{
-            init_pda_witness, init_witness, synthetic_program, test_private_account_keys_1,
-            test_private_account_keys_2, update_pda_witness, update_witness,
+            execution_error, init_pda_witness, init_witness, native_debit, synthetic_program,
+            test_private_account_keys_1, test_private_account_keys_2, update_pda_witness,
+            update_witness,
         },
     },
 };
+
+const ALICE: AccountId = AccountId::new([7; 32]);
+const BOB: AccountId = AccountId::new([8; 32]);
 
 fn decrypt_kind(
     output: &PrivacyPreservingCircuitOutput,
@@ -49,18 +56,17 @@ fn proof_inner_roundtrip() {
 }
 
 #[test]
-fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
+fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let recipient_keys = test_private_account_keys_1();
     let sender_id = AccountId::new([0; 32]);
-    let sender_account = Account::funded(100);
 
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_account_id = AccountId::for_regular_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        Identifier::ZERO,
+    );
 
     let balance_to_move: u128 = 37;
-
-    let expected_sender_pre = Account::funded(100).data;
-    let expected_sender_post = Account::funded(100 - balance_to_move).data;
 
     let expected_recipient_post = Account {
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
@@ -74,12 +80,11 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(recipient_account_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![init_witness(&recipient_keys, 0, Account::default())],
+            private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
             })
@@ -97,8 +102,9 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let [action] = output.public_actions.try_into().unwrap();
     assert_eq!(action.account_id, sender_id);
     assert!(action.is_authorized);
-    assert_eq!(action.pre, expected_sender_pre);
-    assert_eq!(action.post, expected_sender_post);
+    // The journal carries the effect to settle, not a claimed balance: the prover never read
+    // the sender's shard, so it has nothing to assert about its contents.
+    assert_eq!(action.effects, vec![native_debit(balance_to_move)]);
     assert_eq!(output.private_actions.len(), 1);
 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
@@ -116,16 +122,22 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let recipient_keys = test_private_account_keys_2();
 
     let sender_nonce = Nonce(0xdead_beef);
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = AccountId::for_regular_private_account(
+        &sender_keys.npk(),
+        &sender_keys.vpk(),
+        Identifier::ZERO,
+    );
     let sender_pre_account = Account {
         nonce: sender_nonce,
         ..Account::funded(100)
     };
     let commitment_sender = Commitment::new(&sender_account_id, &sender_pre_account);
 
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_account_id = AccountId::for_regular_private_account(
+        &recipient_keys.npk(),
+        &recipient_keys.vpk(),
+        Identifier::ZERO,
+    );
     let balance_to_move: u128 = 37;
 
     let mut commitment_set = CommitmentSet::with_capacity(2);
@@ -169,19 +181,19 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_account_id),
-                ProgramShardSelector::balance(recipient_account_id),
+                ProgramShardSelector::native_balance(sender_account_id),
+                ProgramShardSelector::native_balance(recipient_account_id),
             ],
             private_witnesses: vec![
                 update_witness(
                     &sender_keys,
-                    0,
+                    Identifier::ZERO,
                     sender_pre_account,
                     commitment_set
                         .get_proof_for(&commitment_sender)
                         .expect("sender's commitment must be in the set"),
                 ),
-                init_witness(&recipient_keys, 0, Account::default()),
+                init_witness(&recipient_keys, Identifier::ZERO),
             ],
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
                 amount: balance_to_move,
@@ -243,13 +255,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 fn init_note_view_tag_is_derived_from_account_keys() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 0;
+    let identifier = Identifier::ZERO;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            private_witnesses: vec![init_witness(&keys, identifier)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
@@ -269,7 +281,7 @@ fn init_note_view_tag_is_derived_from_account_keys() {
 fn update_note_view_tag_is_the_supplied_value() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account::funded(1);
     let commitment = Commitment::new(&account_id, &account);
@@ -282,9 +294,8 @@ fn update_note_view_tag_is_the_supplied_value() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
                 identifier,
@@ -292,6 +303,7 @@ fn update_note_view_tag_is_the_supplied_value() {
                     ask: Some(keys.ask),
                 },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: fed_tag,
                     nsk: keys.nsk(),
                     membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
@@ -318,7 +330,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
 
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 7;
+    let identifier = Identifier::new([7; 32]);
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let program_account_id = AccountId::from_builtin_program(program.id());
     let account = Account::default().with_shard(
@@ -334,7 +346,6 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
         ProvingInput {
             shard_selectors: vec![ProgramShardSelector::new(account_id, program_account_id)],
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
                 identifier,
@@ -342,6 +353,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
                     ask: Some(keys.ask),
                 },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
                     nsk: keys.nsk(),
                     membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
@@ -382,8 +394,11 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
 #[test]
 fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
-    let account_id =
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0);
+    let account_id = AccountId::for_regular_private_account(
+        &account_keys.npk(),
+        &account_keys.vpk(),
+        Identifier::ZERO,
+    );
 
     let validity_window_chain_caller = crate::test_methods::validity_window_chain_caller();
     let validity_window = crate::test_methods::validity_window();
@@ -409,15 +424,15 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(&account_keys, 0, Account::default())],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            private_witnesses: vec![init_witness(&account_keys, Identifier::ZERO)],
             instruction_data: instruction,
             ..Default::default()
         },
         &program_with_deps,
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(result, Err(LeeError::OutOfValidityWindow)));
 }
 
 /// A private PDA bound with a non-default identifier produces a ciphertext that decrypts
@@ -428,7 +443,7 @@ fn private_pda_with_custom_identifier_encrypts_correct_kind() {
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
     let account_id = AccountId::for_private_pda(
         &AccountId::from_builtin_program(program.id()),
         &seed,
@@ -442,12 +457,11 @@ fn private_pda_with_custom_identifier_encrypts_correct_kind() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 identifier,
                 (AccountId::from_builtin_program(program.id()), seed),
-                Account::default(),
             )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -481,12 +495,11 @@ fn private_pda_withdraw() {
         &seed,
         &npk,
         &keys.vpk(),
-        0,
+        Identifier::ZERO,
     );
 
     // Recipient (public)
     let recipient_id = AccountId::new([88; 32]);
-    let recipient_account = Account::funded(10000);
 
     let program_with_deps = ProgramWithDependencies::new(
         program.clone(),
@@ -500,16 +513,14 @@ fn private_pda_withdraw() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(pda_id),
-                ProgramShardSelector::balance(recipient_id),
+                ProgramShardSelector::native_balance(pda_id),
+                ProgramShardSelector::native_balance(recipient_id),
             ],
             signers: [recipient_id].into(),
-            public_accounts: [(recipient_id, recipient_account)].into(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
-                0,
+                Identifier::ZERO,
                 (AccountId::from_builtin_program(program.id()), seed),
-                Account::default(),
             )],
             instruction_data: instruction,
             ..Default::default()
@@ -530,11 +541,10 @@ fn private_pda_withdraw() {
 fn shared_account_receives_via_simple_transfer() {
     let shared_keys = test_private_account_keys_1();
     let shared_npk = shared_keys.npk();
-    let shared_identifier: u128 = 42;
+    let shared_identifier = Identifier::new([42; 32]);
 
     // Sender: public account with balance, owned by auth-transfer
     let sender_id = AccountId::new([99; 32]);
-    let sender_account = Account::funded(1000);
 
     // Recipient: shared private account (new, foreign)
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
@@ -548,16 +558,11 @@ fn shared_account_receives_via_simple_transfer() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(sender_id),
-                ProgramShardSelector::balance(shared_account_id),
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(shared_account_id),
             ],
             signers: [sender_id].into(),
-            public_accounts: [(sender_id, sender_account)].into(),
-            private_witnesses: vec![init_witness(
-                &shared_keys,
-                shared_identifier,
-                Account::default(),
-            )],
+            private_witnesses: vec![init_witness(&shared_keys, shared_identifier)],
             instruction_data: instruction,
             ..Default::default()
         },
@@ -576,7 +581,7 @@ fn shared_account_receives_via_simple_transfer() {
 fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let esk = EphemeralSecretKey::new(
         &account_id,
@@ -587,8 +592,8 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
 
     let (output, _) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
-            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            private_witnesses: vec![init_witness(&keys, identifier)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
@@ -609,7 +614,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
 fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
     let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let esk = EphemeralSecretKey::new(
         &recipient_id,
@@ -620,8 +625,8 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
 
     let (output, _) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(recipient_id)],
-            private_witnesses: vec![init_witness(&keys, identifier, Account::default())],
+            shard_selectors: vec![ProgramShardSelector::native_balance(recipient_id)],
+            private_witnesses: vec![init_witness(&keys, identifier)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
         },
@@ -641,7 +646,7 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
 fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let esk = EphemeralSecretKey::new(
         &account_id,
@@ -656,7 +661,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
 
     let (output, _) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![update_witness(
                 &keys,
                 identifier,
@@ -680,7 +685,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
 /// commitment.
 fn seeded_regular_account(
     keys: &crate::state::tests::TestPrivateKeys,
-    identifier: u128,
+    identifier: Identifier,
 ) -> (AccountId, Account, lee_core::MembershipProof) {
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account::funded(1);
@@ -697,18 +702,18 @@ fn seeded_regular_account(
 fn private_regular_update_without_ask_is_spendable() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) = seeded_regular_account(&keys, 0);
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: 0,
                     nsk: keys.nsk(),
                     membership_proof,
@@ -723,22 +728,22 @@ fn private_regular_update_without_ask_is_spendable() {
 }
 
 #[test]
-fn private_regular_witness_without_ask_cannot_assert_authorization() {
-    let program = crate::test_methods::noop();
+fn a_signer_entry_does_not_authorize_a_private_witness_without_ask() {
+    let program = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) = seeded_regular_account(&keys, 0);
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             signers: [account_id].into(),
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: 0,
                     nsk: keys.nsk(),
                     membership_proof,
@@ -750,7 +755,7 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
         &synthetic_program(program),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
 }
 
 /// An `ask` that does not derive this account's `nsk` is not a credential for it.
@@ -759,20 +764,20 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let foreign = test_private_account_keys_2();
-    let (account_id, account, membership_proof) = seeded_regular_account(&keys, 0);
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular {
                     ask: Some(foreign.ask),
                 },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: 0,
                     nsk: keys.nsk(),
                     membership_proof,
@@ -784,7 +789,10 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
         &synthetic_program(program),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::InvalidAuthorizationKey { account_id: rejected } if rejected == account_id
+    ));
 }
 
 /// An `ask` that does not derive this account's `npk` is not a credential for it.
@@ -793,16 +801,16 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let foreign = test_private_account_keys_2();
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+    let account_id =
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![PrivateWitness {
-                account: Account::default(),
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular {
                     ask: Some(foreign.ask),
                 },
@@ -817,7 +825,10 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
         &synthetic_program(program),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::InvalidAuthorizationKey { account_id: rejected } if rejected == account_id
+    ));
 }
 
 /// A program that asserts authorization over its pre-states rejects a regular private account
@@ -826,18 +837,18 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
 fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
     let program = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
-    let (account_id, account, membership_proof) = seeded_regular_account(&keys, 0);
+    let (account_id, account, membership_proof) = seeded_regular_account(&keys, Identifier::ZERO);
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![PrivateWitness {
-                account,
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                identifier: 0,
+                identifier: Identifier::ZERO,
                 kind: WitnessKind::Regular { ask: None },
                 nullifier: NullifierWitness::Update {
+                    account,
                     view_tag: 0,
                     nsk: keys.nsk(),
                     membership_proof,
@@ -855,9 +866,8 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
 /// Root-call private-PDA update attempt: `pda_spend_proxy` spends a PDA it owns via the
 /// native token program.
 fn pda_update_attempt(
-    declare_authorized: bool,
-    derivation_identifier: u128,
-    witness_identifier: u128,
+    derivation_identifier: Identifier,
+    witness_identifier: Identifier,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput, LeeError> {
     let program = crate::test_methods::pda_spend_proxy();
     let keys = test_private_account_keys_1();
@@ -876,25 +886,16 @@ fn pda_update_attempt(
     commitment_set.extend(std::slice::from_ref(&pda_commitment));
 
     let recipient_id = AccountId::new([0; 32]);
-    let mut signers = HashSet::from([recipient_id]);
-    if declare_authorized {
-        signers.insert(pda_id);
-    }
 
     let program_with_deps = ProgramWithDependencies::new(program, program_id, HashMap::new());
 
     execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::balance(pda_id),
-                ProgramShardSelector::balance(recipient_id),
+                ProgramShardSelector::native_balance(pda_id),
+                ProgramShardSelector::native_balance(recipient_id),
             ],
-            signers,
-            public_accounts: [
-                (pda_id, pda_account.clone()),
-                (recipient_id, Account::default()),
-            ]
-            .into(),
+            signers: [recipient_id].into(),
             private_witnesses: vec![update_pda_witness(
                 &keys,
                 witness_identifier,
@@ -917,9 +918,9 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
     let program_id = AccountId::from_builtin_program(crate::test_methods::pda_spend_proxy().id());
     let keys = test_private_account_keys_1();
     let seed = PdaSeed::new([42; 32]);
-    let identifier: u128 = 99;
+    let identifier = Identifier::new([99; 32]);
 
-    let output = pda_update_attempt(false, identifier, identifier)
+    let output = pda_update_attempt(identifier, identifier)
         .expect("a well-formed private PDA update must prove");
 
     let pda_id =
@@ -941,13 +942,6 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
 }
 
 #[test]
-fn private_pda_update_at_root_call_may_not_declare_authorization() {
-    let result = pda_update_attempt(true, 99, 99);
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
 fn private_pda_init_identifier_mismatch_fails() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
@@ -958,17 +952,16 @@ fn private_pda_init_identifier_mismatch_fails() {
         &seed,
         &npk,
         &keys.vpk(),
-        5,
+        Identifier::new([5; 32]),
     );
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
-                99,
+                Identifier::new([99; 32]),
                 (AccountId::from_builtin_program(program.id()), seed),
-                Account::default(),
             )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -976,16 +969,19 @@ fn private_pda_init_identifier_mismatch_fails() {
         &synthetic_program(program),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::WitnessNotInRoot { .. }
+    ));
 }
 
 #[test]
-fn private_pda_init_at_root_call_may_not_declare_authorization() {
-    let program = crate::test_methods::noop();
+fn a_signer_entry_does_not_authorize_a_private_pda() {
+    let program = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
-    let identifier: u128 = 5;
+    let identifier = Identifier::new([5; 32]);
     let account_id = AccountId::for_private_pda(
         &AccountId::from_builtin_program(program.id()),
         &seed,
@@ -996,13 +992,12 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(account_id)],
+            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
             signers: [account_id].into(),
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 identifier,
                 (AccountId::from_builtin_program(program.id()), seed),
-                Account::default(),
             )],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -1010,25 +1005,17 @@ fn private_pda_init_at_root_call_may_not_declare_authorization() {
         &synthetic_program(program),
     );
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
 }
 
 #[test]
 fn private_pda_update_identifier_mismatch_fails() {
-    let result = pda_update_attempt(false, 5, 99);
+    let result = pda_update_attempt(Identifier::new([5; 32]), Identifier::new([99; 32]));
 
-    assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::NativeTransferFailed(
-                    TransferError::UnauthorizedSender { .. }
-                )
-            ))
-        ),
-        "refused for the wrong reason: {:?}",
-        result.err()
-    );
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::WitnessNotInRoot { .. }
+    ));
 }
 
 fn forwarder_over_callee() -> (ProgramWithDependencies, AccountId, AccountId) {
@@ -1044,15 +1031,8 @@ fn forwarder_over_callee() -> (ProgramWithDependencies, AccountId, AccountId) {
     )
 }
 
-fn forwarder_instruction(
-    own_write: Option<(AccountId, &[u8])>,
-    calls: &[(AccountId, ProgramShardSelector, Vec<u8>)],
-) -> Vec<u8> {
-    Program::serialize_instruction((
-        own_write.map(|(target, bytes)| (target, bytes.to_vec())),
-        calls.to_vec(),
-    ))
-    .unwrap()
+fn forwarder_instruction(calls: &[(AccountId, ProgramShardSelector, Vec<u8>)]) -> Vec<u8> {
+    Program::serialize_instruction(calls.to_vec()).unwrap()
 }
 
 fn calls_at(
@@ -1076,234 +1056,43 @@ fn data_changer_instruction(write: &[u8]) -> Vec<u8> {
 }
 
 fn forward_to(account_id: AccountId, callee_id: AccountId, write: &[u8]) -> Vec<u8> {
-    forwarder_instruction(
-        None,
-        &calls_at(account_id, &[(callee_id, data_changer_instruction(write))]),
-    )
-}
-
-fn input_with(
-    account_id: AccountId,
-    forwarder_id: AccountId,
-    account: Account,
-    instruction_data: Vec<u8>,
-) -> ProvingInput {
-    ProvingInput {
-        shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
-        public_accounts: [(account_id, account)].into(),
-        instruction_data,
-        ..Default::default()
-    }
-}
-
-fn forwarding_input(
-    account_id: AccountId,
-    forwarder_id: AccountId,
-    callee_id: AccountId,
-    account: Account,
-    write: &[u8],
-) -> ProvingInput {
-    input_with(
+    forwarder_instruction(&calls_at(
         account_id,
-        forwarder_id,
-        account,
-        forward_to(account_id, callee_id, write),
-    )
+        &[(callee_id, data_changer_instruction(write))],
+    ))
 }
 
 #[test]
-fn a_resolver_supplies_a_chained_calls_unfetched_shard_and_matches_the_complete_account() {
+fn the_prover_never_reads_a_public_shard() {
     let (program, forwarder_id, callee_id) = forwarder_over_callee();
     let account_id = AccountId::new([7; 32]);
-    let on_chain = ShardData::try_from(vec![1; 8]).unwrap();
-    let own_shard = ShardData::try_from(vec![2; 8]).unwrap();
     let write = vec![3; 16];
 
-    let sparse = Account::funded(500).with_shard(forwarder_id, own_shard.clone());
-    let complete = sparse.clone().with_shard(callee_id, on_chain.clone());
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse.clone(), &write),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(on_chain.clone()))
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
+            instruction_data: forward_to(account_id, callee_id, &write),
+            ..Default::default()
         },
+        &program,
     )
     .unwrap();
 
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
     assert!(proof.is_valid_for(&output));
-
-    let [action] = &*output.public_actions else {
-        panic!("one account, one action: {:?}", output.public_actions)
-    };
-    assert_eq!(action.account_id, account_id);
-    assert_eq!(action.pre.shards[&forwarder_id], own_shard);
-    assert_eq!(action.pre.shards[&callee_id], on_chain);
-    assert!(!action.pre.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
-    assert!(!action.post.shards.contains_key(&NATIVE_TOKEN_PROGRAM_ID));
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(write.clone()).unwrap()
-    );
-
-    let (complete_output, _) = execute_and_prove(
-        forwarding_input(account_id, forwarder_id, callee_id, complete, &write),
-        &program,
-    )
-    .unwrap();
-    assert_eq!(output, complete_output);
-
-    let (unresolved_output, _) = execute_and_prove(
-        forwarding_input(account_id, forwarder_id, callee_id, sparse, &write),
-        &program,
-    )
-    .unwrap();
-    assert_ne!(unresolved_output, complete_output);
-}
-
-#[test]
-fn an_empty_resolution_is_asked_once_and_matches_not_resolving_at_all() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-    let first = vec![0xC1; 12];
-    let second = vec![0xC2; 12];
-    let sparse =
-        Account::funded(500).with_shard(forwarder_id, ShardData::try_from(vec![2; 8]).unwrap());
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[
-                (callee_id, data_changer_instruction(&first)),
-                (callee_id, data_changer_instruction(&second)),
-            ],
-        ),
-    );
-
-    let (unresolved_output, _) = execute_and_prove(
-        input_with(
-            account_id,
-            forwarder_id,
-            sparse.clone(),
-            instruction.clone(),
-        ),
-        &program,
-    )
-    .unwrap();
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (resolved_output, _) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, sparse, instruction),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::empty()))
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        asked,
-        vec![ProgramShardSelector::new(account_id, callee_id)]
-    );
-    assert_eq!(resolved_output, unresolved_output);
-
-    let [action] = <[_; 1]>::try_from(resolved_output.public_actions).unwrap();
-    assert_eq!(
-        action.post.shards[&callee_id],
-        ShardData::try_from(second).unwrap()
-    );
-}
-
-#[test]
-fn a_resolver_error_aborts_the_traversal() {
-    let (program, forwarder_id, callee_id) = forwarder_over_callee();
-    let account_id = AccountId::new([7; 32]);
-
-    let result = execute_and_prove_with(
-        forwarding_input(
-            account_id,
-            forwarder_id,
-            callee_id,
-            Account::default(),
-            &[3; 16],
-        ),
-        &program,
-        &mut |_| {
-            Err(LeeError::AccountResolution(
-                "sequencer unreachable".to_owned(),
-            ))
-        },
-    );
-
-    assert!(matches!(result, Err(LeeError::AccountResolution(_))));
-}
-
-fn forwarder_over_itself() -> (ProgramWithDependencies, AccountId) {
-    let forwarder = crate::test_methods::shard_forwarder();
-    let forwarder_id = AccountId::from_builtin_program(forwarder.id());
-
-    (
-        ProgramWithDependencies::new(
-            forwarder.clone(),
-            forwarder_id,
-            [(forwarder_id, forwarder)].into(),
-        ),
-        forwarder_id,
-    )
-}
-
-#[test]
-fn a_top_level_shard_selector_is_never_resolved_for() {
-    let (program, forwarder_id) = forwarder_over_itself();
-    let account_id = AccountId::new([7; 32]);
-    let supplied = ShardData::try_from(vec![0xA1; 12]).unwrap();
-
-    let instruction = forwarder_instruction(
-        None,
-        &calls_at(
-            account_id,
-            &[(forwarder_id, forwarder_instruction(None, &[]))],
-        ),
-    );
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        input_with(
-            account_id,
-            forwarder_id,
-            Account::default().with_shard(forwarder_id, supplied.clone()),
-            instruction,
-        ),
-        &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
-        },
-    )
-    .unwrap();
-
-    assert!(
-        asked.is_empty(),
-        "the only shard selector this transaction touches came from the caller: {asked:?}"
-    );
-    assert!(proof.is_valid_for(&output));
-
     let [action] = <[_; 1]>::try_from(output.public_actions).unwrap();
+    assert_eq!(action.account_id, account_id);
     assert_eq!(
-        action.post.shards[&forwarder_id], supplied,
-        "the chained call must have run against the supplied value, not the resolver's"
+        action.effects,
+        vec![DeferredPublicEffect {
+            program_account_id: callee_id,
+            shard_program_account_id: callee_id,
+            data: borsh::to_vec(&write).unwrap(),
+        }]
     );
 }
 
 #[test]
-fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
+fn a_chained_call_on_an_account_the_root_never_named_is_rejected() {
     let forwarder = crate::test_methods::shard_forwarder();
     let echo = crate::test_methods::noop();
     let forwarder_id = AccountId::from_builtin_program(forwarder.id());
@@ -1312,61 +1101,421 @@ fn a_write_at_an_account_nothing_handed_the_root_is_never_resolved_over() {
 
     let account_id = AccountId::new([7; 32]);
     let fresh_id = AccountId::new([8; 32]);
-    let written = vec![0xA1; 12];
+    let instruction = forwarder_instruction(&[(
+        echo_id,
+        ProgramShardSelector::native_balance(fresh_id),
+        Program::serialize_instruction(()).unwrap(),
+    )]);
 
-    let instruction = forwarder_instruction(
-        Some((fresh_id, &written)),
-        &[(
-            echo_id,
-            ProgramShardSelector::new(fresh_id, forwarder_id),
-            Program::serialize_instruction(()).unwrap(),
-        )],
-    );
-
-    let mut asked: Vec<ProgramShardSelector> = Vec::new();
-    let (output, proof) = execute_and_prove_with(
-        input_with(account_id, forwarder_id, Account::default(), instruction),
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
+            instruction_data: instruction.clone(),
+            ..Default::default()
+        },
         &program,
-        &mut |shard_selector| {
-            asked.push(shard_selector);
-            Ok(Some(ShardData::try_from(vec![0xEE; 12]).unwrap()))
+    );
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::UnknownAccount { account_id } if account_id == fresh_id
+    ));
+
+    let keys = test_private_account_keys_1();
+    let result = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![ProgramShardSelector::new(account_id, forwarder_id)],
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            instruction_data: instruction,
+            ..Default::default()
+        },
+        &program,
+    );
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::WitnessNotInRoot { .. }
+    ));
+}
+
+fn prove_circuit_directly(
+    circuit_input: &PrivacyPreservingCircuitInput,
+    receipts: Vec<Receipt>,
+) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
+    let mut env_builder = ExecutorEnv::builder();
+    for receipt in receipts {
+        env_builder.add_assumption(receipt);
+    }
+    env_builder.write_slice(&to_frame(&borsh::to_vec(circuit_input)?));
+    let prove_info = default_prover()
+        .prove_with_opts(
+            env_builder.build().unwrap(),
+            PRIVACY_PRESERVING_CIRCUIT_ELF,
+            &ProverOpts::succinct(),
+        )
+        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+    Ok(borsh::from_slice(from_frame(&prove_info.receipt.journal.bytes).unwrap()).unwrap())
+}
+
+fn plan_receipt(program: &Program, input: &PlanInput) -> (Receipt, ProvenCall) {
+    let receipt = prove_session(program, |env| Program::write_plan_inputs(input, env)).unwrap();
+    let plan = plan_journal(&receipt.journal.bytes).unwrap();
+    (
+        receipt,
+        ProvenCall {
+            plan,
+            private_apply_outputs: Vec::new(),
         },
     )
-    .unwrap();
+}
 
-    assert!(
-        !asked.contains(&ProgramShardSelector::new(fresh_id, forwarder_id)),
-        "the root's own write covers the shard selector; fetching for it would drop that write: \
-         {asked:?}"
-    );
-    assert!(proof.is_valid_for(&output));
+fn apply_receipt(program: &Program, input: &ApplyInput) -> (Receipt, ApplyOutput) {
+    let receipt = prove_session(program, |env| Program::write_apply_inputs(input, env)).unwrap();
+    let output = apply_journal(&receipt.journal.bytes).unwrap();
+    (receipt, output)
+}
 
-    let fresh = output
-        .public_actions
+fn claims_for(programs: &[&Program]) -> Vec<ProgramImageWitness> {
+    programs
         .iter()
-        .find(|action| action.account_id == fresh_id)
-        .expect("the fresh account must appear in the journal");
+        .map(|program| ProgramImageWitness::Disclosed {
+            account_id: AccountId::from_builtin_program(program.id()),
+            image_id: program.id(),
+        })
+        .collect()
+}
+
+fn direct_input(
+    program: &Program,
+    shard_selectors: Vec<ProgramShardSelector>,
+    authorized_accounts: Vec<AccountId>,
+    instruction: InstructionData,
+    witnesses: Vec<PrivateWitness>,
+    claims: &[&Program],
+    calls: Vec<ProvenCall>,
+) -> PrivacyPreservingCircuitInput {
+    PrivacyPreservingCircuitInput {
+        root: RootCall {
+            program_account_id: AccountId::from_builtin_program(program.id()),
+            shard_selectors,
+            instruction_data: instruction,
+            authorized_accounts,
+        },
+        private_witnesses: witnesses,
+        dummy_inputs: Vec::new(),
+        ciphertext_padding: None,
+        program_image_witnesses: claims_for(claims),
+        shadow_program_witnesses: Vec::new(),
+        calls,
+    }
+}
+
+fn assert_circuit_rejects<T: std::fmt::Debug>(result: &Result<T, LeeError>, expected: &str) {
+    assert!(
+        matches!(result, Err(LeeError::CircuitProvingError(msg)) if msg.contains(expected)),
+        "expected the circuit to reject with {expected:?}, got {result:?}"
+    );
+}
+
+fn alice_input(program: &Program, is_authorized: bool) -> PlanInput {
+    PlanInput {
+        self_account_id: AccountId::from_builtin_program(program.id()),
+        caller_account_id: None,
+        accounts: vec![AccountMeta::native_balance(ALICE, is_authorized)],
+        instruction_data: Program::serialize_instruction(()).unwrap(),
+    }
+}
+
+#[test]
+fn a_hand_built_input_with_a_matching_receipt_proves() {
+    let noop = crate::test_methods::noop();
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, true));
+    let input = direct_input(
+        &noop,
+        vec![ProgramShardSelector::native_balance(ALICE)],
+        vec![ALICE],
+        Program::serialize_instruction(()).unwrap(),
+        Vec::new(),
+        &[&noop],
+        vec![call],
+    );
+
+    let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
+
+    // A handle an accepted plan used contributes its row even though it produced no effect:
+    // that is what binds the claimed authorization to something settlement re-checks.
     assert_eq!(
-        fresh.post.shards[&forwarder_id],
-        ShardData::try_from(written).unwrap(),
-        "the callee must have run against the root's write, not the resolver's value"
+        output.public_actions,
+        vec![PublicAction {
+            account_id: ALICE,
+            is_authorized: true,
+            effects: Vec::new(),
+        }]
     );
 }
 
 #[test]
-fn a_guest_supplied_for_the_reserved_id_is_refused() {
-    let program = crate::test_methods::noop();
-    let result = execute_and_prove(
-        ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::balance(AccountId::new([1; 32]))],
-            instruction_data: Program::serialize_instruction(()).unwrap(),
-            ..Default::default()
-        },
-        &ProgramWithDependencies::new(program, NATIVE_TOKEN_PROGRAM_ID, HashMap::new()),
+fn a_guest_image_claim_for_the_reserved_id_is_refused() {
+    let noop = crate::test_methods::noop();
+    for reserved in [NATIVE_TOKEN_PROGRAM_ID, PROGRAM_LOADER_ACCOUNT_ID] {
+        let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, true));
+        let mut input = direct_input(
+            &noop,
+            vec![ProgramShardSelector::native_balance(ALICE)],
+            vec![ALICE],
+            Program::serialize_instruction(()).unwrap(),
+            Vec::new(),
+            &[&noop],
+            vec![call],
+        );
+        input
+            .program_image_witnesses
+            .push(ProgramImageWitness::Disclosed {
+                account_id: reserved,
+                image_id: noop.id(),
+            });
+
+        let result = prove_circuit_directly(&input, vec![receipt]);
+
+        assert_circuit_rejects(
+            &result,
+            "A reserved program account has no deployable bytecode to claim",
+        );
+    }
+}
+
+#[test]
+fn a_private_call_into_the_program_loader_is_refused() {
+    let noop = crate::test_methods::noop();
+    let mut input = direct_input(
+        &noop,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        &[],
+        Vec::new(),
+    );
+    input.root.program_account_id = PROGRAM_LOADER_ACCOUNT_ID;
+
+    let result = prove_circuit_directly(&input, Vec::new());
+
+    assert_circuit_rejects(&result, "cannot be proven");
+}
+
+#[test]
+fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
+    let noop = crate::test_methods::noop();
+    // Proven against an unauthorized handle, offered where the root claims ALICE signed.
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, false));
+    let input = direct_input(
+        &noop,
+        vec![ProgramShardSelector::native_balance(ALICE)],
+        vec![ALICE],
+        Program::serialize_instruction(()).unwrap(),
+        Vec::new(),
+        &[&noop],
+        vec![call],
     );
 
-    let Err(LeeError::InvalidInput(message)) = result else {
-        panic!("a guest was accepted for the native token program: {result:?}");
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(&result, "plan echoed an input it was not given");
+}
+
+#[test]
+fn forbidden_effects_are_rejected_by_the_circuit() {
+    let writer = crate::test_methods::data_changer();
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, Identifier::ZERO);
+    let target = witness.account_id();
+    let instruction = Program::serialize_instruction(vec![9_u8; 4]).unwrap();
+
+    // The writer names the target's *native* shard, which it does not own.
+    let plan_input = PlanInput {
+        self_account_id: AccountId::from_builtin_program(writer.id()),
+        caller_account_id: None,
+        accounts: vec![AccountMeta::native_balance(target, true)],
+        instruction_data: instruction.clone(),
     };
-    assert!(message.contains("no deployable bytecode"), "{message}");
+    let (plan_proof, mut call) = plan_receipt(&writer, &plan_input);
+    let (apply_proof, output) = apply_receipt(
+        &writer,
+        &ApplyInput {
+            self_account_id: AccountId::from_builtin_program(writer.id()),
+            selector: ProgramShardSelector::native_balance(target),
+            pre_data: ShardData::empty(),
+            effect_data: call.plan.effects[0].data.clone(),
+        },
+    );
+    call.private_apply_outputs = vec![output];
+
+    let input = direct_input(
+        &writer,
+        vec![ProgramShardSelector::native_balance(target)],
+        Vec::new(),
+        instruction,
+        vec![witness],
+        &[&writer],
+        vec![call],
+    );
+
+    let result = prove_circuit_directly(&input, vec![plan_proof, apply_proof]);
+
+    assert_circuit_rejects(&result, "wrote data on a shard selector of");
+}
+
+#[test]
+fn an_undeclared_child_account_is_rejected_by_the_circuit() {
+    let forwarder = crate::test_methods::references_undeclared_account();
+    let noop = crate::test_methods::noop();
+    let instruction = Program::serialize_instruction((
+        noop.id(),
+        Program::serialize_instruction(()).unwrap(),
+        BOB,
+    ))
+    .unwrap();
+    let (root_receipt, root_call) = plan_receipt(
+        &forwarder,
+        &PlanInput {
+            self_account_id: AccountId::from_builtin_program(forwarder.id()),
+            caller_account_id: None,
+            accounts: vec![AccountMeta::native_balance(ALICE, true)],
+            instruction_data: instruction.clone(),
+        },
+    );
+    let (child_receipt, child_call) = plan_receipt(
+        &noop,
+        &PlanInput {
+            self_account_id: AccountId::from_builtin_program(noop.id()),
+            caller_account_id: Some(AccountId::from_builtin_program(forwarder.id())),
+            accounts: vec![AccountMeta::native_balance(BOB, false)],
+            instruction_data: Program::serialize_instruction(()).unwrap(),
+        },
+    );
+    let input = direct_input(
+        &forwarder,
+        vec![ProgramShardSelector::native_balance(ALICE)],
+        vec![ALICE],
+        instruction,
+        Vec::new(),
+        &[&forwarder, &noop],
+        vec![root_call, child_call],
+    );
+
+    let result = prove_circuit_directly(&input, vec![root_receipt, child_receipt]);
+
+    assert_circuit_rejects(&result, "not an input of the root call");
+}
+
+#[test]
+fn missing_call_wrappers_are_rejected_by_the_circuit() {
+    let forwarder = crate::test_methods::non_delegating_forwarder();
+    let noop = crate::test_methods::noop();
+    let instruction = Program::serialize_instruction((
+        noop.id(),
+        Program::serialize_instruction(()).unwrap(),
+        true,
+        Vec::<PdaSeed>::new(),
+    ))
+    .unwrap();
+    let (receipt, call) = plan_receipt(
+        &forwarder,
+        &PlanInput {
+            self_account_id: AccountId::from_builtin_program(forwarder.id()),
+            caller_account_id: None,
+            accounts: vec![AccountMeta::native_balance(ALICE, true)],
+            instruction_data: instruction.clone(),
+        },
+    );
+    let input = direct_input(
+        &forwarder,
+        vec![ProgramShardSelector::native_balance(ALICE)],
+        vec![ALICE],
+        instruction,
+        Vec::new(),
+        &[&forwarder, &noop],
+        vec![call],
+    );
+
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(&result, "a scheduled call must carry its call transcript");
+}
+
+#[test]
+fn surplus_call_wrappers_are_rejected_by_the_circuit() {
+    let noop = crate::test_methods::noop();
+    let (receipt, call) = plan_receipt(&noop, &alice_input(&noop, true));
+    let input = direct_input(
+        &noop,
+        vec![ProgramShardSelector::native_balance(ALICE)],
+        vec![ALICE],
+        Program::serialize_instruction(()).unwrap(),
+        Vec::new(),
+        &[&noop],
+        vec![call.clone(), call],
+    );
+
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(&result, "a call nothing scheduled");
+}
+
+#[test]
+fn a_private_effect_must_carry_exactly_its_own_apply_output() {
+    let writer = crate::test_methods::data_changer();
+    let writer_id = AccountId::from_builtin_program(writer.id());
+    let keys = test_private_account_keys_1();
+    let witness = init_witness(&keys, Identifier::ZERO);
+    let target = witness.account_id();
+    let written = vec![4_u8; 6];
+    let instruction = Program::serialize_instruction(written).unwrap();
+
+    let (plan_proof, call) = plan_receipt(
+        &writer,
+        &PlanInput {
+            self_account_id: writer_id,
+            caller_account_id: None,
+            accounts: vec![AccountMeta::new(target, true, writer_id)],
+            instruction_data: instruction.clone(),
+        },
+    );
+    let (apply_proof, output) = apply_receipt(
+        &writer,
+        &ApplyInput {
+            self_account_id: writer_id,
+            selector: ProgramShardSelector::new(target, writer_id),
+            pre_data: ShardData::empty(),
+            effect_data: call.plan.effects[0].data.clone(),
+        },
+    );
+
+    let build = |private_apply_outputs: Vec<ApplyOutput>| {
+        direct_input(
+            &writer,
+            vec![ProgramShardSelector::new(target, writer_id)],
+            Vec::new(),
+            instruction.clone(),
+            vec![init_witness(&keys, Identifier::ZERO)],
+            &[&writer],
+            vec![ProvenCall {
+                plan: call.plan.clone(),
+                private_apply_outputs,
+            }],
+        )
+    };
+
+    let missing = prove_circuit_directly(&build(Vec::new()), vec![plan_proof.clone()]);
+    assert_circuit_rejects(&missing, "must carry its apply output");
+
+    let surplus = prove_circuit_directly(
+        &build(vec![output.clone(), output.clone()]),
+        vec![plan_proof.clone(), apply_proof.clone()],
+    );
+    assert_circuit_rejects(&surplus, "more apply outputs than it emitted");
+
+    let matched = prove_circuit_directly(&build(vec![output]), vec![plan_proof, apply_proof]);
+    assert!(
+        matched.is_ok(),
+        "the matching transcript must prove: {matched:?}"
+    );
 }

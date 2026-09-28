@@ -1,7 +1,10 @@
 use std::io;
 
-use lee_core::account::Cycles;
-pub use lee_core::error::InvalidProgramBehaviorError;
+use lee_core::{
+    account::{AccountId, Cycles},
+    execution_state::ExecutionError,
+    native_token::TransferError,
+};
 use thiserror::Error;
 
 #[macro_export]
@@ -57,9 +60,6 @@ pub enum LeeError {
     #[error("Core error")]
     Core(#[from] lee_core::error::LeeCoreError),
 
-    #[error("Program output deserialization error: {0}")]
-    ProgramOutputDeserializationError(String),
-
     #[error("Circuit output deserialization error: {0}")]
     CircuitOutputDeserializationError(String),
 
@@ -68,9 +68,6 @@ pub enum LeeError {
 
     #[error("Circuit proving error")]
     CircuitProvingError(String),
-
-    #[error("Failed to resolve an account's shard: {0}")]
-    AccountResolution(String),
 
     #[error("Invalid program bytecode")]
     InvalidProgramBytecode(#[source] anyhow::Error),
@@ -114,12 +111,33 @@ impl LeeError {
     }
 }
 
-impl From<lee_core::validation::ValidationError> for LeeError {
-    fn from(error: lee_core::validation::ValidationError) -> Self {
-        use lee_core::validation::ValidationError;
+#[derive(Error, Debug)]
+pub enum InvalidProgramBehaviorError {
+    #[error("Called program {program_account_id} which is not listed in dependencies")]
+    UndeclaredProgramDependency { program_account_id: AccountId },
+
+    #[error("Invalid native transfer: {0}")]
+    NativeTransferFailed(#[from] TransferError),
+
+    #[error(transparent)]
+    Execution(#[from] ExecutionError),
+}
+
+impl From<ExecutionError> for LeeError {
+    fn from(error: ExecutionError) -> Self {
         match error {
-            ValidationError::ProgramBehavior(error) => Self::InvalidProgramBehavior(error),
-            ValidationError::MaxChainedCallsDepthExceeded => Self::MaxChainedCallsDepthExceeded,
+            ExecutionError::MaxChainedCallsExceeded => Self::MaxChainedCallsDepthExceeded,
+            ExecutionError::EmptyBlockWindowIntersection
+            | ExecutionError::EmptyTimestampWindowIntersection => Self::OutOfValidityWindow,
+            ExecutionError::PublicShardUnavailable { .. }
+            | ExecutionError::DuplicateWitness { .. }
+            | ExecutionError::WitnessNotInRoot { .. }
+            | ExecutionError::InvalidAuthorizationKey { .. }
+            | ExecutionError::FamilyBindingConflict { .. }
+            | ExecutionError::UnknownAccount { .. }
+            | ExecutionError::ExecutionValidation { .. } => {
+                Self::InvalidProgramBehavior(error.into())
+            }
         }
     }
 }

@@ -151,9 +151,8 @@ name = "amm_program"
 version = "0.1.0"
 dependencies = [
  "amm_core",
- "lee",
+ "borsh",
  "lee_core",
- "programs",
  "token_core",
 ]
 
@@ -557,6 +556,7 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
+ "token_core",
 ]
 
 [[package]]
@@ -1273,6 +1273,7 @@ dependencies = [
 name = "bridge_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_core",
  "lee_core",
 ]
@@ -1715,6 +1716,7 @@ dependencies = [
 name = "clock_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "clock_core",
  "lee_core",
 ]
@@ -2150,6 +2152,7 @@ dependencies = [
 name = "cross_zone_inbox_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "cross_zone_inbox_core",
  "cross_zone_marker_core",
  "lee_core",
@@ -2176,6 +2179,7 @@ dependencies = [
 name = "cross_zone_outbox_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "cross_zone_outbox_core",
  "lee_core",
 ]
@@ -3309,6 +3313,7 @@ dependencies = [
 name = "fee_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "fee_core",
  "lee_core",
 ]
@@ -4793,6 +4798,7 @@ dependencies = [
 name = "integration_bench"
 version = "0.1.0"
 dependencies = [
+ "amm_core",
  "anyhow",
  "borsh",
  "clap",
@@ -4800,6 +4806,8 @@ dependencies = [
  "indexer_service_rpc",
  "jsonrpsee",
  "lee",
+ "lee_core",
+ "programs",
  "sequencer_service_rpc",
  "serde",
  "serde_json",
@@ -4812,6 +4820,7 @@ dependencies = [
 name = "integration_tests"
 version = "0.1.0"
 dependencies = [
+ "amm_core",
  "anyhow",
  "async-trait",
  "borsh",
@@ -5668,6 +5677,7 @@ dependencies = [
  "borsh",
  "bytesize",
  "chacha20",
+ "derive_more",
  "ml-kem",
  "risc0-zkvm",
  "serde",
@@ -9199,6 +9209,7 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "cross_zone_marker_core",
  "lee_core",
  "ping_core",
@@ -9208,6 +9219,7 @@ dependencies = [
 name = "ping_sender_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "cross_zone_outbox_core",
  "lee_core",
  "ping_core",
@@ -11152,6 +11164,7 @@ dependencies = [
  "bytesize",
  "chain_state",
  "chrono",
+ "clock_core",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -11412,6 +11425,7 @@ dependencies = [
 name = "sequencer_stake_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "sequencer_stake_core",
 ]
@@ -12876,6 +12890,7 @@ dependencies = [
 name = "token_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "token_core",
 ]
@@ -14613,6 +14628,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "cross_zone_marker_core",
  "lee_core",
  "wrapped_token_core",

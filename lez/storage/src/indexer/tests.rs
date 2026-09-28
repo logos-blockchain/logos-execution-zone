@@ -31,9 +31,11 @@ fn settled_block(
 ) -> Block {
     use common::transaction::{LeeTransaction, clock_invocation, fee_invocation};
     let timestamp = id.saturating_mul(100);
-    let summary = if id == lee::GENESIS_BLOCK_ID {
+    let (summary, payout) = if id == lee::GENESIS_BLOCK_ID {
         // Genesis transactions are fee-exempt
-        fee_core::BlockFeeSummary::default()
+        let summary = fee_core::BlockFeeSummary::default();
+        let payout = chain_state::apply::opening_fee_state(state).apply_block(&summary);
+        (summary, payout)
     } else {
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
@@ -41,8 +43,10 @@ fn settled_block(
     let producer = lee::AccountId::from(&lee::PublicKey::new_from_private_key(
         &common::test_utils::sequencer_sign_key_for_testing(),
     ));
-    transactions.push(LeeTransaction::Public(fee_invocation(summary, producer)));
-    transactions.push(LeeTransaction::Public(clock_invocation(timestamp)));
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        summary, payout, producer,
+    )));
+    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,
@@ -187,17 +191,25 @@ fn one_block_insertion() {
         final_state
             .get_account_by_id(acc2())
             .data
-            .balance()
+            .native_balance()
             .unwrap()
-            - breakpoint.get_account_by_id(acc2()).data.balance().unwrap(),
+            - breakpoint
+                .get_account_by_id(acc2())
+                .data
+                .native_balance()
+                .unwrap(),
         1
     );
     assert!(
-        breakpoint.get_account_by_id(acc1()).data.balance().unwrap()
+        breakpoint
+            .get_account_by_id(acc1())
+            .data
+            .native_balance()
+            .unwrap()
             - final_state
                 .get_account_by_id(acc1())
                 .data
-                .balance()
+                .native_balance()
                 .unwrap()
             > 1
     );
@@ -248,11 +260,11 @@ fn put_block_stores_breakpoint_in_same_batch() {
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
     assert_eq!(
-        bp1.get_account_by_id(acc1()).data.balance().unwrap(),
+        bp1.get_account_by_id(acc1()).data.native_balance().unwrap(),
         INITIAL_ACC1_BALANCE
     );
     assert_eq!(
-        bp1.get_account_by_id(acc2()).data.balance().unwrap(),
+        bp1.get_account_by_id(acc2()).data.native_balance().unwrap(),
         INITIAL_ACC2_BALANCE
     );
     // Only the boundary block schedules a write: breakpoint 0 must be the only other one.
@@ -261,7 +273,7 @@ fn put_block_stores_breakpoint_in_same_batch() {
             .unwrap()
             .get_account_by_id(acc1())
             .data
-            .balance()
+            .native_balance()
             .unwrap(),
         INITIAL_ACC1_BALANCE
     );
@@ -308,7 +320,7 @@ fn state_replay_falls_back_over_missing_breakpoints() {
         final_state
             .get_account_by_id(acc2())
             .data
-            .balance()
+            .native_balance()
             .unwrap()
             - INITIAL_ACC2_BALANCE,
         u128::from(BREAKPOINT_INTERVAL) + 1
@@ -318,7 +330,7 @@ fn state_replay_falls_back_over_missing_breakpoints() {
             - final_state
                 .get_account_by_id(acc1())
                 .data
-                .balance()
+                .native_balance()
                 .unwrap()
             > u128::from(BREAKPOINT_INTERVAL) + 1
     );

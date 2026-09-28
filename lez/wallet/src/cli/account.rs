@@ -5,7 +5,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
-use lee_core::{Identifier, account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
+use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -142,7 +142,7 @@ pub enum NewSubcommand {
         /// Identifier selecting the shared account.
         /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
-        identifier: Option<u128>,
+        identifier: Option<lee_core::Identifier>,
     },
     /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
     /// registering any account.
@@ -231,7 +231,7 @@ impl NewSubcommand {
         pda: bool,
         seed: Option<String>,
         program_id: Option<String>,
-        identifier: Option<u128>,
+        identifier: Option<lee_core::Identifier>,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
@@ -262,16 +262,15 @@ impl NewSubcommand {
                     group.clone(),
                     pda_seed,
                     pid,
-                    identifier.unwrap_or_else(rand::random),
+                    crate::cli::identifier_or_random(identifier),
                 )
-                .await?
-        } else if let Some(id) = identifier {
-            wallet_core
-                .create_shared_regular_account_with_identifier(group.clone(), id)
                 .await?
         } else {
             wallet_core
-                .create_shared_regular_account(group.clone())
+                .create_shared_regular_account_with_identifier(
+                    group.clone(),
+                    crate::cli::identifier_or_random(identifier),
+                )
                 .await?
         };
 
@@ -369,7 +368,7 @@ impl AccountSubcommand {
                 ReadScope::All => wallet_core.get_account_public(id).await?,
                 ReadScope::Balance => {
                     wallet_core
-                        .get_account_view(ProgramShardSelector::balance(id))
+                        .get_account_view(ProgramShardSelector::native_balance(id))
                         .await?
                 }
                 ReadScope::Shard(program) => {
@@ -507,7 +506,7 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::balance(id))
+                .get_account_view(ProgramShardSelector::native_balance(id))
                 .await
             {
                 Ok(account) => print_account_details(&account, "  ", true),
@@ -638,9 +637,9 @@ pub enum ImportSubcommand {
         /// Chain index.
         #[arg(long)]
         chain_index: Option<ChainIndex>,
-        /// Identifier.
-        #[arg(long, default_value = "0")]
-        identifier: Identifier,
+        /// Identifier. Defaults to zero if not specified.
+        #[arg(long)]
+        identifier: Option<lee_core::Identifier>,
     },
 }
 
@@ -674,6 +673,7 @@ impl WalletSubcommand for ImportSubcommand {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
+                let identifier = identifier.unwrap_or(lee_core::Identifier::ZERO);
                 let account_id = lee::AccountId::from((
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
@@ -697,7 +697,7 @@ impl WalletSubcommand for ImportSubcommand {
 
 fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     if balance_read {
-        let balance = account.data.balance().map_or_else(
+        let balance = account.data.native_balance().map_or_else(
             |_error| "<malformed>".to_owned(),
             |balance| balance.to_string(),
         );

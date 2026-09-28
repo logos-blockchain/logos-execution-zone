@@ -81,7 +81,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
-    assert_eq!(to_res_acc.data.balance().unwrap(), 100);
+    assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
     log::info!("Successfully transferred");
 

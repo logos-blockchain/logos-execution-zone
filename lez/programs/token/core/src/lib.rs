@@ -16,7 +16,10 @@ pub enum Instruction {
     /// Required accounts:
     /// - Sender's Token Holding account (initialized, authorized),
     /// - Recipient's Token Holding account (initialized or empty).
-    Transfer { amount_to_transfer: u128 },
+    Transfer {
+        amount_to_transfer: u128,
+        descriptor: TokenDescriptor,
+    },
 
     /// Create a new fungible token definition without metadata.
     ///
@@ -42,14 +45,17 @@ pub enum Instruction {
     /// Required accounts:
     /// - Token Definition account (initialized),
     /// - Token Holding account,
-    InitializeAccount,
+    InitializeAccount { kind: TokenKind },
 
     /// Burn tokens from the holder's account.
     ///
     /// Required accounts:
     /// - Token Definition account (initialized),
     /// - Token Holding account (initialized, authorized).
-    Burn { amount_to_burn: u128 },
+    Burn {
+        amount_to_burn: u128,
+        kind: TokenKind,
+    },
 
     /// Mint new tokens to the holder's account.
     ///
@@ -63,7 +69,7 @@ pub enum Instruction {
     /// Required accounts:
     /// - NFT Master Token Holding account (initialized, authorized),
     /// - NFT Printed Copy Token Holding account (empty).
-    PrintNft,
+    PrintNft { definition_id: AccountId },
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -130,39 +136,56 @@ pub enum TokenHolding {
     },
 }
 
-impl TokenHolding {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TokenDescriptor {
+    pub definition_id: AccountId,
+    pub kind: TokenKind,
+}
+
+impl TokenDescriptor {
     #[must_use]
-    pub const fn zeroized_clone_from(other: &Self) -> Self {
-        match other {
-            Self::Fungible { definition_id, .. } => Self::Fungible {
-                definition_id: *definition_id,
+    pub const fn zeroized(&self) -> TokenHolding {
+        match self.kind {
+            TokenKind::Fungible => TokenHolding::Fungible {
+                definition_id: self.definition_id,
                 balance: 0,
             },
-            Self::NftMaster { definition_id, .. } => Self::NftMaster {
-                definition_id: *definition_id,
+            TokenKind::NftMaster => TokenHolding::NftMaster {
+                definition_id: self.definition_id,
                 print_balance: 0,
             },
-            Self::NftPrintedCopy { definition_id, .. } => Self::NftPrintedCopy {
-                definition_id: *definition_id,
+            TokenKind::NftPrintedCopy => TokenHolding::NftPrintedCopy {
+                definition_id: self.definition_id,
                 owned: false,
             },
         }
     }
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum TokenKind {
+    Fungible,
+    NftMaster,
+    NftPrintedCopy,
+}
+
+impl TokenKind {
     #[must_use]
-    pub const fn zeroized_from_definition(
-        definition_id: AccountId,
-        definition: &TokenDefinition,
-    ) -> Self {
+    pub const fn from_definition(definition: &TokenDefinition) -> Self {
         match definition {
-            TokenDefinition::Fungible { .. } => Self::Fungible {
-                definition_id,
-                balance: 0,
-            },
-            TokenDefinition::NonFungible { .. } => Self::NftPrintedCopy {
-                definition_id,
-                owned: false,
-            },
+            TokenDefinition::Fungible { .. } => Self::Fungible,
+            TokenDefinition::NonFungible { .. } => Self::NftPrintedCopy,
+        }
+    }
+}
+
+impl TokenHolding {
+    #[must_use]
+    pub const fn kind(&self) -> TokenKind {
+        match self {
+            Self::Fungible { .. } => TokenKind::Fungible,
+            Self::NftMaster { .. } => TokenKind::NftMaster,
+            Self::NftPrintedCopy { .. } => TokenKind::NftPrintedCopy,
         }
     }
 

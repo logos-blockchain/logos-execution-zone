@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use lee_core::{
     PrivacyPreservingCircuitInput, ProgramImageWitness,
-    program::{ChainedCall, read_input_frame},
-    validation::validate_state_diff,
+    account::AccountId,
+    execution_state::ExecutionState,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, read_input_frame},
 };
+use private_backend::PrivateBackend;
 use risc0_zkvm::guest::env;
 
 mod output;
@@ -10,37 +15,43 @@ mod private_backend;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
-        program_outputs,
+        root,
         private_witnesses,
-        program_account_id,
         dummy_inputs,
         ciphertext_padding,
-        initial_shard_selectors,
         program_image_witnesses,
         shadow_program_witnesses,
+        calls,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
-    let Some(first_output) = program_outputs.first() else {
-        panic!("PrivacyPreservingCircuitInput::program_outputs is empty: nothing to validate");
-    };
-    // Only bootstraps the loop's first iteration.
-    let initial_call = ChainedCall {
-        program_account_id,
-        instruction_data: first_output.instruction_data.clone(),
-        shard_selectors: Vec::new(),
-        pda_seeds: Vec::new(),
-    };
-    let mut backend = private_backend::PrivateBackend::new(
-        &private_witnesses,
-        program_outputs,
-        &program_image_witnesses,
-        &shadow_program_witnesses,
-        &initial_shard_selectors,
+    // The sequencer checks disclosed images against chain state.
+    // For undisclosed images, `to_claim` checks header immutability and derives the membership
+    // root. Native token and loader accounts run protocol code and cannot claim guest images.
+    assert!(
+        !program_image_witnesses.iter().any(|witness| {
+            let account_id = witness.account_id();
+            account_id == NATIVE_TOKEN_PROGRAM_ID || account_id == PROGRAM_LOADER_ACCOUNT_ID
+        }),
+        "A reserved program account has no deployable bytecode to claim"
     );
-    // Every rejection aborts here, before any output is built.
-    let threaded = validate_state_diff(&mut backend, initial_call, &initial_shard_selectors)
-        .unwrap_or_else(|error| panic!("{error}"));
-    let (block_validity_window, timestamp_validity_window) = backend.into_windows();
+    let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
+        .iter()
+        .map(|witness| (witness.account_id(), witness.image_id()))
+        .collect();
+    for witness in &shadow_program_witnesses {
+        let account_id = AccountId::for_shadow_program(&witness.image_id);
+        let previous = image_id_by_account_id.insert(account_id, witness.image_id);
+        assert!(
+            previous.is_none(),
+            "account {account_id} claimed by both a program-image claim and a shadow witness"
+        );
+    }
+
+    let state =
+        ExecutionState::initialize(root, &private_witnesses).unwrap_or_else(|e| panic!("{e}"));
+    let mut backend = PrivateBackend::new(image_id_by_account_id, calls);
+    let outcome = state.run(&mut backend).unwrap_or_else(|e| panic!("{e}"));
+    backend.finish();
 
     let program_image_claims = program_image_witnesses
         .iter()
@@ -49,9 +60,7 @@ fn main() {
         .expect("every program image witness must produce a valid claim");
 
     let output = output::compute_circuit_output(
-        threaded,
-        block_validity_window,
-        timestamp_validity_window,
+        outcome,
         &private_witnesses,
         dummy_inputs,
         ciphertext_padding,

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
+use common::HashType;
 use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee_core::account::{AccountId, ProgramShardSelector};
@@ -39,6 +40,18 @@ where
     tokio::time::timeout(PHASE_TIMEOUT, wait)
         .await
         .with_context(|| format!("Timed out waiting for {what}"))?
+}
+
+/// Waits until the sequencer reports `tx_hash` in a block.
+pub async fn wait_for_inclusion(ctx: &TestContext, tx_hash: HashType) -> Result<()> {
+    wait_until(&format!("transaction {tx_hash} to be included"), || async {
+        Ok(ctx
+            .sequencer_client()
+            .get_transaction(tx_hash)
+            .await?
+            .is_some())
+    })
+    .await
 }
 
 /// The channel's accredited keys, sorted, plus whose turn the tip was written on.
@@ -123,7 +136,7 @@ pub async fn send(
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(0),
+        to_identifier: Some(lee_core::Identifier::ZERO),
         amount,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

@@ -141,17 +141,20 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         .context("Failed to create a fresh stake ownership account")?;
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
-    let mover_instruction_data =
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
-            amount: FUNDING_BALANCE,
-        })
-        .context("Failed to serialize mover instruction")?;
+    let stake_id = programs::sequencer_stake_account_id();
+    // An untrusted claim about the ownership account this stake targets, read from live state
+    // the same way `submit_stake` builds it: it is checked against the account it describes.
+    let has_record = !get_account(&ctx, ownership_id)
+        .await
+        .context("Failed to read the stake ownership account")?
+        .data
+        .shard(stake_id)
+        .is_empty();
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
             sequencer_key: joiner_stake_key,
             amount: FUNDING_BALANCE,
-            mover_account_id: lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-            mover_instruction_data,
+            has_record,
         })
         .context("Failed to serialize Stake instruction")?;
 
@@ -159,7 +162,6 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         "Staking sequencer key {}",
         hex::encode(joiner_key.to_bytes())
     );
-    let stake_id = programs::sequencer_stake_account_id();
     ctx.wallet()
         .send_pub_tx(
             vec![

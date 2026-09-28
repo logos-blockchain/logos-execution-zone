@@ -655,7 +655,7 @@ struct TipEvidence {
 /// For every cross-zone dispatch in a block it re-derives the transaction from
 /// the peer's finalized block and rejects it if the bytes differ (a forgery), so
 /// delivery no longer relies on trusting the sequencer. A replay of an
-/// already-delivered message is accepted, since the inbox no-ops it on chain.
+/// already-delivered message is left to the inbox, which refuses it on chain.
 #[derive(Clone)]
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
@@ -779,8 +779,8 @@ impl CrossZoneVerifier {
     /// after the block applies, so the seen-set mirrors the inbox's on-chain
     /// seen-shard. Marking a key from a block that never applies would let a later
     /// forged dispatch reuse it to skip re-derivation while the inbox delivers the
-    /// forgery. A key already seen is a replay the inbox no-ops, so it is accepted
-    /// without re-derivation rather than halting on a legitimate re-delivery.
+    /// forgery. A key already seen is a replay the inbox refuses, so it is left to
+    /// the inbox without re-derivation.
     pub async fn verify_block(
         &self,
         block: &Block,
@@ -795,7 +795,7 @@ impl CrossZoneVerifier {
             let key = seen_key(&msg);
             if self.seen.read().await.contains(&key) {
                 debug!(
-                    "Skipping already-seen cross-zone dispatch from zone {} block {} tx {} (replay no-op)",
+                    "Skipping already-seen cross-zone dispatch from zone {} block {} tx {} (a replay the inbox refuses)",
                     hex::encode(msg.src_zone),
                     msg.src_block_id,
                     msg.src_tx_index
@@ -1690,7 +1690,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepts_replayed_dispatch_as_noop() {
+    async fn leaves_a_replayed_dispatch_to_the_inbox() {
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;
 
@@ -1704,7 +1704,7 @@ mod tests {
 
         // A payload that cannot re-derive, under the key just recorded, which
         // now names the source block as well as the coordinates. Accepted only
-        // by the seen-key short circuit, since the inbox no-ops it on chain;
+        // by the seen-key short circuit, since the inbox refuses it on chain;
         // `unaccepted_dispatch_does_not_poison_seen` asserts the same input is
         // rejected when the key was never recorded, which is what makes this one
         // about the short circuit rather than re-derivation.
@@ -1719,7 +1719,7 @@ mod tests {
         verifier
             .verify_block(&replay, Slot::from(0))
             .await
-            .expect("a replay is accepted as an on-chain no-op");
+            .expect("a replay is left to the inbox, which refuses it on chain");
     }
 
     #[tokio::test]
@@ -1960,7 +1960,7 @@ mod tests {
         // chain has not reached; it is well formed and correctly signed, so
         // nothing about the block itself refuses it. Delivered, its message
         // would burn the replay key the honest block at that id would later
-        // need, and the inbox would no-op the real message.
+        // need, and the inbox would refuse the real message.
         let verifier = verifier();
         cache_chain(&verifier, linked_chain(2)).await;
         let claimed = produce_dummy_block(9, None, vec![emission(b"hi")]);

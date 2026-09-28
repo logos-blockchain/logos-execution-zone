@@ -436,7 +436,7 @@ impl IndexerCore {
                     // carries before applying it, so the destination never trusts
                     // a dispatch just because a sequencer signed the block: a
                     // forged one halts ingestion rather than persisting invalid
-                    // state, while a replay is accepted since the inbox no-ops it
+                    // state, while a replay is left to the inbox, which refuses it
                     // on chain. An operator-listed block hash skips verification
                     // entirely, ahead of it, so listing clears a dead-peer retry
                     // loop as well as a forged verdict. The keys are marked seen

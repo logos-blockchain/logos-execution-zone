@@ -70,7 +70,7 @@ async fn main() {
     // Compute the PDA to pass as the input account.
     let pda = AccountId::for_public_pda(&caller_account_id, &PDA_SEED);
     // The caller only needs the account ID; the callee selects its shard.
-    let shard_selectors = vec![ProgramShardSelector::balance(pda)];
+    let shard_selectors = vec![ProgramShardSelector::native_balance(pda)];
     let instruction_data = callee_account_id;
     let nonces = vec![];
     let signing_keys = [];

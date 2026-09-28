@@ -8,10 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+borsh.workspace = true
 lee_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true
-
-[dev-dependencies]
-lee = { workspace = true, features = ["test-utils"] }
-programs = { workspace = true }

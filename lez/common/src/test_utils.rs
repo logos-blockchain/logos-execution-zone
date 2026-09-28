@@ -83,11 +83,13 @@ pub fn produce_dummy_block(
 ) -> Block {
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
+        0,
         lee::AccountId::from(&lee::PublicKey::new_from_private_key(
             &sequencer_sign_key_for_testing(),
         )),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(
+        id,
         id.saturating_mul(100),
     )));
 
@@ -156,8 +158,8 @@ pub fn create_transaction_native_token_transfer_with_fees(
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
     let shard_selectors = vec![
-        ProgramShardSelector::balance(from),
-        ProgramShardSelector::balance(to),
+        ProgramShardSelector::native_balance(from),
+        ProgramShardSelector::native_balance(to),
     ];
     let nonces = vec![nonce.into()];
     let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
@@ -193,8 +195,8 @@ pub fn create_transaction_native_token_transfer_without_fee(
     let message = lee::public_transaction::Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::balance(from),
-            ProgramShardSelector::balance(to),
+            ProgramShardSelector::native_balance(from),
+            ProgramShardSelector::native_balance(to),
         ],
         vec![nonce.into()],
         lee_core::native_token::Instruction::Transfer {

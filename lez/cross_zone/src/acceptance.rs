@@ -314,7 +314,7 @@ pub fn equivocation_report(
 /// This is what closes the id suppression. A delivered message's replay key
 /// covers `(src_zone, src_block_id, src_tx_index)` and nothing else, so a peer
 /// that can get a block accepted under an id of its choosing burns the key an
-/// honest block would later use, and the inbox then no-ops the real message as
+/// honest block would later use, and the inbox then refuses the real message as
 /// a replay. Off a hash link ids are only claimable in order, so the only id
 /// within reach is the one the peer is about to publish anyway.
 #[must_use]
