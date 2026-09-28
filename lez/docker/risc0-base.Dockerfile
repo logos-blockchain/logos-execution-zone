@@ -7,7 +7,7 @@
 # Wiring:
 #   - docker-compose: `build.additional_contexts: { risc0_base: "service:risc0_base" }`
 #   - CI: built first and passed via `build-contexts: risc0_base=docker-image://...`
-FROM lukemathwalker/cargo-chef:latest-rust-1.94.0-slim-trixie
+FROM lukemathwalker/cargo-chef:latest-rust-1.98.1-slim-trixie
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

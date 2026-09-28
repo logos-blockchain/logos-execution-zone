@@ -13,10 +13,11 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{
         ledger::{NoteId, Utxo},
-        ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
+        ops::channel::{ChannelId, MsgId},
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey as Ed25519PublicKey;
 use logos_blockchain_zone_sdk::{Slot, ZoneMessage, sequencer::WithdrawArg};
 use tokio_util::sync::CancellationToken;
 

@@ -23,7 +23,7 @@ use kameo::actor::{ActorRef, Spawn as _};
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
-use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
+use logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey as Ed25519PublicKey;
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,

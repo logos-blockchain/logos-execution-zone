@@ -95,7 +95,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     .await?;
     wait_for_height(b, rotation_target, "B to follow across turn windows").await?;
     wait_until("the round-robin turn to reach B", || async {
-        Ok(committee(&bedrock_config).await?.1 == Some(pub_b))
+        Ok(committee(&bedrock_config).await?.1 == Some(pub_b.into_unverified()))
     })
     .await?;
     assert_same_chain(a, b).await?;

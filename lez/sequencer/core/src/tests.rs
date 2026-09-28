@@ -5080,7 +5080,9 @@ mod channel_update_extraction {
             Op,
             channel::inscribe::{Inscription, InscriptionOp},
         },
-        transactions::{MantleTxBuilder, OpsProofs, SignedMantleTx, states::Unverified},
+        ops::OpProof,
+        traits::Hashable as _,
+        transactions::{MantleTxBuilder, OpProofs},
     };
     use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
 
@@ -5091,20 +5093,27 @@ mod channel_update_extraction {
     fn inscribing_tx(
         channel: ChannelId,
         block: &common::block::Block,
-    ) -> SignedMantleTx<Unverified> {
+    ) -> crate::block_publisher::SignedMantleTx {
         let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+        let key = Ed25519Key::generate(&mut rand::rngs::OsRng);
         let op = Op::ChannelInscribe(InscriptionOp {
             channel_id: channel,
             inscription,
             parent: MsgId::root(),
-            signer: Ed25519Key::generate(&mut rand::rngs::OsRng).public_key(),
+            signer: key.public_key().into_unverified(),
         });
         let raw = MantleTxBuilder::new()
             .extend_ops([op])
             .expect("ops fit")
             .build()
             .expect("tx builds");
-        SignedMantleTx::new(raw, OpsProofs::empty())
+        // One proof per op is required; the inscription is signed by its signer.
+        let signature = key.sign_payload(raw.hash().as_signing_bytes().as_ref());
+        crate::block_publisher::SignedMantleTx::from_parts(
+            raw,
+            OpProofs::from([OpProof::Ed25519Sig(signature)]),
+        )
+        .expect("one proof per op")
     }
 
     #[test]
@@ -5130,7 +5139,10 @@ mod channel_update_extraction {
     fn a_config_tx_yields_nothing() {
         let channel = ChannelId::from([1; 32]);
         let raw = MantleTxBuilder::new().build().expect("tx builds");
-        let config = ChannelUpdateTx::Config(SignedMantleTx::new(raw, OpsProofs::empty()));
+        let config = ChannelUpdateTx::Config(
+            crate::block_publisher::SignedMantleTx::from_parts(raw, OpProofs::empty())
+                .expect("no ops, no proofs"),
+        );
         assert!(channel_blocks(&config, channel).is_empty());
     }
 }

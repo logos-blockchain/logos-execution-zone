@@ -166,7 +166,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // Rejoining is only real if B writes to the channel again.
     wait_until("the round-robin turn to reach B again", || async {
-        Ok(committee(&bedrock_config).await?.1 == Some(key_b))
+        Ok(committee(&bedrock_config).await?.1 == Some(key_b.into_unverified()))
     })
     .await?;
 

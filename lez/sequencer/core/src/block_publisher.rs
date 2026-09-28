@@ -5,28 +5,32 @@ use chain_state::zone_indexer::ZoneIndexer;
 use common::block::Block;
 use futures::{Stream, future::BoxFuture};
 use log::{info, warn};
-pub use logos_blockchain_core::mantle::{
-    ledger::NoteId,
-    ops::channel::{Ed25519PublicKey, MsgId},
-};
+pub use logos_blockchain_core::mantle::{ledger::NoteId, ops::channel::MsgId};
 use logos_blockchain_core::{
     mantle::{
-        SignedMantleTx,
+        SignedOps,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId,
-                config::{ChannelConfigOp, Keys},
+                ChannelId, VerifiedChannelKeys,
+                config::ChannelConfigOp,
                 inscribe::{Inscription, InscriptionOp},
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpsProofs, states::Unverified},
+        transactions::{MantleTxBuilder, OpProofs, states::Unverified},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature, IndexedSignatures},
 };
+/// A channel key as the node reports it (accredited keys, inscription signers).
+/// Config ops need them verified; see [`verified_channel_keys`].
+pub use logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey as Ed25519PublicKey;
+
+/// A signed, not-yet-verified Mantle transaction, as posted to the node.
+pub type SignedMantleTx = SignedOps<Unverified, StandardMode>;
 use logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 pub use logos_blockchain_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey, ZkPublicKey,
@@ -116,14 +120,14 @@ enum Command {
     /// Submit a committee `ChannelConfigOp` as its own, independent Mantle tx
     /// — not bundled with any block publish.
     SubmitChannelConfig {
-        new_keys: Keys,
+        new_keys: VerifiedChannelKeys,
         channel_params: ChannelParams,
         resp: oneshot::Sender<Result<()>>,
     },
     /// Hand zone-sdk a pre-built tx to track and post, keyed by the channel tip
     /// it leaves behind.
     SubmitSignedTx {
-        tx: Box<SignedMantleTx<Unverified>>,
+        tx: Box<SignedMantleTx>,
         msg_id: MsgId,
         resp: oneshot::Sender<Result<PublishOutcome>>,
     },
@@ -440,14 +444,16 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     checkpoint,
                                     channel_update,
                                     finalized,
+                                    // Rebuilt from the finalized ops below.
+                                    deposits: _,
                                 } => {
                                     let adopted = channel_update
-                                        .adopted
+                                        .adopted()
                                         .iter()
                                         .flat_map(|tx| channel_blocks(tx, channel_id))
                                         .collect();
                                     let orphaned = channel_update
-                                        .orphaned
+                                        .orphaned()
                                         .iter()
                                         .flat_map(|tx| channel_blocks(tx, channel_id))
                                         .collect();
@@ -577,7 +583,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             channel_id: self.channel_id,
             inscription,
             parent,
-            signer: self.bedrock_signing_key.public_key(),
+            signer: self.bedrock_signing_key.public_key().into_unverified(),
         };
         let msg_id = inscribe_op.id();
 
@@ -593,14 +599,14 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let signature = self
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-        let mut ops_proofs: OpsProofs = OpProof::Ed25519Sig(signature).into();
+        let mut ops_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
         if let Some(transfer_proof) = funded.transfer_proof {
             ops_proofs
                 .try_push(transfer_proof)
                 .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
         }
 
-        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        let tx = Box::new(SignedMantleTx::from_parts(mantle_tx, ops_proofs)?);
         self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
             .await
     }
@@ -611,14 +617,14 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         keys: Vec<Ed25519PublicKey>,
         channel_params: ChannelParams,
     ) -> Result<PublishOutcome> {
-        let own_key = self.bedrock_signing_key.public_key();
+        let own_key = self.bedrock_signing_key.public_key().into_unverified();
         ensure!(
             keys.first() == Some(&own_key),
             "Creating the channel requires our own key first; creation gives the turn to index 0"
         );
         let key_count = keys.len();
         let keys =
-            Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+            verified_channel_keys(keys)?;
 
         let config_op = ChannelConfigOp {
             channel: self.channel_id,
@@ -659,13 +665,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let signature = self
             .bedrock_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-        // Creation skips the channel-config signature check, but the proof must
-        // still be well formed; index 0 is our own key.
-        let config_proof =
-            ChannelMultiSigProof::try_new(IndexedSignature::new(0, signature).into())
-                .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
+        // Nothing is accredited before creation, so the ledger checks the config
+        // proof against a threshold of zero and rejects any signature in it.
+        let config_proof = ChannelMultiSigProof::try_new(IndexedSignatures::default())
+            .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
 
-        let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(config_proof).into();
+        let mut ops_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(config_proof)]);
         ops_proofs
             .try_push(OpProof::Ed25519Sig(signature))
             .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
@@ -677,7 +682,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
 
-        let tx = Box::new(SignedMantleTx::new(mantle_tx, ops_proofs));
+        let tx = Box::new(SignedMantleTx::from_parts(mantle_tx, ops_proofs)?);
         self.dispatch(|resp| Command::SubmitSignedTx { tx, msg_id, resp })
             .await
     }
@@ -699,7 +704,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             "Refusing to submit a committee update with no accredited keys"
         );
         let new_keys =
-            Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+            verified_channel_keys(new_keys)?;
 
         self.dispatch(|resp| Command::SubmitChannelConfig {
             new_keys,
@@ -773,6 +778,7 @@ pub(crate) fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec
     match tx {
         ChannelUpdateTx::Inscription(info) => entry(info).into_iter().collect(),
         ChannelUpdateTx::AtomicWithdraw(bundle) => entry(&bundle.inscription).into_iter().collect(),
+        ChannelUpdateTx::PinDeposit(bundle) => entry(&bundle.inscription).into_iter().collect(),
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => channel_inscriptions(signed_tx, channel_id)
             .iter()
@@ -785,13 +791,26 @@ pub(crate) fn channel_blocks(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec
 /// plain inscription. See [`PublishOutcome::released_notes`].
 fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
     match tx {
-        PendingTx::Inscription(_) => Vec::new(),
+        PendingTx::Inscription(_) | PendingTx::PinDeposit(_) => Vec::new(),
         PendingTx::AtomicWithdraw(bundle) => bundle
             .withdraws
             .iter()
             .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
             .collect(),
     }
+}
+
+/// Verifies a channel key list for a config op. A committee position is an
+/// index, so one invalid key fails the whole list.
+fn verified_channel_keys(keys: Vec<Ed25519PublicKey>) -> Result<VerifiedChannelKeys> {
+    let keys = keys
+        .into_iter()
+        .map(|key| {
+            logos_blockchain_key_management_system_service::keys::Ed25519PublicKey::try_from(key)
+                .map_err(|err| anyhow!("Invalid channel key {key:?}: {err:?}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    VerifiedChannelKeys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err:?}"))
 }
 
 /// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
@@ -864,7 +883,7 @@ pub async fn post_channel_config(
          than the timeframe, got {posting_timeframe} and {posting_timeout}"
     );
 
-    let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+    let keys = verified_channel_keys(keys)?;
     // Configs chain on the channel's config tip, or the root if there is none.
     let parent = read_channel_state(config)
         .await
@@ -901,17 +920,19 @@ pub async fn post_channel_config(
         0,
         signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
     );
-    let proof = ChannelMultiSigProof::try_new(signature.into())
+    let signatures = IndexedSignatures::try_from(vec![signature])
+        .map_err(|err| anyhow!("Failed to collect channel signatures: {err:?}"))?;
+    let proof = ChannelMultiSigProof::try_new(signatures)
         .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
 
     // Proofs follow op order; funding appends the transfer as the last op.
-    let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(proof).into();
+    let mut ops_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
     if let Some(transfer_proof) = funded.transfer_proof {
         ops_proofs
             .try_push(transfer_proof)
             .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
     }
-    let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs);
+    let signed_tx = SignedMantleTx::from_parts(mantle_tx, ops_proofs)?;
 
     node.post_transaction(signed_tx)
         .await

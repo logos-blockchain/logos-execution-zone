@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use log::info;
-use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
+use logos_blockchain_zone_sdk::UnverifiedEd25519PublicKey as Ed25519PublicKey;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -167,7 +167,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         if state
             .accredited_keys
             .iter()
-            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key)
+            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key.into_unverified())
         {
             channel_state = Some(state);
             break;
@@ -212,7 +212,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                 .accredited_keys
                 .get(usize::from(state.tip_sequencer))
                 .copied();
-            Ok(turn == Some(demo_sequencer_key)
+            Ok(turn == Some(demo_sequencer_key.into_unverified())
                 && ctx.sequencer_client().get_last_block_id().await? > joined_at)
         }
     })
@@ -282,7 +282,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         if !state
             .accredited_keys
             .iter()
-            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key)
+            .any(|key: &Ed25519PublicKey| *key == demo_sequencer_key.into_unverified())
         {
             removed = true;
             break;
