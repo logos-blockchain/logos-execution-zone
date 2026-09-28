@@ -320,7 +320,7 @@ impl AccountId {
 
 **Program account IDs.** Programs are invoked at an `AccountId`: the address of their `ProgramHeader`. Besides addresses chosen freely at deploy time, the following are derived:
 
-- *Builtin program by image ID* (`from_builtin_program`): the 32 bytes of the `ProgramId`, each `u32` word little-endian. This is a reinterpretation, not a hash. Builtins seeded at genesis live here.
+- *Builtin program by image ID* (`from_builtin_program`): the 32 bytes of the `ProgramId`, each `u32` word little-endian. This is a reinterpretation, not a hash. Used to derive shadow-program addresses and by test harnesses; genesis builtins are addressed by name (below).
 - *Builtin program by name* (`from_builtin_program_name`): `SHA256(b"/LEE-BuiltinProgram/v1/AccountId" || name)`, where the prefix is exactly 32 bytes and `name` has variable length.
 - *Shadow program* (`for_shadow_program`): `SHA256(SHADOW_PROGRAM_PREFIX || from_builtin_program(image_id))`, a 64-byte input. A shadow program runs only on the private path, identified by its image ID alone, and has no header.
 - *Immutable mirror* (`for_immutable_mirror`): `SHA256(IMMUTABLE_MIRROR_PREFIX || header_account_id)`, a 64-byte input. It is the account ID of the private commitment that mirrors an immutable `ProgramHeader`, which lets a private transaction prove it ran a deployed program without disclosing which one.
@@ -333,6 +333,26 @@ SHADOW_PROGRAM_PREFIX: [u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\
 IMMUTABLE_MIRROR_PREFIX: [u8; 32] = b"/LEE/v0.3/AccountId/ImmutMirror/"
 /// ASCII "/LEE/v0.3/AccountId/GenesisSeg/" zero-padded to 32 bytes
 GENESIS_SEGMENT_ID_PREFIX: [u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00"
+```
+
+```rust
+impl AccountId {
+    /// The 32 bytes of the image ID, each u32 word little-endian (a reinterpretation, not a hash).
+    fn from_builtin_program(image_id: ProgramId) -> Self {
+        let mut bytes = [0_u8; 32];
+        for (i, word) in image_id.iter().enumerate() {
+            bytes[4 * i..4 * i + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        AccountId(bytes)
+    }
+
+    fn for_shadow_program(image_id: &ProgramId) -> Self {
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        bytes[32..64].copy_from_slice(AccountId::from_builtin_program(*image_id).value());
+        sha256(bytes)
+    }
+}
 ```
 
 ### Commitment
@@ -822,7 +842,7 @@ At genesis, the `CommitmentSet` is initialized by inserting `DUMMY_COMMITMENT` a
 Genesis state is `V03State::default()` (empty public state, `CommitmentSet = [DUMMY_COMMITMENT]`) plus the builtin programs. Each builtin is seeded exactly as a live deploy would leave it:
 
 - its `user_elf` is split into chunks of at most `MAX_SEGMENT_DATA_LEN` bytes, stored as `ProgramSegment`s at the genesis segment addresses (see [Account ID](#account-id));
-- a `ProgramHeader` pointing at the first segment is stored at the builtin's address, by default `from_builtin_program(image_id)`;
+- a `ProgramHeader` pointing at the first segment is stored at the builtin's name-derived address, `from_builtin_program_name(name)`, which is fixed regardless of the ELF;
 - if the builtin is immutable, its mirror commitment is appended to the `CommitmentSet`.
 
 ## Program deployment
@@ -849,7 +869,7 @@ struct ProgramSegment {
 
 Both are stored as plain borsh with no type tag.
 
-**Resolution.** To run the program at address `P`, decode `P`'s loader shard as a `ProgramHeader` (none, or undecodable, means *unknown program*). Starting at `program_first_segment`, follow `next_segment` links, concatenating each segment's `bytecode`, for at most `MAX_PROGRAM_SEGMENTS` segments. The result is the user ELF; it is combined with the protocol's fixed kernel (`risc0_zkos_v1compat`) to form the executable binary. The header's stored `image_id` is used as the program's ID; it is not recomputed at dispatch.
+**Resolution.** To run the program at address `P`, decode `P`'s loader shard as a `ProgramHeader` (none, or undecodable, means *unknown program*). Starting at `program_first_segment`, follow `next_segment` links, concatenating each segment's `bytecode`, for at most `MAX_PROGRAM_SEGMENTS` segments. The result is the user ELF; it is combined with the protocol's fixed kernel (`risc0_zkos_v1compat`) to form the executable binary. The header's stored `image_id` is used as the program's ID without being recomputed at dispatch. It is trustworthy because the loader computes it when writing the header (see `CreateHeader`) and never accepts it from the caller. This relies on headers being written only by `CreateHeader`, `UpdateHeader` or genesis.
 
 **Program loader instructions.** The loader is invoked like any program, by a public transaction or chained call to `PROGRAM_LOADER_ACCOUNT_ID`. Every input must select the loader shard. The loader cannot run on the private path. None of its instructions may target `NATIVE_TOKEN_PROGRAM_ID` or `PROGRAM_LOADER_ACCOUNT_ID`.
 
@@ -861,7 +881,7 @@ enum Instruction {
 }
 ```
 
-- **`WriteSegment`** — accounts `[target]`, or `[target, next]` when `next_segment` is `Some`. The target's loader shard must be empty; `next` must already hold a valid segment, so chains are written from the tail to the head. It requires **no authorization**. The segment must fit in `DATA_MAX_LENGTH`; `MAX_SEGMENT_DATA_LEN` (96 KiB) is the recommended chunk size.
+- **`WriteSegment`** — accounts `[target]`, or `[target, next]` when `next_segment` is `Some`. The target's loader shard must be empty and the target must be **authorized**; `next` must already hold a valid segment, so chains are written from the tail to the head. `next` is only read and needs no authorization. The segment must fit in `DATA_MAX_LENGTH`; `MAX_SEGMENT_DATA_LEN` (96 KiB) is the recommended chunk size.
 - **`CreateHeader`** — accounts `[target, segment_1, …, segment_n]`, the chain in link order. The target's loader shard must be empty and the target must be **authorized**. `first_segment` must equal `segment_1`, the supplied accounts must be exactly the chain (at most `MAX_PROGRAM_SEGMENTS`), and the header's `image_id` is computed from the concatenated bytecode plus the kernel. It is never taken from the caller.
 - **`UpdateHeader`** — same accounts and checks as `CreateHeader`, but the target must already hold a header with `immutable == false`.
 
@@ -878,11 +898,11 @@ A private transaction can later prove membership of this commitment to show that
 
 The loader's plan reads loader shards directly, including shards written earlier in the same transaction, so a single transaction can deploy a program and then call it.
 
-**Shadow programs.** A program can also run on the private path without being deployed. Its address is `for_shadow_program(image_id)`, derived from its image ID alone, so the address itself authenticates the bytecode.
+**Shadow programs.** A program can also run on the private path without being deployed. Its address is [`for_shadow_program(image_id)`](#account-id), derived from its image ID alone, so the address itself authenticates the bytecode. A shadow address has no header and no key, so public dispatch cannot resolve it and nobody can deploy a program at the shadow address (every loader write requires an authorization).
 
 ## Built-in programs
 
-Builtins are ordinary guest programs seeded at genesis (see [Genesis](#genesis)); the native token program and the program loader are the only programs implemented in protocol code. The builtin set is defined by the host chain (LEZ). A builtin addressed by name lives at `from_builtin_program_name(name)`; otherwise it lives at `from_builtin_program(image_id)`. Additional programs are deployed with the program loader.
+Builtins are ordinary guest programs seeded at genesis (see [Genesis](#genesis)); the native token program and the program loader are the only programs implemented in protocol code. The builtin set is defined by the host chain (LEZ). Each builtin is addressed by name, at `from_builtin_program_name(name)`, so its address does not change when its code does. Additional programs are deployed with the program loader.
 
 ## Structure of a public transaction
 
