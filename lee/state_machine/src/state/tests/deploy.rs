@@ -411,6 +411,60 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
     );
 }
 
+/// A 65-byte segment decodes as a header, so an unsigned write at a shadow address would hijack it.
+#[test]
+fn write_segment_rejects_a_shadow_derived_target_the_signer_does_not_control() {
+    let mut state = V03State::new();
+    let attacker_program = crate::test_methods::noop();
+    let victim_program = crate::test_methods::shard_forwarder();
+    let attacker_segments = force_insert_segment_chain(&mut state, attacker_program.elf(), 0x30);
+
+    let shadow_addr = AccountId::for_shadow_program(&victim_program.id());
+
+    // 28 filler bytes + the attacker's first segment: exactly 60 bytes of bytecode, so the stored
+    // segment is 65 bytes and also decodes as a header pointing at the attacker's chain.
+    let mut bytecode = vec![0_u8; 28];
+    bytecode.extend_from_slice(attacker_segments[0].value());
+    let forged = ProgramSegment {
+        bytecode: bytecode.clone(),
+        next_segment: None,
+    }
+    .to_bytes();
+    assert_eq!(
+        ProgramHeader::from_bytes(&forged).map(|header| header.program_first_segment),
+        Some(attacker_segments[0]),
+        "the payload must be a working forgery for this test to mean anything"
+    );
+
+    let unrelated_key = PrivateKey::try_new([0x77; 32]).unwrap();
+    let tx = loader_tx(
+        vec![shadow_addr],
+        vec![Nonce(0)],
+        Instruction::WriteSegment {
+            bytecode,
+            next_segment: None,
+        },
+        &[&unrelated_key],
+    );
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let err = result.expect_err("a segment target the signer doesn't control must be rejected");
+    assert!(
+        err.to_string().contains("must be an authorized account"),
+        "rejection should cite the authorization rule, got: {err}"
+    );
+    assert_eq!(
+        state.get_account_by_id(shadow_addr),
+        Account::default(),
+        "the shadow-derived account must remain unclaimed after a rejected write"
+    );
+    assert!(
+        lee_core::program::get_program_via(shadow_addr, |id| state.loader_shard(id)).is_none(),
+        "no program may resolve at the shadow address"
+    );
+}
+
 /// A `CreateHeader` transaction with `immutable: true` lands the private commitment mirroring the
 /// finalized header, so it can later be referenced in a privacy-preserving transaction without
 /// public disclosure.

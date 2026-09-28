@@ -64,7 +64,7 @@ fn write_segment_writes_the_loader_shard() {
     let shards = Shards::default();
 
     let effects = write_segment(
-        &[handle(target_id, false)],
+        &[handle(target_id, true)],
         shards.read(),
         vec![1, 2, 3],
         None,
@@ -88,7 +88,7 @@ fn write_segment_linking_to_an_existing_segment_leaves_it_unchanged() {
     let shards = Shards::default().segment(next_id, vec![9, 9], None);
 
     let effects = write_segment(
-        &[handle(target_id, false), handle(next_id, false)],
+        &[handle(target_id, true), handle(next_id, false)],
         shards.read(),
         vec![1, 2, 3],
         Some(next_id),
@@ -100,6 +100,14 @@ fn write_segment_linking_to_an_existing_segment_leaves_it_unchanged() {
     assert_eq!(effect.selector.account_id, target_id);
     let segment = ProgramSegment::from_bytes(&written(&effect)).expect("valid segment");
     assert_eq!(segment.next_segment, Some(next_id));
+}
+
+#[test]
+#[should_panic(expected = "WriteSegment target must be an authorized account")]
+fn write_segment_rejects_an_unauthorized_target() {
+    let target_id = AccountId::new([1; 32]);
+    let shards = Shards::default();
+    let _effects = write_segment(&[handle(target_id, false)], shards.read(), vec![1], None);
 }
 
 #[test]
@@ -134,7 +142,7 @@ fn write_segment_rejects_wrong_account_count_with_next() {
 fn write_segment_rejects_an_occupied_loader_shard() {
     let target_id = AccountId::new([1; 32]);
     let shards = Shards::default().segment(target_id, vec![9], None);
-    let _effects = write_segment(&[handle(target_id, false)], shards.read(), vec![1], None);
+    let _effects = write_segment(&[handle(target_id, true)], shards.read(), vec![1], None);
 }
 
 #[test]
@@ -145,7 +153,7 @@ fn write_segment_rejects_a_second_account_that_is_not_next_segment() {
     let wrong_next = AccountId::new([3; 32]);
     let shards = Shards::default().segment(wrong_next, vec![9], None);
     let _effects = write_segment(
-        &[handle(target_id, false), handle(wrong_next, false)],
+        &[handle(target_id, true), handle(wrong_next, false)],
         shards.read(),
         vec![1],
         Some(declared_next),
@@ -160,7 +168,7 @@ fn write_segment_rejects_a_handle_naming_another_shard() {
     let shards = Shards::default().segment(next_id, vec![9], None);
     let _effects = write_segment(
         &[
-            handle(target_id, false),
+            handle(target_id, true),
             AccountMeta::new(next_id, false, AccountId::new([9; 32])),
         ],
         shards.read(),
@@ -176,7 +184,7 @@ fn write_segment_rejects_a_next_segment_with_malformed_data() {
     let next_id = AccountId::new([2; 32]);
     let shards = Shards::default().with(next_id, ShardData::try_from(vec![0xff, 0xff]).unwrap());
     let _effects = write_segment(
-        &[handle(target_id, false), handle(next_id, false)],
+        &[handle(target_id, true), handle(next_id, false)],
         shards.read(),
         vec![1],
         Some(next_id),

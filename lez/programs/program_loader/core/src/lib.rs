@@ -1,9 +1,7 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards. Writing a fresh segment is permissionless — a
-//! still-empty loader shard has no prior claim to violate — but a header target must always be
-//! `is_authorized`, whether created or updated, so a real header can't be squatted at an address
-//! some other account id (e.g. a shadow program's) will later resolve to.
+//! Instructions only change loader shards, and every write target must be `is_authorized`: a
+//! 65-byte segment also decodes as a header, so an unauthorized write could hijack an address.
 //!
 //! The public-only native loader reads staged shards during planning.
 //! [`apply`] executes the resulting [`ShardEffect`]s.
@@ -29,7 +27,7 @@ pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 /// ahead of `WriteSegment` shifts every existing encoding.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Writes a new segment to the empty loader shard of `accounts[0]`, without authorization.
+    /// Writes a new segment to the empty loader shard of `accounts[0]`, which must be authorized.
     ///
     /// If `next_segment` is `Some`, `accounts[1]` must be that account and contain a valid
     /// [`ProgramSegment`] in its loader shard. Segments are immutable and linked from tail to head.
@@ -107,6 +105,10 @@ pub fn write_segment<'state>(
     assert!(
         shard(target.account_id).is_empty(),
         "segment target already deployed"
+    );
+    assert!(
+        target.is_authorized,
+        "WriteSegment target must be an authorized account"
     );
 
     if let (Some(next), [referenced]) = (next_segment, rest) {
