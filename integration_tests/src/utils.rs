@@ -13,9 +13,7 @@ use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
-        programs::{
-            native_token_transfer::AuthTransferSubcommand
-        },
+        programs::native_token_transfer::AuthTransferSubcommand,
     },
     storage::key_chain::FoundPrivateAccount,
 };

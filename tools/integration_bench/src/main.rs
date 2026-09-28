@@ -12,7 +12,7 @@
 //!
 //! Run examples:
 //!   `RISC0_DEV_MODE=1 cargo run --release -p integration_bench -- --scenario all`.
-//!   `cargo run --release -p integration_bench -- --scenario amm`.
+//!   `cargo run --release -p integration_bench -- --scenario private`.
 //!
 //! `RISC0_DEV_MODE=1` skips proving and produces latency-only numbers in
 //! ~minutes; omitting it produces realistic proving-inclusive numbers but

@@ -14,7 +14,7 @@ RISC0_DEV_MODE=1 cargo run --release -p integration_bench -- --scenario all
 cargo run --release -p integration_bench -- --scenario amm
 ```
 
-Scenarios: `token`, `amm`, `fanout`, `private`, `parallel`, `all`.
+Scenarios: `fanout`, `private`, `parallel`, `all`.
 
 All scenarios share a single TestContext for the run (one Bedrock + sequencer + indexer + wallet across the whole run, chain state accumulating), which matches how the node runs in production.
 
