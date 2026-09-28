@@ -21,8 +21,8 @@ use crate::{
         keycard::KeycardSubcommand,
         network::NetworkAlias,
         programs::{
-            bridge::BridgeSubcommand,
-            native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
+            bridge::BridgeSubcommand, native_token_transfer::AuthTransferSubcommand,
+            program_loader::ProgramLoaderSubcommand,
         },
         statistics::StatisticsSubcommand,
     },

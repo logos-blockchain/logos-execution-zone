@@ -12,20 +12,24 @@ use test_fixtures::{TestContext, public_mention};
 use wallet::cli::{
     Command, SubcommandReturnValue,
     account::{AccountSubcommand, NewSubcommand},
-    programs::token::TokenProgramAgnosticSubcommand,
+    programs::native_token_transfer::AuthTransferSubcommand,
 };
 
 use crate::harness::{BlockSize, ScenarioOutput, StepResult};
 
 const PARALLEL_FANOUT_N: usize = 10;
-const AMOUNT_PER_TRANSFER: u128 = 100;
+/// More than needed for fee reserve in second transfer.
+const AMOUNT_PER_TRANSFER: u128 = 20_000_000;
 
 pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     let mut output = ScenarioOutput::new("parallel_fanout");
 
-    // Setup: definition, master supply, N parallel supplies, N recipients.
-    let def_id = new_public_account(ctx, &mut output, "create_acc_def").await?;
-    let master_id = new_public_account(ctx, &mut output, "create_acc_master").await?;
+    // Setup: preconfigured supply, master supply, N parallel supplies, N recipients.
+    // Preconfigured account with a lot of native tokens.
+    let master_id = *ctx
+        .existing_public_accounts()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("At least one public account must exist"))?;
 
     let mut senders = Vec::with_capacity(PARALLEL_FANOUT_N);
     for i in 0..PARALLEL_FANOUT_N {
@@ -38,45 +42,35 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
         recipients.push(id);
     }
 
-    // Mint full supply into master.
-    let total_mint = u128::try_from(PARALLEL_FANOUT_N)
-        .expect("usize fits u128")
-        .saturating_mul(AMOUNT_PER_TRANSFER)
-        .saturating_mul(10);
-    output
-        .step(ctx, "token_new_fungible", async |ctx| {
-            wallet::cli::execute_subcommand(
-                ctx.wallet_mut(),
-                Command::Token(TokenProgramAgnosticSubcommand::New {
-                    definition_account_id: public_mention(def_id),
-                    supply_account_id: public_mention(master_id),
-                    name: "ParToken".to_owned(),
-                    total_supply: total_mint,
-                }),
-            )
-            .await
-        })
-        .await?;
-
     // Fund each sender from master. Serial; this is setup, not measured throughput.
     for (i, sender_id) in senders.iter().copied().enumerate() {
         output
             .step(ctx, format!("fund_sender_{i:02}"), async |ctx| {
                 wallet::cli::execute_subcommand(
                     ctx.wallet_mut(),
-                    Command::Token(TokenProgramAgnosticSubcommand::Send {
+                    Command::AuthTransfer(AuthTransferSubcommand::Send {
                         from: public_mention(master_id),
                         to: Some(public_mention(sender_id)),
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
                         to_identifier: Some(0),
-                        amount: AMOUNT_PER_TRANSFER * 5,
+                        amount: AMOUNT_PER_TRANSFER * 10,
                     }),
                 )
                 .await
             })
             .await?;
+
+        let sender_balance = ctx
+            .wallet()
+            .get_account(wallet::account::AccountIdWithPrivacy::Public(sender_id))
+            .await?
+            .data
+            .balance()
+            .unwrap();
+
+        println!("Now sender_{i} have balance of {sender_balance}");
     }
 
     // The measured phase: submit N transfers as fast as possible, do not wait
@@ -93,14 +87,14 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
     for (sender_id, recipient_id) in senders.iter().zip(recipients.iter()) {
         wallet::cli::execute_subcommand(
             ctx.wallet_mut(),
-            Command::Token(TokenProgramAgnosticSubcommand::Send {
+            Command::AuthTransfer(AuthTransferSubcommand::Send {
                 from: public_mention(*sender_id),
                 to: Some(public_mention(*recipient_id)),
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
                 to_identifier: Some(0),
-                amount: AMOUNT_PER_TRANSFER,
+                amount: 1,
             }),
         )
         .await?;

@@ -21,13 +21,7 @@ Per-program Risc0 cycle counts, prover wall time, PPE composition cost, and veri
 | Program | Instruction | user_cycles | segments | exec_ms (best / mean ± stdev) | calib_ms | net_ms |
 |---|---|---:|---:|---|---:|---:|
 | authenticated_transfer | Transfer | 79,958 | 1 | 31.02 / 32.35 ± 0.59 | 2.38 | 0.61 |
-| token | Burn | 116,546 | 1 | 36.08 / 37.18 ± 0.60 | 3.47 | 5.67 |
-| token | Mint | 116,862 | 1 | 35.67 / 37.73 ± 2.54 | 3.48 | 5.26 |
-| token | Transfer | 127,726 | 1 | 35.49 / 36.86 ± 0.90 | 3.81 | 5.08 |
 | clock | Tick (no rollups) | 137,022 | 1 | 32.12 / 33.16 ± 0.89 | 4.08 | 1.72 |
-| ata | Create | 174,515 | 1 | 35.41 / 36.49 ± 0.65 | 5.20 | 5.00 |
-| amm | SwapExactInput | 508,904 | 1 | 46.71 / 48.06 ± 0.86 | 15.17 | 16.30 |
-| amm | AddLiquidity | 643,464 | 1 | 48.57 / 50.28 ± 0.98 | 19.18 | 18.16 |
 
 ### Public-execution ms calibration
 
@@ -52,13 +46,7 @@ The fixed overhead is paid per transaction in the current node, not amortized. T
 | Program | Instruction | total_cycles | prove_ms | prove_s |
 |---|---|---:|---:|---:|
 | authenticated_transfer | Transfer | 131,072 | 13,705 | 13.7 |
-| token | Burn | 262,144 | 22,893 | 22.9 |
-| token | Mint | 262,144 | 23,927 | 23.9 |
-| token | Transfer | 262,144 | 27,178 | 27.2 |
 | clock | Tick | 262,144 | 23,486 | 23.5 |
-| ata | Create | 262,144 | 21,093 | 21.1 |
-| amm | AddLiquidity | 1,048,576 | 111,654 | 111.7 |
-| amm | SwapExactInput | 1,048,576 | 126,400 | 126.4 |
 
 Linear fit across po2 buckets: ≈ 100 µs per total cycle (≈ 10k cycles/s throughput on this CPU).
 
