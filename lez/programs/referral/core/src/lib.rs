@@ -265,3 +265,152 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 pub fn active_digest(active: &BTreeSet<NodeId>) -> [u8; 32] {
     sha256(&borsh::to_vec(active).expect("borsh serialization is infallible"))
 }
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    use super::*;
+
+    const PROGRAM: AccountId = AccountId::new([9; 32]);
+    const NODE: NodeId = NodeId::new([7; 32]);
+    const PARTICIPANT: AccountId = AccountId::new([3; 32]);
+
+    #[test]
+    fn the_authorization_message_is_the_prefixed_encoding_itself() {
+        let authorization = ParticipantAuthorizationV1::new(PROGRAM, NODE, PARTICIPANT, None);
+        let message = authorization.message();
+
+        assert_eq!(message.len(), 134);
+        assert_eq!(&message[..37], AUTHORIZATION_DOMAIN);
+        assert_eq!(&message[37..69], PROGRAM.as_ref());
+        assert_eq!(
+            sha256(&message),
+            [
+                0x0f, 0x69, 0x7b, 0x3b, 0xaa, 0x83, 0x74, 0x9f, 0xa7, 0x8f, 0x96, 0x17, 0xa9, 0x35,
+                0xaa, 0x4c, 0x76, 0x24, 0x08, 0xe8, 0x28, 0xc2, 0x63, 0x21, 0xc5, 0xea, 0xbc, 0x5b,
+                0x21, 0x32, 0xed, 0xf1,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_signature_over_the_bare_digest_is_rejected() {
+        let key = SigningKey::from_bytes(&[1; 32]);
+        let node = NodeId::new(key.verifying_key().to_bytes());
+        let authorization = ParticipantAuthorizationV1::new(PROGRAM, node, PARTICIPANT, None);
+
+        assert!(authorization.verify(&key.sign(&authorization.message()).to_bytes()));
+        assert!(!authorization.verify(&key.sign(&sha256(&authorization.message())).to_bytes()));
+    }
+
+    #[test]
+    fn authorization_rejects_every_tampered_field() {
+        let key = SigningKey::from_bytes(&[1; 32]);
+        let node = NodeId::new(key.verifying_key().to_bytes());
+        let parent = NodeId::new(SigningKey::from_bytes(&[2; 32]).verifying_key().to_bytes());
+        let authorization =
+            ParticipantAuthorizationV1::new(PROGRAM, node, PARTICIPANT, Some(parent));
+        let signature = key.sign(&authorization.message()).to_bytes();
+
+        assert!(authorization.verify(&signature));
+
+        let tampered = [
+            ParticipantAuthorizationV1 {
+                program_account: AccountId::new([10; 32]),
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                participant_account: AccountId::new([4; 32]),
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                referrer: None,
+                ..authorization
+            },
+            ParticipantAuthorizationV1 {
+                referrer: Some(node),
+                ..authorization
+            },
+        ];
+        for candidate in tampered {
+            assert!(!candidate.verify(&signature));
+        }
+
+        let other = SigningKey::from_bytes(&[2; 32]);
+        assert!(!authorization.verify(&other.sign(&authorization.message()).to_bytes()));
+    }
+
+    #[test]
+    fn state_decoding_rejects_empty_and_trailing_bytes() {
+        let state = State::Child {
+            node: NODE,
+            referrer: NodeId::new([8; 32]),
+        };
+        let data = state.to_data();
+        assert_eq!(State::decode(&data), Some(state));
+        assert_eq!(State::decode(&ShardData::empty()), None);
+
+        let mut trailing = data.to_vec();
+        trailing.push(0);
+        assert_eq!(State::decode(&trailing.try_into().unwrap()), None);
+    }
+
+    const fn child(node: NodeId) -> State {
+        State::Child {
+            node,
+            referrer: NODE,
+        }
+    }
+
+    #[test]
+    fn claim_pays_each_active_child_once_per_publication_plus_its_credits() {
+        let (a, b) = (NodeId::new([1; 32]), NodeId::new([2; 32]));
+        let mut participant = Participant::new(NODE, None);
+        let first_active = BTreeSet::from([a]);
+        let credit = State::Credit {
+            recipient_node: NODE,
+            amount: 4,
+        };
+
+        assert_eq!(
+            participant.claim(1, &first_active, &[child(a), child(b), credit]),
+            5
+        );
+        assert_eq!(participant.children, BTreeMap::from([(a, 1), (b, 0)]));
+        assert_eq!(participant.claim(1, &first_active, &[child(a)]), 0);
+        assert_eq!(participant.claim(2, &BTreeSet::from([a, b]), &[]), 2);
+        assert_eq!(participant.claim(1, &first_active, &[]), 0);
+        assert_eq!(participant.reward_balance, 7);
+    }
+
+    #[test]
+    #[should_panic(expected = "child is announced to another node")]
+    fn claim_rejects_a_child_announced_to_another_node() {
+        let other = NodeId::new([1; 32]);
+        let mut participant = Participant::new(NODE, None);
+        let _total = participant.claim(
+            1,
+            &BTreeSet::new(),
+            &[State::Child {
+                node: other,
+                referrer: other,
+            }],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "credit is addressed to another node")]
+    fn claim_rejects_a_credit_for_another_node() {
+        let other = NodeId::new([1; 32]);
+        let mut participant = Participant::new(NODE, None);
+        let _total = participant.claim(
+            1,
+            &BTreeSet::new(),
+            &[State::Credit {
+                recipient_node: other,
+                amount: 1,
+            }],
+        );
+    }
+}
