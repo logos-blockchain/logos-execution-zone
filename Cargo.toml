@@ -61,6 +61,7 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/referral",
   "lez/programs/referral/core",
   "lez/programs/program_loader/core",
   "lez/cross_zone",
