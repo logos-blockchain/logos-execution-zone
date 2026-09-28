@@ -4851,6 +4851,7 @@ dependencies = [
  "ping_core",
  "program_loader_core",
  "programs",
+ "referral_core",
  "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_ffi",
