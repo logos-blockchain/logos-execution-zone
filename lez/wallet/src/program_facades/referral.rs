@@ -369,13 +369,12 @@ impl<'wallet> Referral<'wallet> {
             return Ok(recorded.status);
         }
 
-        let program_account = self.program_account();
         let view = self
             .wallet
             .observe_transaction(
                 &[ProgramShardSelector::new(
                     ORACLE_ACCOUNT_ID,
-                    program_account,
+                    recorded.program_account,
                 )],
                 &effect_commitments(&recorded.transaction),
             )
@@ -386,10 +385,7 @@ impl<'wallet> Referral<'wallet> {
             return self.set_status(reference, SubmissionStatus::Settled);
         }
 
-        let registry = decode_registry(&view.views[0], program_account)?;
-        if self.is_outspent(&recorded)
-            || is_superseded(&recorded.transaction, program_account, &registry)
-        {
+        if self.is_outspent(&recorded) || is_superseded(&recorded, &view.views[0])? {
             return self.set_status(reference, SubmissionStatus::Rejected);
         }
 
@@ -658,17 +654,17 @@ fn recorded_private(transaction: &LeeTransaction) -> &PrivacyPreservingTransacti
 }
 
 fn is_superseded(
-    transaction: &LeeTransaction,
-    program_account: AccountId,
-    registry: &Registry,
-) -> bool {
-    recorded_private(transaction)
+    recorded: &PendingOperation,
+    registry: &Account,
+) -> Result<bool, ExecutionFailureKind> {
+    let registry = decode_registry(registry, recorded.program_account)?;
+    Ok(recorded_private(&recorded.transaction)
         .message()
         .public_actions
         .iter()
         .filter(|action| action.account_id == ORACLE_ACCOUNT_ID)
         .flat_map(|action| &action.effects)
-        .filter(|effect| effect.program_account_id == program_account)
+        .filter(|effect| effect.program_account_id == recorded.program_account)
         .any(|effect| {
             match borsh::from_slice::<Effect>(&effect.data)
                 .expect("referral effect data decodes as referral_core::Effect")
@@ -683,7 +679,7 @@ fn is_superseded(
                 | Effect::Claim(_)
                 | Effect::Consume(_) => false,
             }
-        })
+        }))
 }
 
 fn effect_commitments(transaction: &LeeTransaction) -> Vec<Commitment> {
