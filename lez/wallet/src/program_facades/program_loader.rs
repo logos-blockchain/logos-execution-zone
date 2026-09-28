@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result, bail};
 use common::HashType;
-use lee::{AccountId, ProgramShardSelector, program::Program};
+use lee::{AccountId, Actor, program::Program};
 use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 use program_loader_core::{Instruction, MAX_PROGRAM_SEGMENTS, MAX_SEGMENT_DATA_LEN};
 
@@ -44,10 +44,7 @@ impl ProgramLoader<'_> {
         if let Some(next_segment_id) = next_segment {
             let next_segment_acc = self
                 .0
-                .get_account_view(ProgramShardSelector::new(
-                    next_segment_id,
-                    PROGRAM_LOADER_ACCOUNT_ID,
-                ))
+                .get_account_view(Actor::new(next_segment_id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
             if program_loader_core::ProgramSegment::from_bytes(
@@ -242,7 +239,7 @@ impl ProgramLoader<'_> {
             }
             let account = self
                 .0
-                .get_account_view(ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+                .get_account_view(Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .await
                 .with_context(|| format!("failed to fetch segment account {id}"))?;
             let segment = program_loader_core::ProgramSegment::from_bytes(

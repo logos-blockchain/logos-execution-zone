@@ -1,7 +1,7 @@
 use amm_core::{PoolDefinition, compute_vault_pda_seed};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, ChainedCall, Plan},
 };
 use token_core::TokenKind;
@@ -46,8 +46,8 @@ pub fn remove_liquidity(plan: &mut Plan, accounts: &[AccountMeta; 7], binding: R
     plan.call(ChainedCall::new(
         binding.token_program_id,
         vec![
-            ProgramShardSelector::from(pool_definition_lp),
-            ProgramShardSelector::from(user_holding_lp),
+            Actor::from(pool_definition_lp),
+            Actor::from(user_holding_lp),
         ],
         &token_core::Instruction::Burn {
             amount_to_burn: binding.remove_liquidity_amount,

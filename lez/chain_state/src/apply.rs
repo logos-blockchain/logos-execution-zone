@@ -522,9 +522,7 @@ mod tests {
             produce_dummy_empty_transaction, sequencer_sign_key_for_testing, test_fee_declaration,
         },
     };
-    use lee::{
-        AccountId, ProgramShardSelector, PublicTransaction, program::Program, public_transaction,
-    };
+    use lee::{AccountId, Actor, PublicTransaction, program::Program, public_transaction};
     use lee_core::{
         account::Nonce,
         program::{InstructionData, ProgramEvent},
@@ -869,8 +867,8 @@ mod tests {
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_program_id,
             vec![
-                lee::ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-                lee::ProgramShardSelector::native_balance(attacker),
+                lee::Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                lee::Actor::native_balance(attacker),
             ],
             vec![state.get_account_by_id(attacker).nonce],
             fee_core::Instruction::Refund {
@@ -1076,7 +1074,7 @@ mod tests {
 
         let message = public_transaction::Message::try_new_with_fees(
             emitter_id,
-            vec![ProgramShardSelector::native_balance(from)],
+            vec![Actor::native_balance(from)],
             vec![Nonce(0)],
             EmitterInstruction {
                 events: vec![emitted(5)],

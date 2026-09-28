@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
+use lee::{Account, AccountId, Actor, PublicKey};
 use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -368,12 +368,12 @@ impl AccountSubcommand {
                 ReadScope::All => wallet_core.get_account_public(id).await?,
                 ReadScope::Balance => {
                     wallet_core
-                        .get_account_view(ProgramShardSelector::native_balance(id))
+                        .get_account_view(Actor::native_balance(id))
                         .await?
                 }
                 ReadScope::Shard(program) => {
                     wallet_core
-                        .get_account_view(ProgramShardSelector::new(id, *program))
+                        .get_account_view(Actor::new(id, *program))
                         .await?
                 }
             },
@@ -506,7 +506,7 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::native_balance(id))
+                .get_account_view(Actor::native_balance(id))
                 .await
             {
                 Ok(account) => print_account_details(&account, "  ", true),

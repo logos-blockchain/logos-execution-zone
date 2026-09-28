@@ -21,7 +21,7 @@ fn an_unused_private_witness_is_rejected() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(touched_id)],
+            shard_selectors: vec![Actor::native_balance(touched_id)],
             private_witnesses: vec![
                 init_witness(&touched_keys, Identifier::ZERO),
                 init_witness(&unused_keys, Identifier::ZERO),
@@ -67,7 +67,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::new(account_id, program_id)],
+            shard_selectors: vec![Actor::new(account_id, program_id)],
             private_witnesses: vec![update_witness(
                 &keys,
                 Identifier::ZERO,
@@ -133,9 +133,9 @@ fn a_private_account_may_be_read_under_two_shards_in_one_call() {
     let (output, _proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(sender_id, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::new(sender_id, program_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![update_witness(
                 &keys,
@@ -200,8 +200,8 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 PrivateWitness {
@@ -254,7 +254,7 @@ fn private_pda_witness_binding_succeeds() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),
@@ -288,7 +288,7 @@ fn private_pda_npk_mismatch_fails() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys_b,
                 Identifier::new([u8::MAX; 32]),
@@ -333,7 +333,7 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),
@@ -375,7 +375,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),
@@ -413,7 +413,7 @@ fn a_private_pda_echoed_unauthorized_at_the_root_is_granted_to_the_callee_by_its
 
     execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::ZERO,
@@ -448,7 +448,7 @@ fn a_delegated_public_pda_is_authorized_in_the_callee_but_exported_unauthorized(
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             instruction_data: Program::serialize_instruction((
                 callee_id,
                 Program::serialize_instruction(()).unwrap(),
@@ -485,7 +485,7 @@ fn a_wrong_seed_leaves_a_signer_public_pda_on_its_credential() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             signers: [account_id].into(),
             instruction_data: Program::serialize_instruction((
                 callee_id,
@@ -533,7 +533,7 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     // sees `is_authorized == false` and panics on it inside its own guest execution.
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::ZERO,
@@ -578,7 +578,7 @@ fn public_pda_first_sight_grant_does_not_extend_to_sibling_calls() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             instruction_data: Program::serialize_instruction((
                 seed,
                 callee_id,
@@ -627,7 +627,7 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
 
     execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::ZERO,
@@ -675,7 +675,7 @@ fn delegated_pda_stays_authorized_in_delegated_subtree() {
 
     execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::ZERO,
@@ -735,8 +735,8 @@ fn holder_authorization_survives_across_sibling_calls() {
     execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(account_id),
-                ProgramShardSelector::native_balance(holder_id),
+                Actor::native_balance(account_id),
+                Actor::native_balance(holder_id),
             ],
             private_witnesses: vec![
                 init_pda_witness(&pda_keys, Identifier::ZERO, (delegator_id, seed)),
@@ -797,7 +797,7 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
 
     execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::ZERO,
@@ -833,7 +833,7 @@ fn a_root_omitting_its_input_rows_is_rejected() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction((
                 callee_id,
@@ -892,8 +892,8 @@ fn top_level_reordering_through_a_passthrough_is_still_provable() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(account_a),
-                ProgramShardSelector::native_balance(account_b),
+                Actor::native_balance(account_a),
+                Actor::native_balance(account_b),
             ],
             private_witnesses: vec![
                 init_pda_witness(&keys_b, Identifier::ZERO, (forwarder_id, seed_b)),
@@ -948,8 +948,8 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(account_a),
-                ProgramShardSelector::native_balance(account_b),
+                Actor::native_balance(account_a),
+                Actor::native_balance(account_b),
             ],
             private_witnesses: vec![
                 init_pda_witness(&keys_a, Identifier::new([u8::MAX; 32]), (program_id, seed)),
@@ -1038,8 +1038,8 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::new(sender_id, AccountId::from_builtin_program(program.id())),
+                Actor::native_balance(sender_id),
+                Actor::new(sender_id, AccountId::from_builtin_program(program.id())),
             ],
             private_witnesses: vec![witness.clone(), witness],
             instruction_data: Program::serialize_instruction(()).unwrap(),
@@ -1069,7 +1069,7 @@ fn private_authorized_uninitialized_account() {
     // Execute and prove the circuit with the authorized account but no commitment proof
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_witness(&private_keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -1112,7 +1112,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::new(account_id, writer_id)],
+            shard_selectors: vec![Actor::new(account_id, writer_id)],
             private_witnesses: vec![init_witness(&private_keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(written).unwrap(),
             ..Default::default()
@@ -1143,7 +1143,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
     // is already spent.
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_witness(&private_keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -1210,8 +1210,8 @@ fn two_private_pda_family_members_receive_and_spend() {
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
-                    ProgramShardSelector::native_balance(funder_id),
-                    ProgramShardSelector::native_balance(alice_pda_0_id),
+                    Actor::native_balance(funder_id),
+                    Actor::native_balance(alice_pda_0_id),
                 ],
                 signers: [funder_id].into(),
                 private_witnesses: vec![init_pda_witness(
@@ -1246,8 +1246,8 @@ fn two_private_pda_family_members_receive_and_spend() {
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
-                    ProgramShardSelector::native_balance(funder_id),
-                    ProgramShardSelector::native_balance(alice_pda_1_id),
+                    Actor::native_balance(funder_id),
+                    Actor::native_balance(alice_pda_1_id),
                 ],
                 signers: [funder_id].into(),
                 private_witnesses: vec![init_pda_witness(
@@ -1286,8 +1286,8 @@ fn two_private_pda_family_members_receive_and_spend() {
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
-                    ProgramShardSelector::native_balance(alice_pda_0_id),
-                    ProgramShardSelector::native_balance(recipient_id),
+                    Actor::native_balance(alice_pda_0_id),
+                    Actor::native_balance(recipient_id),
                 ],
                 signers: [recipient_id].into(),
                 private_witnesses: vec![update_pda_witness(
@@ -1321,8 +1321,8 @@ fn two_private_pda_family_members_receive_and_spend() {
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
-                    ProgramShardSelector::native_balance(alice_pda_1_id),
-                    ProgramShardSelector::native_balance(recipient_id),
+                    Actor::native_balance(alice_pda_1_id),
+                    Actor::native_balance(recipient_id),
                 ],
                 private_witnesses: vec![update_pda_witness(
                     &alice_keys,
@@ -1370,8 +1370,8 @@ fn two_private_pda_family_members_receive_and_spend() {
         let (output, proof) = execute_and_prove(
             ProvingInput {
                 shard_selectors: vec![
-                    ProgramShardSelector::native_balance(recipient_id),
-                    ProgramShardSelector::native_balance(alice_pda_1_id),
+                    Actor::native_balance(recipient_id),
+                    Actor::native_balance(alice_pda_1_id),
                 ],
                 signers: [recipient_id].into(),
                 private_witnesses: vec![update_pda_witness(
@@ -1433,8 +1433,8 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 PrivateWitness {
@@ -1486,8 +1486,8 @@ fn dropped_public_account_is_caught_before_proving() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(AccountId::new([1; 32])),
-                ProgramShardSelector::native_balance(AccountId::new([2; 32])),
+                Actor::native_balance(AccountId::new([1; 32])),
+                Actor::native_balance(AccountId::new([2; 32])),
             ],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -1527,7 +1527,7 @@ fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),
@@ -1563,7 +1563,7 @@ fn shadow_program_claims_a_regular_private_account_it_legitimately_owns() {
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_witness(&keys, identifier)],
             instruction_data: Program::serialize_instruction(()).unwrap(),
             ..Default::default()
@@ -1597,8 +1597,8 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(public_id, shadow_id),
-                ProgramShardSelector::new(private_id, shadow_id),
+                Actor::new(public_id, shadow_id),
+                Actor::new(private_id, shadow_id),
             ],
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             instruction_data: Program::serialize_instruction(written).unwrap(),
@@ -1642,7 +1642,7 @@ fn private_claim_matching_a_real_commitment_passes_verification() {
         PROGRAM_LOADER_ACCOUNT_ID,
         account_ids
             .into_iter()
-            .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
             .collect(),
         vec![Nonce(0)],
         Instruction::CreateHeader {
@@ -1690,7 +1690,7 @@ fn private_claim_matching_a_real_commitment_passes_verification() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),
@@ -1746,7 +1746,7 @@ fn private_claim_with_no_matching_commitment_is_rejected() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+            shard_selectors: vec![Actor::native_balance(account_id)],
             private_witnesses: vec![init_pda_witness(
                 &keys,
                 Identifier::new([u8::MAX; 32]),

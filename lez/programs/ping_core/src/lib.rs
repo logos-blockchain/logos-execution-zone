@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::PdaSeed,
 };
 
@@ -93,7 +93,7 @@ pub enum SenderInstruction {
     Send {
         target_zone: [u8; 32],
         target_account_id: AccountId,
-        target_accounts: Vec<ProgramShardSelector>,
+        target_accounts: Vec<Actor>,
         payload: Vec<u8>,
         ordinal: u32,
     },

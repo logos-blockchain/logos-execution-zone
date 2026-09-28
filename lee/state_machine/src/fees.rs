@@ -62,7 +62,7 @@ pub fn is_fee_authorized<M: SignedMessage>(message: &M, witness_set: &WitnessSet
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::ProgramShardSelector;
+    use lee_core::account::Actor;
 
     use super::*;
     use crate::{
@@ -84,9 +84,7 @@ mod tests {
     fn charged_message(payer: AccountId) -> Message {
         Message::try_new_with_fees(
             AccountId::from_builtin_program([0_u32; 8]),
-            vec![ProgramShardSelector::native_balance(account_id_of(
-                &keys().0,
-            ))],
+            vec![Actor::native_balance(account_id_of(&keys().0))],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],
             FeeDeclaration::new(payer, 1_000, 0, 10_000),
@@ -97,9 +95,7 @@ mod tests {
     fn exempt_message() -> Message {
         Message::try_new(
             AccountId::from_builtin_program([0_u32; 8]),
-            vec![ProgramShardSelector::native_balance(account_id_of(
-                &keys().0,
-            ))],
+            vec![Actor::native_balance(account_id_of(&keys().0))],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],
         )

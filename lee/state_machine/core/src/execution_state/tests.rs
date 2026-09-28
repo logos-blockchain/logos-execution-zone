@@ -106,7 +106,7 @@ struct Script<'script, P> {
     rejection: Option<ExecutionError>,
     trace: Vec<Trace>,
     shards: PublicShards,
-    asked: Vec<ProgramShardSelector>,
+    asked: Vec<Actor>,
     mode: PhantomData<P>,
 }
 
@@ -215,10 +215,7 @@ impl<P: PublicEffectMode> Backend for Script<'_, P> {
         self.rejection.take().map_or(Ok(()), Err)
     }
 
-    fn public_shard(
-        &mut self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<ShardData, ExecutionError> {
+    fn public_shard(&mut self, shard_selector: Actor) -> Result<ShardData, ExecutionError> {
         self.asked.push(shard_selector);
         self.shards
             .get(&shard_selector.account_id)
@@ -242,14 +239,11 @@ fn shards(entries: impl IntoIterator<Item = (AccountId, AccountData)>) -> Public
     entries.into_iter().collect()
 }
 
-fn root(shard_selectors: Vec<ProgramShardSelector>) -> RootCall {
+fn root(shard_selectors: Vec<Actor>) -> RootCall {
     signed_root(shard_selectors, Vec::new())
 }
 
-fn signed_root(
-    shard_selectors: Vec<ProgramShardSelector>,
-    authorized_accounts: Vec<AccountId>,
-) -> RootCall {
+fn signed_root(shard_selectors: Vec<Actor>, authorized_accounts: Vec<AccountId>) -> RootCall {
     RootCall {
         program_account_id: PROGRAM,
         shard_selectors,
@@ -258,10 +252,7 @@ fn signed_root(
     }
 }
 
-fn chained(
-    program_account_id: AccountId,
-    shard_selectors: Vec<ProgramShardSelector>,
-) -> ChainedCall {
+fn chained(program_account_id: AccountId, shard_selectors: Vec<Actor>) -> ChainedCall {
     ChainedCall::new(program_account_id, shard_selectors, &())
 }
 
@@ -347,10 +338,7 @@ fn root_handles_follow_the_selector_order() {
     execute(
         start(
             signed_root(
-                vec![
-                    ProgramShardSelector::new(BOB, PROGRAM),
-                    ProgramShardSelector::native_balance(ALICE),
-                ],
+                vec![Actor::new(BOB, PROGRAM), Actor::native_balance(ALICE)],
                 vec![ALICE],
             ),
             &[],
@@ -374,7 +362,7 @@ fn root_handles_follow_the_selector_order() {
 
 #[test]
 fn a_shard_the_public_source_lacks_is_rejected_while_an_empty_one_is_read() {
-    let selectors = vec![ProgramShardSelector::new(ALICE, PROGRAM)];
+    let selectors = vec![Actor::new(ALICE, PROGRAM)];
     let go = || planning(|call| plan(call).with_effects(vec![effect(&call.accounts[0], b"go")]));
     assert!(matches!(
         execute(
@@ -382,7 +370,7 @@ fn a_shard_the_public_source_lacks_is_rejected_while_an_empty_one_is_read() {
             &mut Script::new([go()]).reading([(ALICE, funded(1))]),
         ),
         Err(ExecutionError::PublicShardUnavailable { shard_selector })
-            if shard_selector == ProgramShardSelector::new(ALICE, PROGRAM)
+            if shard_selector == Actor::new(ALICE, PROGRAM)
     ));
 
     let mut explicit = shards([(ALICE, funded(1))]);
@@ -399,10 +387,7 @@ fn a_shard_the_public_source_lacks_is_rejected_while_an_empty_one_is_read() {
 
 #[test]
 fn a_plan_must_repeat_the_prepared_inputs_exactly() {
-    let selectors = vec![
-        ProgramShardSelector::new(ALICE, PROGRAM),
-        ProgramShardSelector::native_balance(BOB),
-    ];
+    let selectors = vec![Actor::new(ALICE, PROGRAM), Actor::native_balance(BOB)];
     let bind = |mutate: &dyn Fn(&mut PlanOutput)| {
         execute(
             start(signed_root(selectors.clone(), vec![ALICE]), &[]),
@@ -442,10 +427,7 @@ fn a_handle_that_produces_no_effect_is_still_bound() {
     let result = execute(
         start(
             signed_root(
-                vec![
-                    ProgramShardSelector::native_balance(ALICE),
-                    ProgramShardSelector::native_balance(BOB),
-                ],
+                vec![Actor::native_balance(ALICE), Actor::native_balance(BOB)],
                 vec![BOB],
             ),
             &[],
@@ -472,14 +454,14 @@ fn an_effect_outside_the_call_inputs_is_rejected() {
     let result = execute(
         start(
             root(vec![
-                ProgramShardSelector::native_balance(ALICE),
-                ProgramShardSelector::native_balance(BOB),
+                Actor::native_balance(ALICE),
+                Actor::native_balance(BOB),
             ]),
             &[],
         ),
         &mut Script::new([planning(|call| {
             plan(call).with_effects(vec![ShardEffect {
-                selector: ProgramShardSelector::new(BOB, PROGRAM),
+                selector: Actor::new(BOB, PROGRAM),
                 data: b"go".to_vec(),
             }])
         })]),
@@ -508,8 +490,8 @@ fn the_engine_computes_every_apply_input() {
     execute(
         start(
             root(vec![
-                ProgramShardSelector::new(ALICE, PROGRAM),
-                ProgramShardSelector::native_balance(ALICE),
+                Actor::new(ALICE, PROGRAM),
+                Actor::native_balance(ALICE),
             ]),
             &[],
         ),
@@ -522,19 +504,19 @@ fn the_engine_computes_every_apply_input() {
         [
             &ApplyInput {
                 self_account_id: PROGRAM,
-                selector: ProgramShardSelector::new(ALICE, PROGRAM),
+                selector: Actor::new(ALICE, PROGRAM),
                 pre_data: data(b"a"),
                 effect_data: b"first".to_vec(),
             },
             &ApplyInput {
                 self_account_id: PROGRAM,
-                selector: ProgramShardSelector::native_balance(ALICE),
+                selector: Actor::native_balance(ALICE),
                 pre_data: encode_balance(1),
                 effect_data: b"guard".to_vec(),
             },
             &ApplyInput {
                 self_account_id: PROGRAM,
-                selector: ProgramShardSelector::new(ALICE, PROGRAM),
+                selector: Actor::new(ALICE, PROGRAM),
                 pre_data: data(b"b"),
                 effect_data: b"second".to_vec(),
             },
@@ -542,10 +524,7 @@ fn the_engine_computes_every_apply_input() {
     );
     assert_eq!(
         script.asked,
-        vec![
-            ProgramShardSelector::new(ALICE, PROGRAM),
-            ProgramShardSelector::native_balance(ALICE),
-        ]
+        vec![Actor::new(ALICE, PROGRAM), Actor::native_balance(ALICE),]
     );
 }
 
@@ -553,7 +532,7 @@ fn the_engine_computes_every_apply_input() {
 fn an_apply_output_must_echo_the_input_the_engine_computed() {
     let tamper = |mutate: &dyn Fn(&mut ApplyInput)| {
         execute(
-            start(root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]), &[]),
+            start(root(vec![Actor::new(ALICE, PROGRAM)]), &[]),
             &mut Script::new([planning(|call| {
                 plan(call).with_effects(vec![effect(&call.accounts[0], b"go")])
             })])
@@ -568,7 +547,7 @@ fn an_apply_output_must_echo_the_input_the_engine_computed() {
 
     let mutations: Vec<&dyn Fn(&mut ApplyInput)> = vec![
         &|input| input.self_account_id = OTHER_PROGRAM,
-        &|input| input.selector = ProgramShardSelector::native_balance(ALICE),
+        &|input| input.selector = Actor::native_balance(ALICE),
         &|input| input.pre_data = data(b"z"),
         &|input| input.effect_data = b"other".to_vec(),
     ];
@@ -597,8 +576,8 @@ fn an_accepted_apply_output_lands_only_on_its_selected_shard() {
     let public = execute(
         start(
             root(vec![
-                ProgramShardSelector::new(ALICE, PROGRAM),
-                ProgramShardSelector::native_balance(ALICE),
+                Actor::new(ALICE, PROGRAM),
+                Actor::native_balance(ALICE),
             ]),
             &[],
         ),
@@ -613,7 +592,7 @@ fn an_accepted_apply_output_lands_only_on_its_selected_shard() {
 
 #[test]
 fn every_emitted_effect_is_applied_before_its_call_completes() {
-    let selectors = vec![ProgramShardSelector::native_balance(ALICE)];
+    let selectors = vec![Actor::native_balance(ALICE)];
     let emit = || {
         planning(|call| {
             plan(call)
@@ -677,7 +656,7 @@ fn a_calls_effects_are_all_applied_before_its_children_run() {
             ])
             .with_chained_calls(vec![chained(
                 OTHER_PROGRAM,
-                vec![ProgramShardSelector::native_balance(ALICE)],
+                vec![Actor::native_balance(ALICE)],
             )])
             .with_events(events.clone())
     })])
@@ -685,8 +664,8 @@ fn a_calls_effects_are_all_applied_before_its_children_run() {
     execute(
         start(
             root(vec![
-                ProgramShardSelector::native_balance(ALICE),
-                ProgramShardSelector::native_balance(BOB),
+                Actor::native_balance(ALICE),
+                Actor::native_balance(BOB),
             ]),
             &[],
         ),
@@ -731,9 +710,9 @@ fn a_deferred_public_target_is_never_materialized() {
         RootCall {
             program_account_id: PROGRAM,
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(ALICE),
-                ProgramShardSelector::new(private_id, PROGRAM),
-                ProgramShardSelector::native_balance(BOB),
+                Actor::native_balance(ALICE),
+                Actor::new(private_id, PROGRAM),
+                Actor::native_balance(BOB),
             ],
             instruction_data: vec![1, 2, 3],
             authorized_accounts: vec![ALICE],
@@ -765,10 +744,7 @@ fn a_deferred_public_target_is_never_materialized() {
     assert!(script.asked.is_empty());
     let applied = script.applied();
     assert_eq!(applied.len(), 1);
-    assert_eq!(
-        applied[0].selector,
-        ProgramShardSelector::new(private_id, PROGRAM)
-    );
+    assert_eq!(applied[0].selector, Actor::new(private_id, PROGRAM));
     assert_eq!(
         public,
         vec![
@@ -797,17 +773,14 @@ fn applying_public_effects_defers_nothing() {
     })])
     .reading([(ALICE, funded(10))]);
     let public = execute(
-        start(root(vec![ProgramShardSelector::native_balance(ALICE)]), &[]),
+        start(root(vec![Actor::native_balance(ALICE)]), &[]),
         &mut script,
     )
     .unwrap()
     .public;
 
     assert_eq!(script.applied().len(), 1);
-    assert_eq!(
-        script.asked,
-        vec![ProgramShardSelector::native_balance(ALICE)]
-    );
+    assert_eq!(script.asked, vec![Actor::native_balance(ALICE)]);
     assert_eq!(public.len(), 1);
     assert_eq!(public[0].0, ALICE);
 }
@@ -839,14 +812,8 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
                     effect(&call.accounts[1], b"keep"),
                 ])
                 .with_chained_calls(vec![
-                    chained(
-                        OTHER_PROGRAM,
-                        vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
-                    ),
-                    chained(
-                        OTHER_PROGRAM,
-                        vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
-                    ),
+                    chained(OTHER_PROGRAM, vec![Actor::new(ALICE, OTHER_PROGRAM)]),
+                    chained(OTHER_PROGRAM, vec![Actor::new(ALICE, OTHER_PROGRAM)]),
                 ])
         }),
         write(),
@@ -865,10 +832,7 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
     let public = execute(
         start(
             signed_root(
-                vec![
-                    ProgramShardSelector::new(ALICE, PROGRAM),
-                    ProgramShardSelector::native_balance(BOB),
-                ],
+                vec![Actor::new(ALICE, PROGRAM), Actor::native_balance(BOB)],
                 vec![ALICE],
             ),
             &[],
@@ -881,9 +845,9 @@ fn a_chained_call_may_select_another_shard_of_a_root_account() {
     assert_eq!(
         script.asked,
         vec![
-            ProgramShardSelector::new(ALICE, PROGRAM),
-            ProgramShardSelector::native_balance(BOB),
-            ProgramShardSelector::new(ALICE, OTHER_PROGRAM)
+            Actor::new(ALICE, PROGRAM),
+            Actor::native_balance(BOB),
+            Actor::new(ALICE, OTHER_PROGRAM)
         ]
     );
     assert_eq!(
@@ -917,7 +881,7 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
                 ])
                 .with_chained_calls(vec![chained(
                     OTHER_PROGRAM,
-                    vec![ProgramShardSelector::new(ALICE, OTHER_PROGRAM)],
+                    vec![Actor::new(ALICE, OTHER_PROGRAM)],
                 )])
         }),
         planning(|call| plan(call).with_effects(vec![effect(&call.accounts[0], b"read")])),
@@ -933,10 +897,7 @@ fn a_balance_only_root_then_a_shard_read_after_a_balance_change_keeps_the_write(
         start(
             RootCall {
                 program_account_id: NATIVE_TOKEN_PROGRAM_ID,
-                shard_selectors: vec![
-                    ProgramShardSelector::native_balance(ALICE),
-                    ProgramShardSelector::native_balance(BOB),
-                ],
+                shard_selectors: vec![Actor::native_balance(ALICE), Actor::native_balance(BOB)],
                 instruction_data: vec![1, 2, 3],
                 authorized_accounts: vec![ALICE],
             },
@@ -957,39 +918,30 @@ fn a_cleared_shard_reads_back_empty_and_stays_in_the_applied_projection() {
         planning(|call| {
             plan(call)
                 .with_effects(vec![effect(&call.accounts[0], b"clear")])
-                .with_chained_calls(vec![chained(
-                    PROGRAM,
-                    vec![ProgramShardSelector::new(ALICE, PROGRAM)],
-                )])
+                .with_chained_calls(vec![chained(PROGRAM, vec![Actor::new(ALICE, PROGRAM)])])
         }),
         planning(|call| plan(call).with_effects(vec![effect(&call.accounts[0], b"read")])),
     ])
     .applying(|input| (input.effect_data == b"clear").then(ShardData::empty))
     .reading([(ALICE, funded(1).with_shard(PROGRAM, data(b"a")))]);
     let public = execute(
-        start(root(vec![ProgramShardSelector::new(ALICE, PROGRAM)]), &[]),
+        start(root(vec![Actor::new(ALICE, PROGRAM)]), &[]),
         &mut script,
     )
     .unwrap()
     .public;
 
     assert_eq!(script.applied()[1].pre_data, ShardData::empty());
-    assert_eq!(
-        script.asked,
-        vec![ProgramShardSelector::new(ALICE, PROGRAM)]
-    );
+    assert_eq!(script.asked, vec![Actor::new(ALICE, PROGRAM)]);
     assert_eq!(public[0].1.shards[&PROGRAM], ShardData::empty());
 }
 
 #[test]
 fn a_chained_call_cannot_name_an_account_the_root_did_not() {
     let result = execute(
-        start(root(vec![ProgramShardSelector::native_balance(ALICE)]), &[]),
+        start(root(vec![Actor::native_balance(ALICE)]), &[]),
         &mut Script::new([planning(|call| {
-            plan(call).with_chained_calls(vec![chained(
-                PROGRAM,
-                vec![ProgramShardSelector::native_balance(BOB)],
-            )])
+            plan(call).with_chained_calls(vec![chained(PROGRAM, vec![Actor::native_balance(BOB)])])
         })])
         .reading([(ALICE, funded(1)), (BOB, funded(1))]),
     );
@@ -1005,10 +957,7 @@ fn a_witness_outside_the_root_inputs_is_rejected() {
     let keys = Keys::new(4);
     let witnesses = [keys.regular(true)];
 
-    let result = ExecutionState::initialize(
-        root(vec![ProgramShardSelector::native_balance(ALICE)]),
-        &witnesses,
-    );
+    let result = ExecutionState::initialize(root(vec![Actor::native_balance(ALICE)]), &witnesses);
 
     assert!(matches!(
         result.err(),
@@ -1020,7 +969,7 @@ fn a_witness_outside_the_root_inputs_is_rejected() {
 fn duplicate_witnesses_and_unlinked_authorization_keys_are_rejected() {
     let keys = Keys::new(4);
     let other = Keys::new(5);
-    let selectors = vec![ProgramShardSelector::native_balance(keys.regular_id())];
+    let selectors = vec![Actor::native_balance(keys.regular_id())];
 
     let duplicate = [keys.regular(true), keys.regular(true)];
     assert!(matches!(
@@ -1047,8 +996,8 @@ fn two_private_pdas_under_one_seed_conflict() {
 
     let result = ExecutionState::initialize(
         root(vec![
-            ProgramShardSelector::native_balance(keys.pda_id(PROGRAM, SEED)),
-            ProgramShardSelector::native_balance(other.pda_id(PROGRAM, SEED)),
+            Actor::native_balance(keys.pda_id(PROGRAM, SEED)),
+            Actor::native_balance(other.pda_id(PROGRAM, SEED)),
         ]),
         &witnesses,
     );
@@ -1067,9 +1016,9 @@ fn credentials_are_fixed_and_seed_grants_stay_in_their_subtree() {
     let public_pda = AccountId::for_public_pda(&PROGRAM, &SEED);
     let witnesses = [signer.regular(true), holder.regular(false)];
     let selectors = vec![
-        ProgramShardSelector::native_balance(signer.regular_id()),
-        ProgramShardSelector::native_balance(holder.regular_id()),
-        ProgramShardSelector::native_balance(public_pda),
+        Actor::native_balance(signer.regular_id()),
+        Actor::native_balance(holder.regular_id()),
+        Actor::native_balance(public_pda),
     ];
     let mut script = Script::deferring([
         planning(|call| {
@@ -1105,7 +1054,7 @@ fn a_private_pda_is_granted_only_by_its_own_seed_from_its_own_program() {
     let keys = Keys::new(4);
     let witnesses = [keys.pda(PROGRAM, SEED)];
     let pda = keys.pda_id(PROGRAM, SEED);
-    let selectors = vec![ProgramShardSelector::native_balance(pda)];
+    let selectors = vec![Actor::native_balance(pda)];
     let mut script = Script::new([
         planning(|call| {
             plan(call).with_chained_calls(vec![
@@ -1150,8 +1099,8 @@ fn a_public_pda_grant_under_a_privately_bound_seed_conflicts() {
     let witnesses = [keys.pda(PROGRAM, SEED)];
     let public_pda = AccountId::for_public_pda(&PROGRAM, &SEED);
     let selectors = vec![
-        ProgramShardSelector::native_balance(keys.pda_id(PROGRAM, SEED)),
-        ProgramShardSelector::native_balance(public_pda),
+        Actor::native_balance(keys.pda_id(PROGRAM, SEED)),
+        Actor::native_balance(public_pda),
     ];
     let result = execute(
         start(root(selectors.clone()), &witnesses),
@@ -1171,7 +1120,7 @@ fn a_public_pda_grant_under_a_privately_bound_seed_conflicts() {
 
 #[test]
 fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
-    let selectors = vec![ProgramShardSelector::native_balance(ALICE)];
+    let selectors = vec![Actor::native_balance(ALICE)];
     let mut script = Script::new([
         planning(|call| {
             plan(call).with_chained_calls(vec![
@@ -1218,7 +1167,7 @@ fn calls_run_depth_first_in_sibling_order_up_to_the_limit() {
 
 #[test]
 fn validation_and_window_failures_name_the_program() {
-    let selectors = vec![ProgramShardSelector::native_balance(ALICE)];
+    let selectors = vec![Actor::native_balance(ALICE)];
     let result = execute(
         start(root(selectors.clone()), &[]),
         &mut Script::new([planning(|call| {
@@ -1259,7 +1208,7 @@ fn validation_and_window_failures_name_the_program() {
 
 #[test]
 fn the_final_windows_are_the_intersection_of_every_call() {
-    let selectors = vec![ProgramShardSelector::native_balance(ALICE)];
+    let selectors = vec![Actor::native_balance(ALICE)];
     let ExecutionOutcome {
         block_validity_window,
         timestamp_validity_window,
@@ -1294,8 +1243,8 @@ fn a_duplicated_root_account_is_rejected_by_the_transition_rules() {
     let result = execute(
         start(
             root(vec![
-                ProgramShardSelector::native_balance(ALICE),
-                ProgramShardSelector::native_balance(ALICE),
+                Actor::native_balance(ALICE),
+                Actor::native_balance(ALICE),
             ]),
             &[],
         ),
@@ -1328,9 +1277,9 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
         start(
             signed_root(
                 vec![
-                    ProgramShardSelector::native_balance(BOB),
-                    ProgramShardSelector::new(keys.regular_id(), PROGRAM),
-                    ProgramShardSelector::native_balance(ALICE),
+                    Actor::native_balance(BOB),
+                    Actor::new(keys.regular_id(), PROGRAM),
+                    Actor::native_balance(ALICE),
                 ],
                 vec![BOB],
             ),
@@ -1368,7 +1317,7 @@ fn public_actions_follow_root_order_and_private_accounts_keep_untouched_shards()
 
 #[test]
 fn a_failed_completion_stops_the_execution() {
-    let selectors = vec![ProgramShardSelector::native_balance(ALICE)];
+    let selectors = vec![Actor::native_balance(ALICE)];
     let mut script = Script::new([planning(|call| {
         plan(call).with_chained_calls(vec![chained(OTHER_PROGRAM, selectors.clone())])
     })])
@@ -1388,7 +1337,7 @@ fn a_failed_completion_stops_the_execution() {
 
 #[test]
 fn a_pending_shard_is_known_only_once_observed_and_a_cleared_one_stays_known() {
-    let selectors = vec![ProgramShardSelector::new(ALICE, PROGRAM)];
+    let selectors = vec![Actor::new(ALICE, PROGRAM)];
     let mut script = Script::new([
         seeing(|call, state| {
             assert_eq!(state.pending_shard(ALICE, PROGRAM), None);

@@ -13,7 +13,7 @@
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use lee_core::{
     Timestamp,
-    account::ProgramShardSelector,
+    account::Actor,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{ChainedCall, Plan, ProgramCall, apply_keep, read_program_call},
 };
@@ -39,10 +39,7 @@ fn main() {
             plan.inspect(&clock, clock.program_account_id, &DeadlineReached(deadline));
             plan.call(ChainedCall::new(
                 NATIVE_TOKEN_PROGRAM_ID,
-                vec![
-                    ProgramShardSelector::from(&sender),
-                    ProgramShardSelector::from(&receiver),
-                ],
+                vec![Actor::from(&sender), Actor::from(&receiver)],
                 &NativeInstruction::Transfer { amount },
             ));
             plan.write()

@@ -17,7 +17,7 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use cross_zone_outbox_core::outbox_pda;
 use integration_tests::config::{self, SequencerPartialConfig};
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use ping_core::{
     ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -128,8 +128,8 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -140,8 +140,8 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransactio
     let message = Message::try_new(
         sender_id,
         vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(outbox_account, outbox_id),
+            Actor::new(sender_config_account_id(sender_id), sender_id),
+            Actor::new(outbox_account, outbox_id),
         ],
         vec![],
         send,

@@ -19,7 +19,7 @@ fn loader_tx(
         PROGRAM_LOADER_ACCOUNT_ID,
         account_ids
             .into_iter()
-            .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
             .collect(),
         nonces,
         instruction,
@@ -299,7 +299,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
             PROGRAM_LOADER_ACCOUNT_ID,
             account_ids
                 .into_iter()
-                .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+                .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .collect(),
             vec![Nonce(0)],
             Instruction::WriteSegment {
@@ -326,7 +326,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         PROGRAM_LOADER_ACCOUNT_ID,
         header_account_ids
             .into_iter()
-            .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
             .collect(),
         vec![Nonce(0)],
         Instruction::CreateHeader {
@@ -358,7 +358,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let target_id = AccountId::new([9; 32]);
     let call_message = public_transaction::Message::try_new(
         header_account_id,
-        vec![ProgramShardSelector::native_balance(target_id)],
+        vec![Actor::native_balance(target_id)],
         vec![],
         (),
     )
@@ -578,7 +578,7 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
             PROGRAM_LOADER_ACCOUNT_ID,
             account_ids
                 .into_iter()
-                .map(|id| ProgramShardSelector::new(id, PROGRAM_LOADER_ACCOUNT_ID))
+                .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
                 .collect(),
             vec![Nonce(0)],
             Instruction::WriteSegment {
@@ -602,14 +602,11 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
 
     let header_key = PrivateKey::try_new([30; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
-    let mut header_shard_selectors = vec![ProgramShardSelector::new(
-        header_account_id,
-        PROGRAM_LOADER_ACCOUNT_ID,
-    )];
+    let mut header_shard_selectors = vec![Actor::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID)];
     header_shard_selectors.extend(
         segment_account_ids
             .iter()
-            .map(|id| ProgramShardSelector::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
+            .map(|id| Actor::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
     );
     let message = public_transaction::Message::try_new(
         emitter_id,

@@ -12,8 +12,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector, ProvingInput,
-    PublicKey,
+    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
         message::Message,
@@ -62,8 +61,8 @@ async fn fund_private_pda(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender),
-                ProgramShardSelector::native_balance(pda_account_id),
+                Actor::native_balance(sender),
+                Actor::native_balance(pda_account_id),
             ],
             signers: [sender].into(),
             private_witnesses: vec![PrivateWitness {
@@ -190,9 +189,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             write_segment_account_ids
                 .into_iter()
-                .map(|id| {
-                    ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID)
-                })
+                .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
                 .collect(),
             vec![
                 lee_core::account::Nonce(0),
@@ -227,7 +224,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         header_account_ids
             .into_iter()
-            .map(|id| ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
             .collect(),
         vec![
             lee_core::account::Nonce(0),

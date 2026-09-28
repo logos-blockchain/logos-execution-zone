@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::PdaSeed,
 };
 
@@ -27,7 +27,7 @@ pub enum Instruction {
         target_zone: ZoneId,
         target_account_id: AccountId,
         /// Shard selectors forwarded unchanged to the target program.
-        target_accounts: Vec<ProgramShardSelector>,
+        target_accounts: Vec<Actor>,
         payload: Vec<u8>,
         ordinal: u32,
     },
@@ -49,7 +49,7 @@ pub struct OutboxRecord {
     pub target_zone: ZoneId,
     pub ordinal: u32,
     pub target_account_id: AccountId,
-    pub target_accounts: Vec<ProgramShardSelector>,
+    pub target_accounts: Vec<Actor>,
     pub payload: Vec<u8>,
 }
 
@@ -151,10 +151,7 @@ mod tests {
             target_zone: [1; 32],
             ordinal: 7,
             target_account_id: AccountId::new([6; 32]),
-            target_accounts: vec![ProgramShardSelector::new(
-                AccountId::new([9; 32]),
-                AccountId::new([6; 32]),
-            )],
+            target_accounts: vec![Actor::new(AccountId::new([9; 32]), AccountId::new([6; 32]))],
             payload: b"payload".to_vec(),
         };
 

@@ -7,7 +7,7 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
-use lee::{AccountId, ProgramShardSelector, program::Program};
+use lee::{AccountId, Actor, program::Program};
 use sequencer_stake_core::StakeRecord;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -163,10 +163,7 @@ async fn stake_shard(
     sequencer_stake_program_id: AccountId,
 ) -> Result<lee::ShardData> {
     let account = wallet
-        .get_account_view(ProgramShardSelector::new(
-            ownership_account,
-            sequencer_stake_program_id,
-        ))
+        .get_account_view(Actor::new(ownership_account, sequencer_stake_program_id))
         .await
         .context("Failed to read the stake ownership account")?;
     Ok(account.data.shard(sequencer_stake_program_id).clone())

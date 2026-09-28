@@ -10,7 +10,7 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, PdaSeed, Plan, PlanInput},
 };
 use token_core::{TokenDescriptor, TokenKind};
@@ -160,7 +160,7 @@ fn effect_of(plan: &Plan, index: usize) -> Effect {
     borsh::from_slice(&plan.output().effects[index].data).expect("the plan wrote its own effect")
 }
 
-fn selector_of(plan: &Plan, index: usize) -> ProgramShardSelector {
+fn selector_of(plan: &Plan, index: usize) -> Actor {
     plan.output().effects[index].selector
 }
 
@@ -523,8 +523,8 @@ fn call_add_liquidity_chained_call_successsful() {
     assert_eq!(
         plan.output().chained_calls[2].shard_selectors,
         vec![
-            ProgramShardSelector::new(USER_A_ID, TOKEN_PROGRAM_ID),
-            ProgramShardSelector::new(vault_a_id(), TOKEN_PROGRAM_ID),
+            Actor::new(USER_A_ID, TOKEN_PROGRAM_ID),
+            Actor::new(vault_a_id(), TOKEN_PROGRAM_ID),
         ]
     );
 }
@@ -1053,10 +1053,7 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
         );
 
         assert_eq!(plan.output().effects.len(), 1);
-        assert_eq!(
-            selector_of(&plan, 0),
-            ProgramShardSelector::new(pool_id(), AMM_PROGRAM_ID)
-        );
+        assert_eq!(selector_of(&plan, 0), Actor::new(pool_id(), AMM_PROGRAM_ID));
         assert_eq!(
             swap_binding_of(&plan),
             SwapBinding {
@@ -1079,8 +1076,8 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
         assert_eq!(
             calls[0].shard_selectors,
             vec![
-                ProgramShardSelector::new(user_input, TOKEN_PROGRAM_ID),
-                ProgramShardSelector::new(input_vault, TOKEN_PROGRAM_ID),
+                Actor::new(user_input, TOKEN_PROGRAM_ID),
+                Actor::new(input_vault, TOKEN_PROGRAM_ID),
             ]
         );
         assert_eq!(
@@ -1090,8 +1087,8 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
         assert_eq!(
             calls[1].shard_selectors,
             vec![
-                ProgramShardSelector::new(output_vault, TOKEN_PROGRAM_ID),
-                ProgramShardSelector::new(user_output, TOKEN_PROGRAM_ID),
+                Actor::new(output_vault, TOKEN_PROGRAM_ID),
+                Actor::new(user_output, TOKEN_PROGRAM_ID),
             ]
         );
         assert_eq!(

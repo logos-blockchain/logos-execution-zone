@@ -143,10 +143,7 @@ mod inner {
 
     #[cfg(test)]
     mod tests {
-        use lee::{
-            Account, AccountId, ProgramShardSelector, PublicTransaction, V03State,
-            public_transaction,
-        };
+        use lee::{Account, AccountId, Actor, PublicTransaction, V03State, public_transaction};
 
         use super::*;
 
@@ -154,11 +151,11 @@ mod inner {
             let message = public_transaction::Message::try_new(
                 bridge_account_id(),
                 vec![
-                    ProgramShardSelector::native_balance(bridge_core::compute_bridge_account_id(
+                    Actor::native_balance(bridge_core::compute_bridge_account_id(
                         bridge_account_id(),
                     )),
-                    ProgramShardSelector::native_balance(recipient_id),
-                    ProgramShardSelector::new(
+                    Actor::native_balance(recipient_id),
+                    Actor::new(
                         bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
                         bridge_account_id(),
                     ),

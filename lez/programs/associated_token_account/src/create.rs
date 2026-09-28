@@ -1,6 +1,6 @@
 use associated_token_account_core::AtaContents;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, ChainedCall, Plan, PlanInput},
 };
 use token_core::{TokenDefinition, TokenDescriptor, TokenKind};
@@ -65,10 +65,7 @@ pub fn create_associated_token_account(
         plan.call(
             ChainedCall::new(
                 token_program_id,
-                vec![
-                    ProgramShardSelector::from(token_definition),
-                    ProgramShardSelector::from(ata_account),
-                ],
+                vec![Actor::from(token_definition), Actor::from(ata_account)],
                 &token_core::Instruction::InitializeAccount { kind },
             )
             .with_pda_seeds(vec![ata_seed]),

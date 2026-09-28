@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{
         ChainedCall, InstructionData, PdaSeed, Plan, ProgramCall, ProgramId, read_program_call,
     },
@@ -29,8 +29,8 @@ fn main() {
     plan.call(ChainedCall {
         program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
-        shard_selectors: std::iter::once(ProgramShardSelector::from(pda))
-            .chain(rest.iter().map(ProgramShardSelector::from))
+        shard_selectors: std::iter::once(Actor::from(pda))
+            .chain(rest.iter().map(Actor::from))
             .collect(),
         pda_seeds: vec![delegated_seed],
     });
@@ -42,11 +42,11 @@ fn main() {
             program_account_id: AccountId::from_builtin_program(sibling_program_id),
             instruction_data: to_vec(&()).unwrap(),
             shard_selectors: if include_pda {
-                std::iter::once(ProgramShardSelector::from(pda))
-                    .chain(rest.iter().map(ProgramShardSelector::from))
+                std::iter::once(Actor::from(pda))
+                    .chain(rest.iter().map(Actor::from))
                     .collect()
             } else {
-                rest.iter().map(ProgramShardSelector::from).collect()
+                rest.iter().map(Actor::from).collect()
             },
             pda_seeds: vec![],
         });

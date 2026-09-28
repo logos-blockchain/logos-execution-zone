@@ -107,9 +107,9 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
     let message = public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::new(sender, program_id),
-            ProgramShardSelector::native_balance(sender),
-            ProgramShardSelector::native_balance(recipient),
+            Actor::new(sender, program_id),
+            Actor::native_balance(sender),
+            Actor::native_balance(recipient),
         ],
         vec![Nonce(0)],
         (written.clone(), amount),
@@ -140,8 +140,8 @@ fn a_repeated_shard_selector_is_rejected() {
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(account_id),
-            ProgramShardSelector::native_balance(account_id),
+            Actor::native_balance(account_id),
+            Actor::native_balance(account_id),
         ],
         vec![],
         NativeInstruction::Transfer { amount: 0 },

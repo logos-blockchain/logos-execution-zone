@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{AccountMeta, ChainedCall, Plan, PlanInput},
 };
 use token_core::TokenKind;
@@ -30,10 +30,7 @@ pub fn burn_from_associated_token_account(
     plan.call(
         ChainedCall::new(
             token_program_id,
-            vec![
-                ProgramShardSelector::from(token_definition),
-                ProgramShardSelector::from(holder_ata),
-            ],
+            vec![Actor::from(token_definition), Actor::from(holder_ata)],
             &token_core::Instruction::Burn {
                 amount_to_burn: amount,
                 kind,

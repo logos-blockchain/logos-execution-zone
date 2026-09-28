@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{
         ChainedCall, GuestOutput, InstructionData, PdaSeed, PlanInput, PlanOutput, ProgramCall,
         ProgramId, read_program_call,
@@ -14,11 +14,7 @@ fn main() {
     };
     let (callee_program_id, callee_instruction, declare_accounts, pda_seeds) = instruction;
 
-    let shard_selectors: Vec<_> = input
-        .accounts
-        .iter()
-        .map(ProgramShardSelector::from)
-        .collect();
+    let shard_selectors: Vec<_> = input.accounts.iter().map(Actor::from).collect();
     let accounts = if declare_accounts {
         input.accounts
     } else {

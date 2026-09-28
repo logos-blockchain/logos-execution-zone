@@ -159,7 +159,7 @@ pub struct ShardSummary {
 
 /// Selects one of an account's program shards.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramShardSelector {
+pub struct Actor {
     pub account_id: AccountId,
     pub program_account_id: AccountId,
 }
@@ -245,7 +245,7 @@ pub struct PrivacyPreservingTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
     pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
+    pub shard_selectors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.

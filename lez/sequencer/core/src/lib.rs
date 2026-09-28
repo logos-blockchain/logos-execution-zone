@@ -22,7 +22,7 @@ use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
@@ -2599,12 +2599,10 @@ pub fn genesis_stake_message(
     Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::native_balance(genesis_stake_funding_account()),
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::new(
+            Actor::native_balance(genesis_stake_funding_account()),
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),
@@ -2646,7 +2644,7 @@ fn build_init_channel_params_transaction(
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let message = Message::try_new(
         sequencer_stake_program_id,
-        vec![ProgramShardSelector::new(
+        vec![Actor::new(
             system_accounts::sequencer_stake_config_account_id(),
             sequencer_stake_program_id,
         )],
@@ -2762,9 +2760,9 @@ fn build_supply_account_genesis_transaction(
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(*account_id),
-            ProgramShardSelector::new(receipt_id, bridge_program_id),
+            Actor::native_balance(system_accounts::bridge_account_id()),
+            Actor::native_balance(*account_id),
+            Actor::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
@@ -2801,9 +2799,9 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(metadata.recipient_id),
-            ProgramShardSelector::new(receipt_id, bridge_program_id),
+            Actor::native_balance(system_accounts::bridge_account_id()),
+            Actor::native_balance(metadata.recipient_id),
+            Actor::new(receipt_id, bridge_program_id),
         ],
         Vec::new(),
         bridge_core::Instruction::Deposit {
@@ -2847,12 +2845,10 @@ fn build_finalize_unstake_tx(
     let message = Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::native_balance(pending.destination),
-            ProgramShardSelector::new(
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::native_balance(pending.destination),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),

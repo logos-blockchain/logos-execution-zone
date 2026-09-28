@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result, ensure};
 use common::HashType;
 use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::account::{AccountId, ProgramShardSelector};
+use lee_core::account::{AccountId, Actor};
 use log::info;
 use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
 use sequencer_core::Ed25519PublicKey;
@@ -202,7 +202,7 @@ pub async fn get_account(ctx: &TestContext, account_id: AccountId) -> anyhow::Re
 
 pub async fn get_account_view(
     ctx: &TestContext,
-    shard_selector: ProgramShardSelector,
+    shard_selector: Actor,
 ) -> anyhow::Result<lee::Account> {
     Ok(ctx
         .sequencer_client()

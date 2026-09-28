@@ -11,7 +11,7 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, Nonce, ProgramShardSelector, ShardData},
+    account::{Account, Actor, Nonce, ShardData},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
@@ -210,7 +210,7 @@ pub struct AccountMention {
 /// A shard the wallet read. Execution binds the account handle and applies against live state,
 /// never this copy.
 pub struct SelectedShard {
-    pub selector: ProgramShardSelector,
+    pub selector: Actor,
     pub is_authorized: bool,
     pub data: ShardData,
 }
@@ -274,7 +274,7 @@ impl State {
         }
     }
 
-    fn selected(&self, selector: ProgramShardSelector) -> SelectedShard {
+    fn selected(&self, selector: Actor) -> SelectedShard {
         SelectedShard {
             selector,
             is_authorized: self.is_authorized(),
@@ -319,7 +319,7 @@ impl AccountManager {
         } in mentions
         {
             let account_id = identity.account_id();
-            let shard_selector = ProgramShardSelector::new(account_id, program_account_id);
+            let shard_selector = Actor::new(account_id, program_account_id);
 
             let known = prepared
                 .get(&account_id)
@@ -364,8 +364,8 @@ impl AccountManager {
         })
     }
 
-    fn row_selector(&self, row: &Row) -> ProgramShardSelector {
-        ProgramShardSelector::new(
+    fn row_selector(&self, row: &Row) -> Actor {
+        Actor::new(
             self.states[row.account].account_id(),
             row.program_account_id,
         )
@@ -380,7 +380,7 @@ impl AccountManager {
     }
 
     /// The shard selectors, in declaration order.
-    pub fn shard_selectors(&self) -> Vec<ProgramShardSelector> {
+    pub fn shard_selectors(&self) -> Vec<Actor> {
         self.rows.iter().map(|row| self.row_selector(row)).collect()
     }
 
@@ -542,7 +542,7 @@ impl AccountManager {
         mut fetch_view: F,
     ) -> Result<Option<AccountId>, ExecutionFailureKind>
     where
-        F: FnMut(ProgramShardSelector) -> Fut,
+        F: FnMut(Actor) -> Fut,
         Fut: Future<Output = Result<Account, ExecutionFailureKind>>,
     {
         let mut first_signer = None;
@@ -562,8 +562,7 @@ impl AccountManager {
                 .shards
                 .contains_key(&NATIVE_TOKEN_PROGRAM_ID)
             {
-                let view =
-                    fetch_view(ProgramShardSelector::native_balance(account.account_id)).await?;
+                let view = fetch_view(Actor::native_balance(account.account_id)).await?;
                 merge_public_view(account, &view)?;
             }
             if account
@@ -675,7 +674,7 @@ const fn witness_kind(
 
 async fn public_account_view(
     wallet: &WalletCore,
-    shard_selector: ProgramShardSelector,
+    shard_selector: Actor,
 ) -> Result<Account, ExecutionFailureKind> {
     wallet
         .get_account_view(shard_selector)
@@ -700,7 +699,7 @@ fn merge_public_view(
 async fn prepare_account(
     wallet: &WalletCore,
     identity: AccountIdentity,
-    shard_selector: ProgramShardSelector,
+    shard_selector: Actor,
     pin: &mut Option<String>,
 ) -> Result<State, ExecutionFailureKind> {
     let account_id = shard_selector.account_id;
@@ -1046,9 +1045,7 @@ mod tests {
     }
 
     /// A balance read that fails the test if the walk reaches it.
-    fn never_fetches(
-        selector: ProgramShardSelector,
-    ) -> Ready<Result<Account, ExecutionFailureKind>> {
+    fn never_fetches(selector: Actor) -> Ready<Result<Account, ExecutionFailureKind>> {
         panic!(
             "the payer walk must not read a balance it already holds, got {}",
             selector.account_id
@@ -1057,14 +1054,14 @@ mod tests {
 
     fn answers(
         account: &Account,
-    ) -> impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>> {
+    ) -> impl FnMut(Actor) -> Ready<Result<Account, ExecutionFailureKind>> {
         let account = account.clone();
         move |_| ready(Ok(account.clone()))
     }
 
     fn payer(
         manager: &mut AccountManager,
-        fetch: impl FnMut(ProgramShardSelector) -> Ready<Result<Account, ExecutionFailureKind>>,
+        fetch: impl FnMut(Actor) -> Ready<Result<Account, ExecutionFailureKind>>,
     ) -> Option<AccountId> {
         block_on(manager.fee_payer_account_id_with(fetch)).expect("the walk succeeds")
     }

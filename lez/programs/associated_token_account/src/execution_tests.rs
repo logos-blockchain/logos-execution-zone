@@ -5,8 +5,8 @@ use associated_token_account_core::{
 };
 use borsh::BorshSerialize;
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, ShardData,
-    V03State, error::LeeError, public_transaction,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, ShardData, V03State,
+    error::LeeError, public_transaction,
 };
 use lee_core::account::Nonce;
 use token_core::{TokenHolding, TokenKind};
@@ -27,7 +27,7 @@ fn owner_keys() -> (PrivateKey, AccountId) {
 
 fn public_tx<T: BorshSerialize>(
     program_id: AccountId,
-    shard_selectors: Vec<ProgramShardSelector>,
+    shard_selectors: Vec<Actor>,
     nonces: Vec<Nonce>,
     instruction: T,
     signing_keys: &[&PrivateKey],
@@ -40,7 +40,7 @@ fn public_tx<T: BorshSerialize>(
 }
 
 fn create_tx(
-    shard_selectors: Vec<ProgramShardSelector>,
+    shard_selectors: Vec<Actor>,
     nonces: Vec<Nonce>,
     signing_keys: &[&PrivateKey],
     contents: AtaContents,
@@ -69,8 +69,8 @@ fn plant_definition(
     let tx = public_tx(
         token_program_id(),
         vec![
-            ProgramShardSelector::new(definition_id, token_program_id()),
-            ProgramShardSelector::new(holding_id, token_program_id()),
+            Actor::new(definition_id, token_program_id()),
+            Actor::new(holding_id, token_program_id()),
         ],
         vec![],
         token_core::Instruction::NewFungibleDefinition {
@@ -126,10 +126,10 @@ fn repairing_a_squat_requires_the_owner_and_disturbs_nothing_else() {
     );
     plant_definition(&mut state, 2, SQUATTER_DEFINITION_ID, ata_id, "SQUAT", 500);
 
-    let definition_selector = ProgramShardSelector::new(INTENDED_DEFINITION_ID, token_program_id());
-    let ata_selector = ProgramShardSelector::new(ata_id, token_program_id());
+    let definition_selector = Actor::new(INTENDED_DEFINITION_ID, token_program_id());
+    let ata_selector = Actor::new(ata_id, token_program_id());
     let repair_selectors = vec![
-        ProgramShardSelector::native_balance(owner_id),
+        Actor::native_balance(owner_id),
         definition_selector,
         ata_selector,
     ];

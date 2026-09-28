@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{AccountMeta, ChainedCall, Plan, PlanInput, run_program, write_once},
 };
 
@@ -132,8 +132,8 @@ fn dispatch(
         },
     );
     // Put the source marker first, followed by the requested shard selectors.
-    let mut shard_selectors = vec![ProgramShardSelector::native_balance(marker.account_id)];
-    shard_selectors.extend(accounts.map(ProgramShardSelector::from));
+    let mut shard_selectors = vec![Actor::native_balance(marker.account_id)];
+    shard_selectors.extend(accounts.map(Actor::from));
     plan.call(ChainedCall {
         program_account_id: msg.target_account_id,
         shard_selectors,

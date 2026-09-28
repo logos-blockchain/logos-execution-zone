@@ -9,7 +9,7 @@ pub use amm_core as core;
 use amm_core::{Instruction, PoolDefinition};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, ChainedCall, Plan, PlanInput},
 };
 use remove::RemoveBinding;
@@ -45,10 +45,7 @@ pub fn transfer_call(
 ) -> ChainedCall {
     ChainedCall::new(
         token_program_id,
-        vec![
-            ProgramShardSelector::from(from),
-            ProgramShardSelector::from(to),
-        ],
+        vec![Actor::from(from), Actor::from(to)],
         &token_core::Instruction::Transfer {
             amount_to_transfer: amount,
             descriptor: TokenDescriptor {

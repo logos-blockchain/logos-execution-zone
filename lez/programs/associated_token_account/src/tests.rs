@@ -4,7 +4,7 @@ use associated_token_account_core::{
     AtaContents, Instruction, compute_ata_seed, get_associated_token_account_id,
 };
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, Plan, PlanInput, ShardEffect},
 };
 use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
@@ -301,8 +301,8 @@ fn create_leaves_a_matching_holding_untouched_however_the_owner_is_authorized() 
 fn create_repairs_a_squatted_ata_and_delegates_the_seed() {
     let expected_seed = compute_ata_seed(owner_id(), definition_id(), TOKEN_PROGRAM_ID);
     let expected_selectors = vec![
-        ProgramShardSelector::new(definition_id(), TOKEN_PROGRAM_ID),
-        ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
+        Actor::new(definition_id(), TOKEN_PROGRAM_ID),
+        Actor::new(ata_id(), TOKEN_PROGRAM_ID),
     ];
     let squats = [
         foreign_holding(),
@@ -445,8 +445,8 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
     assert_eq!(
         call.shard_selectors,
         vec![
-            ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
-            ProgramShardSelector::new(RECIPIENT_ID, TOKEN_PROGRAM_ID),
+            Actor::new(ata_id(), TOKEN_PROGRAM_ID),
+            Actor::new(RECIPIENT_ID, TOKEN_PROGRAM_ID),
         ]
     );
     let decoded: token_core::Instruction = borsh::from_slice(&call.instruction_data).unwrap();
@@ -524,8 +524,8 @@ fn burn_delegates_the_named_definition_under_the_ata_seed() {
     assert_eq!(
         call.shard_selectors,
         vec![
-            ProgramShardSelector::new(definition_id(), TOKEN_PROGRAM_ID),
-            ProgramShardSelector::new(ata_id(), TOKEN_PROGRAM_ID),
+            Actor::new(definition_id(), TOKEN_PROGRAM_ID),
+            Actor::new(ata_id(), TOKEN_PROGRAM_ID),
         ]
     );
     let decoded: token_core::Instruction = borsh::from_slice(&call.instruction_data).unwrap();

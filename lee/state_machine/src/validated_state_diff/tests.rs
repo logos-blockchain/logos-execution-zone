@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, Nonce, ProgramShardSelector},
+    account::{AccountId, Actor, Nonce},
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::InstructionData,
 };
@@ -14,7 +14,7 @@ use crate::{
 
 const CHAINED_CALLS: usize = 3;
 
-type ForwarderInstruction = Vec<(AccountId, ProgramShardSelector, InstructionData)>;
+type ForwarderInstruction = Vec<(AccountId, Actor, InstructionData)>;
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -29,10 +29,7 @@ fn public_diff_reflects_a_successful_transfer() {
     let state = V03State::new().with_public_account_balances([(from, 100)]);
     let message = Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
+        vec![Actor::native_balance(from), Actor::native_balance(to)],
         vec![Nonce(0), Nonce(0)],
         NativeInstruction::Transfer { amount: 5 },
     )
@@ -127,7 +124,7 @@ fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
         .with_programs(std::iter::once(program));
     let message = Message::try_new(
         program_id,
-        vec![ProgramShardSelector::new(from, program_id)],
+        vec![Actor::new(from, program_id)],
         vec![Nonce(0), Nonce(0)],
         vec![7_u8; 4],
     )
@@ -147,7 +144,7 @@ fn metering_noop_fixture() -> (V03State, crate::PublicTransaction) {
         .with_programs(std::iter::once(program));
     let message = Message::try_new(
         program_id,
-        vec![ProgramShardSelector::new(from, program_id)],
+        vec![Actor::new(from, program_id)],
         vec![Nonce(0)],
         (),
     )
@@ -241,16 +238,12 @@ fn chained_calls_share_one_budget() {
             crate::test_methods::noop(),
             crate::test_methods::shard_forwarder(),
         ]);
-    let callee = (
-        echo_id,
-        ProgramShardSelector::new(from, echo_id),
-        InstructionData::new(),
-    );
+    let callee = (echo_id, Actor::new(from, echo_id), InstructionData::new());
     let forwarding = |callees: Vec<_>| {
         let instruction: ForwarderInstruction = callees;
         let message = Message::try_new(
             forwarder_id,
-            vec![ProgramShardSelector::new(from, forwarder_id)],
+            vec![Actor::new(from, forwarder_id)],
             vec![Nonce(0)],
             instruction,
         )
@@ -307,8 +300,8 @@ fn metered_guest_panic_is_charged_the_full_budget() {
     let message = Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::new(from, program_id),
-            ProgramShardSelector::new(unsigned, program_id),
+            Actor::new(from, program_id),
+            Actor::new(unsigned, program_id),
         ],
         vec![Nonce(0)],
         (),
@@ -342,7 +335,7 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
         )));
     let message = Message::try_new(
         program_id,
-        vec![ProgramShardSelector::native_balance(from)],
+        vec![Actor::native_balance(from)],
         vec![Nonce(0)],
         (),
     )
@@ -388,10 +381,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
         .repeated(num_chain_calls);
         let message = Message::try_new(
             AccountId::from_builtin_program(chain_caller.id()),
-            vec![
-                ProgramShardSelector::native_balance(to),
-                ProgramShardSelector::native_balance(from),
-            ],
+            vec![Actor::native_balance(to), Actor::native_balance(from)],
             vec![Nonce(0)],
             instruction,
         )
@@ -408,7 +398,7 @@ fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
     // caller with one chained call burns only marginally more than with none.
     let callee_message = Message::try_new(
         AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
-        vec![ProgramShardSelector::native_balance(from)],
+        vec![Actor::native_balance(from)],
         vec![Nonce(0)],
         (),
     )

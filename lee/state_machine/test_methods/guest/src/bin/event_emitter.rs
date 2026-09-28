@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{ChainedCall, InstructionData, Plan, ProgramCall, ProgramEvent, read_program_call},
 };
 
@@ -15,11 +15,7 @@ fn main() {
     };
     let EmitterInstruction { events, chain } = &instruction;
 
-    let shard_selectors: Vec<_> = input
-        .accounts
-        .iter()
-        .map(ProgramShardSelector::from)
-        .collect();
+    let shard_selectors: Vec<_> = input.accounts.iter().map(Actor::from).collect();
 
     // Emit both the chained calls and a list of events.
     // This is used to test the end-positioning of events in a transaction.

@@ -1,8 +1,8 @@
 use indexer_service_protocol::{
-    AccountId, Ciphertext, Commitment, CommitmentSetDigest, DeferredPublicEffect,
+    AccountId, Actor, Ciphertext, Commitment, CommitmentSetDigest, DeferredPublicEffect,
     EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, Nullifier,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
-    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
     ValidityWindow, WitnessSet,
 };
 
@@ -131,9 +131,9 @@ pub struct FfiProgramShardSelector {
     pub program_account_id: FfiAccountId,
 }
 
-impl From<ProgramShardSelector> for FfiProgramShardSelector {
-    fn from(value: ProgramShardSelector) -> Self {
-        let ProgramShardSelector {
+impl From<Actor> for FfiProgramShardSelector {
+    fn from(value: Actor) -> Self {
+        let Actor {
             account_id,
             program_account_id,
         } = value;
@@ -145,7 +145,7 @@ impl From<ProgramShardSelector> for FfiProgramShardSelector {
     }
 }
 
-impl From<FfiProgramShardSelector> for ProgramShardSelector {
+impl From<FfiProgramShardSelector> for Actor {
     fn from(value: FfiProgramShardSelector) -> Self {
         Self {
             account_id: AccountId {
@@ -677,7 +677,7 @@ mod tests {
             hash: HashType([1; 32]),
             message: PublicMessage {
                 program_account_id: AccountId { value: [2; 32] },
-                shard_selectors: vec![ProgramShardSelector {
+                shard_selectors: vec![Actor {
                     account_id: AccountId { value: [3; 32] },
                     program_account_id: indexer_service_protocol::AccountId::native_token_program(),
                 }],

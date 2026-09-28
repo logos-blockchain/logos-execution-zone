@@ -10,7 +10,7 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::{AccountId, PrivateKey, ProgramShardSelector, PublicKey};
+use lee::{AccountId, Actor, PrivateKey, PublicKey};
 use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -48,7 +48,7 @@ async fn reject_oversized_transaction() -> Result<()> {
     ));
     let message = lee::public_transaction::Message::try_new(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
+        vec![Actor::new(
             segment_id,
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         )],
@@ -113,7 +113,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
 
     let message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
+        vec![Actor::new(
             segment_id,
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         )],
@@ -189,7 +189,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                     nonce_for_payer: Nonce| {
         let message = lee::public_transaction::Message::try_new_with_fees(
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            vec![ProgramShardSelector::new(
+            vec![Actor::new(
                 segment_id,
                 lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             )],

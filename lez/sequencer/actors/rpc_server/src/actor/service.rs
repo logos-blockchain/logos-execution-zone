@@ -14,9 +14,9 @@ use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    HashType, MembershipProof, Nonce, ProgramId,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -200,10 +200,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_infallible_error)
     }
 
-    async fn get_account_view(
-        &self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, shard_selector: Actor) -> Result<Account, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetAccountView { shard_selector })
             .await

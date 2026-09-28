@@ -1,9 +1,9 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{ChainedCall, InstructionData, Plan, ProgramCall, read_program_call},
 };
 
-type Instruction = Vec<(AccountId, ProgramShardSelector, InstructionData)>;
+type Instruction = Vec<(AccountId, Actor, InstructionData)>;
 
 fn main() {
     let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {

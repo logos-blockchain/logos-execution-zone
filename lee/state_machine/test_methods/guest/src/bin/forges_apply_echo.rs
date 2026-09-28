@@ -1,5 +1,5 @@
 use lee_core::{
-    account::ProgramShardSelector,
+    account::Actor,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID, encode_balance},
     program::{
         ApplyInput, ApplyOutput, ChainedCall, GuestOutput, Plan, ProgramCall, read_program_call,
@@ -33,10 +33,7 @@ fn main() {
             plan.effect(&own, &forge_field);
             plan.call(ChainedCall::new(
                 NATIVE_TOKEN_PROGRAM_ID,
-                vec![
-                    ProgramShardSelector::from(&sender),
-                    ProgramShardSelector::from(&recipient),
-                ],
+                vec![Actor::from(&sender), Actor::from(&recipient)],
                 &NativeInstruction::Transfer { amount },
             ));
             plan.write()
@@ -50,10 +47,7 @@ fn main() {
                     ..input
                 },
                 ForgeField::Selector => ApplyInput {
-                    selector: ProgramShardSelector::new(
-                        input.selector.account_id,
-                        NATIVE_TOKEN_PROGRAM_ID,
-                    ),
+                    selector: Actor::new(input.selector.account_id, NATIVE_TOKEN_PROGRAM_ID),
                     ..input
                 },
                 ForgeField::PreData => ApplyInput {

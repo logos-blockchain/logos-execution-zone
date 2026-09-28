@@ -1,7 +1,7 @@
 //! This module contains [`WalletCore`](crate::WalletCore) facades for interacting with various
 //! on-chain programs.
 
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 use lee_core::account::ShardData;
 use token_core::TokenHolding;
 
@@ -22,7 +22,7 @@ pub(crate) async fn shard(
     let account_id = account.account_id();
     if account.is_public() {
         Ok(wallet
-            .get_account_view(ProgramShardSelector::new(account_id, program_account_id))
+            .get_account_view(Actor::new(account_id, program_account_id))
             .await
             .map_err(ExecutionFailureKind::SequencerError)?
             .data

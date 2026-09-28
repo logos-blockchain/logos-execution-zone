@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    account::{AccountId, Balance, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, Balance, ShardData},
     program::{
         AccountMeta, ApplyInput, ApplyOutput, ChainedCall, InstructionData, PdaSeed, PlanInput,
         PlanOutput, ShardEffect,
@@ -134,10 +134,7 @@ pub fn custody_transfer(
 ) -> ChainedCall {
     ChainedCall::new(
         NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
+        vec![Actor::native_balance(from), Actor::native_balance(to)],
         &Instruction::Transfer { amount },
     )
     .with_pda_seeds(vec![seed])
@@ -167,7 +164,7 @@ mod tests {
     ) -> Result<ShardData, TransferError> {
         apply(&ApplyInput {
             self_account_id: NATIVE_TOKEN_PROGRAM_ID,
-            selector: ProgramShardSelector::native_balance(account_id(seed)),
+            selector: Actor::native_balance(account_id(seed)),
             pre_data,
             effect_data,
         })
@@ -211,15 +208,9 @@ mod tests {
                 output.effects
             );
         };
-        assert_eq!(
-            debit.selector,
-            ProgramShardSelector::native_balance(account_id(1))
-        );
+        assert_eq!(debit.selector, Actor::native_balance(account_id(1)));
         assert_eq!(debit.data, effect_bytes(&Effect::Debit(30)));
-        assert_eq!(
-            credit.selector,
-            ProgramShardSelector::native_balance(account_id(2))
-        );
+        assert_eq!(credit.selector, Actor::native_balance(account_id(2)));
         assert_eq!(credit.data, effect_bytes(&Effect::Credit(30)));
 
         assert_eq!(output.input.accounts, accounts);

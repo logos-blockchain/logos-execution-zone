@@ -13,12 +13,12 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, AccountSummary, BedrockStatus, Block, BlockBody, BlockHeader,
-    BlockId, Commitment, CommitmentSetDigest, DeferredPublicEffect, EncryptedAccountData,
-    EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
-    IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    ProgramShardSelector, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction,
-    Selector, ShardData, ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, AccountSummary, Actor, BedrockStatus, Block, BlockBody,
+    BlockHeader, BlockId, Commitment, CommitmentSetDigest, DeferredPublicEffect,
+    EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
+    IndexerStatus, IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PrivateAction, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector,
+    ShardData, ShardSummary, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -315,10 +315,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
-    async fn get_account_view(
-        &self,
-        selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, selector: Actor) -> Result<Account, ErrorObjectOwned> {
         Ok(project_account(
             self.state.read().await.accounts.get(&selector.account_id),
             selector,
@@ -327,7 +324,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
     async fn get_account_view_at_block(
         &self,
-        selector: ProgramShardSelector,
+        selector: Actor,
         _block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned> {
         self.get_account_view(selector).await
@@ -466,7 +463,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     }
 }
 
-fn project_account(account: Option<&Account>, selector: ProgramShardSelector) -> Account {
+fn project_account(account: Option<&Account>, selector: Actor) -> Account {
     let Some(account) = account else {
         return Account {
             nonce: 0,
@@ -515,11 +512,11 @@ fn mock_public_tx(
         message: PublicMessage {
             program_account_id: AccountId { value: [1; 32] },
             shard_selectors: vec![
-                ProgramShardSelector {
+                Actor {
                     account_id: account_ids[tx_idx as usize % account_ids.len()],
                     program_account_id: AccountId::native_token_program(),
                 },
-                ProgramShardSelector {
+                Actor {
                     account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
                     program_account_id: AccountId::native_token_program(),
                 },

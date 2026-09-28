@@ -61,7 +61,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     let written: Vec<u8> = vec![9; 4];
     let message = lee::public_transaction::Message::try_new_with_fees(
         account_id,
-        vec![lee::ProgramShardSelector::new(target_id, account_id)],
+        vec![lee::Actor::new(target_id, account_id)],
         nonces,
         written.clone(),
         common::test_utils::test_fee_declaration(payer_id),

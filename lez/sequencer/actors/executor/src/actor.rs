@@ -5,7 +5,6 @@ use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
 use kameo::{
-    Actor,
     actor::{ActorRef, WeakActorRef},
     error::{ActorStopReason, Infallible},
     mailbox::{MailboxReceiver, Signal},
@@ -14,7 +13,7 @@ use kameo::{
 };
 use lee_core::{
     BlockId,
-    account::{Balance, Nonce, ProgramShardSelector},
+    account::{Actor, Balance, Nonce},
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
@@ -131,7 +130,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActor<S, B> {
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActorTrait for ExecutorActor<S, B> {}
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Actor for ExecutorActor<S, B> {
+impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<S, B> {
     type Args = Self;
     type Error = Error;
 
@@ -428,7 +427,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
         &mut self,
         GetAccountView {
             shard_selector:
-                ProgramShardSelector {
+                Actor {
                     account_id,
                     program_account_id,
                 },

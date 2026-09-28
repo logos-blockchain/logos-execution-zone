@@ -186,7 +186,7 @@ fn output_of(evaluator: AccountId, post_data: Option<ShardData>) -> ApplyOutput 
     ApplyOutput::new(
         ApplyInput {
             self_account_id: evaluator,
-            selector: ProgramShardSelector::new(AccountId::new([7; 32]), evaluator),
+            selector: Actor::new(AccountId::new([7; 32]), evaluator),
             pre_data: ShardData::empty(),
             effect_data: Vec::new(),
         },
@@ -299,7 +299,7 @@ fn several_effects_may_name_one_input_handle_but_no_other_selector() {
     let account = AccountMeta::new(AccountId::new([7; 32]), true, AccountId::new([2; 32]));
     let effect = ShardEffect::new(&account, &7_u8);
     let foreign = ShardEffect {
-        selector: ProgramShardSelector::native_balance(AccountId::new([7; 32])),
+        selector: Actor::native_balance(AccountId::new([7; 32])),
         data: Vec::new(),
     };
 

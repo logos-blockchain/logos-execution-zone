@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{Nonce, ProgramShardSelector},
+    account::{Actor, Nonce},
     program::InstructionData,
 };
 use sha2::{Digest as _, Sha256};
@@ -12,7 +12,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x0
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
+    pub shard_selectors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -44,7 +44,7 @@ impl Message {
     /// [`Self::try_new_with_fees`].
     pub fn try_new<T: BorshSerialize>(
         program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
+        shard_selectors: Vec<Actor>,
         nonces: Vec<Nonce>,
         instruction: T,
     ) -> Result<Self, LeeError> {
@@ -61,7 +61,7 @@ impl Message {
 
     pub fn try_new_with_fees<T: BorshSerialize>(
         program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
+        shard_selectors: Vec<Actor>,
         nonces: Vec<Nonce>,
         instruction: T,
         fee: FeeDeclaration,
@@ -80,7 +80,7 @@ impl Message {
     #[must_use]
     pub const fn new_preserialized(
         program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
+        shard_selectors: Vec<Actor>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
         fee: Option<FeeDeclaration>,
@@ -121,7 +121,7 @@ impl crate::fees::SignedMessage for Message {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Nonce, ProgramShardSelector};
+    use lee_core::account::{AccountId, Actor, Nonce};
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
@@ -148,7 +148,7 @@ mod tests {
     const NONCES_BYTES: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     fn pinned_message(
-        shard_selectors: Vec<ProgramShardSelector>,
+        shard_selectors: Vec<Actor>,
         instruction_data: Vec<u8>,
         fee: Option<FeeDeclaration>,
     ) -> Message {
@@ -164,8 +164,8 @@ mod tests {
         )
     }
 
-    fn named_shard_selector() -> ProgramShardSelector {
-        ProgramShardSelector::new(AccountId::new([42; 32]), AccountId::new([43; 32]))
+    fn named_shard_selector() -> Actor {
+        Actor::new(AccountId::new([42; 32]), AccountId::new([43; 32]))
     }
 
     /// Pins the borsh wire order (`program_account_id` ++ `shard_selectors` ++ `nonces` ++
@@ -214,9 +214,7 @@ mod tests {
     fn hash_public_pinned_balance_shard_selector() {
         assert_hash_pinned(
             &pinned_message(
-                vec![ProgramShardSelector::native_balance(AccountId::new(
-                    [42; 32],
-                ))],
+                vec![Actor::native_balance(AccountId::new([42; 32]))],
                 vec![],
                 None,
             ),

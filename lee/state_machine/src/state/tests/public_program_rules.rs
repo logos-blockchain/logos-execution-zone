@@ -15,8 +15,8 @@ fn program_should_fail_if_it_drops_a_declared_account() {
         ])
         .with_programs([crate::test_methods::dropped_account()]);
     let shard_selectors = vec![
-        ProgramShardSelector::native_balance(AccountId::new([1; 32])),
-        ProgramShardSelector::native_balance(AccountId::new([2; 32])),
+        Actor::native_balance(AccountId::new([1; 32])),
+        Actor::native_balance(AccountId::new([2; 32])),
     ];
     let program_id = AccountId::from_builtin_program(crate::test_methods::dropped_account().id());
     let message =
@@ -51,8 +51,8 @@ fn program_should_fail_if_it_debits_an_unauthorized_account() {
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(sender_account_id),
-            ProgramShardSelector::native_balance(receiver_account_id),
+            Actor::native_balance(sender_account_id),
+            Actor::native_balance(receiver_account_id),
         ],
         vec![],
         NativeInstruction::Transfer { amount },
@@ -85,8 +85,8 @@ fn program_should_transfer_balance_from_an_authorized_account() {
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(sender_account_id),
-            ProgramShardSelector::native_balance(receiver_account_id),
+            Actor::native_balance(sender_account_id),
+            Actor::native_balance(receiver_account_id),
         ],
         vec![Nonce(0)],
         NativeInstruction::Transfer { amount: 1 },
@@ -124,12 +124,12 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_public
     let cases = [
         (
             "another program's shard",
-            ProgramShardSelector::new(target_id, foreign_program_account_id),
+            Actor::new(target_id, foreign_program_account_id),
             vec![7_u8; 4],
         ),
         (
             "the native balance shard",
-            ProgramShardSelector::native_balance(target_id),
+            Actor::native_balance(target_id),
             encode_balance(500).to_vec(),
         ),
     ];
@@ -169,10 +169,7 @@ fn an_apply_returning_chained_calls_is_rejected_publicly() {
     let mut state = V03State::new().with_programs([crate::test_methods::chains_from_apply()]);
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::new(
-            AccountId::new([1; 32]),
-            program_id,
-        )],
+        vec![Actor::new(AccountId::new([1; 32]), program_id)],
         vec![],
         (),
     )
@@ -202,7 +199,7 @@ fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
 
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::new(target_id, program_id)],
+        vec![Actor::new(target_id, program_id)],
         vec![],
         written.clone(),
     )
@@ -248,7 +245,7 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
         );
         let message = public_transaction::Message::try_new(
             program_id,
-            vec![ProgramShardSelector::native_balance(account_id)],
+            vec![Actor::native_balance(account_id)],
             vec![],
             instruction,
         )
@@ -283,7 +280,7 @@ fn program_should_fail_if_it_injects_an_undeclared_pre_state() {
         AccountId::from_builtin_program(crate::test_methods::injects_undeclared_pre_state().id());
     let message = public_transaction::Message::try_new(
         program_id,
-        vec![ProgramShardSelector::native_balance(account_id)],
+        vec![Actor::native_balance(account_id)],
         vec![],
         fabricated_account_id,
     )
@@ -327,8 +324,8 @@ fn program_should_fail_if_a_callee_drops_an_account_its_caller_named() {
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(crate::test_methods::non_delegating_forwarder().id()),
         vec![
-            ProgramShardSelector::native_balance(AccountId::new([1; 32])),
-            ProgramShardSelector::native_balance(AccountId::new([2; 32])),
+            Actor::native_balance(AccountId::new([1; 32])),
+            Actor::native_balance(AccountId::new([2; 32])),
         ],
         vec![],
         (owner, Vec::<u8>::new(), true, Vec::<PdaSeed>::new()),
@@ -371,10 +368,7 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
+        vec![Actor::native_balance(from), Actor::native_balance(to)],
         vec![Nonce(0), Nonce(0)],
         NativeInstruction::Transfer { amount },
     )
@@ -409,8 +403,8 @@ fn effects_may_be_emitted_in_any_order_relative_to_the_handles() {
     let message = public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::new(first, program_id),
-            ProgramShardSelector::new(second, program_id),
+            Actor::new(first, program_id),
+            Actor::new(second, program_id),
         ],
         vec![],
         vec![7_u8; 4],
@@ -436,8 +430,8 @@ fn effects_may_be_emitted_in_any_order_relative_to_the_handles() {
 }
 
 fn forwarding_transaction(
-    root_shard_selector: ProgramShardSelector,
-    callee_shard_selector: ProgramShardSelector,
+    root_shard_selector: Actor,
+    callee_shard_selector: Actor,
     write: &[u8],
 ) -> PublicTransaction {
     let forwarder_id = AccountId::from_builtin_program(crate::test_methods::shard_forwarder().id());
@@ -479,14 +473,10 @@ fn a_chained_call_reads_another_shard_of_a_root_account_from_chain_state() {
         .with_test_programs();
 
     for root in [
-        ProgramShardSelector::new(account_id, forwarder_id),
-        ProgramShardSelector::native_balance(account_id),
+        Actor::new(account_id, forwarder_id),
+        Actor::native_balance(account_id),
     ] {
-        let tx = forwarding_transaction(
-            root,
-            ProgramShardSelector::new(account_id, callee_id),
-            &written,
-        );
+        let tx = forwarding_transaction(root, Actor::new(account_id, callee_id), &written);
 
         state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
@@ -512,8 +502,8 @@ fn a_chained_call_on_an_account_the_root_never_named_is_rejected_publicly() {
         .with_public_account_balances([(account_id, 0), (other_id, 0)])
         .with_test_programs();
     let tx = forwarding_transaction(
-        ProgramShardSelector::new(account_id, forwarder_id),
-        ProgramShardSelector::new(other_id, callee_id),
+        Actor::new(account_id, forwarder_id),
+        Actor::new(other_id, callee_id),
         &[7; 4],
     );
 

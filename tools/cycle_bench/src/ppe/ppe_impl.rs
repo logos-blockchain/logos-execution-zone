@@ -12,7 +12,7 @@ use lee::{
 };
 use lee_core::{
     PrivacyPreservingCircuitOutput,
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
 };
 use test_guest_core::ChainCall;
 use token_core::{TokenDescriptor, TokenKind};
@@ -68,8 +68,8 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
     Ok(execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             signers: [sender_id, recipient_id].into(),
             instruction_data,
@@ -109,8 +109,8 @@ fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutp
     Ok(execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(SENDER_ID, token_id),
-                ProgramShardSelector::new(RECIPIENT_ID, token_id),
+                Actor::new(SENDER_ID, token_id),
+                Actor::new(RECIPIENT_ID, token_id),
             ],
             signers: [SENDER_ID, RECIPIENT_ID].into(),
             instruction_data: token_transfer_instruction()?,
@@ -142,8 +142,8 @@ fn prove_chain_caller(
 
     // chain_caller expects shard selectors = [recipient, sender].
     let shard_selectors = vec![
-        ProgramShardSelector::new(RECIPIENT_ID, token_id),
-        ProgramShardSelector::new(SENDER_ID, token_id),
+        Actor::new(RECIPIENT_ID, token_id),
+        Actor::new(SENDER_ID, token_id),
     ];
 
     let instruction =

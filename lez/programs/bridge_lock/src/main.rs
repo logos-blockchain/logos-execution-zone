@@ -4,7 +4,7 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     native_token::custody_transfer,
     program::{AccountMeta, ChainedCall, Plan, PlanInput, run_program, write_once},
 };
@@ -111,7 +111,7 @@ fn lock(
     amount: u128,
     target_zone: [u8; 32],
     target_account_id: AccountId,
-    target_accounts: Vec<ProgramShardSelector>,
+    target_accounts: Vec<Actor>,
     payload: Vec<u8>,
     ordinal: u32,
 ) {
@@ -154,11 +154,11 @@ fn lock(
     // `target_zone` is not checkable here, so a lock aimed at a zone that will not route it
     // still burns.
     let expected_accounts = vec![
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::config_account_id(target_account_id),
             target_account_id,
         ),
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::holding_account_id(target_account_id, &recipient),
             target_account_id,
         ),
@@ -198,7 +198,7 @@ fn lock(
     ));
     plan.call(ChainedCall::new(
         outbox.program_account_id,
-        vec![ProgramShardSelector::from(outbox)],
+        vec![Actor::from(outbox)],
         &OutboxInstruction::Emit {
             target_zone,
             target_account_id,
@@ -273,13 +273,13 @@ mod tests {
         .expect("the mint serializes")
     }
 
-    fn target_accounts() -> Vec<ProgramShardSelector> {
+    fn target_accounts() -> Vec<Actor> {
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::config_account_id(WRAPPED_ID),
                 WRAPPED_ID,
             ),
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::holding_account_id(WRAPPED_ID, &RECIPIENT),
                 WRAPPED_ID,
             ),

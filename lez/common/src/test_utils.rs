@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 
 use crate::{
     HashType,
@@ -157,10 +157,7 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signing_key: &lee::PrivateKey,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let shard_selectors = vec![
-        ProgramShardSelector::native_balance(from),
-        ProgramShardSelector::native_balance(to),
-    ];
+    let shard_selectors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let nonces = vec![nonce.into()];
     let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
     let message = lee::public_transaction::Message::try_new_with_fees(
@@ -194,10 +191,7 @@ pub fn create_transaction_native_token_transfer_without_fee(
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-        ],
+        vec![Actor::native_balance(from), Actor::native_balance(to)],
         vec![nonce.into()],
         lee_core::native_token::Instruction::Transfer {
             amount: balance_to_move,

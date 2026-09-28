@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{AccountMeta, ChainedCall, Plan, PlanInput},
 };
 use token_core::TokenDescriptor;
@@ -26,10 +26,7 @@ pub fn transfer_from_associated_token_account(
     plan.call(
         ChainedCall::new(
             token_program_id,
-            vec![
-                ProgramShardSelector::from(sender_ata),
-                ProgramShardSelector::from(recipient),
-            ],
+            vec![Actor::from(sender_ata), Actor::from(recipient)],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: amount,
                 descriptor,

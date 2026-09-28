@@ -5,7 +5,7 @@ use amm_core::{
     compute_pool_pda, compute_vault_pda,
 };
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{AccountMeta, ChainedCall, Plan},
 };
 
@@ -102,8 +102,8 @@ pub fn new_definition(
         ChainedCall::new(
             token_program_id,
             vec![
-                ProgramShardSelector::from(pool_definition_lp),
-                ProgramShardSelector::from(user_holding_lp),
+                Actor::from(pool_definition_lp),
+                Actor::from(user_holding_lp),
             ],
             &instruction,
         )

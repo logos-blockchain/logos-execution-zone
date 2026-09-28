@@ -1,7 +1,7 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, EphemeralPublicKey, FeeDeclaration, PrivacyPreservingTransaction,
-    ProgramShardSelector, PublicKey, PublicTransaction, Signature,
+    AccountId, Actor, EphemeralPublicKey, FeeDeclaration, PrivacyPreservingTransaction, PublicKey,
+    PublicTransaction, Signature,
     privacy_preserving_transaction::{
         circuit::Proof,
         message::{EncryptedAccountData, PublicActionWithID},
@@ -143,8 +143,8 @@ pub struct FfiProgramShardSelector {
     pub program_account_id: FfiAccountId,
 }
 
-impl From<ProgramShardSelector> for FfiProgramShardSelector {
-    fn from(value: ProgramShardSelector) -> Self {
+impl From<Actor> for FfiProgramShardSelector {
+    fn from(value: Actor) -> Self {
         Self {
             account_id: value.account_id.into(),
             program_account_id: value.program_account_id.into(),
@@ -152,7 +152,7 @@ impl From<ProgramShardSelector> for FfiProgramShardSelector {
     }
 }
 
-impl From<FfiProgramShardSelector> for ProgramShardSelector {
+impl From<FfiProgramShardSelector> for Actor {
     fn from(value: FfiProgramShardSelector) -> Self {
         Self {
             account_id: value.account_id.into(),
@@ -763,7 +763,7 @@ mod tests {
         let tx = |fee| PublicTransaction {
             message: lee::public_transaction::Message {
                 program_account_id: AccountId::new([42; 32]),
-                shard_selectors: vec![ProgramShardSelector {
+                shard_selectors: vec![Actor {
                     account_id: AccountId::new([3; 32]),
                     program_account_id: AccountId::new([42; 32]),
                 }],

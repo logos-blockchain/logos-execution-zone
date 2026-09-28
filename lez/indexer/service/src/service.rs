@@ -9,8 +9,8 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig, event_filter::EventFilter};
 use indexer_service_protocol::{
-    Account, AccountId, AccountSummary, Block, BlockId, EventRecord, EventSubscriptionFilter,
-    GetEventsFilter, HashType, IndexerStatus, ProgramShardSelector, Selector, ShardSummary,
+    Account, AccountId, AccountSummary, Actor, Block, BlockId, EventRecord,
+    EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus, Selector, ShardSummary,
     Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
@@ -170,10 +170,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         })
     }
 
-    async fn get_account_view(
-        &self,
-        selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, selector: Actor) -> Result<Account, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
@@ -185,7 +182,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 
     async fn get_account_view_at_block(
         &self,
-        selector: ProgramShardSelector,
+        selector: Actor,
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned> {
         Ok(self

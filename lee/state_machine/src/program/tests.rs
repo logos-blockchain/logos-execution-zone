@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{
         AccountMeta, ApplyInput, ApplyOutput, CallKind, GuestOutput, InstructionData, PlanInput,
     },
@@ -40,7 +40,7 @@ fn top_level_input(
 fn apply_input(program: &Program, effect: &[u8], pre_data: ShardData) -> ApplyInput {
     ApplyInput {
         self_account_id: AccountId::from_builtin_program(program.id()),
-        selector: ProgramShardSelector::new(
+        selector: Actor::new(
             AccountId::new([0; 32]),
             AccountId::from_builtin_program(program.id()),
         ),
@@ -64,7 +64,7 @@ fn program_execution() {
     // no shard contents went in and none came out.
     assert_eq!(plan.input.accounts, accounts);
     let [effect] = <[_; 1]>::try_from(plan.effects).unwrap();
-    assert_eq!(effect.selector, ProgramShardSelector::from(&accounts[0]));
+    assert_eq!(effect.selector, Actor::from(&accounts[0]));
     assert_eq!(effect.data, borsh::to_vec(&written).unwrap());
 }
 
@@ -175,7 +175,7 @@ fn an_apply_journal_is_not_accepted_where_a_plan_was_scheduled() {
     let output = GuestOutput::Apply(ApplyOutput::new(
         ApplyInput {
             self_account_id: AccountId::new([1; 32]),
-            selector: ProgramShardSelector::native_balance(AccountId::new([2; 32])),
+            selector: Actor::native_balance(AccountId::new([2; 32])),
             pre_data: ShardData::empty(),
             effect_data: Vec::new(),
         },

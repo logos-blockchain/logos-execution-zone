@@ -38,7 +38,7 @@
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_account_id` access control
 
 use lee_core::{
-    account::ProgramShardSelector,
+    account::Actor,
     native_token::{NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance},
     program::{ChainedCall, PdaSeed, Plan, ProgramCall, apply_keep, read_program_call},
 };
@@ -131,10 +131,7 @@ fn plan(input: &lee_core::program::PlanInput, instruction: &FlashSwapInstruction
             // etc.) and is expected to return funds to the vault.
             plan.call(ChainedCall {
                 program_account_id: *callback_program_id,
-                shard_selectors: vec![
-                    ProgramShardSelector::from(&vault),
-                    ProgramShardSelector::from(&receiver),
-                ],
+                shard_selectors: vec![Actor::from(&vault), Actor::from(&receiver)],
                 instruction_data: callback_instruction_data.clone(),
                 pda_seeds: vec![],
             });
@@ -147,7 +144,7 @@ fn plan(input: &lee_core::program::PlanInput, instruction: &FlashSwapInstruction
             // entire transaction.
             plan.call(ChainedCall::new(
                 input.self_account_id, // self-referential chained call
-                vec![ProgramShardSelector::from(&vault)],
+                vec![Actor::from(&vault)],
                 &FlashSwapInstruction::InvariantCheck {
                     min_vault_balance: *vault_balance,
                 },

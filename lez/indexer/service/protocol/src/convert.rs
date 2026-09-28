@@ -3,12 +3,12 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
+    Account, AccountData, AccountId, Actor, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
     BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
     DeferredPublicEffect, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
     HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
-    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
     Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
@@ -83,9 +83,9 @@ impl TryFrom<AccountData> for lee_core::account::AccountData {
     }
 }
 
-impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
-    fn from(value: lee_core::account::ProgramShardSelector) -> Self {
-        let lee_core::account::ProgramShardSelector {
+impl From<lee_core::account::Actor> for Actor {
+    fn from(value: lee_core::account::Actor) -> Self {
+        let lee_core::account::Actor {
             account_id,
             program_account_id,
         } = value;
@@ -97,9 +97,9 @@ impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
     }
 }
 
-impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
-    fn from(value: ProgramShardSelector) -> Self {
-        let ProgramShardSelector {
+impl From<Actor> for lee_core::account::Actor {
+    fn from(value: Actor) -> Self {
+        let Actor {
             account_id,
             program_account_id,
         } = value;
@@ -1086,7 +1086,7 @@ mod tests {
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
         let message = lee::public_transaction::Message::try_new_with_fees(
             lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
+            vec![lee::Actor::native_balance(signer_id)],
             vec![0_u128.into()],
             0_u32,
             fee,
@@ -1120,7 +1120,7 @@ mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
+            vec![lee::Actor::native_balance(signer_id)],
             vec![0_u128.into()],
             0_u32,
         )

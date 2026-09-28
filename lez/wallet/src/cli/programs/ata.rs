@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 use token_core::TokenHolding;
 
 use crate::{
@@ -202,7 +202,7 @@ impl AtaSubcommand {
                 &associated_token_account_core::compute_ata_seed(owner, *def, token_program_id),
             );
             let account = wallet_core
-                .get_account_view(ProgramShardSelector::new(ata_id, token_program_id))
+                .get_account_view(Actor::new(ata_id, token_program_id))
                 .await?;
             let holding = account.data.shard(token_program_id);
 

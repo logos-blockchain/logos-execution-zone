@@ -5,7 +5,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, PublicAction,
     WitnessKind,
-    account::{AccountData, AccountId, ProgramShardSelector, ShardData},
+    account::{AccountData, AccountId, Actor, ShardData},
     program::{
         AccountMeta, ApplyInput, ApplyOutput, BlockValidityWindow, ChainedCall, EffectData,
         ExecutionValidationError, InstructionData, InvalidWindow, MAX_NUMBER_CHAINED_CALLS,
@@ -18,7 +18,7 @@ use crate::{
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct RootCall {
     pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
+    pub shard_selectors: Vec<Actor>,
     pub instruction_data: InstructionData,
     pub authorized_accounts: Vec<AccountId>,
 }
@@ -93,10 +93,7 @@ pub trait Backend {
 
     /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
     /// Backends with public state override this method.
-    fn public_shard(
-        &mut self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<ShardData, Self::Error> {
+    fn public_shard(&mut self, shard_selector: Actor) -> Result<ShardData, Self::Error> {
         Err(ExecutionError::PublicShardUnavailable { shard_selector }.into())
     }
 }
@@ -104,9 +101,7 @@ pub trait Backend {
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error("No public shard was supplied for {shard_selector:?}")]
-    PublicShardUnavailable {
-        shard_selector: ProgramShardSelector,
-    },
+    PublicShardUnavailable { shard_selector: Actor },
 
     #[error("Two witnesses derive the same private account {account_id}")]
     DuplicateWitness { account_id: AccountId },

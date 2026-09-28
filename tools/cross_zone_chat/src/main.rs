@@ -57,7 +57,7 @@ use common::{block::BedrockStatus, transaction::LeeTransaction};
 use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Instruction, ZoneId};
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use log::{info, warn};
@@ -420,10 +420,7 @@ async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Re
         // in this tool rides out a transient error rather than ending the run.
         let mut attempt = 0_u32;
         let account = loop {
-            match client
-                .get_account_view(ProgramShardSelector::new(slot, outbox_id))
-                .await
-            {
+            match client.get_account_view(Actor::new(slot, outbox_id)).await {
                 Ok(account) => break account,
                 Err(err) if attempt < RPC_RETRY_LIMIT => {
                     attempt += 1;
@@ -562,8 +559,8 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         target_zone: other_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -574,8 +571,8 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let message = Message::try_new(
         sender_id,
         vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(outbox_account, outbox_id),
+            Actor::new(sender_config_account_id(sender_id), sender_id),
+            Actor::new(outbox_account, outbox_id),
         ],
         vec![],
         send,

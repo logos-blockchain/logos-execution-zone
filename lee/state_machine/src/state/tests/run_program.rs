@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     program::{ApplyInput, ApplyOutput},
 };
 
@@ -10,7 +10,7 @@ fn apply_with(post_data: Option<&[u8]>) -> (ApplyInput, ApplyOutput) {
     let self_account_id = AccountId::from_builtin_program(program.id());
     let input = ApplyInput {
         self_account_id,
-        selector: ProgramShardSelector::new(AccountId::new([7; 32]), self_account_id),
+        selector: Actor::new(AccountId::new([7; 32]), self_account_id),
         pre_data: ShardData::try_from(b"before".to_vec()).unwrap(),
         effect_data: borsh::to_vec(&post_data).unwrap(),
     };

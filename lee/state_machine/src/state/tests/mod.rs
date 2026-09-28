@@ -10,7 +10,7 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
+    account::{Account, AccountId, Actor, Balance, Nonce, data::ShardData},
     encryption::ViewingPublicKey,
     execution_state::{DeferredPublicEffect, ExecutionError},
     native_token::{
@@ -182,10 +182,7 @@ fn transfer_transaction(
     to_nonce: u128,
     balance: u128,
 ) -> PublicTransaction {
-    let shard_selectors = vec![
-        ProgramShardSelector::native_balance(from),
-        ProgramShardSelector::native_balance(to),
-    ];
+    let shard_selectors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let message = public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
@@ -207,8 +204,8 @@ fn build_flash_swap_tx(
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(initiator.id()),
         vec![
-            ProgramShardSelector::native_balance(vault_id),
-            ProgramShardSelector::native_balance(receiver_id),
+            Actor::native_balance(vault_id),
+            Actor::native_balance(receiver_id),
         ],
         vec![], // no signers — vault is PDA-authorised
         instruction,
@@ -376,8 +373,8 @@ fn shielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             signers: [sender_id].into(),
             private_witnesses: vec![init_witness(recipient_keys, Identifier::ZERO)],
@@ -419,8 +416,8 @@ fn private_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 update_witness(
@@ -467,8 +464,8 @@ fn deshielded_balance_transfer_for_tests(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(*recipient_account_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(*recipient_account_id),
             ],
             private_witnesses: vec![update_witness(
                 sender_keys,

@@ -62,7 +62,7 @@ impl PublicTransaction {
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        account::ProgramShardSelector,
+        account::Actor,
         native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     };
     use sha2::{Digest as _, digest::FixedOutput as _};
@@ -94,10 +94,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
@@ -175,10 +172,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr1),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr1)],
             nonces,
             instruction,
         )
@@ -199,10 +193,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
@@ -225,10 +216,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
@@ -248,10 +236,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
@@ -272,10 +257,7 @@ pub mod tests {
         let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
             NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
@@ -307,10 +289,7 @@ pub mod tests {
         let unknown_program_id = AccountId::from_builtin_program([0xdead_beef; 8]);
         let message = Message::try_new(
             unknown_program_id,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
+            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
             instruction,
         )

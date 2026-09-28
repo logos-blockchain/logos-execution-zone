@@ -8,7 +8,7 @@ use common::{
     block::{BedrockStatus, Block, BlockHeader},
     transaction::{LeeTransaction, TxEvents},
 };
-use lee::{Account, AccountId, ProgramShardSelector, V03State};
+use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
@@ -256,16 +256,12 @@ impl IndexerStore {
             .get_account_by_id(*account_id))
     }
 
-    pub async fn account_current_view(&self, selector: ProgramShardSelector) -> Result<Account> {
+    pub async fn account_current_view(&self, selector: Actor) -> Result<Account> {
         let state = self.current_state.read().await;
         Ok(project_account(&state, selector))
     }
 
-    pub fn account_view_at_block(
-        &self,
-        selector: ProgramShardSelector,
-        block_id: u64,
-    ) -> Result<Account> {
+    pub fn account_view_at_block(&self, selector: Actor, block_id: u64) -> Result<Account> {
         Ok(project_account(
             &self.get_state_at_block(block_id)?,
             selector,
@@ -358,7 +354,7 @@ impl IndexerStore {
     }
 }
 
-fn project_account(state: &V03State, selector: ProgramShardSelector) -> Account {
+fn project_account(state: &V03State, selector: Actor) -> Account {
     state
         .get_account_by_id_ref(selector.account_id)
         .map_or_else(Account::default, |account| {
@@ -541,7 +537,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
-    use lee::ProgramShardSelector;
+    use lee::Actor;
     use lee_core::program::{InstructionData, ProgramEvent};
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
@@ -609,9 +605,7 @@ mod tests {
                 lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
                 write_segment_account_ids
                     .into_iter()
-                    .map(|id| {
-                        ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID)
-                    })
+                    .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
                     .collect(),
                 vec![
                     lee_core::account::Nonce(0),
@@ -641,9 +635,7 @@ mod tests {
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             header_account_ids
                 .into_iter()
-                .map(|id| {
-                    ProgramShardSelector::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID)
-                })
+                .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
                 .collect(),
             vec![
                 lee_core::account::Nonce(0),
@@ -682,9 +674,7 @@ mod tests {
         let payer_nonce = u128::try_from(chunk_count.saturating_add(1)).unwrap();
         let message = lee::public_transaction::Message::try_new_with_fees(
             emitter_header_account_id(),
-            vec![ProgramShardSelector::native_balance(AccountId::new(
-                [42; 32],
-            ))],
+            vec![Actor::native_balance(AccountId::new([42; 32]))],
             vec![payer_nonce.into()],
             EmitterInstruction {
                 events,
@@ -1332,7 +1322,7 @@ mod tests {
 #[cfg(test)]
 mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
-    use lee::ProgramShardSelector;
+    use lee::Actor;
 
     use super::*;
 
@@ -1755,8 +1745,8 @@ mod accept_tests {
             let message = lee::public_transaction::Message::try_new(
                 programs::bridge_account_id(),
                 vec![
-                    ProgramShardSelector::native_balance(lee::AccountId::new([1_u8; 32])),
-                    ProgramShardSelector::native_balance(lee::AccountId::new([2_u8; 32])),
+                    Actor::native_balance(lee::AccountId::new([1_u8; 32])),
+                    Actor::native_balance(lee::AccountId::new([2_u8; 32])),
                 ],
                 vec![],
                 bridge_core::Instruction::Deposit {

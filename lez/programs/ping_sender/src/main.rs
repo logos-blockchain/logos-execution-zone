@@ -1,6 +1,6 @@
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{AccountMeta, ChainedCall, Plan, PlanInput, run_program, write_once},
 };
 use ping_core::{SenderInstruction, outbox_bytes, read_outbox, sender_config_account_id};
@@ -60,7 +60,7 @@ fn plan(input: &PlanInput, instruction: SenderInstruction) -> Plan {
             plan.effect(config, &Effect::OutboxIs(outbox.program_account_id));
             plan.call(ChainedCall::new(
                 outbox.program_account_id,
-                vec![ProgramShardSelector::from(outbox)],
+                vec![Actor::from(outbox)],
                 &OutboxInstruction::Emit {
                     target_zone,
                     target_account_id,

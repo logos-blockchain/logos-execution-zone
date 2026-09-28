@@ -3,7 +3,7 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
-use lee::{AccountId, ProgramShardSelector};
+use lee::{AccountId, Actor};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
@@ -513,7 +513,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_view(
         );
         return WalletFfiError::NullPointer;
     }
-    let shard_selector = ProgramShardSelector::new(
+    let shard_selector = Actor::new(
         account_id,
         AccountId::new(unsafe { (*program_account_id).data }),
     );

@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 
 use lee_core::{
     BlockId,
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer},
     program::{AccountMeta, BlockValidityWindow, ChainedCall, Plan, PlanInput, run_program},
 };
@@ -476,8 +476,8 @@ fn stake(input: &PlanInput, sequencer_key: SequencerKey, amount: u128, has_recor
     plan.call(ChainedCall::new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(funding_account.account_id),
-            ProgramShardSelector::native_balance(funds_account.account_id),
+            Actor::native_balance(funding_account.account_id),
+            Actor::native_balance(funds_account.account_id),
         ],
         &native_token::Instruction::Transfer { amount },
     ));

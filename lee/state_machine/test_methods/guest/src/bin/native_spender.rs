@@ -1,5 +1,5 @@
 use lee_core::{
-    account::ProgramShardSelector,
+    account::Actor,
     native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
     program::{ChainedCall, Plan, ProgramCall, apply_write, read_program_call},
 };
@@ -18,10 +18,7 @@ fn main() {
             plan.effect(&own, &own_data);
             plan.call(ChainedCall::new(
                 NATIVE_TOKEN_PROGRAM_ID,
-                vec![
-                    ProgramShardSelector::from(&sender),
-                    ProgramShardSelector::from(&recipient),
-                ],
+                vec![Actor::from(&sender), Actor::from(&recipient)],
                 &NativeInstruction::Transfer { amount },
             ));
             plan.write()

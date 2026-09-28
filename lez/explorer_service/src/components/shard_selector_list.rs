@@ -1,9 +1,9 @@
-use indexer_service_protocol::ProgramShardSelector;
+use indexer_service_protocol::Actor;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
-pub fn ShardSelectorList(shard_selectors: Vec<ProgramShardSelector>) -> impl IntoView {
+pub fn ShardSelectorList(shard_selectors: Vec<Actor>) -> impl IntoView {
     view! {
         <div class="accounts-list">
             {shard_selectors

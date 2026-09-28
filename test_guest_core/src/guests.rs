@@ -2,7 +2,7 @@
 //! between them. Each crate still ships its own binary, and so its own image id.
 
 use lee_core::{
-    account::ProgramShardSelector,
+    account::Actor,
     native_token::custody_transfer,
     program::{
         ChainedCall, GuestOutput, PdaSeed, Plan, PlanOutput, ProgramCall, ShardEffect, apply_write,
@@ -28,10 +28,7 @@ pub fn chain_caller() {
         return;
     };
 
-    let permuted = vec![
-        ProgramShardSelector::from(&sender),
-        ProgramShardSelector::from(&recipient),
-    ];
+    let permuted = vec![Actor::from(&sender), Actor::from(&recipient)];
 
     let mut plan = Plan::new(&input);
     for _ in 0..calls {

@@ -193,7 +193,7 @@ impl AccountData {
     }
 }
 
-/// Selects one of an account's program shards.
+/// One account's shard under one program: the state one handler owns.
 #[derive(
     Debug,
     Copy,
@@ -206,12 +206,12 @@ impl AccountData {
     BorshSerialize,
     BorshDeserialize,
 )]
-pub struct ProgramShardSelector {
+pub struct Actor {
     pub account_id: AccountId,
     pub program_account_id: AccountId,
 }
 
-impl ProgramShardSelector {
+impl Actor {
     #[must_use]
     pub const fn new(account_id: AccountId, program_account_id: AccountId) -> Self {
         Self {
@@ -436,7 +436,7 @@ mod tests {
         account.data.apply_output(&ApplyOutput::new(
             ApplyInput {
                 self_account_id: program,
-                selector: ProgramShardSelector::new(AccountId::new([1; 32]), program),
+                selector: Actor::new(AccountId::new([1; 32]), program),
                 pre_data: b"record".to_vec().try_into().unwrap(),
                 effect_data: Vec::new(),
             },

@@ -9,7 +9,7 @@ use common::{
 };
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, Signature,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
@@ -76,10 +76,7 @@ fn test_transaction() -> LeeTransaction {
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let message = Message::try_new_with_fees(
         NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(acc2),
-        ],
+        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
         nonces,
         NativeInstruction::Transfer { amount: 1337 },
         common::test_utils::test_fee_declaration(payer),
@@ -572,10 +569,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
         NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(acc2),
-        ],
+        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
         vec![0_u128.into(), 0_u128.into()],
         NativeInstruction::Transfer { amount: 1337 },
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),

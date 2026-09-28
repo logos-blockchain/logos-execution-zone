@@ -210,8 +210,8 @@ fn flash_swap_rejects_a_vault_row_that_names_a_foreign_shard() {
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(initiator.id()),
         vec![
-            ProgramShardSelector::new(vault_id, foreign),
-            ProgramShardSelector::native_balance(receiver_id),
+            Actor::new(vault_id, foreign),
+            Actor::native_balance(receiver_id),
         ],
         vec![],
         FlashSwapInstruction::Initiate {
@@ -315,7 +315,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(initiator.id()),
-        vec![ProgramShardSelector::native_balance(vault_id)],
+        vec![Actor::native_balance(vault_id)],
         vec![],
         instruction,
     )
@@ -342,7 +342,7 @@ fn malicious_self_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
-        vec![ProgramShardSelector::native_balance(acc_id)],
+        vec![Actor::native_balance(acc_id)],
         vec![],
         (),
     )
@@ -369,7 +369,7 @@ fn malicious_caller_program_id_rejected_in_public_execution() {
 
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
-        vec![ProgramShardSelector::native_balance(acc_id)],
+        vec![Actor::native_balance(acc_id)],
         vec![],
         (),
     )

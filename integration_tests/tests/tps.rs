@@ -16,8 +16,8 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector,
-    ProvingInput, PublicKey, PublicTransaction,
+    Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
+    PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
@@ -90,8 +90,8 @@ impl TpsTestManager {
                 let message = putx::Message::try_new_with_fees(
                     lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
                     vec![
-                        ProgramShardSelector::native_balance(pair[0].1),
-                        ProgramShardSelector::native_balance(pair[1].1),
+                        Actor::native_balance(pair[0].1),
+                        Actor::native_balance(pair[1].1),
                     ],
                     [Nonce(0_u128)].to_vec(),
                     lee_core::native_token::Instruction::Transfer { amount },
@@ -265,8 +265,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![
                 PrivateWitness {

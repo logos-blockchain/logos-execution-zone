@@ -8,7 +8,7 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
     PublicAction, Timestamp,
-    account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector, ShardData},
+    account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
     execution_state::{DeferredPublicEffect, ExecutionError, ExecutionState, RootCall},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -193,7 +193,7 @@ impl ValidatedStateDiff {
     /// `is_authorized` set — the payer for the reserve, empty for the refund.
     pub fn from_fee_settlement_invocation(
         program_account_id: AccountId,
-        shard_selectors: &[ProgramShardSelector],
+        shard_selectors: &[Actor],
         instruction_data: &[u8],
         authorized: &HashSet<AccountId>,
         state: &V03State,
@@ -251,7 +251,7 @@ impl ValidatedStateDiff {
     )]
     fn execute_authorized(
         program_account_id: AccountId,
-        shard_selectors: &[ProgramShardSelector],
+        shard_selectors: &[Actor],
         instruction_data: &[u8],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
@@ -573,7 +573,7 @@ fn apply_public_effects(
             } = effect;
             let input = ApplyInput {
                 self_account_id: *program_account_id,
-                selector: ProgramShardSelector::new(action.account_id, *shard_program_account_id),
+                selector: Actor::new(action.account_id, *shard_program_account_id),
                 pre_data: account.data.shard(*shard_program_account_id).clone(),
                 effect_data: data.clone(),
             };

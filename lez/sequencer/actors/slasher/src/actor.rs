@@ -3,13 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
 use kameo::{
-    Actor,
     actor::ActorRef,
     message::{Context, Message},
 };
-use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message as LeeMessage,
-};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message as LeeMessage};
 use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{
@@ -218,7 +215,7 @@ impl<S: StorageActorTrait> SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Actor for SlasherActor<S> {
+impl<S: StorageActorTrait> kameo::Actor for SlasherActor<S> {
     type Args = Self;
     type Error = Error;
 
@@ -400,14 +397,10 @@ pub fn build_slash_tx(
     let message = LeeMessage::try_new(
         program_id,
         vec![
-            ProgramShardSelector::new(ownership_id, program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::native_balance(sequencer_stake_core::slash_sink_account_id(
-                program_id,
-            )),
-            ProgramShardSelector::new(
+            Actor::new(ownership_id, program_id),
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::native_balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 program_id,
             ),

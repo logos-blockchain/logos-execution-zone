@@ -1,6 +1,6 @@
 use lee_core::{
     BlockId, Timestamp,
-    account::ProgramShardSelector,
+    account::Actor,
     program::{ChainedCall, Plan, ProgramCall, read_program_call},
 };
 
@@ -18,11 +18,7 @@ fn main() {
     let mut plan = Plan::new(&input);
     plan.call(ChainedCall::new(
         clock_core::clock_account_id(),
-        input
-            .accounts
-            .iter()
-            .map(ProgramShardSelector::from)
-            .collect(),
+        input.accounts.iter().map(Actor::from).collect(),
         &clock_core::Instruction {
             timestamp,
             block_id,

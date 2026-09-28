@@ -17,8 +17,7 @@ use cross_zone_inbox_core::{
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
-    ValidatedStateDiff,
+    AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
     error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
 };
@@ -270,15 +269,15 @@ fn seed_bridge_lock_config(state: &mut V03State) {
 fn dispatch_accounts(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
-    targets: Vec<ProgramShardSelector>,
-) -> Vec<ProgramShardSelector> {
+    targets: Vec<Actor>,
+) -> Vec<Actor> {
     let mut shard_selectors = vec![
-        ProgramShardSelector::new(inbox_config_account_id(inbox_id), inbox_id),
-        ProgramShardSelector::new(
+        Actor::new(inbox_config_account_id(inbox_id), inbox_id),
+        Actor::new(
             inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
             inbox_id,
         ),
-        ProgramShardSelector::native_balance(inbox_source_marker_account_id(
+        Actor::native_balance(inbox_source_marker_account_id(
             inbox_id,
             &msg.src_zone,
             msg.src_account_id,
@@ -304,7 +303,7 @@ fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &s
 /// signed by `key` at `nonce`.
 fn signed_tx(
     program: AccountId,
-    accounts: Vec<ProgramShardSelector>,
+    accounts: Vec<Actor>,
     nonce: u128,
     instruction_data: Vec<u8>,
     key: &PrivateKey,
@@ -332,10 +331,7 @@ fn via_proxy(
 ) -> PublicTransaction {
     let message = Message::try_new(
         proxy_id,
-        vec![
-            ProgramShardSelector::new(config, target),
-            ProgramShardSelector::native_balance(authority),
-        ],
+        vec![Actor::new(config, target), Actor::native_balance(authority)],
         vec![],
         (target, instruction_data, delegated),
     )
@@ -368,8 +364,8 @@ fn chained_via_inbox(
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(config_id, target),
-                ProgramShardSelector::native_balance(authority),
+                Actor::new(config_id, target),
+                Actor::native_balance(authority),
             ],
         ),
         vec![],
@@ -381,11 +377,7 @@ fn chained_via_inbox(
 
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
-fn send_tx(
-    accounts: Vec<ProgramShardSelector>,
-    target_zone: [u8; 32],
-    ordinal: u32,
-) -> PublicTransaction {
+fn send_tx(accounts: Vec<Actor>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
     let receiver_id = programs::ping_receiver_account_id();
     let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: b"ping".to_vec(),
@@ -395,8 +387,8 @@ fn send_tx(
         target_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
         ordinal,
@@ -467,11 +459,11 @@ fn mint_dispatch_tx(amount: u128, src_tx_index: u32) -> PublicTransaction {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(
+                Actor::new(
                     wrapped_token_core::config_account_id(wrapped_token_id),
                     wrapped_token_id,
                 ),
-                ProgramShardSelector::new(
+                Actor::new(
                     wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
                     wrapped_token_id,
                 ),
@@ -565,11 +557,11 @@ fn update_sources_tx(
     signed_tx(
         wrapped_token_id,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
             ),
-            ProgramShardSelector::native_balance(authority),
+            Actor::native_balance(authority),
         ],
         nonce,
         bytes_of!(&wrapped_token_core::Instruction::UpdateSources { sources }),
@@ -832,8 +824,8 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-                ProgramShardSelector::new(record_id, receiver_id),
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(record_id, receiver_id),
             ],
         ),
         vec![],
@@ -937,13 +929,13 @@ fn lock_tx(
 
 /// The mint's own account list: the wrapped-token config, then the recipient's
 /// holding. What `wrapped_token::Mint` requires on the destination zone.
-fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<ProgramShardSelector> {
+fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<Actor> {
     vec![
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::config_account_id(wrapped_token_id),
             wrapped_token_id,
         ),
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
             wrapped_token_id,
         ),
@@ -959,7 +951,7 @@ fn lock_tx_to(
     ordinal: u32,
     nonce: u128,
     target_account_id: AccountId,
-    target_accounts: Vec<ProgramShardSelector>,
+    target_accounts: Vec<Actor>,
 ) -> PublicTransaction {
     let bridge_lock_id = programs::bridge_lock_account_id();
     let outbox_id = programs::cross_zone_outbox_account_id();
@@ -975,16 +967,14 @@ fn lock_tx_to(
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::native_balance(holder_id),
-            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
-            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
-                bridge_lock_id,
-            )),
-            ProgramShardSelector::new(
+            Actor::native_balance(holder_id),
+            Actor::native_balance(holding_id_of(holder_id)),
+            Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            Actor::new(
                 outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
                 outbox_id,
             ),
@@ -1069,8 +1059,8 @@ fn two_emitters_share_an_ordinal_without_colliding() {
 
     let send = send_tx(
         vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(send_slot, outbox_id),
+            Actor::new(sender_config_account_id(sender_id), sender_id),
+            Actor::new(send_slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1122,8 +1112,8 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
     );
     let send = send_tx(
         vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(foreign_slot, programs::cross_zone_outbox_account_id()),
+            Actor::new(sender_config_account_id(sender_id), sender_id),
+            Actor::new(foreign_slot, programs::cross_zone_outbox_account_id()),
         ],
         zone_b,
         ordinal,
@@ -1207,11 +1197,11 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
         0,
         wrapped_token_id,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
             ),
-            ProgramShardSelector::new(other_holding, wrapped_token_id),
+            Actor::new(other_holding, wrapped_token_id),
         ],
     );
 
@@ -1277,13 +1267,11 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            ProgramShardSelector::new(decoy_id, bridge_lock_id),
-            ProgramShardSelector::native_balance(holder_id),
-            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
-            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
-                bridge_lock_id,
-            )),
-            ProgramShardSelector::new(
+            Actor::new(decoy_id, bridge_lock_id),
+            Actor::native_balance(holder_id),
+            Actor::native_balance(holding_id_of(holder_id)),
+            Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            Actor::new(
                 outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
                 outbox_id,
             ),
@@ -1317,10 +1305,8 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     let message = Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
-            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
-                bridge_lock_id,
-            )),
+            Actor::native_balance(holding_id_of(holder_id)),
+            Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
         ],
         vec![],
         lee_core::native_token::Instruction::Transfer {
@@ -1411,16 +1397,14 @@ fn a_zero_amount_lock_is_refused() {
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::native_balance(holder_id),
-            ProgramShardSelector::native_balance(holding_id_of(holder_id)),
-            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
-                bridge_lock_id,
-            )),
-            ProgramShardSelector::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
+            Actor::native_balance(holder_id),
+            Actor::native_balance(holding_id_of(holder_id)),
+            Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            Actor::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
         ],
         vec![0_u128.into()],
         lock,
@@ -1459,16 +1443,14 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
     let message = Message::try_new(
         bridge_lock_id,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 bridge_lock_core::config_account_id(bridge_lock_id),
                 bridge_lock_id,
             ),
-            ProgramShardSelector::native_balance(attacker_id),
-            ProgramShardSelector::native_balance(holding_id_of(victim_id)),
-            ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(
-                bridge_lock_id,
-            )),
-            ProgramShardSelector::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
+            Actor::native_balance(attacker_id),
+            Actor::native_balance(holding_id_of(victim_id)),
+            Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+            Actor::new(outbox_pda(outbox_id, bridge_lock_id, &zone_b, 0), outbox_id),
         ],
         vec![0_u128.into()],
         lock,
@@ -1522,7 +1504,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     let init = |outbox: AccountId, target: AccountId| {
         let message = Message::try_new(
             bridge_lock_id,
-            vec![ProgramShardSelector::new(config_id, bridge_lock_id)],
+            vec![Actor::new(config_id, bridge_lock_id)],
             vec![],
             bridge_lock_core::Instruction::InitConfig {
                 outbox_account_id: outbox,
@@ -1597,8 +1579,8 @@ fn a_send_before_the_pin_is_set_is_rejected() {
     let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
     let send = send_tx(
         vec![
-            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
-            ProgramShardSelector::new(slot, outbox_id),
+            Actor::new(sender_config_account_id(sender_id), sender_id),
+            Actor::new(slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1628,8 +1610,8 @@ fn a_send_with_a_substituted_config_account_is_rejected() {
     let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
     let send = send_tx(
         vec![
-            ProgramShardSelector::new(ping_record_pda(sender_id), sender_id),
-            ProgramShardSelector::new(slot, outbox_id),
+            Actor::new(ping_record_pda(sender_id), sender_id),
+            Actor::new(slot, outbox_id),
         ],
         zone_b,
         ordinal,
@@ -1656,7 +1638,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     let init = |outbox: AccountId| {
         let message = Message::try_new(
             sender_id,
-            vec![ProgramShardSelector::new(config_id, sender_id)],
+            vec![Actor::new(config_id, sender_id)],
             vec![],
             ping_core::SenderInstruction::InitConfig {
                 outbox_account_id: outbox,
@@ -1722,8 +1704,8 @@ fn the_token_authority_path_holds() {
         signed_tx(
             wrapped_token_id,
             vec![
-                ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::native_balance(account),
+                Actor::new(config_id, wrapped_token_id),
+                Actor::native_balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::UpdateSources {
@@ -1736,8 +1718,8 @@ fn the_token_authority_path_holds() {
         signed_tx(
             wrapped_token_id,
             vec![
-                ProgramShardSelector::new(config_id, wrapped_token_id),
-                ProgramShardSelector::native_balance(account),
+                Actor::new(config_id, wrapped_token_id),
+                Actor::native_balance(account),
             ],
             nonce,
             bytes_of!(&wrapped_token_core::Instruction::RenounceAuthority),
@@ -1797,8 +1779,8 @@ fn the_token_authority_path_holds() {
         signed_tx(
             wrapped_token_id,
             vec![
-                ProgramShardSelector::new(ping_record_pda(wrapped_token_id), wrapped_token_id),
-                ProgramShardSelector::native_balance(authority),
+                Actor::new(ping_record_pda(wrapped_token_id), wrapped_token_id),
+                Actor::native_balance(authority),
             ],
             0,
             instruction_data,
@@ -1934,8 +1916,8 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-                ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
             ],
         ),
         vec![],
@@ -1988,18 +1970,18 @@ fn the_inbox_refuses_a_marker_that_does_not_match_the_message() {
     let message = Message::try_new(
         inbox_id,
         vec![
-            ProgramShardSelector::new(inbox_config_account_id(inbox_id), inbox_id),
-            ProgramShardSelector::new(
+            Actor::new(inbox_config_account_id(inbox_id), inbox_id),
+            Actor::new(
                 inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
                 inbox_id,
             ),
-            ProgramShardSelector::native_balance(inbox_source_marker_account_id(
+            Actor::native_balance(inbox_source_marker_account_id(
                 inbox_id,
                 &src_zone,
                 programs::bridge_lock_account_id(),
             )),
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
@@ -2034,8 +2016,8 @@ fn the_receiver_authority_path_holds() {
         signed_tx(
             receiver_id,
             vec![
-                ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::native_balance(account),
+                Actor::new(config_id, receiver_id),
+                Actor::native_balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::UpdateSources {
@@ -2048,8 +2030,8 @@ fn the_receiver_authority_path_holds() {
         signed_tx(
             receiver_id,
             vec![
-                ProgramShardSelector::new(config_id, receiver_id),
-                ProgramShardSelector::native_balance(account),
+                Actor::new(config_id, receiver_id),
+                Actor::native_balance(account),
             ],
             nonce,
             bytes_of!(&ping_core::ReceiverInstruction::RenounceAuthority),
@@ -2510,8 +2492,8 @@ fn the_remaining_authority_guards_hold() {
             &signed_tx(
                 receiver_id,
                 vec![
-                    ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
-                    ProgramShardSelector::native_balance(authority),
+                    Actor::new(ping_record_pda(receiver_id), receiver_id),
+                    Actor::native_balance(authority),
                 ],
                 0,
                 instruction_data,
@@ -2584,11 +2566,11 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(
+                Actor::new(
                     wrapped_token_core::config_account_id(wrapped_token_id),
                     wrapped_token_id,
                 ),
-                ProgramShardSelector::new(
+                Actor::new(
                     wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
                     wrapped_token_id,
                 ),
@@ -2626,12 +2608,12 @@ fn a_top_level_mint_is_refused() {
     let message = Message::try_new(
         wrapped_token_id,
         vec![
-            ProgramShardSelector::native_balance(marker_id),
-            ProgramShardSelector::new(
+            Actor::native_balance(marker_id),
+            Actor::new(
                 wrapped_token_core::config_account_id(wrapped_token_id),
                 wrapped_token_id,
             ),
-            ProgramShardSelector::new(
+            Actor::new(
                 wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
                 wrapped_token_id,
             ),
@@ -2717,8 +2699,8 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(wrapped_config_id, wrapped_token_id),
-                ProgramShardSelector::new(holding_id, wrapped_token_id),
+                Actor::new(wrapped_config_id, wrapped_token_id),
+                Actor::new(holding_id, wrapped_token_id),
             ],
         ),
         vec![],
@@ -2777,8 +2759,8 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(wrapped_config_id, wrapped_token_id),
-                ProgramShardSelector::new(holding_id, wrapped_token_id),
+                Actor::new(wrapped_config_id, wrapped_token_id),
+                Actor::new(holding_id, wrapped_token_id),
             ],
         ),
         vec![],
@@ -2855,8 +2837,8 @@ fn mint_replay_rejected() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(wrapped_config_id, wrapped_token_id),
-                ProgramShardSelector::new(holding_id, wrapped_token_id),
+                Actor::new(wrapped_config_id, wrapped_token_id),
+                Actor::new(holding_id, wrapped_token_id),
             ],
         ),
         vec![],
@@ -2937,8 +2919,8 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
             inbox_id,
             &msg,
             vec![
-                ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-                ProgramShardSelector::new(record_id, receiver_id),
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(record_id, receiver_id),
             ],
         ),
         vec![],
@@ -2974,8 +2956,8 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
             inbox_id,
             &control_msg,
             vec![
-                ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-                ProgramShardSelector::new(record_id, receiver_id),
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(record_id, receiver_id),
             ],
         ),
         vec![],

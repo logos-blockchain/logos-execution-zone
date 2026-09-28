@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{ChainedCall, InstructionData, Plan, ProgramCall, ProgramId, read_program_call},
 };
 
@@ -17,7 +17,7 @@ fn main() {
     plan.call(ChainedCall {
         program_account_id: AccountId::from_builtin_program(callee_program_id),
         instruction_data: callee_instruction,
-        shard_selectors: vec![ProgramShardSelector::native_balance(undeclared_account_id)],
+        shard_selectors: vec![Actor::native_balance(undeclared_account_id)],
         pda_seeds: vec![],
     });
     plan.write()

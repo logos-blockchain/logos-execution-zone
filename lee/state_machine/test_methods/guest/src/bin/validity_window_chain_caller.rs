@@ -1,6 +1,6 @@
 use borsh::to_vec;
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{
         BlockValidityWindow, ChainedCall, Plan, ProgramCall, ProgramId, TimestampValidityWindow,
         read_program_call,
@@ -27,11 +27,7 @@ fn main() {
         TimestampValidityWindow::new_unbounded(),
     ))
     .unwrap();
-    let shard_selectors = input
-        .accounts
-        .iter()
-        .map(ProgramShardSelector::from)
-        .collect();
+    let shard_selectors = input.accounts.iter().map(Actor::from).collect();
 
     let mut plan = Plan::new(&input);
     plan.block_window(block_validity_window);

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, ProgramShardSelector, ShardData},
+    account::{Account, AccountId, Actor, ShardData},
     encryption::ViewingPublicKey,
 };
 
@@ -86,7 +86,7 @@ impl AccountMeta {
     }
 }
 
-impl From<&AccountMeta> for ProgramShardSelector {
+impl From<&AccountMeta> for Actor {
     fn from(account: &AccountMeta) -> Self {
         Self {
             account_id: account.account_id,
@@ -97,7 +97,7 @@ impl From<&AccountMeta> for ProgramShardSelector {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ShardEffect {
-    pub selector: ProgramShardSelector,
+    pub selector: Actor,
     pub data: EffectData,
 }
 
@@ -114,7 +114,7 @@ impl ShardEffect {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct ApplyInput {
     pub self_account_id: AccountId,
-    pub selector: ProgramShardSelector,
+    pub selector: Actor,
     pub pre_data: ShardData,
     pub effect_data: EffectData,
 }
@@ -349,7 +349,7 @@ pub struct ChainedCall {
     /// The account ID of the program to execute.
     pub program_account_id: AccountId,
     /// Selects the callee's inputs from the current execution state.
-    pub shard_selectors: Vec<ProgramShardSelector>,
+    pub shard_selectors: Vec<Actor>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
@@ -362,7 +362,7 @@ impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: BorshSerialize>(
         program_account_id: AccountId,
-        shard_selectors: Vec<ProgramShardSelector>,
+        shard_selectors: Vec<Actor>,
         instruction: &I,
     ) -> Self {
         Self {
@@ -668,7 +668,7 @@ pub enum ExecutionValidationError {
     AccountShardSelectorsNotUnique,
 
     #[error("An effect selects {selector:?}, which is not an input of the call")]
-    EffectOutsideInputs { selector: ProgramShardSelector },
+    EffectOutsideInputs { selector: Actor },
 
     #[error(
         "A program's apply echoed an input it was not given: expected {expected:?}, actual {actual:?}"
@@ -895,7 +895,7 @@ pub fn validate_plan(
 
     let mut named = HashSet::new();
     for account in &expected.accounts {
-        if !named.insert(ProgramShardSelector::from(account)) {
+        if !named.insert(Actor::from(account)) {
             return Err(ExecutionValidationError::AccountShardSelectorsNotUnique);
         }
     }

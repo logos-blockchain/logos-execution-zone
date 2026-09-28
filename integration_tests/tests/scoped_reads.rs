@@ -15,7 +15,7 @@ use integration_tests::{
     },
 };
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, PublicKey,
+    AccountId, Actor, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
@@ -77,7 +77,7 @@ fn fresh_key(seed: u8) -> (PrivateKey, AccountId) {
 async fn submit(
     ctx: &TestContext,
     program: AccountId,
-    shard_selectors: Vec<ProgramShardSelector>,
+    shard_selectors: Vec<Actor>,
     nonces: Vec<Nonce>,
     instruction: impl borsh::BorshSerialize,
     payer: &PublicAccountPrivateInitialData,
@@ -202,14 +202,14 @@ async fn bloat_account(
         submit(
             ctx,
             *writer_id,
-            vec![ProgramShardSelector::new(victim, *writer_id)],
+            vec![Actor::new(victim, *writer_id)],
             vec![payer_nonce],
             shard.clone(),
             payer,
             &[],
         )
         .await?;
-        let view = get_account_view(ctx, ProgramShardSelector::new(victim, *writer_id)).await?;
+        let view = get_account_view(ctx, Actor::new(victim, *writer_id)).await?;
         assert_bloat_shard(view.data.shards.get(writer_id).map(AsRef::as_ref));
     }
 
@@ -239,11 +239,11 @@ async fn a_bloated_account_defeats_the_whole_account_read_but_not_the_scoped_one
             !writers[..index].contains(writer),
             "every bloat writer must be a distinct address"
         );
-        let view = get_account_view(&ctx, ProgramShardSelector::new(victim, *writer)).await?;
+        let view = get_account_view(&ctx, Actor::new(victim, *writer)).await?;
         assert_eq!(view.data.shards.len(), 1, "a scoped read carries one shard");
     }
 
-    let balance_only = get_account_view(&ctx, ProgramShardSelector::native_balance(victim)).await?;
+    let balance_only = get_account_view(&ctx, Actor::native_balance(victim)).await?;
     assert_eq!(
         balance_only.data.shards.keys().copied().collect::<Vec<_>>(),
         vec![NATIVE_TOKEN_PROGRAM_ID],
@@ -291,13 +291,11 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
     let height_before_bloat = ctx.sequencer_client().get_last_block_id().await?;
     let writers = bloat_account(&mut ctx, victim).await?;
     let last_writer = writers[BLOAT_WRITERS - 1];
-    let balance_only = get_account_view(&ctx, ProgramShardSelector::native_balance(victim)).await?;
+    let balance_only = get_account_view(&ctx, Actor::native_balance(victim)).await?;
 
     let indexer_height = wait_for_indexer_to_catch_up(&ctx).await?;
-    let selector: indexer_service_protocol::ProgramShardSelector =
-        ProgramShardSelector::new(victim, last_writer).into();
-    let native_selector: indexer_service_protocol::ProgramShardSelector =
-        ProgramShardSelector::native_balance(victim).into();
+    let selector: indexer_service_protocol::Actor = Actor::new(victim, last_writer).into();
+    let native_selector: indexer_service_protocol::Actor = Actor::native_balance(victim).into();
     let last_writer_key: indexer_service_protocol::AccountId = last_writer.into();
 
     let indexer = &**ctx.indexer_client();
@@ -396,7 +394,7 @@ async fn a_bloated_account_stays_readable_through_the_indexer() -> Result<()> {
 
     let missing = indexer_service_rpc::RpcClient::get_account_view(
         indexer,
-        ProgramShardSelector::native_balance(AccountId::new([0x5A; 32])).into(),
+        Actor::native_balance(AccountId::new([0x5A; 32])).into(),
     )
     .await?;
     assert_eq!(missing.data.balance().unwrap(), 0);
@@ -483,11 +481,7 @@ async fn an_application_scoped_call_still_finds_its_funded_payer() -> Result<()>
     .await?;
 
     let token_program_id = programs::token_account_id();
-    let definition_view = get_account_view(
-        &ctx,
-        ProgramShardSelector::new(definition, token_program_id),
-    )
-    .await?;
+    let definition_view = get_account_view(&ctx, Actor::new(definition, token_program_id)).await?;
     assert!(
         !definition_view.data.shard(token_program_id).is_empty(),
         "the definition must have been written, so the transaction was admitted and settled"
@@ -538,10 +532,7 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
     submit(
         &ctx,
         PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
-            segment_id,
-            PROGRAM_LOADER_ACCOUNT_ID,
-        )],
+        vec![Actor::new(segment_id, PROGRAM_LOADER_ACCOUNT_ID)],
         vec![Nonce(0), payer_nonce],
         program_loader_core::Instruction::WriteSegment {
             bytecode: vec![0xAB_u8; SEGMENT_FILLER_BYTES],
@@ -601,7 +592,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
     submit(
         &ctx,
         q_id,
-        vec![ProgramShardSelector::new(account_id, q_id)],
+        vec![Actor::new(account_id, q_id)],
         vec![payer_nonce],
         existing.clone(),
         payer,
@@ -609,7 +600,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
     )
     .await?;
 
-    let before = get_account_view(&ctx, ProgramShardSelector::new(account_id, q_id)).await?;
+    let before = get_account_view(&ctx, Actor::new(account_id, q_id)).await?;
     assert_eq!(before.data.shards[&q_id].as_ref(), existing.as_slice());
 
     let rewritten = vec![0xCD_u8; 48];
@@ -621,7 +612,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
             vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
             Program::serialize_instruction(vec![(
                 q_id,
-                ProgramShardSelector::new(account_id, q_id),
+                Actor::new(account_id, q_id),
                 Program::serialize_instruction(rewritten.clone())?,
             )])?,
             &program,
@@ -630,7 +621,7 @@ async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()>
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     ctx.wallet().poll_transaction(tx_hash).await?;
 
-    let after = get_account_view(&ctx, ProgramShardSelector::new(account_id, q_id)).await?;
+    let after = get_account_view(&ctx, Actor::new(account_id, q_id)).await?;
     assert_eq!(
         after.data.shards[&q_id].as_ref(),
         rewritten.as_slice(),

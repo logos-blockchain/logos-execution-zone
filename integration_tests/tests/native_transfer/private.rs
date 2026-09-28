@@ -8,7 +8,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, ProgramShardSelector, ProvingInput, execute_and_prove,
+    AccountId, Actor, ProvingInput, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
@@ -605,8 +605,8 @@ fn prove_init_with_commitment_root(
     let (output, _) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_account_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_account_id),
             ],
             signers: [sender_id].into(),
             private_witnesses: vec![PrivateWitness {

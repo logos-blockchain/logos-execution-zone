@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     program::{ChainedCall, Plan, ProgramCall, read_program_call},
 };
 
@@ -30,10 +30,7 @@ fn main() {
     let mut plan = Plan::new(&input);
     plan.call(ChainedCall::new(
         callee_account_id,
-        vec![ProgramShardSelector::new(
-            account.account_id,
-            callee_account_id,
-        )],
+        vec![Actor::new(account.account_id, callee_account_id)],
         &greeting,
     ));
     plan.write()

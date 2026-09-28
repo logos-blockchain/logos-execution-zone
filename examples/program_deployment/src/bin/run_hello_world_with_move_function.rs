@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
     public_transaction,
 };
@@ -75,7 +75,7 @@ async fn shard_bytes(
     program_account_id: AccountId,
 ) -> Vec<u8> {
     wallet_core
-        .get_account_view(ProgramShardSelector::new(account_id, program_account_id))
+        .get_account_view(Actor::new(account_id, program_account_id))
         .await
         .unwrap()
         .data
@@ -111,7 +111,7 @@ async fn main() {
             let nonces = vec![];
             let message = public_transaction::Message::try_new(
                 program_account_id,
-                vec![ProgramShardSelector::new(account_id, program_account_id)],
+                vec![Actor::new(account_id, program_account_id)],
                 nonces,
                 instruction,
             )
@@ -154,8 +154,8 @@ async fn main() {
             let message = public_transaction::Message::try_new(
                 program_account_id,
                 vec![
-                    ProgramShardSelector::new(from, program_account_id),
-                    ProgramShardSelector::new(to, program_account_id),
+                    Actor::new(from, program_account_id),
+                    Actor::new(to, program_account_id),
                 ],
                 nonces,
                 instruction,

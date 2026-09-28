@@ -12,8 +12,7 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    ProgramShardSelector, execute_and_prove, privacy_preserving_transaction, program::Program,
-    public_transaction,
+    Actor, execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -31,9 +30,9 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = public_transaction::Message::try_new(
         programs::bridge_account_id(),
         vec![
-            ProgramShardSelector::native_balance(bridge_account_id),
-            ProgramShardSelector::native_balance(recipient_id),
-            ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
+            Actor::native_balance(bridge_account_id),
+            Actor::native_balance(recipient_id),
+            Actor::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -82,9 +81,9 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let message = public_transaction::Message::try_new(
         programs::bridge_account_id(),
         vec![
-            ProgramShardSelector::native_balance(bridge_account_id),
-            ProgramShardSelector::native_balance(recipient_id),
-            ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
+            Actor::native_balance(bridge_account_id),
+            Actor::native_balance(recipient_id),
+            Actor::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -165,9 +164,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     .context("Failed to serialize bridge deposit instruction")?;
 
     let shard_selectors = vec![
-        ProgramShardSelector::native_balance(bridge_account_id),
-        ProgramShardSelector::native_balance(recipient_id),
-        ProgramShardSelector::new(receipt_id, programs::bridge_account_id()),
+        Actor::native_balance(bridge_account_id),
+        Actor::native_balance(recipient_id),
+        Actor::new(receipt_id, programs::bridge_account_id()),
     ];
     let nonces = vec![
         bridge_account.nonce,

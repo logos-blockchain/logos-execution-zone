@@ -42,7 +42,7 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
-    account::{AccountId, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, ShardData},
     from_frame,
     native_token::encode_balance,
     program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
@@ -262,9 +262,9 @@ impl Case {
         } = self;
         let self_account_id = AccountId::from_builtin_program(program.id());
 
-        let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
+        let mut shards: HashMap<Actor, ShardData> = fixtures
             .iter()
-            .map(|f| (ProgramShardSelector::from(&f.account), f.data.clone()))
+            .map(|f| (Actor::from(&f.account), f.data.clone()))
             .collect();
         let input = PlanInput {
             self_account_id,

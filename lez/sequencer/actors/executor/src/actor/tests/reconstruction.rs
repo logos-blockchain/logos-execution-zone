@@ -20,7 +20,7 @@ use common::{
 };
 use kameo::actor::{ActorRef, Spawn as _};
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction, V03State,
+    AccountId, Actor, PublicTransaction, V03State,
     public_transaction::{Message, WitnessSet},
 };
 use logos_blockchain_binary_codec::bincode::SerializeOp as _;
@@ -390,8 +390,8 @@ fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
         },
         receiver_id,
         &[
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         instruction,
     ))
@@ -403,11 +403,11 @@ fn deposit_tx(op_id: [u8; 32], recipient: AccountId, amount: u64) -> LeeTransact
     let message = Message::try_new(
         bridge_program_id,
         vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(recipient),
+            Actor::native_balance(system_accounts::bridge_account_id()),
+            Actor::native_balance(recipient),
             // The receipt PDA carries the exactly-once check, so the program
             // needs it in the account list.
-            ProgramShardSelector::new(
+            Actor::new(
                 bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
                 bridge_program_id,
             ),

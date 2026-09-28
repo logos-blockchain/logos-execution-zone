@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
-    account::{AccountId, ProgramShardSelector},
+    account::{AccountId, Actor},
     execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -180,7 +180,7 @@ impl ProgramWithDependencies {
 /// Inputs for proving an LEE program's execution.
 #[derive(Default)]
 pub struct ProvingInput {
-    pub shard_selectors: Vec<ProgramShardSelector>,
+    pub shard_selectors: Vec<Actor>,
     pub signers: HashSet<AccountId>,
     pub private_witnesses: Vec<PrivateWitness>,
     pub instruction_data: InstructionData,

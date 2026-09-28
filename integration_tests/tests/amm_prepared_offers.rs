@@ -16,7 +16,7 @@ use integration_tests::{
     wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, PrivacyPreservingTransaction, ProgramShardSelector, ProvingInput, execute_and_prove,
+    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, execute_and_prove,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::Message, witness_set::WitnessSet,
     },
@@ -99,11 +99,11 @@ async fn prepare_offer(
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(pool.pool_id, amm_program_id()),
-                ProgramShardSelector::new(pool.vault_a, token_program_id()),
-                ProgramShardSelector::new(pool.vault_b, token_program_id()),
-                ProgramShardSelector::new(trader.input, token_program_id()),
-                ProgramShardSelector::new(trader.output, token_program_id()),
+                Actor::new(pool.pool_id, amm_program_id()),
+                Actor::new(pool.vault_a, token_program_id()),
+                Actor::new(pool.vault_b, token_program_id()),
+                Actor::new(trader.input, token_program_id()),
+                Actor::new(trader.output, token_program_id()),
             ],
             private_witnesses: vec![
                 PrivateWitness {

@@ -1,5 +1,5 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramShardSelector, PublicMessage,
+    Actor, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
     PublicTransaction, WitnessSet,
 };
 use leptos::prelude::*;
@@ -107,13 +107,10 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let public_shard_selectors: Vec<_> = public_actions
         .into_iter()
         .flat_map(|action| {
-            action
-                .effects
-                .into_iter()
-                .map(move |effect| ProgramShardSelector {
-                    account_id: action.account_id,
-                    program_account_id: effect.shard_program_account_id,
-                })
+            action.effects.into_iter().map(move |effect| Actor {
+                account_id: action.account_id,
+                program_account_id: effect.shard_program_account_id,
+            })
         })
         .collect();
     let signer_nonces_str = nonces

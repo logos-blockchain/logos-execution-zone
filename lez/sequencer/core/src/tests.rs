@@ -12,8 +12,7 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction, V03State,
-    program::Program,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_core::{
@@ -477,9 +476,9 @@ fn create_charged_bridge_deposit(
     let message = lee::public_transaction::Message::try_new_with_fees(
         bridge_program_id,
         vec![
-            ProgramShardSelector::native_balance(system_accounts::bridge_account_id()),
-            ProgramShardSelector::native_balance(recipient_id),
-            ProgramShardSelector::new(
+            Actor::native_balance(system_accounts::bridge_account_id()),
+            Actor::native_balance(recipient_id),
+            Actor::new(
                 bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
                 bridge_program_id,
             ),
@@ -656,8 +655,8 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
         },
         receiver_id,
         &[
-            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
-            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         payload,
     ))
@@ -2122,7 +2121,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
         let message = lee::public_transaction::Message::try_new(
             clock_program_id,
             system_accounts::clock_account_ids()
-                .map(|id| ProgramShardSelector::new(id, clock_program_id))
+                .map(|id| Actor::new(id, clock_program_id))
                 .to_vec(),
             vec![],
             42_u64,
@@ -2176,7 +2175,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let user_elf = clock_chain_caller.user_elf().expect("valid ProgramBinary");
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        vec![ProgramShardSelector::new(
+        vec![Actor::new(
             segment_id,
             lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         )],
@@ -2205,11 +2204,11 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
         vec![
-            ProgramShardSelector::new(
+            Actor::new(
                 clock_chain_caller_id,
                 lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
             ),
-            ProgramShardSelector::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
         ],
         vec![lee_core::account::Nonce(1)],
         program_loader_core::Instruction::CreateHeader {
@@ -2241,7 +2240,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let message = lee::public_transaction::Message::try_new(
         clock_chain_caller_id,
         system_accounts::clock_account_ids()
-            .map(|id| ProgramShardSelector::new(id, clock_account_id))
+            .map(|id| Actor::new(id, clock_account_id))
             .to_vec(),
         vec![], // no signers
         (timestamp, block_id),
@@ -2342,9 +2341,9 @@ fn time_locked_transfer_transaction(
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::native_balance(from),
-            ProgramShardSelector::native_balance(to),
-            ProgramShardSelector::new(clock_account_id, clock_program_id),
+            Actor::native_balance(from),
+            Actor::native_balance(to),
+            Actor::new(clock_account_id, clock_program_id),
         ],
         vec![Nonce(from_nonce)],
         (amount, deadline),
@@ -2469,8 +2468,8 @@ fn cooldown_transaction(
     let message = lee::public_transaction::Message::try_new(
         program_id,
         vec![
-            ProgramShardSelector::new(state_id, program_id),
-            ProgramShardSelector::new(clock_account_id, clock_program_id),
+            Actor::new(state_id, program_id),
+            Actor::new(clock_account_id, clock_program_id),
         ],
         vec![],
         timestamp,
@@ -2587,9 +2586,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
             programs::bridge_account_id(),
-            vec![ProgramShardSelector::native_balance(
-                system_accounts::bridge_account_id(),
-            )],
+            vec![Actor::native_balance(system_accounts::bridge_account_id())],
             vec![],
             bridge_core::Instruction::Withdraw {
                 amount: 1,
@@ -3854,12 +3851,10 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::native_balance(funding_id),
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::new(config_id, sequencer_stake_program_id),
+            Actor::native_balance(funding_id),
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::new(config_id, sequencer_stake_program_id),
         ],
         vec![Nonce(0), Nonce(0)],
         sequencer_stake_core::Instruction::Stake {
@@ -3927,12 +3922,10 @@ fn stake_transaction(
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::native_balance(funding_id),
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::native_balance(system_accounts::stake_funds_account_id(
-                &ownership_id,
-            )),
-            ProgramShardSelector::new(
+            Actor::native_balance(funding_id),
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),
@@ -4014,8 +4007,8 @@ fn unstake_request_transaction(
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::new(config_slot, sequencer_stake_program_id),
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::new(config_slot, sequencer_stake_program_id),
         ],
         vec![state.get_account_by_id(ownership_id).nonce],
         sequencer_stake_core::Instruction::UnstakeRequest {
@@ -4060,8 +4053,8 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     let message = lee::public_transaction::Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(funding_id),
-            ProgramShardSelector::native_balance(funds_id),
+            Actor::native_balance(funding_id),
+            Actor::native_balance(funds_id),
         ],
         vec![state.get_account_by_id(funding_id).nonce],
         lee_core::native_token::Instruction::Transfer { amount: donation },
@@ -4139,8 +4132,8 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
     let message = lee::public_transaction::Message::try_new(
         lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(griefer_id),
-            ProgramShardSelector::native_balance(funds_id),
+            Actor::native_balance(griefer_id),
+            Actor::native_balance(funds_id),
         ],
         vec![state.get_account_by_id(griefer_id).nonce],
         lee_core::native_token::Instruction::Transfer { amount: dust },
@@ -4395,8 +4388,8 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::new(ownership_id, sequencer_stake_program_id),
-            ProgramShardSelector::new(
+            Actor::new(ownership_id, sequencer_stake_program_id),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),
@@ -4564,8 +4557,8 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let message = lee::public_transaction::Message::try_new(
         sequencer_stake_program_id,
         vec![
-            ProgramShardSelector::new(stake_id, sequencer_stake_program_id),
-            ProgramShardSelector::new(
+            Actor::new(stake_id, sequencer_stake_program_id),
+            Actor::new(
                 system_accounts::sequencer_stake_config_account_id(),
                 sequencer_stake_program_id,
             ),

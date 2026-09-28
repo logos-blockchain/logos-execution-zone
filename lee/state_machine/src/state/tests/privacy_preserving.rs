@@ -306,9 +306,9 @@ fn a_failing_deferred_effect_leaves_the_state_untouched() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(own_id, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::new(own_id, program_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             signers: [sender_id].into(),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
@@ -440,12 +440,12 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_in_the
     let cases = [
         (
             "another program's shard",
-            ProgramShardSelector::new(target_id, foreign_program_account_id),
+            Actor::new(target_id, foreign_program_account_id),
             vec![7_u8; 4],
         ),
         (
             "the native balance shard",
-            ProgramShardSelector::native_balance(target_id),
+            Actor::native_balance(target_id),
             encode_balance(500).to_vec(),
         ),
     ];
@@ -484,7 +484,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
 
     let result = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![ProgramShardSelector::new(account_id, program_id)],
+            shard_selectors: vec![Actor::new(account_id, program_id)],
             private_witnesses: vec![witness],
             instruction_data: Program::serialize_instruction(large_data).unwrap(),
             ..Default::default()
@@ -503,8 +503,8 @@ fn unauthorized_debit_is_refused_when_proving() {
     let result = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             signers: [recipient_id].into(),
             instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
@@ -599,9 +599,9 @@ fn a_guest_evaluated_public_effect_settles_against_live_state() {
             shard_selectors: vec![
                 // A public account whose shard belongs to the guest, so the guest evaluates the
                 // effect on it.
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
+                Actor::new(written_to, program_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(recipient_id),
             ],
             private_witnesses: vec![update_witness(
                 &sender_keys,
@@ -662,9 +662,9 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(written_to, program_id),
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(AccountId::new([88; 32])),
+                Actor::new(written_to, program_id),
+                Actor::native_balance(sender_id),
+                Actor::native_balance(AccountId::new([88; 32])),
             ],
             private_witnesses: vec![update_witness(
                 &sender_keys,
@@ -720,8 +720,8 @@ fn a_deferred_apply_returning_chained_calls_is_refused_at_settlement() {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::new(AccountId::new([77; 32]), program_id),
-                ProgramShardSelector::native_balance(private_id),
+                Actor::new(AccountId::new([77; 32]), program_id),
+                Actor::native_balance(private_id),
             ],
             private_witnesses: vec![update_witness(
                 &keys,

@@ -1,6 +1,6 @@
 use lee_core::{
     BlockId, Commitment, Timestamp,
-    account::{AccountId, Cycles, ProgramShardSelector, ShardData},
+    account::{AccountId, Actor, Cycles, ShardData},
     execution_state::{ApplyPublicEffects, Backend, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
@@ -132,10 +132,7 @@ impl Backend for PublicBackend<'_> {
         Ok(())
     }
 
-    fn public_shard(
-        &mut self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<ShardData, LeeError> {
+    fn public_shard(&mut self, shard_selector: Actor) -> Result<ShardData, LeeError> {
         Ok(self
             .state
             .get_account_by_id_ref(shard_selector.account_id)

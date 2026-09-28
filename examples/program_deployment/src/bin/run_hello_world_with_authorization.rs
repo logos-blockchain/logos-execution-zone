@@ -1,6 +1,6 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::deploy_program;
@@ -78,7 +78,7 @@ async fn main() {
     let signing_keys = [&signing_key];
     let message = Message::try_new(
         program_account_id,
-        vec![ProgramShardSelector::new(account_id, program_account_id)],
+        vec![Actor::new(account_id, program_account_id)],
         nonces,
         greeting,
     )

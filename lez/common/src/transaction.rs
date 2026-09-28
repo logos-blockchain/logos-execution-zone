@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, ProgramShardSelector, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -206,7 +206,7 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
     let message = lee::public_transaction::Message::try_new(
         programs::clock_account_id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
-            .map(|id| ProgramShardSelector::new(id, programs::clock_account_id()))
+            .map(|id| Actor::new(id, programs::clock_account_id()))
             .to_vec(),
         vec![],
         clock_core::Instruction {
@@ -319,10 +319,10 @@ pub fn fee_invocation(
     let fee_program_id = programs::fee_account_id();
     // Select the fee state shard and balances for the escrow, inbox, and producer.
     let shard_selectors = vec![
-        ProgramShardSelector::new(system_accounts::fee_state_account_id(), fee_program_id),
-        ProgramShardSelector::native_balance(system_accounts::fee_escrow_account_id()),
-        ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-        ProgramShardSelector::native_balance(producer),
+        Actor::new(system_accounts::fee_state_account_id(), fee_program_id),
+        Actor::native_balance(system_accounts::fee_escrow_account_id()),
+        Actor::native_balance(system_accounts::fee_inbox_account_id()),
+        Actor::native_balance(producer),
     ];
     let message = lee::public_transaction::Message::try_new(
         fee_program_id,
@@ -376,8 +376,8 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     lee::public_transaction::Message::try_new(
         NATIVE_TOKEN_PROGRAM_ID,
         vec![
-            ProgramShardSelector::native_balance(payer),
-            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
+            Actor::native_balance(payer),
+            Actor::native_balance(system_accounts::fee_inbox_account_id()),
         ],
         vec![],
         lee_core::native_token::Instruction::Transfer { amount },
@@ -391,8 +391,8 @@ pub fn fee_refund_invocation(payer: AccountId, amount: u128) -> lee::public_tran
     lee::public_transaction::Message::try_new(
         programs::fee_account_id(),
         vec![
-            ProgramShardSelector::native_balance(system_accounts::fee_inbox_account_id()),
-            ProgramShardSelector::native_balance(payer),
+            Actor::native_balance(system_accounts::fee_inbox_account_id()),
+            Actor::native_balance(payer),
         ],
         vec![],
         fee_core::Instruction::Refund { amount },

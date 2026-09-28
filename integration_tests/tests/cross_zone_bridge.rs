@@ -24,7 +24,7 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use lee::{
-    AccountId, PrivateKey, ProgramShardSelector, PublicKey, PublicTransaction,
+    AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
@@ -189,11 +189,11 @@ fn build_lock_tx(
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
     let target_accounts = vec![
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::config_account_id(wrapped_token_id),
             wrapped_token_id,
         ),
-        ProgramShardSelector::new(
+        Actor::new(
             wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
             wrapped_token_id,
         ),
@@ -208,17 +208,17 @@ fn build_lock_tx(
     };
 
     let accounts = vec![
-        ProgramShardSelector::new(
+        Actor::new(
             bridge_lock_core::config_account_id(bridge_lock_id),
             bridge_lock_id,
         ),
-        ProgramShardSelector::native_balance(holder_id),
-        ProgramShardSelector::native_balance(bridge_lock_core::holding_account_id(
+        Actor::native_balance(holder_id),
+        Actor::native_balance(bridge_lock_core::holding_account_id(
             programs::bridge_lock_account_id(),
             &holder_id.into_value(),
         )),
-        ProgramShardSelector::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-        ProgramShardSelector::new(
+        Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+        Actor::new(
             outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
             outbox_id,
         ),

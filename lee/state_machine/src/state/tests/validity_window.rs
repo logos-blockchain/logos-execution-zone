@@ -22,9 +22,7 @@ fn validity_window_works_in_public_transactions(
     let account_keys = test_public_account_keys_1();
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
-        let shard_selectors = vec![ProgramShardSelector::native_balance(
-            account_keys.account_id(),
-        )];
+        let shard_selectors = vec![Actor::native_balance(account_keys.account_id())];
         let nonces = vec![];
         let program_id = AccountId::from_builtin_program(validity_window_program.id());
         let instruction = (
@@ -74,9 +72,7 @@ fn timestamp_validity_window_works_in_public_transactions(
     let account_keys = test_public_account_keys_1();
     let mut state = V03State::new().with_programs([crate::test_methods::validity_window()]);
     let tx = {
-        let shard_selectors = vec![ProgramShardSelector::native_balance(
-            account_keys.account_id(),
-        )];
+        let shard_selectors = vec![Actor::native_balance(account_keys.account_id())];
         let nonces = vec![];
         let program_id = AccountId::from_builtin_program(validity_window_program.id());
         let instruction = (
@@ -139,7 +135,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
         );
         let (output, proof) = execute_and_prove(
             ProvingInput {
-                shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+                shard_selectors: vec![Actor::native_balance(account_id)],
                 private_witnesses: vec![init_witness(&account_keys, Identifier::ZERO)],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()
@@ -201,7 +197,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         );
         let (output, proof) = execute_and_prove(
             ProvingInput {
-                shard_selectors: vec![ProgramShardSelector::native_balance(account_id)],
+                shard_selectors: vec![Actor::native_balance(account_id)],
                 private_witnesses: vec![init_witness(&account_keys, Identifier::ZERO)],
                 instruction_data: Program::serialize_instruction(instruction).unwrap(),
                 ..Default::default()

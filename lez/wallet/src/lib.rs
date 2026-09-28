@@ -27,7 +27,7 @@ use lee::{
 };
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
-    account::{Nonce, ProgramShardSelector},
+    account::{Actor, Nonce},
     program::InstructionData,
 };
 use log::warn;
@@ -596,7 +596,7 @@ impl WalletCore {
 
     /// Returns the account's nonce and the selected shard; its balance is the shard at the
     /// native token program.
-    pub async fn get_account_view(&self, shard_selector: ProgramShardSelector) -> Result<Account> {
+    pub async fn get_account_view(&self, shard_selector: Actor) -> Result<Account> {
         let mut account = self
             .multi_sequencer_client
             .metered_get(async |client: &SequencerClient| {
@@ -960,7 +960,7 @@ impl WalletCore {
                     invalid_input("Fee payer's signing key is not held by this wallet")
                 })?;
                 let account = self
-                    .get_account_view(ProgramShardSelector::native_balance(payer))
+                    .get_account_view(Actor::native_balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?;
                 nonces.push(account.nonce);

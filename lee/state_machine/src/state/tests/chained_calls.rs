@@ -26,10 +26,7 @@ fn public_chained_call() {
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
-        vec![
-            ProgramShardSelector::native_balance(to),
-            ProgramShardSelector::native_balance(from),
-        ],
+        vec![Actor::native_balance(to), Actor::native_balance(from)],
         vec![Nonce(0)],
         instruction,
     )
@@ -72,10 +69,7 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(program.id()),
         // The chain_caller program permutes the account order in the chain call.
-        vec![
-            ProgramShardSelector::native_balance(to),
-            ProgramShardSelector::native_balance(from),
-        ],
+        vec![Actor::native_balance(to), Actor::native_balance(from)],
         vec![Nonce(0)],
         instruction,
     )
@@ -114,10 +108,7 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
-        vec![
-            ProgramShardSelector::native_balance(to),
-            ProgramShardSelector::native_balance(from),
-        ],
+        vec![Actor::native_balance(to), Actor::native_balance(from)],
         vec![],
         instruction,
     )
@@ -167,7 +158,7 @@ fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
 
     let message = public_transaction::Message::try_new(
         delegator_id,
-        vec![ProgramShardSelector::native_balance(pda_id)],
+        vec![Actor::native_balance(pda_id)],
         vec![],
         instruction,
     )
@@ -213,10 +204,7 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
     let message = public_transaction::Message::try_new(
         AccountId::from_builtin_program(chain_caller.id()),
         // The chain_caller program permutes the account order in the chain call.
-        vec![
-            ProgramShardSelector::native_balance(to),
-            ProgramShardSelector::native_balance(from),
-        ],
+        vec![Actor::native_balance(to), Actor::native_balance(from)],
         vec![Nonce(0), Nonce(0)],
         instruction,
     )
@@ -299,8 +287,8 @@ fn private_chained_call(number_of_calls: u32) {
     let (output, proof) = execute_and_prove(
         ProvingInput {
             shard_selectors: vec![
-                ProgramShardSelector::native_balance(to_account_id),
-                ProgramShardSelector::native_balance(from_account_id),
+                Actor::native_balance(to_account_id),
+                Actor::native_balance(from_account_id),
             ],
             private_witnesses: vec![
                 update_witness(

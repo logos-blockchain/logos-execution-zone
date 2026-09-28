@@ -20,7 +20,7 @@ use cross_zone_inbox_core::{
     inbox_seen_shard_account_id,
 };
 use cross_zone_marker_core::inbox_source_marker_account_id;
-use lee_core::account::{AccountId, Balance, ProgramShardSelector};
+use lee_core::account::{AccountId, Actor, Balance};
 
 pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
@@ -31,7 +31,7 @@ pub mod test_utils;
 pub struct Emission {
     pub target_zone: ZoneId,
     pub target_account_id: AccountId,
-    pub target_accounts: Vec<ProgramShardSelector>,
+    pub target_accounts: Vec<Actor>,
     pub payload: Vec<u8>,
 }
 
@@ -113,24 +113,23 @@ pub fn extract_emission(account_id: AccountId, instruction_data: &[u8]) -> Optio
 fn build_inbox_dispatch_tx(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
-    target_shard_selectors: Vec<ProgramShardSelector>,
+    target_shard_selectors: Vec<Actor>,
 ) -> lee::PublicTransaction {
     // Select the inbox's config and seen shards, and the source marker's account ID.
     let mut shard_selectors = Vec::with_capacity(target_shard_selectors.len().saturating_add(3));
-    shard_selectors.push(ProgramShardSelector::new(
-        inbox_config_account_id(inbox_id),
-        inbox_id,
-    ));
-    shard_selectors.push(ProgramShardSelector::new(
+    shard_selectors.push(Actor::new(inbox_config_account_id(inbox_id), inbox_id));
+    shard_selectors.push(Actor::new(
         inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
         inbox_id,
     ));
     // Declared here rather than derived by the guest, since a guest cannot
     // conjure an account. Both the watcher and the verifier build it through this
     // one function, so they cannot disagree about the source a target will see.
-    shard_selectors.push(ProgramShardSelector::native_balance(
-        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_account_id),
-    ));
+    shard_selectors.push(Actor::native_balance(inbox_source_marker_account_id(
+        inbox_id,
+        &msg.src_zone,
+        msg.src_account_id,
+    )));
     shard_selectors.extend(target_shard_selectors);
 
     let message = lee::public_transaction::Message::try_new(
@@ -156,7 +155,7 @@ fn build_inbox_dispatch_tx(
 pub fn build_dispatch_from_emission(
     source: &EmissionSource,
     target_account_id: AccountId,
-    target_accounts: &[ProgramShardSelector],
+    target_accounts: &[Actor],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
@@ -358,7 +357,7 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
 ) -> lee::PublicTransaction {
     let shard_selectors = account_ids
         .into_iter()
-        .map(|id| ProgramShardSelector::new(id, account_id))
+        .map(|id| Actor::new(id, account_id))
         .collect();
     let message =
         lee::public_transaction::Message::try_new(account_id, shard_selectors, vec![], instruction)
