@@ -183,15 +183,15 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 // ---- validation tests ----
 
 fn output_of(evaluator: AccountId, post_data: Option<ShardData>) -> ApplyOutput {
-    ApplyOutput {
-        input: ApplyInput {
+    ApplyOutput::new(
+        ApplyInput {
             self_account_id: evaluator,
             selector: ProgramShardSelector::new(AccountId::new([7; 32]), evaluator),
             pre_data: ShardData::empty(),
             effect_data: Vec::new(),
         },
         post_data,
-    }
+    )
 }
 
 #[test]
@@ -242,6 +242,35 @@ fn a_guest_cannot_write_the_native_balance_shard() {
         result,
         Err(ExecutionValidationError::ForeignShardWrite { account_id: id, .. }) if id == account_id
     ));
+}
+
+#[test]
+fn an_apply_output_with_chained_calls_is_rejected() {
+    let mut output = output_of(AccountId::new([2; 32]), None);
+    output
+        .chained_calls
+        .push(ChainedCall::new(AccountId::new([3; 32]), Vec::new(), &()));
+
+    assert!(matches!(
+        validate_apply_output(&output.input, &output),
+        Err(ExecutionValidationError::ChainedCallsFromApply)
+    ));
+}
+
+#[test]
+fn an_apply_output_encodes_its_chained_calls_last() {
+    let output = output_of(
+        AccountId::new([2; 32]),
+        Some(b"record".to_vec().try_into().unwrap()),
+    );
+
+    let expected = [
+        borsh::to_vec(&output.input).unwrap(),
+        borsh::to_vec(&output.post_data).unwrap(),
+        vec![0; 4],
+    ]
+    .concat();
+    assert_eq!(borsh::to_vec(&output).unwrap(), expected);
 }
 
 #[test]

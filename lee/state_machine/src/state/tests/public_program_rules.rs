@@ -164,6 +164,34 @@ fn a_data_write_on_a_shard_the_executing_program_does_not_own_is_rejected_public
 }
 
 #[test]
+fn an_apply_returning_chained_calls_is_rejected_publicly() {
+    let program_id = AccountId::from_builtin_program(crate::test_methods::chains_from_apply().id());
+    let mut state = V03State::new().with_programs([crate::test_methods::chains_from_apply()]);
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![ProgramShardSelector::new(
+            AccountId::new([1; 32]),
+            program_id,
+        )],
+        vec![],
+        (),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::ExecutionValidation {
+            program_account_id,
+            source: ExecutionValidationError::ChainedCallsFromApply,
+        } if program_account_id == program_id
+    ));
+}
+
+#[test]
 fn a_data_write_on_the_executing_shard_is_accepted_publicly() {
     let target_id = AccountId::new([1; 32]);
     let mut state = V03State::new()

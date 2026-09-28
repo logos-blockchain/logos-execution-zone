@@ -702,6 +702,56 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
 }
 
 #[test]
+fn a_deferred_apply_returning_chained_calls_is_refused_at_settlement() {
+    let program = crate::test_methods::chains_from_apply();
+    let program_id = AccountId::from_builtin_program(program.id());
+    let keys = test_private_account_keys_1();
+    let private_id =
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
+
+    let pre_account = Account::funded(100);
+    let mut state = V03State::new()
+        .with_programs([crate::test_methods::chains_from_apply()])
+        .with_private_account(&keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&private_id, &pre_account))
+        .expect("the account's commitment must be in state");
+
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::new(AccountId::new([77; 32]), program_id),
+                ProgramShardSelector::native_balance(private_id),
+            ],
+            private_witnesses: vec![update_witness(
+                &keys,
+                Identifier::ZERO,
+                pre_account,
+                membership_proof,
+            )],
+            instruction_data: Program::serialize_instruction(()).unwrap(),
+            ..Default::default()
+        },
+        &synthetic_program(program),
+    )
+    .unwrap();
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::ExecutionValidation {
+            program_account_id,
+            source: ExecutionValidationError::ChainedCallsFromApply,
+        } if program_account_id == program_id
+    ));
+}
+
+#[test]
 fn an_apply_forging_its_own_account_id_is_refused() {
     assert_forged_field_is_refused(ForgeField::SelfId);
 }

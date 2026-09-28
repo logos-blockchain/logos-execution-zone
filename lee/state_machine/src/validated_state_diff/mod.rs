@@ -452,12 +452,12 @@ impl Applier {
         cycles_used: &mut Cycles,
     ) -> Result<ApplyOutput, LeeError> {
         match self {
-            Self::Loader => Ok(ApplyOutput {
-                post_data: Some(catch_program_loader_panic(|| {
+            Self::Loader => Ok(ApplyOutput::new(
+                input.clone(),
+                Some(catch_program_loader_panic(|| {
                     program_loader_core::apply(input)
                 })?),
-                input: input.clone(),
-            }),
+            )),
             Self::Native => Ok(native_token::apply_output(input)
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?),
             Self::Guest(program) => {
