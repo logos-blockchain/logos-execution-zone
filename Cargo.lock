@@ -2382,8 +2382,6 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
- "test_guest_core",
- "test_programs",
 ]
 
 [[package]]
