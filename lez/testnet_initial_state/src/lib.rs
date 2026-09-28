@@ -204,11 +204,8 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
 
 fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
     let mut programs = vec![
-        (programs::token_account_id(), programs::token()),
-        (programs::amm_account_id(), programs::amm()),
         (programs::clock_account_id(), programs::clock()),
         (programs::fee_account_id(), programs::fee()),
-        (programs::ata_account_id(), programs::ata()),
         (programs::bridge_account_id(), programs::bridge()),
         (
             programs::sequencer_stake_account_id(),

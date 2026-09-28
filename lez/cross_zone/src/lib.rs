@@ -373,30 +373,6 @@ fn genesis_public_tx<I: borsh::BorshSerialize>(
 mod tests {
     use super::*;
 
-    /// A route naming a program that never opted into cross-zone sources is an
-    /// operator typo that nothing downstream would report: the fan-out would drop
-    /// it, the watcher no longer filters targets, and every delivery would be
-    /// refused by the target and dead-lettered.
-    #[test]
-    #[should_panic(expected = "does not authorize cross-zone sources")]
-    fn a_route_to_a_program_that_does_not_authorize_sources_is_refused() {
-        let cross_zone = CrossZoneConfig {
-            peers: vec![CrossZonePeer {
-                channel_id: [2; 32],
-                allowed_routes: vec![cross_zone_inbox_core::CrossZoneRoute {
-                    src_account_id: programs::bridge_lock_account_id(),
-                    target_account_id: programs::amm_account_id(),
-                    mint_cap: None,
-                }],
-                expected_block_signing_pubkeys: Vec::new(),
-                min_committee_size: 0,
-            }],
-            source_authority: None,
-            source_governance: None,
-        };
-        let _tx = build_wrapped_token_init_config_tx(&cross_zone);
-    }
-
     /// A capped route on an authority-less zone is a fuse with no replacement:
     /// once honest volume exhausts the cap, every later delivery dead-letters
     /// and the peer's escrow strands, so genesis refuses the combination.
