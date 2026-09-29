@@ -6,11 +6,12 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{DeferPublicEffects, ExecutionOutcome},
+    execution_state::{Declared, ExecutionOutcome},
 };
 
 pub fn compute_circuit_output(
-    outcome: ExecutionOutcome<DeferPublicEffects>,
+    outcome: ExecutionOutcome,
+    declared: Declared,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
@@ -19,11 +20,13 @@ pub fn compute_circuit_output(
     let ExecutionOutcome {
         block_validity_window,
         timestamp_validity_window,
-        public: public_actions,
         mut private_accounts,
+        boundary,
+        ..
     } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
-        public_actions,
+        declared,
+        boundary,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
@@ -214,8 +217,9 @@ mod tests {
 
     use lee_core::{
         AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier,
-        NullifierPublicKey, PublicAction,
+        NullifierPublicKey,
         account::{AccountData, ShardData},
+        execution_state::Boundary,
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
@@ -286,7 +290,6 @@ mod tests {
     }
 
     fn emit(
-        public_actions: Vec<PublicAction>,
         private: Vec<(AccountId, AccountData)>,
         witnesses: &[PrivateWitness],
     ) -> PrivacyPreservingCircuitOutput {
@@ -294,9 +297,13 @@ mod tests {
             ExecutionOutcome {
                 block_validity_window: BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-                public: public_actions,
+                public: Vec::new(),
                 private_accounts: private.into_iter().collect(),
+                boundary: Boundary::default(),
+                assumed: Vec::new(),
+                events: Vec::new(),
             },
+            Declared::default(),
             witnesses,
             Vec::new(),
             None,
@@ -323,7 +330,6 @@ mod tests {
             .with_shard(SHARD_B, data(b"b-rewritten"));
 
         let output = emit(
-            Vec::new(),
             vec![(owner.account_id(), rewritten.clone())],
             &[owner.update_witness(account.clone())],
         );
