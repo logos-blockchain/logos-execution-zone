@@ -41,7 +41,7 @@ cryptarchia:
     reward:
       reward_pool_genesis: 1000000000
       epoch_reward_genesis: 1000000
-      initial_difficulty: 26
+      minimum_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
       target_claims_per_block: 100
