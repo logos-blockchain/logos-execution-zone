@@ -412,6 +412,19 @@ mod tests {
         Envelope::new(config_actor(), message)
     }
 
+    // The authority's actor receives `message` from `origin`; the config then receives what it
+    // forwards, as the driver would deliver it.
+    fn through_authority(origin: Origin, is_authorized: bool, message: &Message) -> Transition {
+        let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
+        let [forwarded] = <[Envelope; 1]>::try_from(entry.sends).expect("one forwarded change");
+        assert_eq!(forwarded.to, config_actor());
+        at_config(
+            Origin::Program(WRAPPED_ID),
+            &config(),
+            &borsh::from_slice(&forwarded.message).expect("the forwarded change decodes"),
+        )
+    }
+
     fn update(authority: AccountId, via: Option<AccountId>) -> Message {
         Message::UpdateSources {
             authority,
@@ -444,6 +457,21 @@ mod tests {
             transition.sends,
             vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10))],
             "the deliverer travels from the runtime's origin, and the config is checked first"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Mint is only callable by the authorized minter")]
+    fn a_mint_sent_directly_is_refused() {
+        let _transition = run(
+            actor(WRAPPED_ID),
+            Origin::Root,
+            false,
+            Vec::new(),
+            &Message::Mint {
+                recipient: RECIPIENT,
+                amount: 1,
+            },
         );
     }
 
@@ -531,6 +559,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "a credit is only sent by this token's config")]
+    fn a_credit_from_another_program_is_refused() {
+        let _transition = credit_at_holding(Origin::Program(STRANGER), 0, 1);
+    }
+
+    #[test]
     fn an_update_carries_over_a_kept_sources_counter_and_zeroes_a_re_added_one() {
         let transition = at_config(
             Origin::Program(WRAPPED_ID),
@@ -580,6 +614,48 @@ mod tests {
     }
 
     #[test]
+    fn the_governance_program_may_act_for_the_authority() {
+        let transition = at_config(
+            Origin::Program(WRAPPED_ID),
+            &config(),
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+        assert_eq!(written_config(&transition).sources, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a change is only forwarded by the authority's own actor")]
+    fn the_governance_program_cannot_reach_the_config_past_the_authority() {
+        let _transition = at_config(
+            Origin::Program(GOVERNANCE),
+            &config(),
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+    }
+
+    // The driver authorizes the authority's actor for the governance program only when it
+    // sends with the seed that derives the authority.
+    #[test]
+    fn governance_granting_the_authoritys_seed_acts_through_its_actor() {
+        let transition = through_authority(
+            Origin::Program(GOVERNANCE),
+            true,
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+        assert_eq!(written_config(&transition).sources, vec![]);
+    }
+
+    #[test]
+    #[should_panic(expected = "the configured authority must authorize a source change")]
+    fn governance_without_the_authoritys_seed_is_refused() {
+        let _transition = through_authority(
+            Origin::Program(GOVERNANCE),
+            false,
+            &update(AUTHORITY, Some(GOVERNANCE)),
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "wrapped-token sources are fixed at genesis")]
     fn sources_cannot_be_replaced_once_the_authority_is_renounced() {
         let _transition = at_config(
@@ -619,6 +695,20 @@ mod tests {
             false,
             Vec::new(),
             &update(AUTHORITY, None),
+        );
+    }
+
+    // A signed authority does not make any program its governance.
+    #[test]
+    #[should_panic(expected = "the authority acts at top level")]
+    fn a_governance_change_entered_from_another_program_is_refused() {
+        let _transition = through_authority(
+            Origin::Program(STRANGER),
+            true,
+            &Message::RenounceAuthority {
+                authority: AUTHORITY,
+                via: None,
+            },
         );
     }
 
@@ -713,6 +803,19 @@ mod tests {
         let _transition = at_config(
             Origin::Program(MINTER),
             &config(),
+            &Message::InitConfig(config()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "the receiver must be the wrapped-token config PDA")]
+    fn an_init_at_another_account_is_refused() {
+        // Unchecked, a genesis-shaped write into an empty holding would read back as a balance.
+        let _transition = run(
+            holding_actor(),
+            Origin::Root,
+            false,
+            Vec::new(),
             &Message::InitConfig(config()),
         );
     }

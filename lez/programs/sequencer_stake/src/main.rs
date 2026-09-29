@@ -567,6 +567,7 @@ mod tests {
     use super::*;
 
     const PROGRAM: AccountId = AccountId::new([7; 32]);
+    const OTHER_PROGRAM: AccountId = AccountId::new([6; 32]);
     const OWNER: AccountId = AccountId::new([1; 32]);
     const OTHER_OWNER: AccountId = AccountId::new([2; 32]);
     const DESTINATION: AccountId = AccountId::new([3; 32]);
@@ -928,6 +929,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "must sign for the ownership account")]
+    fn an_unsigned_unstake_request_is_refused() {
+        let _transition = at_owner(false, &record(key(1), None), request(key(1), 500));
+    }
+
+    #[test]
     #[should_panic(expected = "ownership account backs a different sequencer key")]
     fn a_request_cannot_name_a_key_this_account_does_not_back() {
         // The record and the config both read the proposed key; unchecked, it would point the
@@ -966,6 +973,45 @@ mod tests {
     }
 
     // --- Stake ---
+
+    #[test]
+    fn a_stake_opens_the_record_and_funds_the_stake() {
+        let transition = at_owner(true, &[], stake(false));
+
+        assert_eq!(written(&transition), record(key(1), None));
+        assert_eq!(
+            transition.sends,
+            vec![
+                to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)),
+                Envelope::new(
+                    Actor::native_balance(FUNDING),
+                    &native_token::Message::Transfer {
+                        to: funds_of(OWNER),
+                        amount: MINIMUM,
+                        expect_balance: None,
+                    },
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must sign for the ownership account")]
+    fn an_unsigned_stake_is_refused() {
+        let _transition = at_owner(false, &[], stake(false));
+    }
+
+    #[test]
+    #[should_panic(expected = "Stake is only invoked as a top-level user transaction")]
+    fn a_stake_from_another_program_is_refused() {
+        let _transition = run(
+            OWNER,
+            true,
+            Origin::Program(OTHER_PROGRAM),
+            &[],
+            stake(false),
+        );
+    }
 
     #[test]
     #[should_panic(expected = "stake claims an ownership record this account does not match")]
@@ -1024,6 +1070,35 @@ mod tests {
     // --- Slash ---
 
     #[test]
+    fn a_slash_clears_the_record_and_burns_the_stake() {
+        let approvals = vec![approval(2, key(1)), approval(3, key(1))];
+        let transition = at_owner(
+            false,
+            &record(key(1), Some(pending(500, DESTINATION))),
+            Message::Slash {
+                sequencer_key: key(1),
+                inscription: INSCRIPTION,
+                approvals: approvals.clone(),
+                total_staked: 3_000,
+            },
+        );
+
+        assert_eq!(written(&transition), record(key(1), None));
+        assert_eq!(
+            transition.sends,
+            vec![
+                to_config(PROGRAM, &apply_slash(OWNER, approvals, 3_000)),
+                custody_transfer(
+                    funds_of(OWNER),
+                    stake_funds_seed(&OWNER),
+                    slash_sink_account_id(PROGRAM),
+                    3_000,
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn an_approved_slash_removes_the_entry() {
         let transition = at_config(
             Origin::Program(PROGRAM),
@@ -1052,6 +1127,16 @@ mod tests {
             Origin::Program(PROGRAM),
             &committee_of_three(),
             apply_slash(OWNER, vec![approval(2, key(1))], 3_000),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "the same key approved twice")]
+    fn a_slash_approved_twice_by_one_key_is_refused() {
+        let _transition = at_config(
+            Origin::Program(PROGRAM),
+            &committee_of_three(),
+            apply_slash(OWNER, vec![approval(2, key(1)), approval(2, key(1))], 3_000),
         );
     }
 
@@ -1104,4 +1189,40 @@ mod tests {
     }
 
     // --- Bookkeeping origin ---
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn bookkeeping_from_the_root_is_refused() {
+        let _transition = at_config(
+            Origin::Root,
+            &config_with(&[]),
+            record_stake(OWNER, MINIMUM, false),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn bookkeeping_from_another_program_is_refused() {
+        let _transition = at_config(
+            Origin::Program(OTHER_PROGRAM),
+            &config_with(&[]),
+            record_stake(OWNER, MINIMUM, false),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not the sequencer_stake config account")]
+    fn bookkeeping_at_another_account_is_refused() {
+        let _transition = run(
+            OWNER,
+            false,
+            Origin::Program(PROGRAM),
+            &config_with(&[]),
+            record_stake(OWNER, MINIMUM, false),
+        );
+    }
 }

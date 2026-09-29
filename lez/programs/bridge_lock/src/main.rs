@@ -317,6 +317,16 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
+    fn a_lock_from_another_program_is_refused() {
+        let _transition = lock(
+            Origin::Program(OUTBOX_ID),
+            true,
+            lock_message(WRAPPED_ID, mint_payload(AMOUNT)),
+        );
+    }
+
+    #[test]
     fn the_route_genesis_pinned_is_accepted() {
         assert_eq!(check_route(OUTBOX_ID, WRAPPED_ID, config()).post_data, None);
     }
@@ -342,6 +352,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "the route is only checked for a lock of bridge_lock's own")]
+    fn a_route_check_from_outside_bridge_lock_is_refused() {
+        let _transition = run(
+            config_actor(),
+            Origin::Root,
+            false,
+            config(),
+            Message::CheckRoute {
+                outbox_account_id: OUTBOX_ID,
+                target_account_id: WRAPPED_ID,
+            },
+        );
+    }
+
+    #[test]
     fn a_first_init_writes_the_route() {
         assert_eq!(
             init(Origin::Root, WRAPPED_ID, Vec::new()).post_data,
@@ -361,6 +386,16 @@ mod tests {
     #[should_panic(expected = "shard already holds different data")]
     fn a_reinit_with_a_different_route_is_refused() {
         let _transition = init(Origin::Root, AccountId::new([0xBB; 32]), config());
+    }
+
+    #[test]
+    #[should_panic(expected = "bridge_lock is only invoked as a top-level user transaction")]
+    fn an_init_from_another_program_is_refused() {
+        let _transition = init(
+            Origin::Program(holder_actor().program_account_id),
+            WRAPPED_ID,
+            Vec::new(),
+        );
     }
 
     #[test]

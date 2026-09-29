@@ -222,6 +222,29 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "A delivery is only marked by the inbox's own dispatch")]
+    fn a_mark_from_outside_the_inbox_is_refused() {
+        let _transition = run(
+            seen_actor(),
+            Origin::Root,
+            Vec::new(),
+            Message::Mark(msg(PEER_ZONE, HASH, 3)),
+        );
+    }
+
+    // A delivery targeting the inbox program reaches `(inbox, inbox)` under the inbox's own origin.
+    #[test]
+    #[should_panic(expected = "A delivery is marked only at its own seen shard")]
+    fn an_own_origin_mark_at_another_inbox_actor_is_refused() {
+        let _transition = run(
+            Actor::new(INBOX, INBOX),
+            Origin::Program(seen_actor().program_account_id),
+            Vec::new(),
+            Message::Mark(msg(PEER_ZONE, HASH, 3)),
+        );
+    }
+
+    #[test]
     fn a_message_from_a_peer_zone_is_accepted() {
         let message = msg(PEER_ZONE, HASH, 3);
         let transition = run(
@@ -246,6 +269,17 @@ mod tests {
             Origin::Root,
             config(),
             Message::Dispatch(msg(SELF_ZONE, HASH, 3)),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Inbox is only invoked as a top-level sequencer-origin transaction")]
+    fn a_dispatch_from_another_program_is_refused() {
+        let _transition = run(
+            config_actor(),
+            Origin::Program(AccountId::new([4; 32])),
+            config(),
+            Message::Dispatch(msg(PEER_ZONE, HASH, 3)),
         );
     }
 

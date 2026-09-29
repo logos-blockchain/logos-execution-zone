@@ -8,12 +8,13 @@
 use amm_core::{
     Message, PoolDefinition, SwapOffer, compute_liquidity_token_pda,
     compute_liquidity_token_pda_seed, compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
+    swap_transfer,
 };
 use lee_core::{
     account::{AccountId, Actor, ShardData},
     program::{Envelope, Origin, ReceiveInput, Transition},
 };
-use token_core::{NewTokenDefinition, Notification, TokenDescriptor, TokenKind};
+use token_core::{NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends};
 
 const AMM_PROGRAM_ID: AccountId = AccountId::new([1; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([15; 32]);
@@ -411,6 +412,35 @@ fn call_add_liquidity_reserves_zero() {
     }
 }
 
+#[test]
+fn call_add_liquidity_successful() {
+    let transition = add(
+        &pool_base(),
+        &add_message(ADD_MAX_A, ADD_MAX_B, ADD_ACTUAL_A, ADD_ACTUAL_B, ADD_LP),
+    );
+
+    assert_eq!(
+        written(&transition),
+        PoolDefinition {
+            liquidity_pool_supply: LP_SUPPLY + ADD_LP,
+            reserve_a: RESERVE_A + ADD_ACTUAL_A,
+            reserve_b: RESERVE_B + ADD_ACTUAL_B,
+            ..pool_base()
+        }
+    );
+    assert_eq!(
+        transition.sends,
+        vec![
+            lp_send(&token_core::Message::Mint {
+                to: USER_LP_ID,
+                amount: ADD_LP,
+            }),
+            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, ADD_ACTUAL_B),
+            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, ADD_ACTUAL_A),
+        ]
+    );
+}
+
 #[should_panic(expected = "Remove liquidity amount must be nonzero")]
 #[test]
 fn call_remove_liquidity_amount_zero() {
@@ -479,6 +509,39 @@ fn remove_liquidity_refuses_burning_more_lp_than_the_supply() {
     let _transition = user_turn(
         pool_shard(&pool_base()),
         &remove_message(LP_SUPPLY + 1, 1_001, 500),
+    );
+}
+
+#[test]
+fn call_remove_liquidity_successful() {
+    let transition = user_turn(
+        pool_shard(&pool_base()),
+        &remove_message(REMOVE_LP, REMOVE_A, REMOVE_B),
+    );
+
+    assert_eq!(
+        written(&transition),
+        PoolDefinition {
+            liquidity_pool_supply: LP_SUPPLY - REMOVE_LP,
+            reserve_a: RESERVE_A - REMOVE_A,
+            reserve_b: RESERVE_B - REMOVE_B,
+            ..pool_base()
+        }
+    );
+    assert_eq!(
+        transition.sends,
+        vec![
+            Envelope::new(
+                token_actor(USER_LP_ID),
+                &token_core::Message::Burn {
+                    descriptor: fungible_of(token_lp_id()),
+                    amount: REMOVE_LP,
+                    definition: token_lp_id(),
+                },
+            ),
+            withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, REMOVE_B),
+            withdrawal(vault_a_id(), USER_A_ID, TOKEN_A_ID, REMOVE_A),
+        ]
     );
 }
 
@@ -694,6 +757,64 @@ fn a_swap_settles_any_offer_the_live_curve_can_afford() {
     refuses(with_reserves(u128::MAX, RESERVE_B), a_to_b, 1, 1, overflow);
 }
 
+#[test]
+fn a_swap_refuses_a_forged_notification() {
+    for input_is_token_a in [true, false] {
+        let (definition_id_in, definition_id_out) = definitions(input_is_token_a);
+        let [input_vault, output_vault, _, user_output] = swap_route(input_is_token_a);
+        let honest_offer = offer(definition_id_out, 1, user_output);
+        let honest = notification(input_vault, definition_id_in, 100, honest_offer);
+        let forgeries = [
+            // Not from the pool's token program, so it is not a swap at all.
+            (
+                "token program",
+                Origin::Program(STRANGER_PROGRAM_ID),
+                honest,
+                "an AMM message must decode",
+            ),
+            (
+                "credited account",
+                Origin::Program(TOKEN_PROGRAM_ID),
+                notification(UNRELATED_ID, definition_id_in, 100, honest_offer),
+                "Input vault was not provided",
+            ),
+            (
+                "input definition",
+                Origin::Program(TOKEN_PROGRAM_ID),
+                notification(input_vault, token_lp_id(), 100, honest_offer),
+                "AccountId is not a token type for the pool",
+            ),
+            (
+                "output definition",
+                Origin::Program(TOKEN_PROGRAM_ID),
+                notification(
+                    input_vault,
+                    definition_id_in,
+                    100,
+                    offer(definition_id_in, 1, user_output),
+                ),
+                "AccountId is not a token type for the pool",
+            ),
+            // A real vault of the pool, credited with the other side's token.
+            (
+                "vault order",
+                Origin::Program(TOKEN_PROGRAM_ID),
+                notification(output_vault, definition_id_in, 100, honest_offer),
+                "Input vault was not provided",
+            ),
+        ];
+        for (field, origin, message, expected) in forgeries {
+            assert!(
+                rejection(|| {
+                    let _transition = pool_turn(pool_shard(&pool_base()), origin, message);
+                })
+                .contains(expected),
+                "a forged {field} was accepted (input is token A: {input_is_token_a})"
+            );
+        }
+    }
+}
+
 // The offer, not the quote, is what moves: the surplus these offers leave stays in the pool.
 #[test]
 fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
@@ -711,6 +832,52 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
             )]
         );
     }
+}
+
+// A wallet's swap is one token transfer; the token program's own sends carry it to the pool and
+// predict the payout a private trader assumes.
+#[test]
+fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
+    let (definition_id_in, definition_id_out) = definitions(true);
+    let [input_vault, output_vault, user_input, user_output] = swap_route(true);
+    let pool = Actor::new(pool_id(), AMM_PROGRAM_ID);
+    let trade = swap_transfer(
+        pool,
+        input_vault,
+        fungible_of(definition_id_in),
+        99,
+        offer(definition_id_out, 45, user_output),
+    );
+
+    let decoded = |envelope: &Envelope| -> token_core::Message {
+        borsh::from_slice(&envelope.message).expect("a token send carries a token message")
+    };
+    let [credit] = <[Envelope; 1]>::try_from(expected_sends(token_actor(user_input), &trade))
+        .expect("a transfer sends one credit");
+    assert_eq!(credit.to, token_actor(input_vault));
+    let [notice] =
+        <[Envelope; 1]>::try_from(expected_sends(token_actor(input_vault), &decoded(&credit)))
+            .expect("a notified credit sends one notification");
+    assert_eq!(notice.to, pool);
+
+    let settled = pool_turn(
+        pool_shard(&pool_base()),
+        Origin::Program(TOKEN_PROGRAM_ID),
+        notice.message,
+    );
+    let [payout] = <[Envelope; 1]>::try_from(settled.sends).expect("a swap sends one withdrawal");
+    assert_eq!(payout.to, token_actor(output_vault));
+    assert_eq!(
+        expected_sends(token_actor(output_vault), &decoded(&payout)),
+        vec![Envelope::new(
+            token_actor(user_output),
+            &token_core::Message::Credit {
+                descriptor: fungible_of(definition_id_out),
+                amount: 45,
+                notify: None,
+            },
+        )]
+    );
 }
 
 #[test]

@@ -119,4 +119,10 @@ mod tests {
         // `amount` again out of bridge custody.
         let _transition = run(Origin::Root, &RECEIPT_MARKER);
     }
+
+    #[test]
+    #[should_panic(expected = "Bridge cannot be invoked through chain calls")]
+    fn a_deposit_from_another_program_is_refused() {
+        let _transition = run(Origin::Program(AccountId::new([5; 32])), &[]);
+    }
 }

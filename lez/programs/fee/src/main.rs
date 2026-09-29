@@ -96,6 +96,8 @@ mod tests {
 
     const FEE: AccountId = AccountId::new([1; 32]);
     const PRODUCER: AccountId = AccountId::new([2; 32]);
+    const PAYER: AccountId = AccountId::new([3; 32]);
+
     fn summary(revenue_base: Balance, revenue_tip: Balance) -> fee_core::BlockFeeSummary {
         fee_core::BlockFeeSummary {
             revenue_base,
@@ -182,5 +184,102 @@ mod tests {
         let block = summary(0, 0);
         let payout = honest_payout(&forged, &block);
         let _transition = distribute_at(&FeeState::genesis(), block, payout);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds per-block gas caps")]
+    fn a_summary_over_the_gas_cap_is_refused() {
+        let block = fee_core::BlockFeeSummary {
+            gas_used_exec: market::MAX_GAS_EXEC + 1,
+            ..fee_core::BlockFeeSummary::default()
+        };
+        let _transition = distribute_at(&FeeState::genesis(), block, 0);
+    }
+
+    #[test]
+    fn a_distribution_with_tip_and_payout_sends_all_three_transfers_in_order() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        assert!(payout > 0, "a warmed window pays out");
+
+        let transition = distribute_at(&state, block, payout);
+
+        let inbox = compute_fee_inbox_account_id(FEE);
+        let escrow = compute_fee_escrow_account_id(FEE);
+        assert_eq!(
+            transition.sends,
+            vec![
+                Envelope::new(
+                    Actor::native_balance(inbox),
+                    &NativeMessage::Transfer {
+                        to: escrow,
+                        amount: 1_000,
+                        expect_balance: Some(1_007),
+                    },
+                )
+                .with_pda_seeds(vec![fee_inbox_seed()]),
+                custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,),
+                custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_distribution_without_tip_or_payout_sends_only_the_pinned_inbox_transfer() {
+        let block = summary(10, 0);
+        let payout = honest_payout(&FeeState::genesis(), &block);
+        assert_eq!(
+            payout, 0,
+            "a small first-block revenue pays out nothing yet"
+        );
+
+        let transition = distribute_at(&FeeState::genesis(), block, payout);
+
+        let inbox = compute_fee_inbox_account_id(FEE);
+        let escrow = compute_fee_escrow_account_id(FEE);
+        assert_eq!(
+            transition.sends,
+            vec![
+                Envelope::new(
+                    Actor::native_balance(inbox),
+                    &NativeMessage::Transfer {
+                        to: escrow,
+                        amount: 10,
+                        expect_balance: Some(10),
+                    },
+                )
+                .with_pda_seeds(vec![fee_inbox_seed()]),
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Fee program is only invoked as a top-level system transaction")]
+    fn a_non_root_origin_is_refused() {
+        let sender = Origin::Program(AccountId::new([8; 32]));
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            sender,
+            FeeState::genesis().to_bytes(),
+            Message::Refund {
+                amount: 1,
+                payer: PAYER,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid fee state account")]
+    fn a_wrong_receiver_is_refused() {
+        let _transition = run(
+            AccountId::new([99; 32]),
+            Origin::Root,
+            FeeState::genesis().to_bytes(),
+            Message::Refund {
+                amount: 1,
+                payer: PAYER,
+            },
+        );
     }
 }

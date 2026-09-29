@@ -157,4 +157,11 @@ mod tests {
         };
         let _transition = run(Origin::Root, &outbox_bytes(OUTBOX), init);
     }
+
+    #[test]
+    #[should_panic(expected = "ping_sender is only invoked as a top-level user transaction")]
+    fn a_message_from_another_program_is_refused() {
+        let sender = Origin::Program(AccountId::new([6; 32]));
+        let _transition = run(sender, &outbox_bytes(OUTBOX), send_through(OUTBOX));
+    }
 }

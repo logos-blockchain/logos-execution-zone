@@ -123,12 +123,39 @@ mod tests {
         Some(ShardData::try_from(data.to_bytes()).unwrap())
     }
 
+    fn record_to(account_id: AccountId, data: ClockAccountData) -> Envelope {
+        Envelope::new(Actor::new(account_id, CLOCK), &Message::Record(data))
+    }
+
     #[test]
     fn the_every_block_account_advances_by_one() {
         let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(8));
 
         assert_eq!(transition.post_data, written(data(8)));
         assert!(transition.sends.is_empty());
+    }
+
+    #[test]
+    fn a_tick_records_into_the_coarser_accounts_it_is_due_at() {
+        let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
+        assert_eq!(
+            at_ten.sends,
+            vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10))]
+        );
+
+        let at_fifty = run(
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            Origin::Root,
+            data(49),
+            tick(50),
+        );
+        assert_eq!(
+            at_fifty.sends,
+            vec![
+                record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)),
+                record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)),
+            ]
+        );
     }
 
     #[test]
@@ -145,6 +172,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Tick is addressed to the every-block clock account")]
+    fn only_the_every_block_account_takes_a_tick() {
+        let _transition = run(CLOCK_10_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
+    }
+
+    #[test]
     fn a_coarser_account_stores_the_same_values() {
         let sender = Origin::Program(CLOCK);
         let transition = run(
@@ -155,6 +188,34 @@ mod tests {
         );
 
         assert_eq!(transition.post_data, written(data(50)));
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock records are only sent by the every-block clock account")]
+    fn a_record_from_another_program_is_refused() {
+        let sender = Origin::Program(AccountId::new([3; 32]));
+        let _transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            sender,
+            data(40),
+            Message::Record(data(50)),
+        );
+    }
+
+    #[test]
+    fn a_timestamp_within_bounds_is_kept() {
+        let transition = run(
+            CLOCK_50_PROGRAM_ACCOUNT_ID,
+            Origin::Root,
+            data(40),
+            Message::AssertTimestamp {
+                at_least: 1_699_999_999,
+                at_most: 1_700_000_001,
+            },
+        );
+
+        assert_eq!(transition.post_data, None);
+        assert!(transition.sends.is_empty());
     }
 
     #[test]

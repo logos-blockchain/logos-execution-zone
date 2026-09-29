@@ -121,4 +121,10 @@ mod tests {
     fn an_occupied_slot_refuses_a_second_message() {
         let _transition = run(from_emitter(), record().to_bytes());
     }
+
+    #[test]
+    #[should_panic(expected = "Outbox is only callable through a chain call from a user program")]
+    fn a_root_emit_has_no_emitter_and_is_refused() {
+        let _transition = run(Origin::Root, Vec::new());
+    }
 }

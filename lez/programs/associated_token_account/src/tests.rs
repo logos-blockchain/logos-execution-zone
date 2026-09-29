@@ -131,6 +131,31 @@ fn the_ata_of_a_stranger_program_is_a_different_address() {
 }
 
 #[test]
+fn create_grants_the_ata_seed_only_when_the_owner_signed() {
+    let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
+    let assert_kind = Envelope::new(
+        Actor::new(definition_id(), TOKEN_PROGRAM_ID),
+        &token_core::Message::AssertKind {
+            kind: TokenKind::Fungible,
+        },
+    );
+    let ensure = Envelope::new(
+        ata,
+        &token_core::Message::EnsureHolding {
+            descriptor: descriptor(),
+        },
+    );
+
+    let unsigned = turn(false, create(TOKEN_PROGRAM_ID));
+    assert_eq!(unsigned.post_data, None);
+    assert_eq!(unsigned.sends, vec![assert_kind.clone(), ensure.clone()]);
+    assert_eq!(
+        turn(true, create(TOKEN_PROGRAM_ID)).sends,
+        vec![assert_kind, ensure.with_pda_seeds(seeds)]
+    );
+}
+
+#[test]
 fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
     let (real_ata, _) = holding(TOKEN_PROGRAM_ID);
     let (stranger_ata, _) = holding(STRANGER_PROGRAM_ID);

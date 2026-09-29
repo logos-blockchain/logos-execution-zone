@@ -4,11 +4,11 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Origin, ReceiveInput, Transition},
+    program::{Envelope, Origin, ReceiveInput, Transition},
 };
 use token_core::{
-    Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition,
-    TokenDescriptor, TokenHolding, TokenKind, TokenMetadata,
+    Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification, Notify,
+    TokenDefinition, TokenDescriptor, TokenHolding, TokenKind, TokenMetadata, expected_sends,
 };
 
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([5; 32]);
@@ -268,6 +268,105 @@ fn new_definition_with_metadata_creates_a_master_copy_for_a_non_fungible() {
     assert_eq!(state.get(&METADATA_ID), Some(&ShardData::from(&metadata())));
 }
 
+#[test]
+fn every_sent_creation_writes_only_into_an_empty_target() {
+    let new_definition = |definition, metadata| Message::NewDefinition {
+        definition,
+        holding: HOLDING_ID,
+        metadata,
+    };
+    let fungible_definition_message = || NewTokenDefinition::Fungible {
+        name: String::from("test"),
+        total_supply: INIT_SUPPLY,
+    };
+    let cases = [
+        (
+            "NewDefinition (fungible)",
+            DEFINITION_ID,
+            new_definition(fungible_definition_message(), None),
+            vec![HOLDING_ID],
+        ),
+        (
+            "NewDefinition (fungible, metadata)",
+            DEFINITION_ID,
+            new_definition(
+                fungible_definition_message(),
+                Some((METADATA_ID, new_metadata())),
+            ),
+            vec![HOLDING_ID, METADATA_ID],
+        ),
+        (
+            "NewDefinition (non-fungible)",
+            DEFINITION_ID,
+            new_definition(
+                NewTokenDefinition::NonFungible {
+                    name: String::from("test"),
+                    printable_supply: PRINTABLE_COPIES,
+                },
+                Some((METADATA_ID, new_metadata())),
+            ),
+            vec![HOLDING_ID, METADATA_ID],
+        ),
+        (
+            "PrintNft",
+            HOLDING_ID,
+            Message::PrintNft {
+                printed: HOLDING_ID_2,
+                definition_id: DEFINITION_ID,
+            },
+            vec![HOLDING_ID_2],
+        ),
+    ];
+
+    for (operation, receiver, message, targets) in cases {
+        let creations: Vec<(AccountId, Message)> =
+            expected_sends(Actor::new(receiver, TOKEN_PROGRAM_ID), &message)
+                .into_iter()
+                .filter_map(|envelope| {
+                    let sent: Message = borsh::from_slice(&envelope.message)
+                        .expect("a token send carries a message");
+                    matches!(sent, Message::Create(_)).then_some((envelope.to.account_id, sent))
+                })
+                .collect();
+        assert_eq!(
+            creations
+                .iter()
+                .map(|(account_id, _)| *account_id)
+                .collect::<Vec<_>>(),
+            targets,
+            "{operation} creates a different set of accounts"
+        );
+
+        for (account_id, create) in creations {
+            let Message::Create(data) = &create else {
+                unreachable!("only creations were kept");
+            };
+            assert_eq!(
+                written(&create, &ShardData::empty()).as_ref(),
+                Some(data),
+                "{operation} wrote something other than it sent into {account_id}"
+            );
+            // Even the very data it would write: a creation never lands twice.
+            for occupant in [data.clone(), ShardData::from(&fungible(1))] {
+                assert!(
+                    rejection(&create, &occupant)
+                        .contains("Target account must not already hold data"),
+                    "{operation} overwrote the occupied account {account_id}"
+                );
+            }
+        }
+    }
+
+    assert!(
+        rejection(
+            &new_definition(fungible_definition_message(), None),
+            &ShardData::from(&fungible_definition(INIT_SUPPLY))
+        )
+        .contains("Target account must not already hold data"),
+        "NewDefinition overwrote an occupied definition"
+    );
+}
+
 // --- transfer --------------------------------------------------------------------------------
 
 #[should_panic(expected = "Sender authorization is missing")]
@@ -404,7 +503,282 @@ fn transfer_of_an_unowned_printed_copy_should_fail() {
     let _written = written(&transfer(PRINTED, 1), &ShardData::from(&printed(false)));
 }
 
+#[test]
+fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() {
+    let requester = Origin::Program(OTHER_DEFINITION_ID);
+    let sender = ShardData::from(&fungible(INIT_SUPPLY));
+    let request = |is_authorized| {
+        turn(
+            HOLDING_ID,
+            is_authorized,
+            requester,
+            &sender,
+            &transfer(FUNGIBLE, TRANSFER_AMOUNT),
+        )
+    };
+
+    assert_eq!(
+        request(true).post_data,
+        Some(ShardData::from(&fungible(SENDER_POST_TRANSFER)))
+    );
+    let refusal = std::panic::catch_unwind(|| request(false).post_data)
+        .expect_err("an unauthorized transfer was accepted");
+    assert_eq!(
+        refusal.downcast_ref::<&str>(),
+        Some(&"Sender authorization is missing")
+    );
+}
+
+#[should_panic(expected = "A credit must come from the token program")]
+#[test]
+fn a_credit_from_the_root_is_rejected() {
+    let _transition = turn(
+        HOLDING_ID,
+        true,
+        Origin::Root,
+        &ShardData::empty(),
+        &credit(FUNGIBLE, TRANSFER_AMOUNT),
+    );
+}
+
+#[should_panic(expected = "A creation must come from the token program")]
+#[test]
+fn a_creation_from_another_program_is_rejected() {
+    let _transition = turn(
+        HOLDING_ID,
+        true,
+        Origin::Program(OTHER_DEFINITION_ID),
+        &ShardData::empty(),
+        &Message::Create(ShardData::from(&fungible(INIT_SUPPLY))),
+    );
+}
+
+#[test]
+fn a_credit_with_notify_sends_one_notification() {
+    let listener = Actor::new(HOLDING_ID_2, OTHER_DEFINITION_ID);
+    let transition = turn(
+        HOLDING_ID,
+        false,
+        TOKEN_ORIGIN,
+        &ShardData::empty(),
+        &Message::Credit {
+            descriptor: FUNGIBLE,
+            amount: TRANSFER_AMOUNT,
+            notify: Some(Notify {
+                to: listener,
+                payload: b"swap".to_vec(),
+            }),
+        },
+    );
+
+    assert_eq!(
+        transition.sends,
+        vec![Envelope::new(
+            listener,
+            &Message::Notification(Notification {
+                credited_account: HOLDING_ID,
+                descriptor: FUNGIBLE,
+                amount: TRANSFER_AMOUNT,
+                payload: b"swap".to_vec(),
+            })
+        )]
+    );
+}
+
+#[should_panic(expected = "A token actor does not accept notifications")]
+#[test]
+fn a_notification_from_a_token_origin_is_refused() {
+    let _transition = turn(
+        HOLDING_ID,
+        true,
+        TOKEN_ORIGIN,
+        &ShardData::empty(),
+        &Message::Notification(Notification {
+            credited_account: HOLDING_ID,
+            descriptor: FUNGIBLE,
+            amount: TRANSFER_AMOUNT,
+            payload: vec![0],
+        }),
+    );
+}
+
+#[test]
+fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
+    assert_eq!(
+        expected_sends(
+            Actor::new(HOLDING_ID, TOKEN_PROGRAM_ID),
+            &transfer(FUNGIBLE, TRANSFER_AMOUNT)
+        ),
+        vec![Envelope::new(
+            token_actor(HOLDING_ID_2),
+            &credit(FUNGIBLE, TRANSFER_AMOUNT)
+        )]
+    );
+}
+
 // --- ensure holding and kind -----------------------------------------------------------------
+
+#[test]
+fn ensure_holding_zeroizes_an_empty_or_mismatched_authorized_target() {
+    let other_definition = TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    };
+    let targets = [
+        ShardData::empty(),
+        ShardData::from(&other_definition),
+        ShardData::try_from(vec![0xFF; 4]).expect("fits the shard limit"),
+    ];
+
+    for target in targets {
+        assert_eq!(
+            holding_at(
+                &Message::EnsureHolding {
+                    descriptor: FUNGIBLE
+                },
+                &target
+            ),
+            fungible(0)
+        );
+    }
+}
+
+#[should_panic(expected = "Only Uninitialized or authorized accounts can be initialized")]
+#[test]
+fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
+    let other_definition = TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    };
+    let _transition = turn(
+        HOLDING_ID,
+        false,
+        Origin::Root,
+        &ShardData::from(&other_definition),
+        &Message::EnsureHolding {
+            descriptor: FUNGIBLE,
+        },
+    );
+}
+
+#[test]
+fn another_actor_replaces_a_funded_holding_only_with_authorization() {
+    let requester = Origin::Program(OTHER_DEFINITION_ID);
+    let funded = ShardData::from(&TokenHolding::Fungible {
+        definition_id: OTHER_DEFINITION_ID,
+        balance: HOLDING_BALANCE,
+    });
+    let request = |is_authorized| {
+        turn(
+            HOLDING_ID,
+            is_authorized,
+            requester,
+            &funded,
+            &Message::EnsureHolding {
+                descriptor: FUNGIBLE,
+            },
+        )
+    };
+
+    assert_eq!(request(true).post_data, Some(ShardData::from(&fungible(0))));
+    let refusal = std::panic::catch_unwind(|| request(false).post_data)
+        .expect_err("an unauthorized reset was accepted");
+    assert_eq!(
+        refusal.downcast_ref::<&str>(),
+        Some(&"Only Uninitialized or authorized accounts can be initialized")
+    );
+}
+
+#[test]
+fn ensure_holding_keeps_a_matching_funded_holding() {
+    for is_authorized in [false, true] {
+        assert_eq!(
+            turn(
+                HOLDING_ID,
+                is_authorized,
+                Origin::Root,
+                &ShardData::from(&fungible(HOLDING_BALANCE)),
+                &Message::EnsureHolding {
+                    descriptor: FUNGIBLE,
+                },
+            )
+            .post_data,
+            None
+        );
+    }
+}
+
+#[test]
+fn ensure_holding_keeps_a_funded_master_for_a_printed_copy_descriptor() {
+    assert_eq!(
+        turn(
+            HOLDING_ID,
+            false,
+            Origin::Root,
+            &ShardData::from(&master(PRINTABLE_COPIES)),
+            &Message::EnsureHolding {
+                descriptor: PRINTED,
+            },
+        )
+        .post_data,
+        None
+    );
+}
+
+#[test]
+fn assert_kind_keeps_the_definition_it_checked() {
+    assert_eq!(
+        written(
+            &Message::AssertKind {
+                kind: TokenKind::Fungible
+            },
+            &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        ),
+        None
+    );
+    assert_eq!(
+        written(
+            &Message::AssertKind {
+                kind: TokenKind::NftPrintedCopy
+            },
+            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+        ),
+        None
+    );
+}
+
+#[test]
+fn assert_kind_rejects_a_forged_token_kind() {
+    // The kind a holding is ensured with comes from the message, and the holding's own turn
+    // never sees the definition. `AssertKind` on the definition is the only thing standing
+    // between a claimed kind and a holding that carries it.
+    let cases = [
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftMaster,
+        ),
+        (
+            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            TokenKind::NftPrintedCopy,
+        ),
+        (
+            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            TokenKind::Fungible,
+        ),
+        (
+            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            TokenKind::NftMaster,
+        ),
+    ];
+
+    for (definition, claimed) in cases {
+        assert!(
+            rejection(&Message::AssertKind { kind: claimed }, &definition)
+                .contains("Token Definition does not initialize this Token Holding kind"),
+            "AssertKind accepted a claimed kind of {claimed:?}"
+        );
+    }
+}
 
 // --- mint ------------------------------------------------------------------------------------
 
@@ -737,6 +1111,49 @@ fn burn_rejects_a_forged_holding_kind() {
             claimed.kind
         );
     }
+}
+
+#[test]
+fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
+    let transition = turn(
+        HOLDING_ID,
+        true,
+        Origin::Root,
+        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &Message::Burn {
+            descriptor: FUNGIBLE,
+            amount: BURN_SUCCESS,
+            definition: DEFINITION_ID,
+        },
+    );
+
+    assert_eq!(
+        transition.sends,
+        vec![Envelope::new(
+            token_actor(DEFINITION_ID),
+            &Message::BurnSupply {
+                definition_id: DEFINITION_ID,
+                kind: TokenKind::Fungible,
+                amount: BURN_SUCCESS,
+            }
+        )]
+    );
+}
+
+#[should_panic(expected = "A supply burn names another definition")]
+#[test]
+fn a_supply_burn_received_by_another_definition_is_rejected() {
+    let _transition = turn(
+        OTHER_DEFINITION_ID,
+        true,
+        TOKEN_ORIGIN,
+        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &Message::BurnSupply {
+            definition_id: DEFINITION_ID,
+            kind: TokenKind::Fungible,
+            amount: BURN_SUCCESS,
+        },
+    );
 }
 
 // --- print nft -------------------------------------------------------------------------------
