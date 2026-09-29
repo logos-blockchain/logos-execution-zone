@@ -622,7 +622,6 @@ fn cross_zone_test_config() -> SequencerConfig {
                     target_account_id: programs::ping_receiver_account_id(),
                     mint_cap: None,
                 }],
-                expected_block_signing_pubkeys: Vec::new(),
                 min_committee_size: 0,
             }],
             source_authority: None,
