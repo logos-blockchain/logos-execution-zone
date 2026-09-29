@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_marker_core::Delivery;
 use lee_core::{
     account::{AccountId, Balance, data::DATA_MAX_LENGTH},
     program::PdaSeed,
@@ -100,8 +101,8 @@ pub struct CrossZoneConfig {
     /// a source, so its compromise is theft rather than delay.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
-    /// Program allowed to act on the source authority's behalf through a chained
-    /// call, seeded into every target's config at genesis. Needed only for a PDA
+    /// Program allowed to act on the source authority's behalf by message, seeded
+    /// into every target's config at genesis. Needed only for a PDA
     /// authority, which cannot sign; unset means the authority acts at top level.
     #[serde(default)]
     pub source_governance: Option<AccountId>,
@@ -132,7 +133,7 @@ pub struct CrossZoneMessage {
 /// This inbox's own zone id.
 ///
 /// It no longer decides who may deliver what. Each target program authorizes its
-/// own sources against the marker the inbox passes, so the only thing the inbox
+/// own sources against the marker it derives from the delivery, so the only thing the inbox
 /// still needs to know is which zone it is, to refuse a message addressed to
 /// itself.
 #[derive(
@@ -240,9 +241,10 @@ impl SeenShard {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
+    Mark(CrossZoneMessage),
     /// Initializes the inbox config account at genesis.
     InitConfig(InboxConfig),
 }

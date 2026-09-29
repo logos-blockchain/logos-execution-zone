@@ -1,78 +1,75 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::{AccountId, ShardData};
+use lee_core::{
+    account::{AccountId, Actor, ShardData},
+    program::Envelope,
+};
 use serde::{Deserialize, Serialize};
 
 pub const TOKEN_NAME: [u8; 5] = *b"token";
 
-/// Token Program Instruction.
-///
-/// All inputs select this program's shard. "Empty" and "initialized" refer to that shard.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    /// Transfer tokens from sender to recipient.
-    ///
-    /// Required accounts:
-    /// - Sender's Token Holding account (initialized, authorized),
-    /// - Recipient's Token Holding account (initialized or empty).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Message {
     Transfer {
-        amount_to_transfer: u128,
+        to: AccountId,
+        descriptor: TokenDescriptor,
+        amount: u128,
+        notify: Option<Notify>,
+    },
+    Credit {
+        descriptor: TokenDescriptor,
+        amount: u128,
+        notify: Option<Notify>,
+    },
+    EnsureHolding {
         descriptor: TokenDescriptor,
     },
-
-    /// Create a new fungible token definition without metadata.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty).
-    NewFungibleDefinition { name: String, total_supply: u128 },
-
-    /// Create a new fungible or non-fungible token definition with metadata.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (empty),
-    /// - Token Holding account (empty),
-    /// - Token Metadata account (empty).
-    NewDefinitionWithMetadata {
-        new_definition: NewTokenDefinition,
-        /// Boxed to avoid large enum variant size.
-        metadata: Box<NewTokenMetadata>,
-    },
-
-    /// Initialize a token holding account for a given token definition.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account,
-    InitializeAccount { kind: TokenKind },
-
-    /// Burn tokens from the holder's account.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account (initialized, authorized).
     Burn {
-        amount_to_burn: u128,
+        descriptor: TokenDescriptor,
+        amount: u128,
+        definition: AccountId,
+    },
+    PrintNft {
+        printed: AccountId,
+        definition_id: AccountId,
+    },
+    NewDefinition {
+        definition: NewTokenDefinition,
+        holding: AccountId,
+        metadata: Option<(AccountId, NewTokenMetadata)>,
+    },
+    Mint {
+        to: AccountId,
+        amount: u128,
+    },
+    BurnSupply {
+        definition_id: AccountId,
+        kind: TokenKind,
+        amount: u128,
+    },
+    AssertKind {
         kind: TokenKind,
     },
-
-    /// Mint new tokens to the holder's account.
-    ///
-    /// Required accounts:
-    /// - Token Definition account (initialized, authorized),
-    /// - Token Holding account (initialized or empty).
-    Mint { amount_to_mint: u128 },
-
-    /// Print a new NFT from the master copy.
-    ///
-    /// Required accounts:
-    /// - NFT Master Token Holding account (initialized, authorized),
-    /// - NFT Printed Copy Token Holding account (empty).
-    PrintNft { definition_id: AccountId },
+    Create(ShardData),
+    Notification(Notification),
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Notify {
+    pub to: Actor,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Notification {
+    pub credited_account: AccountId,
+    pub descriptor: TokenDescriptor,
+    pub amount: u128,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum NewTokenDefinition {
     Fungible {
         name: String,
@@ -219,7 +216,7 @@ impl From<&TokenHolding> for ShardData {
     }
 }
 
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct NewTokenMetadata {
     /// Metadata standard.
     pub standard: MetadataStandard,
@@ -268,6 +265,120 @@ impl From<&TokenMetadata> for ShardData {
 
         Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
     }
+}
+
+#[must_use]
+pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Envelope> {
+    let own = |account_id: AccountId| Actor::new(account_id, receiver.program_account_id);
+    let create = |to: AccountId, data: ShardData| Envelope::new(own(to), &Message::Create(data));
+    match message {
+        Message::Transfer {
+            to,
+            descriptor,
+            amount,
+            notify,
+        } => vec![Envelope::new(
+            own(*to),
+            &Message::Credit {
+                descriptor: *descriptor,
+                amount: *amount,
+                notify: notify.clone(),
+            },
+        )],
+        Message::Credit {
+            descriptor,
+            amount,
+            notify,
+        } => notify
+            .iter()
+            .map(|target| {
+                Envelope::new(
+                    target.to,
+                    &Message::Notification(Notification {
+                        credited_account: receiver.account_id,
+                        descriptor: *descriptor,
+                        amount: *amount,
+                        payload: target.payload.clone(),
+                    }),
+                )
+            })
+            .collect(),
+        Message::Burn {
+            descriptor,
+            amount,
+            definition,
+        } => vec![Envelope::new(
+            own(*definition),
+            &Message::BurnSupply {
+                definition_id: descriptor.definition_id,
+                kind: descriptor.kind,
+                amount: *amount,
+            },
+        )],
+        Message::PrintNft {
+            printed,
+            definition_id,
+        } => vec![create(
+            *printed,
+            ShardData::from(&TokenHolding::NftPrintedCopy {
+                definition_id: *definition_id,
+                owned: true,
+            }),
+        )],
+        Message::NewDefinition {
+            definition,
+            holding,
+            metadata,
+        } => {
+            let created = match definition {
+                NewTokenDefinition::Fungible { total_supply, .. } => TokenHolding::Fungible {
+                    definition_id: receiver.account_id,
+                    balance: *total_supply,
+                },
+                NewTokenDefinition::NonFungible {
+                    printable_supply, ..
+                } => TokenHolding::NftMaster {
+                    definition_id: receiver.account_id,
+                    print_balance: *printable_supply,
+                },
+            };
+            std::iter::once(create(*holding, ShardData::from(&created)))
+                .chain(metadata.iter().map(|(metadata_id, new_metadata)| {
+                    create(
+                        *metadata_id,
+                        ShardData::from(&TokenMetadata {
+                            definition_id: receiver.account_id,
+                            standard: new_metadata.standard.clone(),
+                            uri: new_metadata.uri.clone(),
+                            creators: new_metadata.creators.clone(),
+                            primary_sale_date: 0, // TODO #261: future works to implement this
+                        }),
+                    )
+                }))
+                .collect()
+        }
+        Message::Mint { to, amount } => vec![Envelope::new(
+            own(*to),
+            &Message::Credit {
+                descriptor: TokenDescriptor {
+                    definition_id: receiver.account_id,
+                    kind: TokenKind::Fungible,
+                },
+                amount: *amount,
+                notify: None,
+            },
+        )],
+        Message::EnsureHolding { .. }
+        | Message::BurnSupply { .. }
+        | Message::AssertKind { .. }
+        | Message::Create(_)
+        | Message::Notification(_) => Vec::new(),
+    }
+}
+
+#[must_use]
+pub fn same_asset(holding: TokenKind, descriptor: TokenKind) -> bool {
+    holding == descriptor || (holding != TokenKind::Fungible && descriptor != TokenKind::Fungible)
 }
 
 #[must_use]

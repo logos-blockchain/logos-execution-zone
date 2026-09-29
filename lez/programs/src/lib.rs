@@ -148,20 +148,21 @@ mod inner {
         use super::*;
 
         fn deposit_tx(op_id: [u8; 32], recipient_id: AccountId, amount: u64) -> PublicTransaction {
-            let message = public_transaction::Message::try_new(
+            let receipt = Actor::new(
+                bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
                 bridge_account_id(),
+            );
+            let message = public_transaction::Message::try_new(
+                receipt,
                 vec![
+                    receipt,
                     Actor::native_balance(bridge_core::compute_bridge_account_id(
                         bridge_account_id(),
                     )),
                     Actor::native_balance(recipient_id),
-                    Actor::new(
-                        bridge_core::deposit_receipt_account_id(bridge_account_id(), op_id),
-                        bridge_account_id(),
-                    ),
                 ],
                 vec![],
-                bridge_core::Instruction::Deposit {
+                bridge_core::Message::Deposit {
                     l1_deposit_op_id: op_id,
                     recipient_id,
                     amount,

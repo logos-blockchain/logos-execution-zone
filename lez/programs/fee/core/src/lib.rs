@@ -27,24 +27,22 @@ pub struct BlockFeeSummary {
     pub revenue_tip: Balance,
 }
 
-/// The instruction type for the Fee Program.
+/// The message type for the Fee Program, sent to the fee-state actor
+/// `(compute_fee_state_account_id(self), fee)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Block-tail distribution: apply the market update, drain the inbox (base
-    /// revenue to escrow, tips to the producer), and pay the smoothed payout.
-    ///
-    /// Accounts: `[state, escrow, inbox, producer]`; `state` is named under this program's
-    /// shard, the rest are balance-only. `payout` is the producer's smoothed share.
-    /// [`state::FeeState::apply_block`] returns.
+    /// revenue to escrow, tips to `producer`), and pay `producer` the smoothed
+    /// payout. `payout` is that smoothed share; [`state::FeeState::apply_block`]
+    /// returns it.
     Distribute {
         summary: BlockFeeSummary,
         payout: Balance,
+        producer: AccountId,
     },
     /// Per-transaction refund: return `amount` (the unspent part of the reserve)
-    /// from the inbox to the payer.
-    ///
-    /// Accounts: `[inbox, payer]`, both balance-only.
-    Refund { amount: Balance },
+    /// from the inbox to `payer`.
+    Refund { amount: Balance, payer: AccountId },
 }
 
 #[must_use]

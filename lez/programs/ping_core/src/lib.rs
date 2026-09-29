@@ -14,28 +14,35 @@ pub const PING_RECEIVER_NAME: [u8; 13] = *b"ping_receiver";
 /// Raw 32-byte zone (channel) id, matching the inbox's.
 pub type ZoneId = [u8; 32];
 
-/// Instruction to `ping_receiver`.
+/// Message to `ping_receiver`.
 ///
-/// Variants are append-only, for the same reason `SenderInstruction`'s are.
+/// Variants are append-only, for the same reason `SenderMessage`'s are.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum ReceiverInstruction {
+pub enum ReceiverMessage {
     /// Record the payload, delivered by the inbox on behalf of a peer source
     /// this receiver authorizes.
     ///
-    /// Required accounts (3): the source marker, the receiver config PDA, then
-    /// the record PDA.
-    Record { payload: Vec<u8> },
+    /// Only ever the payload of a delivery to the receiver's program account.
+    Record {
+        payload: Vec<u8>,
+    },
     /// Pins the deliverer and the peer sources it may deliver from, written once
     /// into an empty config shard at genesis. A re-run holding anything different
     /// is refused; an identical one is a no-op, which is what genesis replay does.
     ///
-    /// Required accounts (1): the receiver config PDA.
+    /// Sent to the receiver config PDA.
     InitConfig(ReceiverConfig),
     /// Replaces the authorized sources. Refused unless the config names an
     /// authority and that account authorized the transaction.
     ///
-    /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources { sources: Vec<(ZoneId, AccountId)> },
+    /// Sent to the authority's own actor under this program, which forwards it to
+    /// the config PDA naming itself as `authority` and the program that sent it,
+    /// if any, as `via`.
+    UpdateSources {
+        authority: AccountId,
+        via: Option<AccountId>,
+        sources: Vec<(ZoneId, AccountId)>,
+    },
     /// Gives up the authority, leaving the source list fixed for good. Refused
     /// unless the config names an authority and that account authorized it.
     ///
@@ -44,8 +51,18 @@ pub enum ReceiverInstruction {
     /// with only this, the worst either party achieves is freezing the list,
     /// which is what a config with no authority does anyway.
     ///
-    /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority,
+    /// Sent like `UpdateSources`.
+    RenounceAuthority {
+        authority: AccountId,
+        via: Option<AccountId>,
+    },
+    RecordFrom {
+        deliverer: AccountId,
+        src_zone: ZoneId,
+        src_account_id: AccountId,
+        payload: Vec<u8>,
+    },
+    WriteRecord(Vec<u8>),
 }
 
 /// Who may deliver to this receiver, and which peer sources they may deliver from.
@@ -56,10 +73,10 @@ pub enum ReceiverInstruction {
 /// it.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ReceiverConfig {
-    /// The program allowed to call `Record`: the cross-zone inbox.
+    /// The program allowed to deliver `Record`: the cross-zone inbox.
     pub deliverer: AccountId,
-    /// The program allowed to reach the authority instructions through a chained
-    /// call, or `None` for top-level only. See `WrappedTokenConfig::governance`.
+    /// The program allowed to send the authority messages on the authority's
+    /// behalf, or `None` for top-level only. See `WrappedTokenConfig::governance`.
     pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis. Seeded unset; see `WrappedTokenConfig::authority` for why.
@@ -80,17 +97,17 @@ impl ReceiverConfig {
     }
 }
 
-/// Instruction to `ping_sender`. `Send`'s emission fields are forwarded verbatim
-/// into `cross_zone_outbox::Instruction::Emit`.
+/// Message to `ping_sender`'s config PDA. `Send`'s emission fields are forwarded
+/// verbatim into `cross_zone_outbox_core::Message::Emit`.
 ///
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte,
 /// so inserting one ahead of `Send` shifts every existing encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum SenderInstruction {
-    /// Emit a cross-zone message through the pinned outbox.
-    ///
-    /// Required accounts (2): the sender config PDA, then the outbox PDA.
+pub enum SenderMessage {
+    /// Emit a cross-zone message through `outbox`, which must run the pinned
+    /// outbox program.
     Send {
+        outbox: Actor,
         target_zone: [u8; 32],
         target_account_id: AccountId,
         target_accounts: Vec<Actor>,
@@ -100,8 +117,6 @@ pub enum SenderInstruction {
     /// Pins the outbox program, written once into an empty config shard at
     /// genesis. A re-run naming a different outbox is refused; an identical one
     /// is a no-op, which is what genesis replay does.
-    ///
-    /// Required accounts (1): the sender config PDA.
     InitConfig { outbox_account_id: AccountId },
 }
 
@@ -128,7 +143,7 @@ const fn ping_record_seed() -> PdaSeed {
 }
 
 /// PDA holding the outbox program id, seeded at genesis so the guest can pin the
-/// program it chains into without importing the outbox image id.
+/// program it sends to without importing the outbox image id.
 #[must_use]
 pub fn sender_config_account_id(sender_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&sender_id, &sender_config_seed())
@@ -175,7 +190,8 @@ mod tests {
     /// existing encoding.
     #[test]
     fn send_is_the_first_variant() {
-        let send = SenderInstruction::Send {
+        let send = SenderMessage::Send {
+            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),
             target_accounts: vec![],
@@ -190,7 +206,7 @@ mod tests {
     /// decoded by the destination, so its tag byte is wire format.
     #[test]
     fn record_is_the_first_variant() {
-        let record = ReceiverInstruction::Record { payload: vec![] };
+        let record = ReceiverMessage::Record { payload: vec![] };
         let bytes = borsh::to_vec(&record).expect("Record serializes");
         assert_eq!(bytes[0], 0);
     }

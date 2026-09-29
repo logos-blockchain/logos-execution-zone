@@ -12,7 +12,7 @@ pub const CLOCK_10_PROGRAM_ACCOUNT_ID: AccountId =
 pub const CLOCK_50_PROGRAM_ACCOUNT_ID: AccountId =
     AccountId::new(*b"/LEZ/ClockProgramAccount/0000050");
 
-/// All clock program account ID in the order expected by the clock program.
+/// All clock program account IDs, from the every-block one to the coarsest.
 pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
     CLOCK_01_PROGRAM_ACCOUNT_ID,
     CLOCK_10_PROGRAM_ACCOUNT_ID,
@@ -21,14 +21,21 @@ pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
 
 pub const CLOCK_NAME: [u8; 5] = *b"clock";
 
-/// The instruction type for the Clock Program.
-///
-/// The instruction type for the Clock Program. The sequencer passes the current block timestamp and
-/// block ID.
+/// The message type for the Clock Program. The sequencer ticks the every-block account with the
+/// current block timestamp and block ID; that account records it into the coarser ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Instruction {
-    pub timestamp: Timestamp,
-    pub block_id: u64,
+pub enum Message {
+    Tick {
+        timestamp: Timestamp,
+        block_id: u64,
+    },
+    Record(ClockAccountData),
+    /// Read-only: any clock account may answer it, asserting its own timestamp falls in
+    /// `[at_least, at_most]` (`at_least == at_most` pins an exact timestamp).
+    AssertTimestamp {
+        at_least: Timestamp,
+        at_most: Timestamp,
+    },
 }
 
 /// The data stored in a clock account.

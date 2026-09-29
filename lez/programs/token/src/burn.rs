@@ -1,43 +1,5 @@
-use lee_core::{
-    account::ShardData,
-    program::{AccountMeta, Plan},
-};
+use lee_core::account::ShardData;
 use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
-
-use crate::Effect;
-
-pub fn burn(
-    plan: &mut Plan,
-    definition_account: &AccountMeta,
-    user_holding_account: &AccountMeta,
-    kind: TokenKind,
-    amount_to_burn: u128,
-) {
-    assert!(
-        user_holding_account.is_authorized,
-        "Authorization is missing"
-    );
-
-    // The holding's kind picks which supply the definition decrements, so it crosses into the
-    // definition's effect. Both sides check it against their own contents.
-    plan.effect(
-        definition_account,
-        &Effect::BurnSupply {
-            kind,
-            amount: amount_to_burn,
-        },
-    );
-    plan.effect(
-        user_holding_account,
-        &Effect::BurnHolding {
-            descriptor: TokenDescriptor {
-                definition_id: definition_account.account_id,
-                kind,
-            },
-            amount: amount_to_burn,
-        },
-    );
-}
 
 #[must_use]
 pub fn burn_supply(pre_data: &ShardData, kind: TokenKind, amount_to_burn: u128) -> ShardData {

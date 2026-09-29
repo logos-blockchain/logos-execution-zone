@@ -1,37 +1,5 @@
-use lee_core::{
-    account::ShardData,
-    program::{AccountMeta, Plan},
-};
+use lee_core::account::ShardData;
 use token_core::{TokenDescriptor, TokenHolding};
-
-use crate::Effect;
-
-pub fn transfer(
-    plan: &mut Plan,
-    sender: &AccountMeta,
-    recipient: &AccountMeta,
-    descriptor: TokenDescriptor,
-    balance_to_move: u128,
-) {
-    assert!(sender.is_authorized, "Sender authorization is missing");
-
-    // Both the asset and the amount reach the recipient's shard, which never sees the sender's
-    // contents. The sender's own effect is what ties them to what the sender really holds.
-    plan.effect(
-        sender,
-        &Effect::Withdraw {
-            descriptor,
-            amount: balance_to_move,
-        },
-    );
-    plan.effect(
-        recipient,
-        &Effect::Deposit {
-            descriptor,
-            amount: balance_to_move,
-        },
-    );
-}
 
 #[must_use]
 pub fn withdraw(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128) -> ShardData {

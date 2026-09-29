@@ -1,6 +1,7 @@
 //! Core types for the wrapped-token program, the destination side of the
 //! cross-zone bridge. Only the cross-zone inbox may mint; the guest enforces
-//! this by reading the authorized minter from a genesis-seeded config account.
+//! this by checking a delivery's sender against the minter in a genesis-seeded
+//! config account.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -29,18 +30,20 @@ pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
 pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Credit `amount` wrapped tokens to `recipient`'s holding. Delivered only by
     /// the cross-zone inbox, and only for a peer source this token authorizes.
     ///
-    /// Required accounts (3): the source marker, the wrapped-token config PDA,
-    /// then the recipient's holding PDA.
-    Mint { recipient: [u8; 32], amount: u128 },
+    /// Only ever the payload of a delivery to the wrapped token's program account.
+    Mint {
+        recipient: [u8; 32],
+        amount: u128,
+    },
     /// Pins the minter and the peer sources it may mint for, written once into an
     /// empty config shard at genesis. A re-run holding anything different is
     /// refused; an identical one is a no-op, which is what genesis replay does.
     ///
-    /// Required accounts (1): the wrapped-token config PDA.
+    /// Sent to the wrapped-token config PDA.
     InitConfig(WrappedTokenConfig),
     /// Replaces the authorized sources. Refused unless the config names an
     /// authority and that account authorized the transaction.
@@ -51,8 +54,14 @@ pub enum Instruction {
     /// pause a source without forgetting its counter, keep it listed with
     /// `mint_cap: Some(0)` rather than removing it.
     ///
-    /// Required accounts (2): the config PDA, then the authority account.
-    UpdateSources { sources: Vec<SourcePolicy> },
+    /// Sent to the authority's own actor under this program, which forwards it to
+    /// the config PDA naming itself as `authority` and the program that sent it,
+    /// if any, as `via`.
+    UpdateSources {
+        authority: AccountId,
+        via: Option<AccountId>,
+        sources: Vec<SourcePolicy>,
+    },
     /// Gives up the authority, leaving the source list fixed for good. Refused
     /// unless the config names an authority and that account authorized it.
     ///
@@ -61,8 +70,19 @@ pub enum Instruction {
     /// with only this, the worst either party achieves is freezing the list,
     /// which is what a config with no authority does anyway.
     ///
-    /// Required accounts (2): the config PDA, then the authority account.
-    RenounceAuthority,
+    /// Sent like `UpdateSources`.
+    RenounceAuthority {
+        authority: AccountId,
+        via: Option<AccountId>,
+    },
+    MintFrom {
+        deliverer: AccountId,
+        src_zone: ZoneId,
+        src_account_id: AccountId,
+        recipient: [u8; 32],
+        amount: u128,
+    },
+    Credit(u128),
 }
 
 /// Who may mint, and which peer sources they may mint for.
@@ -72,14 +92,14 @@ pub enum Instruction {
 /// list is variable length.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WrappedTokenConfig {
-    /// The program allowed to call `Mint`: the cross-zone inbox.
+    /// The program allowed to deliver `Mint`: the cross-zone inbox.
     pub minter: AccountId,
-    /// The program allowed to reach `UpdateSources` and `RenounceAuthority`
-    /// through a chained call, or `None` for top-level only.
+    /// The program allowed to send `UpdateSources` and `RenounceAuthority` on the
+    /// authority's behalf, or `None` for top-level only.
     ///
-    /// Exists because a PDA cannot sign: a program-held authority acts only by
-    /// its own program delegating it on a chained call. Unset closes the ambient
-    /// path where any program the authority signed for could rewrite the list.
+    /// Exists because a PDA cannot sign: a program-held authority acts only
+    /// through its own program. Unset closes the ambient path where any program
+    /// the authority signed for could rewrite the list.
     pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.
@@ -104,9 +124,9 @@ pub struct SourcePolicy {
     pub src_account_id: AccountId,
     /// Lifetime mint allowance for this source; `None` is uncapped.
     ///
-    /// Lifetime rather than windowed: the guest has no clock in the dispatch
-    /// account list, and the authority can raise the cap as honest volume
-    /// grows, which serves the same purpose without new plumbing.
+    /// Lifetime rather than windowed: the guest reads no clock on a delivery,
+    /// and the authority can raise the cap as honest volume grows, which serves
+    /// the same purpose without new plumbing.
     pub mint_cap: Option<Balance>,
 }
 
@@ -138,7 +158,7 @@ pub fn wrapped_token_account_id() -> AccountId {
 }
 
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at
-/// genesis so the guest can pin its caller without importing the inbox image id.
+/// genesis so the guest can pin a delivery's sender without importing the inbox image id.
 #[must_use]
 pub fn config_account_id(wrapped_token_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&wrapped_token_id, &config_seed())
@@ -229,7 +249,7 @@ mod tests {
     /// its tag byte is wire format.
     #[test]
     fn mint_is_the_first_variant() {
-        let mint = Instruction::Mint {
+        let mint = Message::Mint {
             recipient: [3; 32],
             amount: 1,
         };

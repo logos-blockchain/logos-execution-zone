@@ -1,6 +1,6 @@
-use associated_token_account_program::{apply, plan};
-use lee_core::program::run_program;
+use associated_token_account_program::receive;
+use lee_core::program::run_actor;
 
 fn main() {
-    run_program(plan, apply)
+    run_actor(receive)
 }

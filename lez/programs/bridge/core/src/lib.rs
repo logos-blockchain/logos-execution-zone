@@ -10,17 +10,14 @@ const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/
 pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Transfers native tokens from the bridge PDA account to a recipient,
     /// exactly once per `l1_deposit_op_id`.
     ///
-    /// Required accounts (3):
-    /// - Bridge PDA account
-    /// - Recipient account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard. A
-    ///   nonempty shard marks the deposit as already processed; a repeat is refused.
+    /// Sent to the deposit-receipt PDA derived from `l1_deposit_op_id`, whose shard of this
+    /// program marks the deposit as already processed once nonempty; a repeat is refused.
     Deposit {
-        /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
+        /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Message::Deposit) to a
         /// Deposit Event on L1.
         ///
         /// TODO: genesis allocations pass a synthetic id no L1 event backs; they should carry a
@@ -31,10 +28,6 @@ pub enum Instruction {
     },
 
     /// Transfers native tokens from a user account to the bridge PDA account.
-    ///
-    /// Required accounts (2):
-    /// - Sender account
-    /// - Bridge PDA account
     ///
     /// `bedrock_account_pk` is consumed by the Sequencer and is not used by the Bridge program
     /// logic.

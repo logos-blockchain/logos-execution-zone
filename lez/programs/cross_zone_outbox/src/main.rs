@@ -1,50 +1,26 @@
-use cross_zone_outbox_core::{Instruction, OutboxRecord, outbox_pda};
-use lee_core::program::{Plan, PlanInput, run_program};
-
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    /// A slot holds one message for ever.
-    CreateRecord(OutboxRecord),
-}
+use cross_zone_outbox_core::{Message, OutboxRecord, outbox_pda};
+use lee_core::program::{ReceiveInput, Response, run_actor};
 
 fn main() {
-    run_program(plan, apply)
+    run_actor(receive)
 }
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    let Effect::CreateRecord(record) = effect;
-    assert!(
-        pre_data.is_empty(),
-        "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
-    );
-    Some(record.to_bytes())
-}
-
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    // The emitter, and the only identity here the state machine verifies: it
-    // checks a guest's claimed caller against the real one. Note this is the
-    // immediate chained caller, not the top-level program that cross-zone
-    // discovery names; the two coincide only while every emitter refuses to be
-    // called by another program, which both do today.
-    let Some(emitter) = input.caller_account_id else {
+fn receive(input: &ReceiveInput, message: Message) -> Response {
+    // The emitter, and the only identity here the state machine verifies: the driver
+    // sets the origin, the sender cannot claim it. Note this is the immediate sender,
+    // not the top-level program that cross-zone discovery names; the two coincide only
+    // while every emitter refuses messages from another program, which both do today.
+    let Some(emitter) = input.origin_program() else {
         panic!("Outbox is only callable through a chain call from a user program");
     };
 
-    let mut plan = Plan::new(input);
-    let Instruction::Emit {
+    let Message::Emit {
         target_zone,
         target_account_id,
         target_accounts,
         payload,
         ordinal,
-    } = instruction;
-
-    let [outbox] =
-        <&[_; 1]>::try_from(input.accounts.as_slice()).expect("Emit requires exactly 1 account");
+    } = message;
 
     // Identity first, so a wrong account that happens to be free is reported as
     // the wrong account rather than as a used slot.
@@ -55,34 +31,59 @@ fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
     // pick an ordinal the chain does not already hold rather than counting from
     // zero.
     assert_eq!(
-        outbox.account_id,
-        outbox_pda(input.self_account_id, emitter, &target_zone, ordinal),
+        input.receiver.account_id,
+        outbox_pda(
+            input.receiver.program_account_id,
+            emitter,
+            &target_zone,
+            ordinal
+        ),
         "Account must be the outbox PDA for (emitter, target_zone, ordinal)"
     );
+    // A slot holds one message for ever.
+    assert!(
+        input.pre_data.is_empty(),
+        "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
+    );
 
-    plan.effect(
-        outbox,
-        &Effect::CreateRecord(OutboxRecord {
+    Response::write(
+        OutboxRecord {
             emitter,
             target_zone,
             ordinal,
             target_account_id,
             target_accounts,
             payload,
-        }),
-    );
-    plan
+        }
+        .to_bytes(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::AccountId;
+    use lee_core::{
+        account::{AccountId, Actor, ShardData},
+        program::{Origin, Transition},
+    };
 
     use super::*;
 
+    const OUTBOX: AccountId = AccountId::new([3; 32]);
+    const EMITTER: AccountId = AccountId::new([4; 32]);
+
+    fn emit() -> Message {
+        Message::Emit {
+            target_zone: [1; 32],
+            target_account_id: AccountId::new([6; 32]),
+            target_accounts: vec![],
+            payload: b"payload".to_vec(),
+            ordinal: 7,
+        }
+    }
+
     fn record() -> OutboxRecord {
         OutboxRecord {
-            emitter: AccountId::new([4; 32]),
+            emitter: EMITTER,
             target_zone: [1; 32],
             ordinal: 7,
             target_account_id: AccountId::new([6; 32]),
@@ -91,17 +92,33 @@ mod tests {
         }
     }
 
+    fn run(origin: Origin, pre: Vec<u8>) -> Transition {
+        let receiver = Actor::new(outbox_pda(OUTBOX, EMITTER, &[1; 32], 7), OUTBOX);
+        let input = ReceiveInput {
+            receiver,
+            origin,
+            is_authorized: false,
+            pre_data: ShardData::try_from(pre).unwrap(),
+            message: borsh::to_vec(&emit()).unwrap(),
+        };
+        receive(&input, emit()).into_transition(input)
+    }
+
+    fn from_emitter() -> Origin {
+        Origin::Program(EMITTER)
+    }
+
     #[test]
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
-            apply(Effect::CreateRecord(record()), &[]),
-            Some(record().to_bytes())
+            run(from_emitter(), Vec::new()).post_data,
+            Some(ShardData::try_from(record().to_bytes()).unwrap())
         );
     }
 
     #[test]
     #[should_panic(expected = "Outbox slot already written")]
     fn an_occupied_slot_refuses_a_second_message() {
-        apply(Effect::CreateRecord(record()), &record().to_bytes());
+        let _transition = run(from_emitter(), record().to_bytes());
     }
 }

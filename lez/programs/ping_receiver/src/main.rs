@@ -1,87 +1,168 @@
-use cross_zone_marker_core::inbox_source_marker_account_id;
+use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
-    account::AccountId,
-    program::{AccountMeta, Plan, PlanInput, run_program, write_once},
+    account::{AccountId, Actor},
+    program::{Envelope, Origin, ReceiveInput, Response, run_actor_with, write_once},
 };
-use ping_core::{
-    ReceiverConfig, ReceiverInstruction, ZoneId, ping_record_pda, receiver_config_account_id,
-};
-
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    /// The config decides whether it accepts the deliverer and the claimed peer: without this
-    /// the record says only that some program on some configured peer wrote it.
-    AcceptDelivery {
-        caller: AccountId,
-        marker: AccountId,
-    },
-    /// Leaves the source list fixed for good.
-    RenounceAuthority {
-        caller: Option<AccountId>,
-        authority: AccountId,
-    },
-    UpdateSources {
-        caller: Option<AccountId>,
-        authority: AccountId,
-        sources: Vec<(ZoneId, AccountId)>,
-    },
-    InitConfig(ReceiverConfig),
-    WriteRecord(Vec<u8>),
-}
+use ping_core::{ReceiverConfig, ReceiverMessage, ping_record_pda, receiver_config_account_id};
 
 fn main() {
-    run_program(plan, apply)
+    run_actor_with(receive)
 }
 
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    match effect {
-        Effect::AcceptDelivery { caller, marker } => {
-            let cfg = decode_config(pre_data);
+fn receive(input: &ReceiveInput) -> Response {
+    let program = input.receiver.program_account_id;
+    if input.receiver.account_id == program && input.origin_program().is_some() {
+        let delivery: Delivery = borsh::from_slice(&input.message).expect("a delivery decodes");
+        return deliver(input, delivery);
+    }
+    let message: ReceiverMessage =
+        borsh::from_slice(&input.message).expect("message must decode from borsh");
+    match message {
+        ReceiverMessage::Record { .. } => {
+            panic!("Record is only callable by the authorized deliverer (the cross-zone inbox)")
+        }
+        ReceiverMessage::RecordFrom {
+            deliverer,
+            src_zone,
+            src_account_id,
+            payload,
+        } => {
+            // Only this receiver's own program account forwards a delivery, naming its
+            // real sender; anyone else could claim to be the deliverer.
+            assert!(
+                input.from_own_program(),
+                "Record is only callable by the authorized deliverer (the cross-zone inbox)"
+            );
+            let cfg = decode_config(&input.pre_data);
             assert_eq!(
-                caller, cfg.deliverer,
+                deliverer, cfg.deliverer,
                 "Record is only callable by the authorized deliverer (the cross-zone inbox)"
             );
             // Which peer sent it is this program's own business.
+            let marker = inbox_source_marker_account_id(deliverer, &src_zone, src_account_id);
             assert!(
-                cfg.sources.iter().any(|(src_zone, src_account_id)| {
-                    marker
-                        == inbox_source_marker_account_id(cfg.deliverer, src_zone, *src_account_id)
+                cfg.sources.iter().any(|(zone, account_id)| {
+                    marker == inbox_source_marker_account_id(cfg.deliverer, zone, *account_id)
                 }),
                 "Record is only callable for a peer source this receiver authorizes"
             );
-            None
+            Response::keep().send(Envelope::new(
+                Actor::new(ping_record_pda(program), program),
+                &ReceiverMessage::WriteRecord(payload),
+            ))
         }
-        Effect::RenounceAuthority { caller, authority } => {
-            let mut cfg = decode_config(pre_data);
+        ReceiverMessage::WriteRecord(payload) => {
+            assert!(
+                input.from_own_program(),
+                "the record is only written by this receiver's config"
+            );
+            Response::write(payload)
+        }
+        ReceiverMessage::RenounceAuthority { authority, via } => {
+            if !at_config(input) {
+                return forward_as_authority(
+                    input,
+                    &ReceiverMessage::RenounceAuthority {
+                        authority: input.receiver.account_id,
+                        via: input.origin_program(),
+                    },
+                );
+            }
+            let mut cfg = decode_config(&input.pre_data);
             assert_authority(
+                input,
                 &cfg,
-                caller,
                 authority,
+                via,
                 "receiver authority is already renounced",
             );
             cfg.authority = None;
-            Some(cfg.to_bytes())
+            Response::write(cfg.to_bytes())
         }
-        Effect::UpdateSources {
-            caller,
+        ReceiverMessage::UpdateSources {
             authority,
+            via,
             sources,
         } => {
-            let mut cfg = decode_config(pre_data);
+            if !at_config(input) {
+                return forward_as_authority(
+                    input,
+                    &ReceiverMessage::UpdateSources {
+                        authority: input.receiver.account_id,
+                        via: input.origin_program(),
+                        sources,
+                    },
+                );
+            }
+            let mut cfg = decode_config(&input.pre_data);
             assert_authority(
+                input,
                 &cfg,
-                caller,
                 authority,
+                via,
                 "receiver sources are fixed at genesis: no authority is configured",
             );
             cfg.sources = sources;
-            Some(cfg.to_bytes())
+            Response::write(cfg.to_bytes())
         }
-        // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
-        // a written config must already hold exactly this.
-        Effect::InitConfig(config) => Some(write_once(pre_data, config.to_bytes())),
-        Effect::WriteRecord(payload) => Some(payload),
+        ReceiverMessage::InitConfig(config) => {
+            assert!(
+                matches!(input.origin, Origin::Root),
+                "InitConfig is a top-level genesis transaction"
+            );
+            assert!(
+                at_config(input),
+                "the config account must be the receiver config PDA"
+            );
+            // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
+            // a written config must already hold exactly this.
+            Response::write(write_once(&input.pre_data, config.to_bytes()))
+        }
     }
+}
+
+/// The receiver's program account forwards a delivery to its config, naming the program that
+/// sent it.
+fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
+    let Delivery {
+        src_zone,
+        src_account_id,
+        payload,
+    } = delivery;
+    let ReceiverMessage::Record { payload } =
+        borsh::from_slice(&payload).expect("delivery payload must decode from borsh")
+    else {
+        panic!("a delivery to ping_receiver must carry a Record");
+    };
+    let program = input.receiver.program_account_id;
+    Response::keep().send(Envelope::new(
+        Actor::new(receiver_config_account_id(program), program),
+        &ReceiverMessage::RecordFrom {
+            deliverer: input.origin_program().expect("a delivery has a sender"),
+            src_zone,
+            src_account_id,
+            payload,
+        },
+    ))
+}
+
+/// The authority's own actor vouches that the authority authorized the change and names the
+/// program that reached it; which account the authority has to be, and whether that program may
+/// act, are the config's own answer and are checked there.
+fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Response {
+    assert!(
+        input.is_authorized,
+        "the configured authority must authorize a change"
+    );
+    let program = input.receiver.program_account_id;
+    Response::keep().send(Envelope::new(
+        Actor::new(receiver_config_account_id(program), program),
+        message,
+    ))
+}
+
+fn at_config(input: &ReceiveInput) -> bool {
+    input.receiver.account_id == receiver_config_account_id(input.receiver.program_account_id)
 }
 
 fn decode_config(pre_data: &[u8]) -> ReceiverConfig {
@@ -89,14 +170,22 @@ fn decode_config(pre_data: &[u8]) -> ReceiverConfig {
 }
 
 fn assert_authority(
+    input: &ReceiveInput,
     cfg: &ReceiverConfig,
-    caller: Option<AccountId>,
     authority: AccountId,
+    via: Option<AccountId>,
     unset: &str,
 ) {
+    // This program sends a change only from the authority's own actor, after the authority
+    // authorized it, filling `authority` from that receiver and `via` from its origin; so both
+    // are the runtime's word rather than a sender's claim.
+    assert!(
+        input.from_own_program(),
+        "a change is only forwarded by the authority's own actor"
+    );
     // See `ReceiverConfig::governance` for why the governance escape hatch exists.
     assert!(
-        caller.is_none() || caller == cfg.governance,
+        via.is_none() || via == cfg.governance,
         "the authority acts at top level, or through the configured governance program"
     );
     let Some(expected) = cfg.authority else {
@@ -104,103 +193,19 @@ fn assert_authority(
     };
     assert_eq!(
         authority, expected,
-        "second account must be the configured authority"
-    );
-}
-
-fn plan(input: &PlanInput, instruction: ReceiverInstruction) -> Plan {
-    let mut plan = Plan::new(input);
-    let self_account_id = input.self_account_id;
-    let caller_account_id = input.caller_account_id;
-    let accounts = &input.accounts;
-    match instruction {
-        ReceiverInstruction::Record { payload } => {
-            let [marker, config, record] = <&[_; 3]>::try_from(accounts.as_slice())
-                .expect("Record requires the source marker, config, and record accounts");
-            assert_config_account(config, self_account_id);
-            let Some(caller) = caller_account_id else {
-                panic!(
-                    "Record is only callable by the authorized deliverer (the cross-zone inbox)"
-                );
-            };
-            assert_eq!(
-                record.account_id,
-                ping_record_pda(self_account_id),
-                "third account must be the ping record PDA"
-            );
-
-            plan.effect(
-                config,
-                &Effect::AcceptDelivery {
-                    caller,
-                    marker: marker.account_id,
-                },
-            );
-            plan.effect(record, &Effect::WriteRecord(payload));
-        }
-        ReceiverInstruction::RenounceAuthority => {
-            let (config, authority) = governance_accounts(accounts, self_account_id);
-            plan.effect(
-                config,
-                &Effect::RenounceAuthority {
-                    caller: caller_account_id,
-                    authority: authority.account_id,
-                },
-            );
-        }
-        ReceiverInstruction::UpdateSources { sources } => {
-            let (config, authority) = governance_accounts(accounts, self_account_id);
-            plan.effect(
-                config,
-                &Effect::UpdateSources {
-                    caller: caller_account_id,
-                    authority: authority.account_id,
-                    sources,
-                },
-            );
-        }
-        ReceiverInstruction::InitConfig(config_value) => {
-            assert!(
-                caller_account_id.is_none(),
-                "InitConfig is a top-level genesis transaction"
-            );
-            let [config] = <&[_; 1]>::try_from(accounts.as_slice())
-                .expect("InitConfig requires the config account");
-            assert_config_account(config, self_account_id);
-            plan.effect(config, &Effect::InitConfig(config_value));
-        }
-    }
-    plan
-}
-
-/// Which account the authority has to be, and who may reach this instruction at all, is the
-/// config's own answer and is checked there.
-fn governance_accounts(
-    accounts: &[AccountMeta],
-    self_account_id: AccountId,
-) -> (&AccountMeta, &AccountMeta) {
-    let [config, authority] = <&[_; 2]>::try_from(accounts)
-        .expect("this instruction requires exactly the config and authority accounts");
-    assert_config_account(config, self_account_id);
-    assert!(
-        authority.is_authorized,
-        "the configured authority must authorize a change"
-    );
-    (config, authority)
-}
-
-fn assert_config_account(config: &AccountMeta, self_account_id: AccountId) {
-    assert_eq!(
-        config.account_id,
-        receiver_config_account_id(self_account_id),
-        "the config account must be the receiver config PDA"
+        "the signing account must be the configured authority"
     );
 }
 
 #[cfg(test)]
 mod tests {
+    use borsh::BorshSerialize;
+    use lee_core::{account::ShardData, program::Transition};
+    use ping_core::ZoneId;
+
     use super::*;
 
+    const RECEIVER: AccountId = AccountId::new([4; 32]);
     const INBOX: AccountId = AccountId::new([1; 32]);
     const SOURCE: AccountId = AccountId::new([9; 32]);
     const AUTHORITY: AccountId = AccountId::new([5; 32]);
@@ -216,104 +221,142 @@ mod tests {
         }
     }
 
-    fn marker() -> AccountId {
-        inbox_source_marker_account_id(INBOX, &ZONE, SOURCE)
+    fn actor(account_id: AccountId) -> Actor {
+        Actor::new(account_id, RECEIVER)
+    }
+
+    fn config_actor() -> Actor {
+        actor(receiver_config_account_id(RECEIVER))
+    }
+
+    fn run(
+        receiver: Actor,
+        origin: Origin,
+        is_authorized: bool,
+        pre: Vec<u8>,
+        message: &impl BorshSerialize,
+    ) -> Transition {
+        let input = ReceiveInput {
+            receiver,
+            origin,
+            is_authorized,
+            pre_data: ShardData::try_from(pre).unwrap(),
+            message: borsh::to_vec(message).unwrap(),
+        };
+        receive(&input).into_transition(input)
+    }
+
+    fn at_config(origin: Origin, pre: &ReceiverConfig, message: &ReceiverMessage) -> Transition {
+        run(config_actor(), origin, false, pre.to_bytes(), message)
+    }
+
+    fn record_from(deliverer: AccountId, src_account_id: AccountId) -> ReceiverMessage {
+        ReceiverMessage::RecordFrom {
+            deliverer,
+            src_zone: ZONE,
+            src_account_id,
+            payload: b"ping".to_vec(),
+        }
+    }
+
+    fn update(authority: AccountId, via: Option<AccountId>) -> ReceiverMessage {
+        ReceiverMessage::UpdateSources {
+            authority,
+            via,
+            sources: vec![],
+        }
+    }
+
+    fn renounce(via: Option<AccountId>) -> ReceiverMessage {
+        ReceiverMessage::RenounceAuthority {
+            authority: AUTHORITY,
+            via,
+        }
+    }
+
+    fn written_config(transition: &Transition) -> ReceiverConfig {
+        ReceiverConfig::from_bytes(
+            transition
+                .post_data
+                .as_ref()
+                .expect("the config is written"),
+        )
+        .expect("the config decodes")
     }
 
     #[test]
     fn an_authorized_source_delivered_by_the_inbox_is_accepted() {
+        let transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &record_from(INBOX, SOURCE),
+        );
+
+        assert_eq!(transition.post_data, None);
         assert_eq!(
-            apply(
-                Effect::AcceptDelivery {
-                    caller: INBOX,
-                    marker: marker()
-                },
-                &config().to_bytes()
-            ),
-            None
+            transition.sends,
+            vec![Envelope::new(
+                actor(ping_record_pda(RECEIVER)),
+                &ReceiverMessage::WriteRecord(b"ping".to_vec()),
+            )]
         );
     }
 
     #[test]
     #[should_panic(expected = "only callable by the authorized deliverer")]
     fn a_caller_that_is_not_the_deliverer_is_refused() {
-        apply(
-            Effect::AcceptDelivery {
-                caller: AccountId::new([2; 32]),
-                marker: marker(),
-            },
-            &config().to_bytes(),
+        let _transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &record_from(AccountId::new([2; 32]), SOURCE),
         );
     }
 
     #[test]
     #[should_panic(expected = "only callable for a peer source this receiver authorizes")]
     fn a_marker_for_an_unauthorized_source_is_refused() {
-        apply(
-            Effect::AcceptDelivery {
-                caller: INBOX,
-                marker: inbox_source_marker_account_id(INBOX, &ZONE, AccountId::new([4; 32])),
-            },
-            &config().to_bytes(),
+        let _transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &record_from(INBOX, AccountId::new([4; 32])),
         );
     }
 
     #[test]
     fn the_configured_authority_may_replace_the_sources() {
-        let updated = apply(
-            Effect::UpdateSources {
-                caller: None,
-                authority: AUTHORITY,
-                sources: vec![],
-            },
-            &config().to_bytes(),
-        )
-        .expect("the config is written");
-        assert_eq!(
-            ReceiverConfig::from_bytes(&updated)
-                .expect("the config decodes")
-                .sources,
-            vec![]
+        let transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &update(AUTHORITY, None),
         );
+        assert_eq!(written_config(&transition).sources, vec![]);
     }
 
     #[test]
-    #[should_panic(expected = "second account must be the configured authority")]
+    #[should_panic(expected = "must be the configured authority")]
     fn another_account_cannot_replace_the_sources() {
-        apply(
-            Effect::UpdateSources {
-                caller: None,
-                authority: AccountId::new([3; 32]),
-                sources: vec![],
-            },
-            &config().to_bytes(),
-        );
+        let other = AccountId::new([3; 32]);
+        let _transition = at_config(Origin::Program(RECEIVER), &config(), &update(other, None));
     }
 
     #[test]
     #[should_panic(expected = "through the configured governance program")]
     fn another_program_cannot_act_for_the_authority() {
-        apply(
-            Effect::UpdateSources {
-                caller: Some(AccountId::new([8; 32])),
-                authority: AUTHORITY,
-                sources: vec![],
-            },
-            &config().to_bytes(),
+        let _transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &update(AUTHORITY, Some(AccountId::new([8; 32]))),
         );
     }
 
     #[test]
     fn renouncing_clears_the_authority() {
-        let updated = apply(
-            Effect::RenounceAuthority {
-                caller: Some(GOVERNANCE),
-                authority: AUTHORITY,
-            },
-            &config().to_bytes(),
-        )
-        .expect("the config is written");
-        let cfg = ReceiverConfig::from_bytes(&updated).expect("the config decodes");
+        let transition = at_config(
+            Origin::Program(RECEIVER),
+            &config(),
+            &renounce(Some(GOVERNANCE)),
+        );
+        let cfg = written_config(&transition);
         assert_eq!(cfg.authority, None);
         assert_eq!(cfg.sources, config().sources);
     }
@@ -323,21 +366,17 @@ mod tests {
     fn a_renounced_authority_cannot_be_renounced_again() {
         let mut cfg = config();
         cfg.authority = None;
-        apply(
-            Effect::RenounceAuthority {
-                caller: None,
-                authority: AUTHORITY,
-            },
-            &cfg.to_bytes(),
-        );
+        let _transition = at_config(Origin::Program(RECEIVER), &cfg, &renounce(None));
     }
 
     #[test]
     fn an_identical_reinit_is_a_no_op_rewrite() {
-        assert_eq!(
-            apply(Effect::InitConfig(config()), &config().to_bytes()),
-            Some(config().to_bytes())
+        let transition = at_config(
+            Origin::Root,
+            &config(),
+            &ReceiverMessage::InitConfig(config()),
         );
+        assert_eq!(written_config(&transition), config());
     }
 
     #[test]
@@ -345,6 +384,6 @@ mod tests {
     fn a_reinit_with_different_contents_is_refused() {
         let mut other = config();
         other.sources = vec![];
-        apply(Effect::InitConfig(other), &config().to_bytes());
+        let _transition = at_config(Origin::Root, &config(), &ReceiverMessage::InitConfig(other));
     }
 }

@@ -16,13 +16,11 @@ pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
 pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
-    /// Writes an outbound cross-zone message to the outbox shard at the slot PDA.
+pub enum Message {
+    /// Writes an outbound cross-zone message to the outbox shard at the slot PDA,
+    /// which is the receiving actor's account.
     ///
     /// Each `(emitter, target_zone, ordinal)` slot can be written only once.
-    ///
-    /// Required accounts (1):
-    /// - Outbox PDA account
     Emit {
         target_zone: ZoneId,
         target_account_id: AccountId,
@@ -41,10 +39,10 @@ pub enum Instruction {
 /// watcher and are not stored here.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OutboxRecord {
-    /// The program that called `Emit`, which is the immediate chained caller.
+    /// The program that sent `Emit`, which is the immediate sender.
     /// Cross-zone discovery names the top-level program instead, so joining a
-    /// record against a delivery is only sound while every emitter refuses to be
-    /// called by another program.
+    /// record against a delivery is only sound while every emitter refuses
+    /// messages from another program.
     pub emitter: AccountId,
     pub target_zone: ZoneId,
     pub ordinal: u32,
@@ -74,8 +72,8 @@ pub fn cross_zone_outbox_account_id() -> AccountId {
 /// PDA holding one emitted message, keyed by the emitting program, the
 /// destination zone, and a per-emitter per-zone ordinal.
 ///
-/// `emitter` is the program that called `Emit`, which the guest takes from
-/// `caller_program_id` rather than from the instruction. Without it in the
+/// `emitter` is the program that sent `Emit`, which the guest takes from the
+/// delivery's origin rather than from the message. Without it in the
 /// address two programs share a slot and one overwrites the other.
 #[must_use]
 pub fn outbox_pda(

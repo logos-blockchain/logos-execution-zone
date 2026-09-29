@@ -17,7 +17,7 @@ pub const BRIDGE_LOCK_NAME: [u8; 11] = *b"bridge_lock";
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte,
 /// so inserting one ahead of `Lock` shifts every existing encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Lock `amount` of the holder's balance and emit a cross-zone message
     /// minting the wrapped token on `target_zone`.
     ///
@@ -28,9 +28,10 @@ pub enum Instruction {
     /// `target_zone` is the caller's, so a lock to a zone that will not route it
     /// escrows and never mints. TODO: bound it source-side.
     ///
-    /// Required accounts (5): config PDA, holder (authorized, echoed), holder
-    /// holding PDA, escrow PDA, outbox PDA.
+    /// Sent to the holder's own actor under this program, signed by the holder;
+    /// `outbox` is the outbox PDA actor the emission goes to.
     Lock {
+        outbox: Actor,
         amount: u128,
         target_zone: [u8; 32],
         target_account_id: AccountId,
@@ -41,8 +42,12 @@ pub enum Instruction {
     /// Sets the outbox program and mint target in the config shard at genesis.
     /// Repeating the same configuration is a no-op; a different one is rejected.
     ///
-    /// Required accounts (1): the config PDA.
+    /// Sent to the config PDA.
     InitConfig {
+        outbox_account_id: AccountId,
+        target_account_id: AccountId,
+    },
+    CheckRoute {
         outbox_account_id: AccountId,
         target_account_id: AccountId,
     },
@@ -155,7 +160,8 @@ mod tests {
     /// existing encoding.
     #[test]
     fn lock_is_the_first_variant() {
-        let lock = Instruction::Lock {
+        let lock = Message::Lock {
+            outbox: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
             amount: 1,
             target_zone: [7; 32],
             target_account_id: AccountId::new([1; 32]),

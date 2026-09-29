@@ -1,12 +1,11 @@
 //! The Token Program implementation.
 
-use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, ShardData},
-    program::{Plan, PlanInput},
+    account::ShardData,
+    program::{ReceiveInput, Response},
 };
 pub use token_core as core;
-use token_core::{Instruction, TokenDescriptor, TokenKind};
+use token_core::{Message, expected_sends};
 
 pub mod burn;
 pub mod initialize;
@@ -17,156 +16,85 @@ pub mod transfer;
 
 mod tests;
 
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Effect {
-    Withdraw {
-        descriptor: TokenDescriptor,
-        amount: u128,
-    },
-    Deposit {
-        descriptor: TokenDescriptor,
-        amount: u128,
-    },
-    Create(ShardData),
-    CheckHoldingKind(TokenKind),
-    InitializeHolding {
-        descriptor: TokenDescriptor,
-        is_authorized: bool,
-    },
-    MintSupply {
-        amount: u128,
-    },
-    BurnSupply {
-        kind: TokenKind,
-        amount: u128,
-    },
-    BurnHolding {
-        descriptor: TokenDescriptor,
-        amount: u128,
-    },
-    PrintCopy {
-        definition_id: AccountId,
-    },
-}
-
-pub fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    let mut plan = Plan::new(input);
-    match instruction {
-        Instruction::Transfer {
-            amount_to_transfer,
-            descriptor,
+pub fn receive(input: &ReceiveInput, message: Message) -> Response {
+    let from_token = input.from_own_program();
+    let sends = expected_sends(input.receiver, &message);
+    let post = match message {
+        Message::Transfer {
+            descriptor, amount, ..
         } => {
-            let [sender, recipient] = <&[_; 2]>::try_from(input.accounts.as_slice())
-                .expect("Transfer instruction requires exactly two accounts");
-            transfer::transfer(&mut plan, sender, recipient, descriptor, amount_to_transfer);
+            assert!(input.is_authorized, "Sender authorization is missing");
+            Some(transfer::withdraw(&input.pre_data, &descriptor, amount))
+        }
+        Message::Credit {
+            descriptor, amount, ..
+        } => {
+            assert!(from_token, "A credit must come from the token program");
+            Some(transfer::deposit(&input.pre_data, &descriptor, amount))
+        }
+        Message::EnsureHolding { descriptor } => {
+            initialize::ensure_holding(&input.pre_data, &descriptor, input.is_authorized)
+        }
+        Message::Burn {
+            descriptor, amount, ..
+        } => {
+            assert!(input.is_authorized, "Authorization is missing");
+            Some(burn::burn_holding(&input.pre_data, &descriptor, amount))
+        }
+        Message::PrintNft { definition_id, .. } => {
+            assert!(input.is_authorized, "Master NFT Account must be authorized");
+            Some(print_nft::print_copy(&input.pre_data, definition_id))
         }
         // TODO(cross-zone): nothing here checks the caller, so the cross-zone inbox
         // can deliver into this program on a peer's word, letting the peer drive
         // writes in token's own shard at addresses it names. That is the same
         // reach any local caller has; a peer just pays no local fee.
-        Instruction::NewFungibleDefinition { name, total_supply } => {
-            let [definition_account, holding_account] =
-                <&[_; 2]>::try_from(input.accounts.as_slice())
-                    .expect("NewFungibleDefinition instruction requires exactly two accounts");
-            new_definition::new_fungible_definition(
-                &mut plan,
-                definition_account,
-                holding_account,
-                name,
-                total_supply,
-            );
-        }
-        Instruction::NewDefinitionWithMetadata {
-            new_definition,
+        Message::NewDefinition {
+            definition,
             metadata,
+            ..
         } => {
-            let [definition_account, holding_account, metadata_account] = <&[_; 3]>::try_from(
-                input.accounts.as_slice(),
-            )
-            .expect("NewDefinitionWithMetadata instruction requires exactly three accounts");
-            new_definition::new_definition_with_metadata(
-                &mut plan,
-                definition_account,
-                holding_account,
-                metadata_account,
-                new_definition,
-                *metadata,
-            );
-        }
-        Instruction::InitializeAccount { kind } => {
-            let [definition_account, account_to_initialize] =
-                <&[_; 2]>::try_from(input.accounts.as_slice())
-                    .expect("InitializeAccount instruction requires exactly two accounts");
-            initialize::initialize_account(
-                &mut plan,
-                definition_account,
-                account_to_initialize,
-                kind,
-            );
-        }
-        Instruction::Burn {
-            amount_to_burn,
-            kind,
-        } => {
-            let [definition_account, user_holding_account] =
-                <&[_; 2]>::try_from(input.accounts.as_slice())
-                    .expect("Burn instruction requires exactly two accounts");
-            burn::burn(
-                &mut plan,
-                definition_account,
-                user_holding_account,
-                kind,
-                amount_to_burn,
-            );
-        }
-        Instruction::Mint { amount_to_mint } => {
-            let [definition_account, user_holding_account] =
-                <&[_; 2]>::try_from(input.accounts.as_slice())
-                    .expect("Mint instruction requires exactly two accounts");
-            mint::mint(
-                &mut plan,
-                definition_account,
-                user_holding_account,
-                amount_to_mint,
-            );
-        }
-        Instruction::PrintNft { definition_id } => {
-            let [master_account, printed_account] = <&[_; 2]>::try_from(input.accounts.as_slice())
-                .expect("PrintNft instruction requires exactly two accounts");
-            print_nft::print_nft(&mut plan, master_account, printed_account, definition_id);
-        }
-    }
-
-    plan
-}
-
-#[must_use]
-pub fn apply(effect: Effect, pre_data: &ShardData) -> Option<ShardData> {
-    Some(match effect {
-        Effect::Withdraw { descriptor, amount } => {
-            transfer::withdraw(pre_data, &descriptor, amount)
-        }
-        Effect::Deposit { descriptor, amount } => transfer::deposit(pre_data, &descriptor, amount),
-        Effect::Create(data) => {
             assert!(
-                pre_data.is_empty(),
+                input.pre_data.is_empty(),
                 "Target account must not already hold data"
             );
-            data
+            Some(ShardData::from(&new_definition::definition(
+                definition,
+                metadata.map(|(metadata_id, _)| metadata_id),
+            )))
         }
-        Effect::CheckHoldingKind(kind) => {
-            initialize::check_holding_kind(pre_data, kind);
-            return None;
+        Message::Mint { amount, .. } => {
+            assert!(input.is_authorized, "Definition authorization is missing");
+            Some(mint::mint_supply(&input.pre_data, amount))
         }
-        Effect::InitializeHolding {
-            descriptor,
-            is_authorized,
-        } => initialize::initialize_holding(pre_data, &descriptor, is_authorized),
-        Effect::MintSupply { amount } => mint::mint_supply(pre_data, amount),
-        Effect::BurnSupply { kind, amount } => burn::burn_supply(pre_data, kind, amount),
-        Effect::BurnHolding { descriptor, amount } => {
-            burn::burn_holding(pre_data, &descriptor, amount)
+        Message::BurnSupply {
+            definition_id,
+            kind,
+            amount,
+        } => {
+            assert!(from_token, "A supply burn must come from the token program");
+            assert_eq!(
+                input.receiver.account_id, definition_id,
+                "A supply burn names another definition"
+            );
+            Some(burn::burn_supply(&input.pre_data, kind, amount))
         }
-        Effect::PrintCopy { definition_id } => print_nft::print_copy(pre_data, definition_id),
-    })
+        Message::AssertKind { kind } => {
+            initialize::check_holding_kind(&input.pre_data, kind);
+            None
+        }
+        Message::Create(data) => {
+            assert!(from_token, "A creation must come from the token program");
+            assert!(
+                input.pre_data.is_empty(),
+                "Target account must not already hold data"
+            );
+            Some(data)
+        }
+        Message::Notification(_) => panic!("A token actor does not accept notifications"),
+    };
+    sends.into_iter().fold(
+        post.map_or_else(Response::keep, Response::write),
+        Response::send,
+    )
 }

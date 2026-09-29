@@ -144,6 +144,7 @@ dependencies = [
  "borsh",
  "lee_core",
  "risc0-zkvm",
+ "token_core",
 ]
 
 [[package]]
@@ -2143,6 +2144,7 @@ name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "cross_zone_marker_core",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -2154,7 +2156,6 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "cross_zone_inbox_core",
- "cross_zone_marker_core",
  "lee_core",
 ]
 
@@ -2162,6 +2163,7 @@ dependencies = [
 name = "cross_zone_marker_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -12521,7 +12523,6 @@ dependencies = [
 name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
- "borsh",
  "clock_core",
  "lee_core",
  "risc0-zkvm",

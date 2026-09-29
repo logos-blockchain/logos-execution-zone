@@ -71,13 +71,14 @@ impl borsh::BorshDeserialize for SequencerKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Locks `amount` into the stake funds account of `sequencer_key`'s ownership account.
     /// First use initializes the ownership account's shard for this program.
     Stake {
         sequencer_key: SequencerKey,
         amount: u128,
         has_record: bool,
+        funding: AccountId,
     },
 
     /// Records a request to release `amount` to `destination`; no balance
@@ -97,6 +98,21 @@ pub enum Instruction {
         amount: u128,
         requested_at: u64,
         exit_delay: u64,
+        destination: AccountId,
+    },
+
+    /// Burns the key's whole stake to the sink and removes its entry.
+    ///
+    /// Only `approvals` authorize this. The reason for the offence is not checked.
+    ///
+    /// `total_staked` is the burn amount, proposed here and required by the config to be the
+    /// entry's actual tracked stake.
+    Slash {
+        sequencer_key: SequencerKey,
+        /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
+        inscription: [u8; 32],
+        approvals: Vec<SlashApproval>,
+        total_staked: u128,
     },
 
     /// Sets the channel params and the channel id once, at genesis. Rejected
@@ -107,15 +123,26 @@ pub enum Instruction {
         channel_id: [u8; 32],
     },
 
-    /// Burns the key's whole stake to the sink and removes its entry.
-    ///
-    /// Only `approvals` authorize this. The reason for the offence is not checked.
-    ///
-    /// `total_staked` is the burn amount, proposed here and required by the config effect to
-    /// be the entry's actual tracked stake.
-    Slash {
+    RecordStake {
         sequencer_key: SequencerKey,
-        /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
+        ownership: AccountId,
+        amount: u128,
+        has_record: bool,
+    },
+    TrackUnstakeRequest {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
+        amount: u128,
+    },
+    SettleUnstake {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
+        amount: u128,
+        exit_delay: u64,
+    },
+    ApplySlash {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
         inscription: [u8; 32],
         approvals: Vec<SlashApproval>,
         total_staked: u128,
@@ -198,10 +225,10 @@ pub struct ChannelParams {
 /// Minimum stake and per-key standing, stored in this program's config shard.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerStakeConfig {
-    /// `None` until genesis runs [`Instruction::InitChannelParams`], which is
-    /// the only state that instruction accepts.
+    /// `None` until genesis runs [`Message::InitChannelParams`], which is
+    /// the only state that message accepts.
     pub channel_params: Option<ChannelParams>,
-    /// The Bedrock channel this chain writes to, set by the same instruction;
+    /// The Bedrock channel this chain writes to, set by the same message;
     /// scopes a slash approval to this zone.
     pub channel_id: Option<[u8; 32]>,
     pub entries: BTreeMap<SequencerKey, SequencerEntry>,
