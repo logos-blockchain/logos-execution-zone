@@ -1164,6 +1164,36 @@ mod tests {
     }
 
     #[test]
+    fn boundary_outputs_keep_their_order_through_the_mirror() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let output = |data: u8| lee_core::execution_state::Output {
+            to: lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([1; 32]),
+                lee_core::account::AccountId::new([2; 32]),
+            ),
+            message: vec![data],
+            origin: lee_core::program::Origin::Root,
+            grants: vec![],
+            pda_seeds: vec![],
+        };
+        let boundary = lee_core::execution_state::Boundary {
+            outputs: vec![output(7), output(8), output(9), output(7)],
+            assumptions: vec![],
+            schedule: vec![],
+        };
+
+        let mirrored = Boundary::from(boundary.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: Boundary = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee_core::execution_state::Boundary::from(restored),
+            boundary
+        );
+    }
+
+    #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
             account_id: lee_core::account::AccountId::from_builtin_program([7_u32; 8]),

@@ -842,6 +842,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn boundary_outputs_keep_their_order_over_the_ffi() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let output = |data: u8| Output {
+            to: Actor {
+                account_id: AccountId { value: [1; 32] },
+                program_account_id: AccountId { value: [2; 32] },
+            },
+            message: vec![data],
+            origin: Origin::Root,
+            grants: vec![],
+            pda_seeds: vec![],
+        };
+        let original = PrivacyPreservingTransaction {
+            hash: HashType([4; 32]),
+            message: PrivacyPreservingMessage {
+                declared: Declared::default(),
+                boundary: Boundary {
+                    outputs: vec![output(7), output(8), output(9), output(7)],
+                    assumptions: vec![],
+                    schedule: vec![
+                        ScheduleOp::CallPublic,
+                        ScheduleOp::CallPublic,
+                        ScheduleOp::CallPublic,
+                        ScheduleOp::CallPublic,
+                    ],
+                },
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow((None, None)),
+                timestamp_validity_window: ValidityWindow((None, None)),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: Some(Proof(vec![])),
+            },
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
+
+        assert_eq!(
+            back.message.boundary.outputs,
+            original.message.boundary.outputs
+        );
+    }
+
+    #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
