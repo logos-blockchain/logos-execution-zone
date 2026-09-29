@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use lee::{Account, AccountData, AccountId, ShardData};
 
-use crate::{
-    OperationStatus,
-    api::types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
-};
+use crate::{errors::OperationStatus, types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8}};
 
 #[repr(C)]
 pub struct FfiAccountData {
@@ -120,7 +117,7 @@ impl TryFrom<FfiAccount> for Account {
 
 /// Frees the resources associated with the given ffi account.
 ///
-/// Takes ownership of the whole allocation produced by a `query_*` call: the
+/// Takes ownership of the whole allocation: the
 /// outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
 /// data buffer. Passing the struct by value previously freed only the inner
 /// buffer and leaked the outer box.
@@ -137,8 +134,7 @@ impl TryFrom<FfiAccount> for Account {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
+pub unsafe fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -162,7 +158,7 @@ mod tests {
     use lee::{Account, AccountData, AccountId, ShardData};
     use lee_core::account::Nonce;
 
-    use crate::api::types::account::FfiAccount;
+    use crate::types::account::FfiAccount;
 
     #[test]
     fn account_roundtrip() {

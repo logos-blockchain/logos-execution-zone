@@ -5,62 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef enum OperationStatus {
-  Ok = 0,
-  NullPointer = 1,
-  InitializationError = 2,
-  ClientError = 3,
-  CastError = 4,
-  NotSupported = 5,
-  InvalidArgument = 6,
-  ResponseTooBig = 7,
-} OperationStatus;
-
-typedef enum FfiProgramImageClaimKind {
-  Disclosed = 0,
-  Undisclosed,
-} FfiProgramImageClaimKind;
-
-typedef enum FfiTransactionKind {
-  Public = 0,
-  Private,
-} FfiTransactionKind;
-
-typedef enum FfiBedrockStatus {
-  Pending = 0,
-  Safe,
-  Finalized,
-} FfiBedrockStatus;
-
-typedef enum PointerKind_Tag {
-  Owned,
-  Borrowed,
-  Null,
-} PointerKind_Tag;
-
-typedef struct PointerKind {
-  PointerKind_Tag tag;
-  union {
-    struct {
-      void *owned;
-    };
-    struct {
-      const void *borrowed;
-    };
-  };
-} PointerKind;
-
-typedef struct Pointer_Runtime {
-  struct PointerKind kind;
-} Pointer_Runtime;
-
-/**
- * Wrapper around [`tokio::runtime::Runtime`] that can be safely passed across the FFI boundary.
- */
-typedef struct Runtime {
-  struct Pointer_Runtime inner;
-} Runtime;
-
 /**
  * FFI-owned sequencer.
  *
@@ -70,21 +14,10 @@ typedef struct Runtime {
  */
 typedef struct SequencerServiceFFI {
   void *handle;
-  struct Runtime runtime;
+  Runtime runtime;
 } SequencerServiceFFI;
 
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_SequencerServiceFFI__OperationStatus {
-  struct SequencerServiceFFI *value;
-  enum OperationStatus error;
-} PointerResult_SequencerServiceFFI__OperationStatus;
-
-typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSequencerServiceFFIResult;
+typedef PointerResult<SequencerServiceFFI, OperationStatus> InitializedSequencerServiceFFIResult;
 
 /**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
@@ -97,401 +30,8 @@ typedef struct PointerResult_SequencerServiceFFI__OperationStatus InitializedSeq
 typedef struct LastBlockIdResult {
   uint64_t block_id;
   bool is_some;
-  enum OperationStatus error;
+  OperationStatus error;
 } LastBlockIdResult;
-
-typedef uint64_t FfiBlockId;
-
-/**
- * 32-byte array type for `AccountId`, keys, hashes, etc.
- */
-typedef struct FfiBytes32 {
-  uint8_t data[32];
-} FfiBytes32;
-
-typedef struct FfiBytes32 FfiHashType;
-
-typedef uint64_t FfiTimestamp;
-
-typedef struct FfiBytes32 FfiPublicKey;
-
-/**
- * 64-byte array type for signatures, etc.
- */
-typedef struct FfiBytes64 {
-  uint8_t data[64];
-} FfiBytes64;
-
-typedef struct FfiBytes64 FfiSignature;
-
-typedef struct FfiBlockHeader {
-  FfiBlockId block_id;
-  FfiHashType prev_block_hash;
-  FfiHashType hash;
-  FfiTimestamp timestamp;
-  FfiPublicKey producer;
-  FfiSignature signature;
-} FfiBlockHeader;
-
-typedef struct FfiBytes32 FfiAccountId;
-
-typedef struct FfiProgramShardSelector {
-  FfiAccountId account_id;
-  FfiAccountId program_account_id;
-} FfiProgramShardSelector;
-
-typedef struct FfiVec_FfiProgramShardSelector {
-  struct FfiProgramShardSelector *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiProgramShardSelector;
-
-/**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
-
-typedef struct FfiU128 FfiNonce;
-
-typedef struct FfiVec_FfiNonce {
-  FfiNonce *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiNonce;
-
-typedef struct FfiVec_FfiNonce FfiNonceList;
-
-typedef struct FfiVec_u8 {
-  uint8_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u8;
-
-typedef struct FfiVec_u8 FfiInstructionDataList;
-
-/**
- * Fee declaration of a public transaction. Held inline (not behind a
- * pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
- * declaration.
- */
-typedef struct FfiFeeDeclaration {
-  FfiAccountId payer;
-  uint64_t gas_limit;
-  uint64_t tip;
-  struct FfiU128 max_fee;
-} FfiFeeDeclaration;
-
-typedef struct FfiPublicMessage {
-  FfiAccountId program_account_id;
-  struct FfiVec_FfiProgramShardSelector shard_selectors;
-  FfiNonceList nonces;
-  FfiInstructionDataList instruction_data;
-  bool has_fee;
-  struct FfiFeeDeclaration fee;
-} FfiPublicMessage;
-
-typedef struct FfiSignaturePubKeyEntry {
-  FfiSignature signature;
-  FfiPublicKey public_key;
-} FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry {
-  struct FfiSignaturePubKeyEntry *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
-
-typedef struct FfiPublicTransactionBody {
-  FfiHashType hash;
-  struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
-} FfiPublicTransactionBody;
-
-typedef struct FfiVec_u8 FfiVecU8;
-
-typedef struct FfiPublicEffect {
-  FfiAccountId program_account_id;
-  FfiAccountId shard_program_account_id;
-  FfiVecU8 data;
-} FfiPublicEffect;
-
-typedef struct FfiVec_FfiPublicEffect {
-  struct FfiPublicEffect *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicEffect;
-
-typedef struct FfiVec_FfiPublicEffect FfiPublicEffectList;
-
-typedef struct FfiPublicAction {
-  FfiAccountId account_id;
-  FfiPublicEffectList effects;
-} FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction {
-  struct FfiPublicAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiEncryptedAccountData {
-  FfiVecU8 ciphertext;
-  FfiVecU8 epk;
-  uint8_t view_tag;
-} FfiEncryptedAccountData;
-
-typedef struct FfiPrivateAction {
-  struct FfiBytes32 nullifier;
-  struct FfiBytes32 root;
-  struct FfiBytes32 commitment;
-  struct FfiEncryptedAccountData encrypted_post_state;
-} FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction {
-  struct FfiPrivateAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
-
-typedef struct FfiProgramImageClaim {
-  enum FfiProgramImageClaimKind image_claim_kind;
-  const FfiAccountId *account_id;
-  const uint32_t (*image_id)[8];
-  const uint8_t (*root)[32];
-} FfiProgramImageClaim;
-
-typedef struct FfiVec_FfiProgramImageClaim {
-  struct FfiProgramImageClaim *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiProgramImageClaim;
-
-typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
-
-typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicActionList public_actions;
-  FfiNonceList nonces;
-  FfiPrivateActionList private_actions;
-  uint64_t block_validity_window[2];
-  uint64_t timestamp_validity_window[2];
-  FfiProgramImageClaims program_image_claims;
-} FfiPrivacyPreservingMessage;
-
-typedef FfiVecU8 FfiProof;
-
-typedef struct FfiPrivateTransactionBody {
-  FfiHashType hash;
-  struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
-  FfiProof proof;
-} FfiPrivateTransactionBody;
-
-typedef struct FfiTransactionBody {
-  struct FfiPublicTransactionBody *public_body;
-  struct FfiPrivateTransactionBody *private_body;
-} FfiTransactionBody;
-
-typedef struct FfiTransaction {
-  struct FfiTransactionBody body;
-  enum FfiTransactionKind kind;
-} FfiTransaction;
-
-typedef struct FfiVec_FfiTransaction {
-  struct FfiTransaction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiTransaction;
-
-typedef struct FfiVec_FfiTransaction FfiBlockBody;
-
-typedef struct FfiBlock {
-  struct FfiBlockHeader header;
-  FfiBlockBody body;
-  enum FfiBedrockStatus bedrock_status;
-} FfiBlock;
-
-typedef struct FfiOption_FfiBlock {
-  struct FfiBlock *value;
-  bool is_some;
-} FfiOption_FfiBlock;
-
-typedef struct FfiOption_FfiBlock FfiBlockOpt;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiBlockOpt__OperationStatus {
-  FfiBlockOpt *value;
-  enum OperationStatus error;
-} PointerResult_FfiBlockOpt__OperationStatus;
-
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiAccountId;
-
-typedef struct FfiVec_FfiVecU8 {
-  FfiVecU8 *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiVecU8;
-
-typedef struct FfiAccountData {
-  /**
-   * Account shards keys.
-   */
-  struct FfiVec_FfiAccountId account_data_keys;
-  /**
-   * Account shards values (guaranteed to have same amount of entries as `account_data_keys`).
-   */
-  struct FfiVec_FfiVecU8 account_data_values;
-} FfiAccountData;
-
-/**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  /**
-   * Account data struct.
-   */
-  struct FfiAccountData account_data;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiAccount__OperationStatus {
-  struct FfiAccount *value;
-  enum OperationStatus error;
-} PointerResult_FfiAccount__OperationStatus;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_u8__OperationStatus {
-  uint8_t *value;
-  enum OperationStatus error;
-} PointerResult_u8__OperationStatus;
-
-typedef struct FfiOption_FfiTransaction {
-  struct FfiTransaction *value;
-  bool is_some;
-} FfiOption_FfiTransaction;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
-  struct FfiOption_FfiTransaction *value;
-  enum OperationStatus error;
-} PointerResult_FfiOption_FfiTransaction_____OperationStatus;
-
-typedef struct FfiVec_FfiBlock {
-  struct FfiBlock *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiBlock;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
-  struct FfiVec_FfiBlock *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiBlock_____OperationStatus;
-
-typedef struct FfiOption_u64 {
-  uint64_t *value;
-  bool is_some;
-} FfiOption_u64;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
-  struct FfiVec_FfiTransaction *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiTransaction_____OperationStatus;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_u64__OperationStatus {
-  uint64_t *value;
-  enum OperationStatus error;
-} PointerResult_u64__OperationStatus;
-
-/**
- * 8-byte array type for event selectors.
- */
-typedef struct FfiBytes8 {
-  uint8_t data[8];
-} FfiBytes8;
-
-typedef struct FfiBytes8 FfiSelector;
-
-typedef struct FfiEventRecord {
-  FfiBlockId block_id;
-  uint32_t tx_index;
-  FfiHashType tx_hash;
-  FfiAccountId program_account_id;
-  FfiSelector selector;
-  FfiVecU8 data;
-} FfiEventRecord;
-
-typedef struct FfiVec_FfiEventRecord {
-  struct FfiEventRecord *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiEventRecord;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
-  struct FfiVec_FfiEventRecord *value;
-  enum OperationStatus error;
-} PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
 
 #ifdef __cplusplus
 extern "C" {
@@ -517,7 +57,7 @@ extern "C" {
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
  * - `config_path` is a valid pointer to a null-terminated C string.
  */
-InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
+InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const Runtime *runtime,
                                                                    const char *config_path);
 
 /**
@@ -538,7 +78,7 @@ InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct 
  * - The `SequencerServiceFFI` instance was created by this library
  * - The pointer will not be used after this function returns
  */
-enum OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
+OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
 
 /**
  * Initializes logging for the sequencer at `level`.
@@ -553,14 +93,6 @@ enum OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *se
  * - First call to this function wins; subsequent calls are no-ops.
  */
 void sequencer_ffi_init_logger(const char *level);
-
-/**
- * # Safety
- * It's up to the caller to pass a proper pointer, if somehow from c/c++ side
- * this is called with a type which doesn't come from a returned `CString` it
- * will cause a segfault.
- */
-void sequencer_ffi_free_cstring(char *block);
 
 /**
  * Query the last block id from sequencer.
@@ -630,8 +162,8 @@ char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(const struct SequencerServiceFFI *sequencer,
-                                                                            FfiBlockId block_id);
+PointerResult<FfiBlockOpt, OperationStatus> sequencer_ffi_query_block(const struct SequencerServiceFFI *sequencer,
+                                                                      FfiBlockId block_id);
 
 /**
  * Query the block by hash from sequencer.
@@ -650,8 +182,8 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block(cons
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
-                                                                                    FfiHashType hash);
+PointerResult<FfiBlockOpt, OperationStatus> sequencer_ffi_query_block_by_hash(const struct SequencerServiceFFI *sequencer,
+                                                                              FfiHashType hash);
 
 /**
  * Query the account by id from sequencer.
@@ -670,8 +202,8 @@ struct PointerResult_FfiBlockOpt__OperationStatus sequencer_ffi_query_block_by_h
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiAccount__OperationStatus sequencer_ffi_query_account(const struct SequencerServiceFFI *sequencer,
-                                                                             FfiAccountId account_id);
+PointerResult<FfiAccount, OperationStatus> sequencer_ffi_query_account(const struct SequencerServiceFFI *sequencer,
+                                                                       FfiAccountId account_id);
 
 /**
  * Send transaction into sequencer.
@@ -690,8 +222,8 @@ struct PointerResult_FfiAccount__OperationStatus sequencer_ffi_query_account(con
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_u8__OperationStatus sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                        struct FfiTransaction transaction);
+PointerResult<uint8_t, OperationStatus> sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                       FfiTransaction transaction);
 
 /**
  * Query the transaction by hash from sequencer.
@@ -710,8 +242,8 @@ struct PointerResult_u8__OperationStatus sequencer_ffi_send_transaction(const st
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiOption_FfiTransaction_____OperationStatus sequencer_ffi_query_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                                                  FfiHashType hash);
+PointerResult<FfiOption<FfiTransaction>, OperationStatus> sequencer_ffi_query_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                          FfiHashType hash);
 
 /**
  * Query the blocks by block range from sequencer.
@@ -731,9 +263,9 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus sequencer_ffi_
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_block_vec(const struct SequencerServiceFFI *sequencer,
-                                                                                       struct FfiOption_u64 before,
-                                                                                       uint64_t limit);
+PointerResult<FfiVec<FfiBlock>, OperationStatus> sequencer_ffi_query_block_vec(const struct SequencerServiceFFI *sequencer,
+                                                                               FfiOption<uint64_t> before,
+                                                                               uint64_t limit);
 
 /**
  * Query the transactions range by account id from sequencer.
@@ -754,10 +286,10 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus sequencer_ffi_query_blo
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
-                                                                                                           FfiAccountId account_id,
-                                                                                                           uint64_t offset,
-                                                                                                           uint64_t limit);
+PointerResult<FfiVec<FfiTransaction>, OperationStatus> sequencer_ffi_query_transactions_by_account(const struct SequencerServiceFFI *sequencer,
+                                                                                                   FfiAccountId account_id,
+                                                                                                   uint64_t offset,
+                                                                                                   uint64_t limit);
 
 /**
  * Query the block id by transaction hash from sequencer.
@@ -776,8 +308,8 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus sequencer_ffi_que
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-struct PointerResult_u64__OperationStatus sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
-                                                                               FfiHashType tx_hash);
+PointerResult<uint64_t, OperationStatus> sequencer_ffi_query_block_by_tx_hash(const struct SequencerServiceFFI *sequencer,
+                                                                              FfiHashType tx_hash);
 
 /**
  * Frees the resources associated with the query for block id by transaction hash.
@@ -831,12 +363,20 @@ void sequencer_ffi_free_query_block_id_by_transaction(uint64_t *val);
  * - each of `tx_hash`, `program_account_id` and `selector` is either null or a valid pointer to
  *   its respective type.
  */
-struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
-                                                                                          uint64_t from_block,
-                                                                                          struct FfiOption_u64 to_block,
-                                                                                          const FfiHashType *tx_hash,
-                                                                                          const FfiAccountId *program_account_id,
-                                                                                          const FfiSelector *selector);
+PointerResult<FfiVec<FfiEventRecord>, OperationStatus> sequencer_ffi_query_events(const struct SequencerServiceFFI *sequencer,
+                                                                                  uint64_t from_block,
+                                                                                  FfiOption<uint64_t> to_block,
+                                                                                  const FfiHashType *tx_hash,
+                                                                                  const FfiAccountId *program_account_id,
+                                                                                  const FfiSelector *selector);
+
+/**
+ * # Safety
+ * It's up to the caller to pass a proper pointer, if somehow from c/c++ side
+ * this is called with a type which doesn't come from a returned `CString` it
+ * will cause a segfault.
+ */
+void primitives_ffi_free_cstring(char *block);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -859,7 +399,7 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus sequencer_ffi_que
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_account(struct FfiAccount *val);
+void primitives_ffi_free_ffi_account(FfiAccount *val);
 
 /**
  * Frees the resources owned by an `FfiBlock` value.
@@ -883,7 +423,7 @@ void sequencer_ffi_free_ffi_account(struct FfiAccount *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_block(struct FfiBlock val);
+void primitives_ffi_free_ffi_block(FfiBlock val);
 
 /**
  * Frees the resources associated with the given ffi block option.
@@ -905,7 +445,7 @@ void sequencer_ffi_free_ffi_block(struct FfiBlock val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_block_opt(FfiBlockOpt *val);
+void primitives_ffi_free_ffi_block_opt(FfiBlockOpt *val);
 
 /**
  * Frees the resources associated with the given ffi block vector.
@@ -927,7 +467,7 @@ void sequencer_ffi_free_ffi_block_opt(FfiBlockOpt *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+void primitives_ffi_free_ffi_block_vec(FfiVec<FfiBlock> *val);
 
 /**
  * Frees the resources associated with the given vector of ffi event records.
@@ -949,7 +489,7 @@ void sequencer_ffi_free_ffi_block_vec(struct FfiVec_FfiBlock *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
+void primitives_ffi_free_ffi_event_record_vec(FfiVec<FfiEventRecord> *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.
@@ -967,7 +507,7 @@ void sequencer_ffi_free_ffi_event_record_vec(struct FfiVec_FfiEventRecord *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiTransaction`.
  */
-void sequencer_ffi_free_ffi_transaction(struct FfiTransaction val);
+void primitives_ffi_free_ffi_transaction(FfiTransaction val);
 
 /**
  * Frees the resources associated with the given ffi transaction option.
@@ -990,7 +530,7 @@ void sequencer_ffi_free_ffi_transaction(struct FfiTransaction val);
  * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
  *   freed.
  */
-void sequencer_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
+void primitives_ffi_free_ffi_transaction_opt(FfiOption<FfiTransaction> *val);
 
 /**
  * Frees the resources associated with the given vector of ffi transactions.
@@ -1012,11 +552,7 @@ void sequencer_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
-void sequencer_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
-
-bool is_ok(const enum OperationStatus *self);
-
-bool is_error(const enum OperationStatus *self);
+void primitives_ffi_free_ffi_transaction_vec(FfiVec<FfiTransaction> *val);
 
 #ifdef __cplusplus
 }  // extern "C"

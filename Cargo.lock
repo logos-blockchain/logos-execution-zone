@@ -4849,6 +4849,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
  "ping_core",
+ "primitives_ffi",
  "program_loader_core",
  "programs",
  "sequencer_bedrock_actor",
@@ -9431,6 +9432,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "primitives_ffi"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_executor_actor",
+ "sequencer_service",
+ "sequencer_storage_actor",
+ "serde_json",
+ "tokio",
+ "wallet",
+]
+
+[[package]]
 name = "privacy_preserving_circuit_program"
 version = "0.1.0"
 dependencies = [
@@ -11276,6 +11294,7 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
+ "primitives_ffi",
  "sequencer_executor_actor",
  "sequencer_service",
  "sequencer_storage_actor",
@@ -13854,6 +13873,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "primitives_ffi",
  "programs",
  "sequencer_service_rpc",
  "serde_json",

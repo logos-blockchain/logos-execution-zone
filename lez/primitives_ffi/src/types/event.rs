@@ -1,6 +1,6 @@
 use sequencer_storage_actor::actor::event_filter::EventRecord;
 
-use crate::api::types::{
+use crate::types::{
     FfiAccountId, FfiBlockId, FfiHashType, FfiSelector, FfiVec, vectors::FfiVecU8,
 };
 
@@ -39,7 +39,7 @@ impl From<EventRecord> for FfiEventRecord {
 
 /// Frees the resources associated with the given vector of ffi event records.
 ///
-/// Takes ownership of the whole allocation produced by `query_events`: the outer
+/// Takes ownership of the whole allocation: the outer
 /// `Box<FfiVec<FfiEventRecord>>` (the `PointerResult.value` pointer), the vector's
 /// backing buffer, and every record's payload within it.
 ///
@@ -55,8 +55,7 @@ impl From<EventRecord> for FfiEventRecord {
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
+pub unsafe fn primitives_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;

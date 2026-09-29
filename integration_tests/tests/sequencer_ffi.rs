@@ -17,10 +17,7 @@ use integration_tests::get_account;
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::adapter::Node as _;
-use sequencer_ffi::api::types::{
-    FfiOption,
-    transaction::{FfiTransaction, FfiTransactionKind},
-};
+use primitives_ffi::types::{FfiOption, transaction::{FfiTransaction, FfiTransactionKind}};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::config::bedrock_channel_id;
 

@@ -1,4 +1,4 @@
-use crate::api::types::{
+use crate::types::{
     FfiAccountId, FfiNonce, FfiVec,
     transaction::{
         FfiPrivateAction, FfiPublicAction, FfiPublicEffect, FfiSignaturePubKeyEntry, FfiTransaction,

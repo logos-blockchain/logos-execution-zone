@@ -11,6 +11,7 @@ sequencer_service.workspace = true
 sequencer_executor_actor = { workspace = true, features = ["actor"] }
 sequencer_storage_actor.workspace = true
 common.workspace = true
+primitives_ffi.workspace = true
 
 env_logger.workspace = true
 log = { workspace = true }

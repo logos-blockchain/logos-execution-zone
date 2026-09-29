@@ -15,19 +15,12 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
 };
-use sequencer_ffi::{
-    OperationStatus, Runtime, SequencerServiceFFI,
+use primitives_ffi::{errors::OperationStatus, result::PointerResult, runtime::Runtime, types::{FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec, account::FfiAccount, block::{FfiBlock, FfiBlockOpt}, event::FfiEventRecord, transaction::FfiTransaction}};
+use sequencer_ffi::{ 
+    SequencerServiceFFI,
     api::{
-        PointerResult,
         lifecycle::InitializedSequencerServiceFFIResult,
         query::LastBlockIdResult,
-        types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
-            account::FfiAccount,
-            block::{FfiBlock, FfiBlockOpt},
-            event::FfiEventRecord,
-            transaction::FfiTransaction,
-        },
     },
 };
 use sequencer_service::GenesisAction;

@@ -17,6 +17,7 @@ lee_core.workspace = true
 common.workspace = true
 programs.workspace = true
 sequencer_service_rpc.workspace = true
+primitives_ffi.workspace = true
 
 tokio.workspace = true
 key_protocol.workspace = true
