@@ -4,6 +4,11 @@ license = { workspace = true }
 name = "indexer_ffi"
 version = "0.1.0"
 
+[features]
+default = ["backend-http"]
+backend-http = ["indexer_core/backend-http"]
+backend-module = ["indexer_core/backend-module"]
+
 [dependencies]
 lee.workspace = true
 indexer_core.workspace = true
