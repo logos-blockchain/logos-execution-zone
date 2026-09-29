@@ -852,3 +852,6 @@ fn bind_family(
         }),
     }
 }
+
+#[cfg(test)]
+mod tests;

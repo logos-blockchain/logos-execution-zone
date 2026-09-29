@@ -1,5 +1,16 @@
 use super::*;
 
+fn receive_input() -> ReceiveInput {
+    let receiver = Actor::native_balance(AccountId::default());
+    ReceiveInput {
+        receiver,
+        origin: Origin::Root,
+        is_authorized: false,
+        pre_data: ShardData::empty(),
+        message: Vec::new(),
+    }
+}
+
 #[test]
 fn validity_window_unbounded_accepts_any_value() {
     let w: ValidityWindow<u64> = ValidityWindow::new_unbounded();
@@ -95,6 +106,55 @@ fn validity_window_from_range_full() {
     let w: ValidityWindow<u64> = (..).into();
     assert_eq!(w.start(), None);
     assert_eq!(w.end(), None);
+}
+
+#[test]
+fn response_try_with_block_validity_window_range() {
+    let transition = Response::keep()
+        .try_block_window(10_u64..100)
+        .unwrap()
+        .into_transition(receive_input());
+    assert_eq!(transition.block_validity_window.start(), Some(10));
+    assert_eq!(transition.block_validity_window.end(), Some(100));
+}
+
+#[test]
+fn response_with_block_validity_window_range_from() {
+    let transition = Response::keep()
+        .block_window(10_u64..)
+        .into_transition(receive_input());
+    assert_eq!(transition.block_validity_window.start(), Some(10));
+    assert_eq!(transition.block_validity_window.end(), None);
+}
+
+#[test]
+fn response_with_block_validity_window_range_to() {
+    let transition = Response::keep()
+        .block_window(..100_u64)
+        .into_transition(receive_input());
+    assert_eq!(transition.block_validity_window.start(), None);
+    assert_eq!(transition.block_validity_window.end(), Some(100));
+}
+
+#[test]
+fn response_try_with_block_validity_window_empty_range_fails() {
+    let result = Response::keep().try_block_window(5_u64..5);
+    assert!(result.is_err());
+}
+
+#[test]
+fn a_transition_must_echo_its_input_exactly() {
+    let input = receive_input();
+    let altered = ReceiveInput {
+        is_authorized: true,
+        ..input.clone()
+    };
+
+    assert!(validate_transition(&input, &Response::keep().into_transition(input.clone())).is_ok());
+    assert!(matches!(
+        validate_transition(&input, &Response::keep().into_transition(altered)),
+        Err(ExecutionValidationError::TransitionInputMismatch { .. })
+    ));
 }
 
 #[test]
@@ -378,5 +438,65 @@ fn account_id_from_builtin_program_reinterprets_words_as_le_bytes() {
     assert_eq!(
         AccountId::from_builtin_program(program_id).value(),
         &expected
+    );
+}
+
+#[test]
+fn a_transition_journal_frame_has_a_pinned_layout() {
+    let receiver = Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let transition = Transition {
+        input: ReceiveInput {
+            receiver,
+            origin: Origin::Root,
+            is_authorized: true,
+            pre_data: ShardData::try_from(b"ab".to_vec()).unwrap(),
+            message: b"m".to_vec(),
+        },
+        post_data: Some(ShardData::try_from(b"xyz".to_vec()).unwrap()),
+        sends: vec![Envelope {
+            to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+            message: b"q".to_vec(),
+            pda_seeds: vec![PdaSeed::new([9; 32])],
+        }],
+        events: Vec::new(),
+        block_validity_window: ValidityWindow::new_unbounded(),
+        timestamp_validity_window: ValidityWindow::new_unbounded(),
+    };
+
+    let expected: Vec<u8> = [
+        &[202, 0, 0, 0][..], // frame length: the 202 bytes below
+        &[1; 32],            // input.receiver.account_id
+        &[2; 32],            // input.receiver.program_account_id
+        &[0],                // input.origin: Origin::Root
+        &[1],                // input.is_authorized
+        &[2, 0, 0, 0],       // input.pre_data
+        b"ab",
+        &[1, 0, 0, 0], // input.message
+        b"m",
+        &[1], // post_data: Some
+        &[3, 0, 0, 0],
+        b"xyz",
+        &[1, 0, 0, 0], // sends: one envelope
+        &[3; 32],      // to
+        &[4; 32],
+        &[1, 0, 0, 0], // message
+        b"q",
+        &[1, 0, 0, 0], // pda_seeds: one seed
+        &[9; 32],
+        &[0, 0, 0, 0], // events: none
+        &[0, 0],       // block_validity_window: from None, to None
+        &[0, 0],       // timestamp_validity_window: from None, to None
+    ]
+    .concat();
+
+    assert_eq!(crate::to_borsh_frame(&transition), expected);
+}
+
+#[test]
+fn origin_tags_follow_declaration_order() {
+    assert_eq!(borsh::to_vec(&Origin::Root).unwrap(), [0]);
+    assert_eq!(
+        borsh::to_vec(&Origin::Program(AccountId::new([2; 32]))).unwrap(),
+        [&[1][..], &[2; 32]].concat()
     );
 }

@@ -138,6 +138,36 @@ pub fn custody_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::Origin;
+
+    fn native(tag: u8) -> Actor {
+        Actor::native_balance(AccountId::new([tag; 32]))
+    }
+
+    fn input(self_account: u8, authorized: bool, pre: Balance, message: &Message) -> ReceiveInput {
+        ReceiveInput {
+            receiver: native(self_account),
+            origin: Origin::Root,
+            is_authorized: authorized,
+            pre_data: encode_balance(pre),
+            message: borsh::to_vec(message).unwrap(),
+        }
+    }
+
+    fn credit(amount: Balance, pre: Balance, origin: Origin) -> Result<Transition, TransferError> {
+        receive(&ReceiveInput {
+            origin,
+            ..input(2, false, pre, &Message::Credit(amount))
+        })
+    }
+
+    fn transfer(amount: Balance, expect_balance: Option<Balance>) -> Message {
+        Message::Transfer {
+            to: AccountId::new([2; 32]),
+            amount,
+            expect_balance,
+        }
+    }
 
     #[test]
     fn a_balance_round_trips_through_the_codec() {
@@ -158,5 +188,123 @@ mod tests {
                 "{bytes:?} decoded as a balance"
             );
         }
+    }
+
+    #[test]
+    fn a_transfer_debits_the_sender_and_credits_the_recipient() {
+        let transition = receive(&input(1, true, 100, &transfer(30, None))).unwrap();
+
+        assert_eq!(transition.post_data, Some(encode_balance(70)));
+        assert_eq!(
+            transition.sends,
+            vec![Envelope::new(native(2), &Message::Credit(30))]
+        );
+    }
+
+    #[test]
+    fn a_transfer_to_the_sender_itself_is_rejected() {
+        let to_self = Message::Transfer {
+            to: AccountId::new([1; 32]),
+            amount: 30,
+            expect_balance: None,
+        };
+
+        assert_eq!(
+            receive(&input(1, true, 100, &to_self)),
+            Err(TransferError::InvalidInputs)
+        );
+    }
+
+    #[test]
+    fn an_unauthorized_transfer_is_rejected() {
+        assert_eq!(
+            receive(&input(1, false, 100, &transfer(30, None))),
+            Err(TransferError::UnauthorizedSender {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_public_origin_debits_an_account_only_with_its_authorization() {
+        let from_public = |authorized| ReceiveInput {
+            origin: Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            ..input(1, authorized, 100, &transfer(30, None))
+        };
+
+        assert_eq!(
+            receive(&from_public(true)).unwrap().post_data,
+            Some(encode_balance(70))
+        );
+        assert_eq!(
+            receive(&from_public(false)),
+            Err(TransferError::UnauthorizedSender {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn an_expected_balance_must_match_the_sender_balance() {
+        assert_eq!(
+            receive(&input(1, true, 100, &transfer(30, Some(99)))),
+            Err(TransferError::BalanceMismatch {
+                account_id: AccountId::new([1; 32]),
+                expected: 99,
+                actual: 100,
+            })
+        );
+        assert!(receive(&input(1, true, 100, &transfer(30, Some(100)))).is_ok());
+    }
+
+    #[test]
+    fn a_transfer_beyond_the_sender_balance_is_rejected() {
+        assert_eq!(
+            receive(&input(1, true, 100, &transfer(101, None))),
+            Err(TransferError::InsufficientBalance {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_credit_adds_to_the_balance_unless_it_overflows() {
+        let from_native = Origin::Program(NATIVE_TOKEN_PROGRAM_ID);
+        assert_eq!(
+            credit(5, 100, from_native).unwrap().post_data,
+            Some(encode_balance(105))
+        );
+        assert_eq!(
+            credit(1, Balance::MAX, from_native),
+            Err(TransferError::BalanceOverflow {
+                account_id: AccountId::new([2; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_credit_not_sent_by_a_native_transfer_is_rejected() {
+        let foreign = Err(TransferError::ForeignCredit {
+            account_id: AccountId::new([2; 32]),
+        });
+        assert_eq!(credit(5, 100, Origin::Root), foreign);
+        assert_eq!(
+            credit(5, 100, Origin::Program(AccountId::new([7; 32]))),
+            foreign
+        );
+    }
+
+    #[test]
+    fn a_custody_transfer_is_a_seeded_transfer_from_the_native_actor() {
+        let seed = PdaSeed::new([3; 32]);
+
+        assert_eq!(
+            custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
+            Envelope {
+                to: native(1),
+                message: borsh::to_vec(&transfer(7, None)).unwrap(),
+                pda_seeds: vec![seed],
+            }
+        );
     }
 }

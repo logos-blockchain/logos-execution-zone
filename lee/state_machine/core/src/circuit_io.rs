@@ -271,9 +271,105 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId},
+        account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
+        execution_state::{Output, ScheduleOp},
+        program::Origin,
     };
+
+    fn pinned_statement() -> (Declared, Boundary) {
+        let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
+        let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+        (
+            Declared {
+                public_actors: vec![public],
+                authorized_accounts: vec![AccountId::new([7; 32])],
+            },
+            Boundary {
+                outputs: vec![Output {
+                    to: public,
+                    message: b"o".to_vec(),
+                    origin: Origin::Program(private.program_account_id),
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                assumptions: vec![Assumption {
+                    from: public,
+                    to: private,
+                    message: b"a".to_vec(),
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                schedule: vec![
+                    ScheduleOp::CallPublic,
+                    ScheduleOp::EnterPrivate,
+                    ScheduleOp::LeavePrivate,
+                    ScheduleOp::ReturnPublic,
+                ],
+            },
+        )
+    }
+
+    #[test]
+    fn a_circuit_output_journal_has_a_pinned_layout() {
+        let (declared, boundary) = pinned_statement();
+        let output = PrivacyPreservingCircuitOutput {
+            declared,
+            boundary,
+            private_actions: Vec::new(),
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: Vec::new(),
+        };
+
+        let expected: Vec<u8> = [
+            &[127, 1, 0, 0][..], // frame length: the 383 bytes below
+            &[1, 0, 0, 0],       // declared.public_actors: one actor
+            &[5; 32],
+            &[6; 32],
+            &[1, 0, 0, 0], // declared.authorized_accounts: one account
+            &[7; 32],
+            &[1, 0, 0, 0], // boundary.outputs: one output
+            &[5; 32],      // to
+            &[6; 32],
+            &[1, 0, 0, 0], // message
+            b"o",
+            &[1], // origin: Origin::Program
+            &[8; 32],
+            &[0, 0, 0, 0], // grants: none
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[1, 0, 0, 0], // boundary.assumptions: one assumption
+            &[5; 32],      // from
+            &[6; 32],
+            &[9; 32], // to
+            &[8; 32],
+            &[1, 0, 0, 0], // message
+            b"a",
+            &[0, 0, 0, 0], // grants: none
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[4, 0, 0, 0], // boundary.schedule: four ops
+            &[0, 1, 2, 3],
+            &[0, 0, 0, 0], // private_actions: none
+            &[0, 0],       // block_validity_window: from None, to None
+            &[0, 0],       // timestamp_validity_window: from None, to None
+            &[0, 0, 0, 0], // program_image_claims: none
+        ]
+        .concat();
+
+        assert_eq!(output.to_bytes(), expected);
+    }
+
+    #[test]
+    fn schedule_op_tags_follow_declaration_order() {
+        for (op, tag) in [
+            (ScheduleOp::CallPublic, 0),
+            (ScheduleOp::EnterPrivate, 1),
+            (ScheduleOp::LeavePrivate, 2),
+            (ScheduleOp::ReturnPublic, 3),
+        ] {
+            assert_eq!(borsh::to_vec(&op).unwrap(), [tag]);
+        }
+    }
 
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
