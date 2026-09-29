@@ -3,13 +3,13 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, Actor, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
-    DeferredPublicEffect, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, Actor, Assumption, BedrockStatus, Block, BlockBody,
+    BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment, CommitmentSetDigest,
+    CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
+    HashType, IndexerStatus, IndexerSyncState, Nullifier, Origin, Output, PdaSeed, PeerHealth,
+    PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
+    PublicKey, PublicMessage, PublicTransaction, ScheduleOp, Selector, ShardData, Signature,
+    StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -305,17 +305,17 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
-            program_account_id,
-            shard_selectors,
+            to,
+            message,
+            public_actors,
             nonces,
-            instruction_data,
             fee,
         } = value;
         Self {
-            program_account_id: program_account_id.into(),
-            shard_selectors: shard_selectors.into_iter().map(Into::into).collect(),
+            to: to.into(),
+            message,
+            public_actors: public_actors.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
-            instruction_data,
             fee: fee.map(Into::into),
         }
     }
@@ -324,60 +324,205 @@ impl From<lee::public_transaction::Message> for PublicMessage {
 impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_account_id,
-            shard_selectors,
+            to,
+            message,
+            public_actors,
             nonces,
-            instruction_data,
             fee,
         } = value;
         Self::new_preserialized(
-            program_account_id.into(),
-            shard_selectors.into_iter().map(Into::into).collect(),
+            to.into(),
+            message,
+            public_actors.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
-            instruction_data,
             fee.map(Into::into),
         )
     }
 }
 
-impl From<lee_core::execution_state::DeferredPublicEffect> for DeferredPublicEffect {
-    fn from(value: lee_core::execution_state::DeferredPublicEffect) -> Self {
-        let lee_core::execution_state::DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
+impl From<lee_core::program::PdaSeed> for PdaSeed {
+    fn from(value: lee_core::program::PdaSeed) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
+impl From<PdaSeed> for lee_core::program::PdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self::new(value.0)
+    }
+}
+
+impl From<lee_core::program::Origin> for Origin {
+    fn from(value: lee_core::program::Origin) -> Self {
+        match value {
+            lee_core::program::Origin::Root => Self::Root,
+            lee_core::program::Origin::Program(program) => Self::Program(program.into()),
         }
     }
 }
 
-impl From<DeferredPublicEffect> for lee_core::execution_state::DeferredPublicEffect {
-    fn from(value: DeferredPublicEffect) -> Self {
-        let DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
+impl From<Origin> for lee_core::program::Origin {
+    fn from(value: Origin) -> Self {
+        match value {
+            Origin::Root => Self::Root,
+            Origin::Program(program) => Self::Program(program.into()),
         }
     }
 }
 
-impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
-    fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
+impl From<lee_core::execution_state::ScheduleOp> for ScheduleOp {
+    fn from(value: lee_core::execution_state::ScheduleOp) -> Self {
+        match value {
+            lee_core::execution_state::ScheduleOp::CallPublic => Self::CallPublic,
+            lee_core::execution_state::ScheduleOp::EnterPrivate => Self::EnterPrivate,
+            lee_core::execution_state::ScheduleOp::LeavePrivate => Self::LeavePrivate,
+            lee_core::execution_state::ScheduleOp::ReturnPublic => Self::ReturnPublic,
+        }
+    }
+}
+
+impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
+    fn from(value: ScheduleOp) -> Self {
+        match value {
+            ScheduleOp::CallPublic => Self::CallPublic,
+            ScheduleOp::EnterPrivate => Self::EnterPrivate,
+            ScheduleOp::LeavePrivate => Self::LeavePrivate,
+            ScheduleOp::ReturnPublic => Self::ReturnPublic,
+        }
+    }
+}
+
+impl From<lee_core::execution_state::Output> for Output {
+    fn from(value: lee_core::execution_state::Output) -> Self {
+        let lee_core::execution_state::Output {
+            to,
+            message,
+            origin,
+            grants,
+            pda_seeds,
+        } = value;
         Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
+            to: to.into(),
+            message,
+            origin: origin.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<Output> for lee_core::execution_state::Output {
+    fn from(value: Output) -> Self {
+        let Output {
+            to,
+            message,
+            origin,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            to: to.into(),
+            message,
+            origin: origin.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::Assumption> for Assumption {
+    fn from(value: lee_core::execution_state::Assumption) -> Self {
+        let lee_core::execution_state::Assumption {
+            from,
+            to,
+            message,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<Assumption> for lee_core::execution_state::Assumption {
+    fn from(value: Assumption) -> Self {
+        let Assumption {
+            from,
+            to,
+            message,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::Boundary> for Boundary {
+    fn from(value: lee_core::execution_state::Boundary) -> Self {
+        let lee_core::execution_state::Boundary {
+            outputs,
+            assumptions,
+            schedule,
+        } = value;
+        Self {
+            outputs: outputs.into_iter().map(Into::into).collect(),
+            assumptions: assumptions.into_iter().map(Into::into).collect(),
+            schedule: schedule.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<Boundary> for lee_core::execution_state::Boundary {
+    fn from(value: Boundary) -> Self {
+        let Boundary {
+            outputs,
+            assumptions,
+            schedule,
+        } = value;
+        Self {
+            outputs: outputs.into_iter().map(Into::into).collect(),
+            assumptions: assumptions.into_iter().map(Into::into).collect(),
+            schedule: schedule.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::Declared> for Declared {
+    fn from(value: lee_core::execution_state::Declared) -> Self {
+        let lee_core::execution_state::Declared {
+            public_actors,
+            authorized_accounts,
+        } = value;
+        Self {
+            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<Declared> for lee_core::execution_state::Declared {
+    fn from(value: Declared) -> Self {
+        let Declared {
+            public_actors,
+            authorized_accounts,
+        } = value;
+        Self {
+            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -396,7 +541,8 @@ impl From<lee_core::PrivateAction> for PrivateAction {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            public_actions,
+            declared,
+            boundary,
             nonces,
             private_actions,
             block_validity_window,
@@ -407,20 +553,12 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             program_image_claims: _,
         } = value;
         Self {
-            public_actions: public_actions.into_iter().map(Into::into).collect(),
+            declared: declared.into(),
+            boundary: boundary.into(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
-        }
-    }
-}
-
-impl From<PublicActionWithID> for lee::privacy_preserving_transaction::message::PublicActionWithID {
-    fn from(value: PublicActionWithID) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -441,18 +579,19 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_actions,
+            declared,
+            boundary,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
         } = value;
 
-        let public_actions = public_actions.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_actions,
+            declared: declared.into(),
+            boundary: boundary.into(),
             nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -1025,30 +1164,6 @@ mod tests {
     }
 
     #[test]
-    fn public_action_effects_keep_their_order_through_the_mirror() {
-        // A repeated write to one shard, and not a palindrome: a set would collapse the
-        // sequence and a reversal would show, and settlement folds them in emission order.
-        let apply = |data: u8| lee_core::execution_state::DeferredPublicEffect {
-            program_account_id: lee_core::account::AccountId::new([1; 32]),
-            shard_program_account_id: lee_core::account::AccountId::new([2; 32]),
-            data: vec![data],
-        };
-        let action = lee::privacy_preserving_transaction::message::PublicActionWithID {
-            account_id: lee_core::account::AccountId::new([3; 32]),
-            effects: vec![apply(7), apply(8), apply(9), apply(7)],
-        };
-
-        let mirrored = PublicActionWithID::from(action.clone());
-        let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: PublicActionWithID = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            lee::privacy_preserving_transaction::message::PublicActionWithID::from(restored),
-            action
-        );
-    }
-
-    #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
             account_id: lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
@@ -1084,9 +1199,10 @@ mod tests {
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new_with_fees(
-            lee::AccountId::new([7; 32]),
-            vec![lee::Actor::native_balance(signer_id)],
+            to,
+            vec![to],
             vec![0_u128.into()],
             0_u32,
             fee,
@@ -1118,13 +1234,10 @@ mod tests {
         let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
         let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
 
-        let message = lee::public_transaction::Message::try_new(
-            lee::AccountId::new([7; 32]),
-            vec![lee::Actor::native_balance(signer_id)],
-            vec![0_u128.into()],
-            0_u32,
-        )
-        .expect("message builds");
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
+        let message =
+            lee::public_transaction::Message::try_new(to, vec![to], vec![0_u128.into()], 0_u32)
+                .expect("message builds");
         let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();

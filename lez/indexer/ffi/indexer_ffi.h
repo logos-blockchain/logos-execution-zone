@@ -18,6 +18,13 @@ typedef enum OperationStatus {
   InvalidArgument = 4,
 } OperationStatus;
 
+typedef enum FfiScheduleOp {
+  CallPublic = 0,
+  EnterPrivate,
+  LeavePrivate,
+  ReturnPublic,
+} FfiScheduleOp;
+
 typedef enum FfiTransactionKind {
   Public = 0,
   Private,
@@ -136,20 +143,28 @@ typedef struct FfiBlockHeader {
 typedef struct FfiBytes32 FfiAccountId;
 
 /**
- * Selects one of an account's program shards.
+ * Identifies one of an account's program shards.
  */
-typedef struct FfiProgramShardSelector {
+typedef struct FfiActor {
   FfiAccountId account_id;
   FfiAccountId program_account_id;
-} FfiProgramShardSelector;
+} FfiActor;
 
-typedef struct FfiVec_FfiProgramShardSelector {
-  struct FfiProgramShardSelector *entries;
+typedef struct FfiVec_u8 {
+  uint8_t *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiProgramShardSelector;
+} FfiVec_u8;
 
-typedef struct FfiVec_FfiProgramShardSelector FfiProgramShardSelectorList;
+typedef struct FfiVec_u8 FfiMessageDataList;
+
+typedef struct FfiVec_FfiActor {
+  struct FfiActor *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiActor;
+
+typedef struct FfiVec_FfiActor FfiActorList;
 
 /**
  * U128 - 16 bytes little endian.
@@ -168,14 +183,6 @@ typedef struct FfiVec_FfiNonce {
 
 typedef struct FfiVec_FfiNonce FfiNonceList;
 
-typedef struct FfiVec_u8 {
-  uint8_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u8;
-
-typedef struct FfiVec_u8 FfiInstructionDataList;
-
 /**
  * Fee declaration of a public transaction. Held inline (not behind a
  * pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
@@ -189,10 +196,10 @@ typedef struct FfiFeeDeclaration {
 } FfiFeeDeclaration;
 
 typedef struct FfiPublicMessage {
-  FfiAccountId program_account_id;
-  FfiProgramShardSelectorList shard_selectors;
+  struct FfiActor to;
+  FfiMessageDataList message;
+  FfiActorList public_actors;
   FfiNonceList nonces;
-  FfiInstructionDataList instruction_data;
   bool has_fee;
   struct FfiFeeDeclaration fee;
 } FfiPublicMessage;
@@ -216,34 +223,83 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
-typedef struct FfiVec_u8 FfiVecU8;
+typedef struct FfiVec_FfiAccountId {
+  FfiAccountId *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAccountId;
 
-typedef struct FfiPublicEffect {
+typedef struct FfiVec_FfiAccountId FfiAccountIdList;
+
+typedef struct FfiDeclared {
+  FfiActorList public_actors;
+  FfiAccountIdList authorized_accounts;
+} FfiDeclared;
+
+/**
+ * Where a delivery came from: the root, or the program that sent it
+ * (`program_account_id`, meaningful when `is_root` is false).
+ */
+typedef struct FfiOrigin {
+  bool is_root;
   FfiAccountId program_account_id;
-  FfiAccountId shard_program_account_id;
-  FfiVecU8 data;
-} FfiPublicEffect;
+} FfiOrigin;
 
-typedef struct FfiVec_FfiPublicEffect {
-  struct FfiPublicEffect *entries;
+typedef struct FfiVec_FfiBytes32 {
+  struct FfiBytes32 *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiPublicEffect;
+} FfiVec_FfiBytes32;
 
-typedef struct FfiVec_FfiPublicEffect FfiPublicEffectList;
+typedef struct FfiVec_FfiBytes32 FfiPdaSeedList;
 
-typedef struct FfiPublicAction {
-  FfiAccountId account_id;
-  FfiPublicEffectList effects;
-} FfiPublicAction;
+typedef struct FfiOutput {
+  struct FfiActor to;
+  FfiMessageDataList message;
+  struct FfiOrigin origin;
+  FfiAccountIdList grants;
+  FfiPdaSeedList pda_seeds;
+} FfiOutput;
 
-typedef struct FfiVec_FfiPublicAction {
-  struct FfiPublicAction *entries;
+typedef struct FfiVec_FfiOutput {
+  struct FfiOutput *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiPublicAction;
+} FfiVec_FfiOutput;
 
-typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
+typedef struct FfiVec_FfiOutput FfiOutputList;
+
+typedef struct FfiAssumption {
+  struct FfiActor from;
+  struct FfiActor to;
+  FfiMessageDataList message;
+  FfiAccountIdList grants;
+  FfiPdaSeedList pda_seeds;
+} FfiAssumption;
+
+typedef struct FfiVec_FfiAssumption {
+  struct FfiAssumption *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiAssumption;
+
+typedef struct FfiVec_FfiAssumption FfiAssumptionList;
+
+typedef struct FfiVec_FfiScheduleOp {
+  enum FfiScheduleOp *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiScheduleOp;
+
+typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
+
+typedef struct FfiBoundary {
+  FfiOutputList outputs;
+  FfiAssumptionList assumptions;
+  FfiScheduleOpList schedule;
+} FfiBoundary;
+
+typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
   FfiVecU8 ciphertext;
@@ -267,7 +323,8 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicActionList public_actions;
+  struct FfiDeclared declared;
+  struct FfiBoundary boundary;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];

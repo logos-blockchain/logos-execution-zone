@@ -79,12 +79,12 @@ pub trait Rpc {
     ) -> Result<AccountSummary, ErrorObjectOwned>;
 
     #[method(name = "getAccountView")]
-    async fn get_account_view(&self, selector: Actor) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account_view(&self, actor: Actor) -> Result<Account, ErrorObjectOwned>;
 
     #[method(name = "getAccountViewAtBlock")]
     async fn get_account_view_at_block(
         &self,
-        selector: Actor,
+        actor: Actor,
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned>;
 

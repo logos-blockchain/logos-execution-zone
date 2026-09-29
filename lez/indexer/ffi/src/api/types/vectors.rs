@@ -1,27 +1,33 @@
 use crate::api::types::{
-    FfiNonce, FfiVec,
+    FfiAccountId, FfiBytes32, FfiNonce, FfiVec,
     transaction::{
-        FfiPrivateAction, FfiProgramShardSelector, FfiPublicAction, FfiPublicEffect,
+        FfiActor, FfiAssumption, FfiOutput, FfiPrivateAction, FfiScheduleOp,
         FfiSignaturePubKeyEntry, FfiTransaction,
     },
 };
 
 pub type FfiVecU8 = FfiVec<u8>;
 
-pub type FfiProgramShardSelectorList = FfiVec<FfiProgramShardSelector>;
+pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiAccountIdList = FfiVec<FfiAccountId>;
 
 pub type FfiBlockBody = FfiVec<FfiTransaction>;
 
 pub type FfiNonceList = FfiVec<FfiNonce>;
 
-pub type FfiInstructionDataList = FfiVec<u8>;
+pub type FfiMessageDataList = FfiVec<u8>;
 
 pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
 
 pub type FfiProof = FfiVecU8;
 
-pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
+pub type FfiOutputList = FfiVec<FfiOutput>;
+
+pub type FfiAssumptionList = FfiVec<FfiAssumption>;
+
+pub type FfiScheduleOpList = FfiVec<FfiScheduleOp>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
 
-pub type FfiPublicEffectList = FfiVec<FfiPublicEffect>;
+pub type FfiPdaSeedList = FfiVec<FfiBytes32>;

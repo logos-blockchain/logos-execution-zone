@@ -22,7 +22,7 @@ use cross_zone::{
     screen_peer_block, signed_by_any,
 };
 use cross_zone_inbox_core::{
-    CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
+    CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
@@ -835,14 +835,15 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_account_id != programs::cross_zone_inbox_account_id() {
+        if public_tx.message().to.program_account_id != programs::cross_zone_inbox_account_id() {
             return None;
         }
-        match borsh::from_slice::<InboxInstruction>(&public_tx.message().instruction_data) {
-            Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
+        match borsh::from_slice::<InboxMessage>(&public_tx.message().message) {
+            Ok(InboxMessage::Dispatch(msg)) => Some(msg),
             // Only a dispatch carries a cross-zone message to re-derive; a genesis
-            // `InitConfig` is not verifier-relevant.
-            Ok(InboxInstruction::InitConfig(_)) | Err(_) => None,
+            // `InitConfig` is not verifier-relevant, and a `Mark` never reaches this
+            // decode (it targets the seen actor, not the inbox's config actor).
+            Ok(InboxMessage::Mark(_) | InboxMessage::InitConfig(_)) | Err(_) => None,
         }
     }
 
@@ -889,7 +890,7 @@ impl CrossZoneVerifier {
             ));
         };
         let message = emission_tx.message();
-        let emission = extract_emission(message.program_account_id, &message.instruction_data)
+        let emission = extract_emission(message.to.program_account_id, &message.message)
             .ok_or_else(|| {
                 forged(
                     msg,
@@ -916,7 +917,7 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_account_id: message.program_account_id,
+                src_account_id: message.to.program_account_id,
             },
             emission.target_account_id,
             &emission.target_accounts,

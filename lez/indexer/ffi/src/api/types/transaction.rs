@@ -1,16 +1,17 @@
 use indexer_service_protocol::{
-    AccountId, Actor, Ciphertext, Commitment, CommitmentSetDigest, DeferredPublicEffect,
-    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, Nullifier,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
-    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
+    AccountId, Actor, Assumption, Boundary, Ciphertext, Commitment, CommitmentSetDigest, Declared,
+    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, Nullifier, Origin, Output,
+    PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
+    PublicKey, PublicMessage, PublicTransaction, ScheduleOp, Signature, Transaction,
     ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
     vectors::{
-        FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProgramShardSelectorList,
-        FfiProof, FfiPublicActionList, FfiPublicEffectList, FfiSignaturePubKeyList, FfiVecU8,
+        FfiAccountIdList, FfiActorList, FfiAssumptionList, FfiMessageDataList, FfiNonceList,
+        FfiOutputList, FfiPdaSeedList, FfiPrivateActionList, FfiProof, FfiScheduleOpList,
+        FfiSignaturePubKeyList, FfiVecU8,
     },
 };
 
@@ -47,18 +48,16 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                program_account_id: AccountId {
-                    value: value.message.program_account_id.data,
-                },
-                shard_selectors: {
-                    let std_vec: Vec<_> = value.message.shard_selectors.into();
+                to: value.message.to.into(),
+                message: value.message.message.into(),
+                public_actors: {
+                    let std_vec: Vec<_> = value.message.public_actors.into();
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
                     std_vec.into_iter().map(Into::into).collect()
                 },
-                instruction_data: value.message.instruction_data.into(),
                 fee: value.message.has_fee.then(|| value.message.fee.into()),
             },
             witness_set: WitnessSet {
@@ -123,15 +122,15 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
     }
 }
 
-/// Selects one of an account's program shards.
+/// Identifies one of an account's program shards.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct FfiProgramShardSelector {
+pub struct FfiActor {
     pub account_id: FfiAccountId,
     pub program_account_id: FfiAccountId,
 }
 
-impl From<Actor> for FfiProgramShardSelector {
+impl From<Actor> for FfiActor {
     fn from(value: Actor) -> Self {
         let Actor {
             account_id,
@@ -145,8 +144,8 @@ impl From<Actor> for FfiProgramShardSelector {
     }
 }
 
-impl From<FfiProgramShardSelector> for Actor {
-    fn from(value: FfiProgramShardSelector) -> Self {
+impl From<FfiActor> for Actor {
+    fn from(value: FfiActor) -> Self {
         Self {
             account_id: AccountId {
                 value: value.account_id.data,
@@ -160,10 +159,10 @@ impl From<FfiProgramShardSelector> for Actor {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub program_account_id: FfiAccountId,
-    pub shard_selectors: FfiProgramShardSelectorList,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+    pub public_actors: FfiActorList,
     pub nonces: FfiNonceList,
-    pub instruction_data: FfiInstructionDataList,
     pub has_fee: bool,
     pub fee: FfiFeeDeclaration,
 }
@@ -171,16 +170,17 @@ pub struct FfiPublicMessage {
 impl From<PublicMessage> for FfiPublicMessage {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
-            program_account_id,
-            shard_selectors,
+            to,
+            message,
+            public_actors,
             nonces,
-            instruction_data,
             fee,
         } = value;
 
         Self {
-            program_account_id: program_account_id.into(),
-            shard_selectors: shard_selectors
+            to: to.into(),
+            message: message.into(),
+            public_actors: public_actors
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -190,7 +190,6 @@ impl From<PublicMessage> for FfiPublicMessage {
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
-            instruction_data: instruction_data.into(),
             has_fee: fee.is_some(),
             fee: fee.map(Into::into).unwrap_or_default(),
         }
@@ -236,21 +235,8 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
-                public_actions: {
-                    let std_vec: Vec<_> = value.message.public_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PublicActionWithID {
-                            account_id: AccountId {
-                                value: ffi_val.account_id.data,
-                            },
-                            effects: {
-                                let ffi_effects: Vec<FfiPublicEffect> = ffi_val.effects.into();
-                                ffi_effects.into_iter().map(Into::into).collect()
-                            },
-                        })
-                        .collect()
-                },
+                declared: value.message.declared.into(),
+                boundary: value.message.boundary.into(),
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -299,65 +285,257 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
+/// Where a delivery came from: the root, or the program that sent it
+/// (`program_account_id`, meaningful when `is_root` is false).
 #[repr(C)]
-pub struct FfiPublicEffect {
+#[derive(Clone, Copy)]
+pub struct FfiOrigin {
+    pub is_root: bool,
     pub program_account_id: FfiAccountId,
-    pub shard_program_account_id: FfiAccountId,
-    pub data: FfiVecU8,
 }
 
-impl From<DeferredPublicEffect> for FfiPublicEffect {
-    fn from(value: DeferredPublicEffect) -> Self {
-        let DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data: data.into(),
+impl From<Origin> for FfiOrigin {
+    fn from(value: Origin) -> Self {
+        match value {
+            Origin::Root => Self {
+                is_root: true,
+                program_account_id: FfiAccountId::default(),
+            },
+            Origin::Program(program) => Self {
+                is_root: false,
+                program_account_id: program.into(),
+            },
         }
     }
 }
 
-impl From<FfiPublicEffect> for DeferredPublicEffect {
-    fn from(value: FfiPublicEffect) -> Self {
-        let FfiPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-
-        Self {
-            program_account_id: AccountId {
-                value: program_account_id.data,
-            },
-            shard_program_account_id: AccountId {
-                value: shard_program_account_id.data,
-            },
-            data: data.into(),
+impl From<FfiOrigin> for Origin {
+    fn from(value: FfiOrigin) -> Self {
+        if value.is_root {
+            Self::Root
+        } else {
+            Self::Program(AccountId {
+                value: value.program_account_id.data,
+            })
         }
     }
 }
 
 #[repr(C)]
-pub struct FfiPublicAction {
-    pub account_id: FfiAccountId,
-    pub effects: FfiPublicEffectList,
+pub struct FfiOutput {
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+    pub origin: FfiOrigin,
+    pub grants: FfiAccountIdList,
+    pub pda_seeds: FfiPdaSeedList,
 }
 
-impl From<PublicActionWithID> for FfiPublicAction {
-    fn from(value: PublicActionWithID) -> Self {
+impl From<Output> for FfiOutput {
+    fn from(value: Output) -> Self {
+        let Output {
+            to,
+            message,
+            origin,
+            grants,
+            pda_seeds,
+        } = value;
+
         Self {
-            account_id: value.account_id.into(),
-            effects: value
-                .effects
+            to: to.into(),
+            message: message.into(),
+            origin: origin.into(),
+            grants: grants_to_ffi(grants),
+            pda_seeds: pda_seeds
+                .into_iter()
+                .map(pda_seed_to_ffi)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<FfiOutput> for Output {
+    fn from(value: FfiOutput) -> Self {
+        Self {
+            to: value.to.into(),
+            message: value.message.into(),
+            origin: value.origin.into(),
+            grants: grants_from_ffi(value.grants),
+            pda_seeds: {
+                let std_vec: Vec<_> = value.pda_seeds.into();
+                std_vec.into_iter().map(ffi_to_pda_seed).collect()
+            },
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiAssumption {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+    pub grants: FfiAccountIdList,
+    pub pda_seeds: FfiPdaSeedList,
+}
+
+impl From<Assumption> for FfiAssumption {
+    fn from(value: Assumption) -> Self {
+        let Assumption {
+            from,
+            to,
+            message,
+            grants,
+            pda_seeds,
+        } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+            grants: grants_to_ffi(grants),
+            pda_seeds: pda_seeds
+                .into_iter()
+                .map(pda_seed_to_ffi)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<FfiAssumption> for Assumption {
+    fn from(value: FfiAssumption) -> Self {
+        Self {
+            from: value.from.into(),
+            to: value.to.into(),
+            message: value.message.into(),
+            grants: grants_from_ffi(value.grants),
+            pda_seeds: {
+                let std_vec: Vec<_> = value.pda_seeds.into();
+                std_vec.into_iter().map(ffi_to_pda_seed).collect()
+            },
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiScheduleOp {
+    CallPublic = 0,
+    EnterPrivate,
+    LeavePrivate,
+    ReturnPublic,
+}
+
+impl From<ScheduleOp> for FfiScheduleOp {
+    fn from(value: ScheduleOp) -> Self {
+        match value {
+            ScheduleOp::CallPublic => Self::CallPublic,
+            ScheduleOp::EnterPrivate => Self::EnterPrivate,
+            ScheduleOp::LeavePrivate => Self::LeavePrivate,
+            ScheduleOp::ReturnPublic => Self::ReturnPublic,
+        }
+    }
+}
+
+impl From<FfiScheduleOp> for ScheduleOp {
+    fn from(value: FfiScheduleOp) -> Self {
+        match value {
+            FfiScheduleOp::CallPublic => Self::CallPublic,
+            FfiScheduleOp::EnterPrivate => Self::EnterPrivate,
+            FfiScheduleOp::LeavePrivate => Self::LeavePrivate,
+            FfiScheduleOp::ReturnPublic => Self::ReturnPublic,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiBoundary {
+    pub outputs: FfiOutputList,
+    pub assumptions: FfiAssumptionList,
+    pub schedule: FfiScheduleOpList,
+}
+
+impl From<Boundary> for FfiBoundary {
+    fn from(value: Boundary) -> Self {
+        let Boundary {
+            outputs,
+            assumptions,
+            schedule,
+        } = value;
+
+        Self {
+            outputs: outputs
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
+            assumptions: assumptions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            schedule: schedule
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<FfiBoundary> for Boundary {
+    fn from(value: FfiBoundary) -> Self {
+        let outputs: Vec<FfiOutput> = value.outputs.into();
+        let assumptions: Vec<FfiAssumption> = value.assumptions.into();
+        let schedule: Vec<FfiScheduleOp> = value.schedule.into();
+
+        Self {
+            outputs: outputs.into_iter().map(Into::into).collect(),
+            assumptions: assumptions.into_iter().map(Into::into).collect(),
+            schedule: schedule.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiDeclared {
+    pub public_actors: FfiActorList,
+    pub authorized_accounts: FfiAccountIdList,
+}
+
+impl From<Declared> for FfiDeclared {
+    fn from(value: Declared) -> Self {
+        let Declared {
+            public_actors,
+            authorized_accounts,
+        } = value;
+
+        Self {
+            public_actors: public_actors
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            authorized_accounts: authorized_accounts
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<FfiDeclared> for Declared {
+    fn from(value: FfiDeclared) -> Self {
+        let public_actors: Vec<FfiActor> = value.public_actors.into();
+        let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
+
+        Self {
+            public_actors: public_actors.into_iter().map(Into::into).collect(),
+            authorized_accounts: authorized_accounts
+                .into_iter()
+                .map(|id| AccountId { value: id.data })
+                .collect(),
         }
     }
 }
@@ -387,7 +565,8 @@ impl From<PrivateAction> for FfiPrivateAction {
 
 #[repr(C)]
 pub struct FfiPrivacyPreservingMessage {
-    pub public_actions: FfiPublicActionList,
+    pub declared: FfiDeclared,
+    pub boundary: FfiBoundary,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
@@ -397,7 +576,8 @@ pub struct FfiPrivacyPreservingMessage {
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
     fn from(value: PrivacyPreservingMessage) -> Self {
         let PrivacyPreservingMessage {
-            public_actions,
+            declared,
+            boundary,
             nonces,
             private_actions,
             block_validity_window,
@@ -405,11 +585,8 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
         } = value;
 
         Self {
-            public_actions: public_actions
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            declared: declared.into(),
+            boundary: boundary.into(),
             nonces: nonces
                 .into_iter()
                 .map(Into::into)
@@ -613,6 +790,30 @@ pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransactio
     free_transaction_vec_value(*boxed);
 }
 
+fn grants_to_ffi(grants: Vec<AccountId>) -> FfiAccountIdList {
+    grants
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn grants_from_ffi(grants: FfiAccountIdList) -> Vec<AccountId> {
+    let std_vec: Vec<FfiAccountId> = grants.into();
+    std_vec
+        .into_iter()
+        .map(|id| AccountId { value: id.data })
+        .collect()
+}
+
+const fn pda_seed_to_ffi(seed: PdaSeed) -> FfiBytes32 {
+    FfiBytes32 { data: seed.0 }
+}
+
+const fn ffi_to_pda_seed(ffi: FfiBytes32) -> PdaSeed {
+    PdaSeed(ffi.data)
+}
+
 fn cast_validity_window(window: ValidityWindow) -> [u64; 2] {
     [
         window.0.0.unwrap_or_default(),
@@ -641,48 +842,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_action_effects_keep_their_order_over_the_ffi() {
-        let apply = |data: u8| DeferredPublicEffect {
-            program_account_id: AccountId { value: [1; 32] },
-            shard_program_account_id: AccountId { value: [2; 32] },
-            data: vec![data],
-        };
-        let original = PrivacyPreservingTransaction {
-            hash: HashType([4; 32]),
-            message: PrivacyPreservingMessage {
-                public_actions: vec![PublicActionWithID {
-                    account_id: AccountId { value: [3; 32] },
-                    effects: vec![apply(7), apply(8), apply(9), apply(7)],
-                }],
-                nonces: vec![],
-                private_actions: vec![],
-                block_validity_window: ValidityWindow((None, None)),
-                timestamp_validity_window: ValidityWindow((None, None)),
-            },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: Some(Proof(vec![])),
-            },
-        };
-
-        let ffi: FfiPrivateTransactionBody = original.clone().into();
-        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
-
-        assert_eq!(back.message.public_actions, original.message.public_actions);
-    }
-
-    #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
             message: PublicMessage {
-                program_account_id: AccountId { value: [2; 32] },
-                shard_selectors: vec![Actor {
+                to: Actor {
+                    account_id: AccountId { value: [3; 32] },
+                    program_account_id: indexer_service_protocol::AccountId::native_token_program(),
+                },
+                message: vec![9, 9],
+                public_actors: vec![Actor {
                     account_id: AccountId { value: [3; 32] },
                     program_account_id: indexer_service_protocol::AccountId::native_token_program(),
                 }],
                 nonces: vec![],
-                instruction_data: vec![9, 9],
                 fee,
             },
             witness_set: WitnessSet {

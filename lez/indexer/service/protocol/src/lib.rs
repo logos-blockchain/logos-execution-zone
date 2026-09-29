@@ -244,10 +244,10 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_account_id: AccountId,
-    pub shard_selectors: Vec<Actor>,
+    pub to: Actor,
+    pub message: MessageData,
+    pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
-    pub instruction_data: InstructionData,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
 }
@@ -260,22 +260,58 @@ pub struct FeeDeclaration {
     pub max_fee: u128,
 }
 
-pub type InstructionData = Vec<u8>;
-pub type EffectData = Vec<u8>;
+pub type MessageData = Vec<u8>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct DeferredPublicEffect {
-    pub program_account_id: AccountId,
-    pub shard_program_account_id: AccountId,
-    pub data: EffectData,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PdaSeed(
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded PDA seed")]
+    pub [u8; 32],
+);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Origin {
+    Root,
+    Program(AccountId),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum ScheduleOp {
+    CallPublic,
+    EnterPrivate,
+    LeavePrivate,
+    ReturnPublic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    /// Ordered: settlement folds these onto the account's shards in this order, so any
-    /// representation of them has to keep it.
-    pub effects: Vec<DeferredPublicEffect>,
+pub struct Output {
+    pub to: Actor,
+    pub message: MessageData,
+    pub origin: Origin,
+    pub grants: Vec<AccountId>,
+    pub pda_seeds: Vec<PdaSeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Assumption {
+    pub from: Actor,
+    pub to: Actor,
+    pub message: MessageData,
+    pub grants: Vec<AccountId>,
+    pub pda_seeds: Vec<PdaSeed>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Boundary {
+    pub outputs: Vec<Output>,
+    pub assumptions: Vec<Assumption>,
+    pub schedule: Vec<ScheduleOp>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Declared {
+    pub public_actors: Vec<Actor>,
+    pub authorized_accounts: Vec<AccountId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -291,7 +327,8 @@ pub struct PrivateAction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_actions: Vec<PublicActionWithID>,
+    pub declared: Declared,
+    pub boundary: Boundary,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,

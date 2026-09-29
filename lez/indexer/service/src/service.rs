@@ -170,11 +170,11 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         })
     }
 
-    async fn get_account_view(&self, selector: Actor) -> Result<Account, ErrorObjectOwned> {
+    async fn get_account_view(&self, actor: Actor) -> Result<Account, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
-            .account_current_view(selector.into())
+            .account_current_view(actor.into())
             .await
             .map_err(db_error)?
             .into())
@@ -182,13 +182,13 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 
     async fn get_account_view_at_block(
         &self,
-        selector: Actor,
+        actor: Actor,
         block_id: BlockId,
     ) -> Result<Account, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
-            .account_view_at_block(selector.into(), block_id)
+            .account_view_at_block(actor.into(), block_id)
             .map_err(db_error)?
             .into())
     }

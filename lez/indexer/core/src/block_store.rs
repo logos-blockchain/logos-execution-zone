@@ -256,16 +256,13 @@ impl IndexerStore {
             .get_account_by_id(*account_id))
     }
 
-    pub async fn account_current_view(&self, selector: Actor) -> Result<Account> {
+    pub async fn account_current_view(&self, actor: Actor) -> Result<Account> {
         let state = self.current_state.read().await;
-        Ok(project_account(&state, selector))
+        Ok(project_account(&state, actor))
     }
 
-    pub fn account_view_at_block(&self, selector: Actor, block_id: u64) -> Result<Account> {
-        Ok(project_account(
-            &self.get_state_at_block(block_id)?,
-            selector,
-        ))
+    pub fn account_view_at_block(&self, actor: Actor, block_id: u64) -> Result<Account> {
+        Ok(project_account(&self.get_state_at_block(block_id)?, actor))
     }
 
     /// The last successfully applied block, or `None` on a cold store.
@@ -354,11 +351,11 @@ impl IndexerStore {
     }
 }
 
-fn project_account(state: &V03State, selector: Actor) -> Account {
+fn project_account(state: &V03State, actor: Actor) -> Account {
     state
-        .get_account_by_id_ref(selector.account_id)
+        .get_account_by_id_ref(actor.account_id)
         .map_or_else(Account::default, |account| {
-            account.project([selector.program_account_id])
+            account.project([actor.program_account_id])
         })
 }
 
@@ -538,20 +535,13 @@ mod tests {
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use lee::Actor;
-    use lee_core::program::{InstructionData, ProgramEvent};
+    use lee_core::program::ProgramEvent;
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
     use crate::event_filter::{SelectorFilter, covered_over_range};
-
-    // Host-side mirror of the `event_emitter` test guest's instruction.
-    #[derive(borsh::BorshSerialize)]
-    struct EmitterInstruction {
-        events: Vec<ProgramEvent>,
-        chain: Vec<(lee_core::account::AccountId, InstructionData)>,
-    }
 
     fn emitted(n: u8) -> ProgramEvent {
         ProgramEvent {
@@ -568,19 +558,19 @@ mod tests {
         AccountId::from(&lee::PublicKey::new_from_private_key(&emitter_header_key()))
     }
 
-    // Deploys the emitter guest through `program_loader`, chunked into `WriteSegment`s. A
-    // funded genesis account co-signs every transaction as payer, since new accounts can't
+    // Deploys the `scripted` test guest through `program_loader`, chunked into `WriteSegment`s.
+    // A funded genesis account co-signs every transaction as payer, since new accounts can't
     // self-pay.
     fn deploy_emitter_txs() -> Vec<LeeTransaction> {
         let payer = &initial_pub_accounts_private_keys()[0];
         let header_key = emitter_header_key();
         let header_id = emitter_header_account_id();
+        let loader = lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
 
         // Segments only ever hold `user_elf`.
-        let user_elf = risc0_binfmt::ProgramBinary::decode(test_methods::EVENT_EMITTER_ELF)
-            .expect("EVENT_EMITTER_ELF must be a valid ProgramBinary")
-            .user_elf
-            .to_vec();
+        let user_elf = test_programs::scripted()
+            .user_elf()
+            .expect("scripted program has a valid user_elf");
         let chunks: Vec<&[u8]> = user_elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .collect();
@@ -599,25 +589,21 @@ mod tests {
         let mut txs = Vec::with_capacity(chunks.len().saturating_add(1));
         let mut payer_nonce = 0_u128;
         for i in (0..chunks.len()).rev() {
-            let mut write_segment_account_ids = vec![segment_ids[i]];
-            write_segment_account_ids.extend(segment_ids.get(i.saturating_add(1)).copied());
+            let to = Actor::new(segment_ids[i], loader);
             let segment_message = lee::public_transaction::Message::try_new_with_fees(
-                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-                write_segment_account_ids
-                    .into_iter()
-                    .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
-                    .collect(),
+                to,
+                vec![to],
                 vec![
                     lee_core::account::Nonce(0),
                     lee_core::account::Nonce(payer_nonce),
                 ],
-                program_loader_core::Instruction::WriteSegment {
+                program_loader_core::Message::WriteSegment {
                     bytecode: chunks[i].to_vec(),
                     next_segment: segment_ids.get(i.saturating_add(1)).copied(),
                 },
                 common::test_utils::test_fee_declaration(payer.account_id),
             )
-            .expect("WriteSegment instruction data should always be serializable");
+            .expect("WriteSegment message should always be serializable");
             let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
                 &segment_message,
                 &[&segment_keys[i], &payer.pub_sign_key],
@@ -629,25 +615,21 @@ mod tests {
             payer_nonce = payer_nonce.saturating_add(1);
         }
 
-        let mut header_account_ids = vec![header_id];
-        header_account_ids.extend(&segment_ids);
+        let header_to = Actor::new(header_id, loader);
         let header_message = lee::public_transaction::Message::try_new_with_fees(
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            header_account_ids
-                .into_iter()
-                .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
-                .collect(),
+            header_to,
+            vec![header_to],
             vec![
                 lee_core::account::Nonce(0),
                 lee_core::account::Nonce(payer_nonce),
             ],
-            program_loader_core::Instruction::CreateHeader {
+            program_loader_core::Message::CreateHeader {
                 first_segment: segment_ids[0],
                 immutable: true,
             },
             common::test_utils::test_fee_declaration(payer.account_id),
         )
-        .expect("CreateHeader instruction data should always be serializable");
+        .expect("CreateHeader message should always be serializable");
         let header_witness_set = lee::public_transaction::WitnessSet::for_message(
             &header_message,
             &[&header_key, &payer.pub_sign_key],
@@ -664,25 +646,26 @@ mod tests {
         // create message with payer so that it's not rejected due to missing fee declaration
         let payer = &initial_pub_accounts_private_keys()[0];
         // The payer's next nonce after `deploy_emitter_txs`'s chunked deploy.
-        let user_elf = risc0_binfmt::ProgramBinary::decode(test_methods::EVENT_EMITTER_ELF)
-            .expect("EVENT_EMITTER_ELF must be a valid ProgramBinary")
-            .user_elf
-            .to_vec();
+        let user_elf = test_programs::scripted()
+            .user_elf()
+            .expect("scripted program has a valid user_elf");
         let chunk_count = user_elf
             .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
             .count();
         let payer_nonce = u128::try_from(chunk_count.saturating_add(1)).unwrap();
+        let header_id = emitter_header_account_id();
+        let to = Actor::new(header_id, header_id);
         let message = lee::public_transaction::Message::try_new_with_fees(
-            emitter_header_account_id(),
-            vec![Actor::native_balance(AccountId::new([42; 32]))],
+            to,
+            vec![to],
             vec![payer_nonce.into()],
-            EmitterInstruction {
+            test_guest_core::Script {
                 events,
-                chain: vec![],
+                ..test_guest_core::Script::default()
             },
             common::test_utils::test_fee_declaration(payer.account_id),
         )
-        .expect("emitter instruction serializes");
+        .expect("script serializes");
         let witness_set =
             lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
@@ -1742,14 +1725,15 @@ mod accept_tests {
         // accounts → StateTransition → retryable. A charged overdraft no
         // longer works here: it reverts-with-fee inside a valid block.
         let bogus_deposit = {
-            let message = lee::public_transaction::Message::try_new(
+            let to = Actor::new(
+                lee::AccountId::new([1_u8; 32]),
                 programs::bridge_account_id(),
-                vec![
-                    Actor::native_balance(lee::AccountId::new([1_u8; 32])),
-                    Actor::native_balance(lee::AccountId::new([2_u8; 32])),
-                ],
+            );
+            let message = lee::public_transaction::Message::try_new(
+                to,
+                vec![to],
                 vec![],
-                bridge_core::Instruction::Deposit {
+                bridge_core::Message::Deposit {
                     l1_deposit_op_id: [7_u8; 32],
                     recipient_id: lee::AccountId::new([3_u8; 32]),
                     amount: 5,
