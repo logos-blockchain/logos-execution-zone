@@ -51,7 +51,6 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
-            expected_block_signing_pubkeys: Vec::new(),
             min_committee_size: 0,
         }],
         source_authority: None,

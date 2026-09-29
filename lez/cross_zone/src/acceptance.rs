@@ -11,8 +11,8 @@ use common::{
     HashType,
     block::{Block, PeerChainTip},
 };
-use cross_zone_inbox_core::{CrossZonePeer, ZoneId};
-use lee::{GENESIS_BLOCK_ID, PublicKey};
+use cross_zone_inbox_core::ZoneId;
+use lee::GENESIS_BLOCK_ID;
 
 /// Consecutive passes a reader spends stuck on one slot before it says so as
 /// something more than the per-pass failure. It never reads past the slot.
@@ -91,9 +91,8 @@ impl Display for OffChain {
 /// The channel authorizes who may write, not what they may claim. The hash
 /// check is unconditional: the signature does not cover `header.hash`, and the
 /// chain link compares hashes, so an unchecked one lets a peer assert links it
-/// never built. The pinned keys, checked only when any are configured, are what
-/// say one of the peer's own sequencers produced the block; they subsume
-/// nothing here, since a correctly signed block may still carry a bogus hash.
+/// never built. Who produced the block is Bedrock's check: a channel only takes
+/// inscriptions signed by its scheduled accredited key.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScreenRefusal {
     /// `header.hash` is not the hash of the block's contents.
@@ -102,26 +101,19 @@ pub enum ScreenRefusal {
         declared: HashType,
         recomputed: HashType,
     },
-    /// The block is not signed by any pinned block-signing key.
-    KeyMismatch { block_id: u64 },
 }
 
 impl Display for ScreenRefusal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::HashMismatch {
-                block_id,
-                declared,
-                recomputed,
-            } => write!(
-                f,
-                "block {block_id} carries header hash {declared} but its contents hash to {recomputed}"
-            ),
-            Self::KeyMismatch { block_id } => write!(
-                f,
-                "block {block_id} is not signed by any pinned block-signing key"
-            ),
-        }
+        let Self::HashMismatch {
+            block_id,
+            declared,
+            recomputed,
+        } = *self;
+        write!(
+            f,
+            "block {block_id} carries header hash {declared} but its contents hash to {recomputed}"
+        )
     }
 }
 
@@ -350,10 +342,7 @@ pub fn link_to_tip(tip: Option<&PeerChainTip>, block: &Block, recomputed: HashTy
 
 /// Whether a block read off a peer's channel may be considered for the chain at
 /// all, returning the recomputed hash every later placement has to use.
-pub fn screen_peer_block(
-    block: &Block,
-    expected_pubkeys: &[PublicKey],
-) -> Result<HashType, ScreenRefusal> {
+pub fn screen_peer_block(block: &Block) -> Result<HashType, ScreenRefusal> {
     let recomputed = block.recompute_hash();
     if recomputed != block.header.hash {
         return Err(ScreenRefusal::HashMismatch {
@@ -362,35 +351,7 @@ pub fn screen_peer_block(
             recomputed,
         });
     }
-    if !signed_by_any(block, expected_pubkeys) {
-        return Err(ScreenRefusal::KeyMismatch {
-            block_id: block.header.block_id,
-        });
-    }
     Ok(recomputed)
-}
-
-/// Whether `block` is signed by one of the peer's pinned keys.
-///
-/// Vacuously true with none pinned: the check is opt-in, and every place that
-/// judges a peer block's signature goes through here so they cannot diverge on
-/// that rule.
-#[must_use]
-pub fn signed_by_any(block: &Block, pinned: &[PublicKey]) -> bool {
-    pinned.is_empty() || pinned.iter().any(|key| block.is_signed_by(key))
-}
-
-/// The peer's configured block-signing keys, parsed. Panics on a malformed
-/// entry: both sides read this at startup, so a bad config byte fails the
-/// process before it judges any block.
-#[must_use]
-pub fn pinned_keys(peer: &CrossZonePeer) -> Vec<PublicKey> {
-    peer.expected_block_signing_pubkeys
-        .iter()
-        .map(|&bytes| {
-            PublicKey::try_new(bytes).expect("configured peer block-signing pubkey is a valid key")
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -421,7 +382,7 @@ mod tests {
     }
 
     fn screened(block: &Block) -> HashType {
-        screen_peer_block(block, &[]).expect("honest block passes screening")
+        screen_peer_block(block).expect("honest block passes screening")
     }
 
     /// Runs the stall machine over `(stuck_on, read_to)` pass results.
@@ -516,68 +477,12 @@ mod tests {
 
     #[test]
     fn a_block_whose_header_hash_is_not_its_contents_is_refused() {
-        // A correctly signed block can still carry any value in `header.hash`.
+        // A block can carry any value in `header.hash`.
         let mut tampered = chain_block(3);
         tampered.header.hash = HashType([9; 32]);
         assert!(matches!(
-            screen_peer_block(&tampered, &[]),
+            screen_peer_block(&tampered),
             Err(ScreenRefusal::HashMismatch { block_id: 3, .. })
-        ));
-
-        // And the hash verdict comes first, whatever else is wrong.
-        let other = lee::PublicKey::try_new([42; 32]).expect("test key");
-        assert!(matches!(
-            screen_peer_block(&tampered, &[other]),
-            Err(ScreenRefusal::HashMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn a_block_not_signed_by_the_pinned_key_is_refused() {
-        let signer = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([37; 32]).expect("test key"),
-        );
-        let block = chain_block(GENESIS_BLOCK_ID);
-        assert_eq!(
-            screen_peer_block(&block, &[signer]),
-            Ok(chain_hash(GENESIS_BLOCK_ID)),
-            "produce_dummy_block signs with this key, so the pin must accept it"
-        );
-
-        let other = lee::PublicKey::try_new([42; 32]).expect("test key");
-        assert!(matches!(
-            screen_peer_block(&block, &[other]),
-            Err(ScreenRefusal::KeyMismatch {
-                block_id: GENESIS_BLOCK_ID
-            })
-        ));
-    }
-
-    #[test]
-    fn a_block_signed_by_any_key_in_the_set_is_accepted() {
-        // The multi-sequencer peer shape: the block's signer is one configured
-        // key among several, not the first one listed.
-        let signer = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([37; 32]).expect("test key"),
-        );
-        let other = lee::PublicKey::try_new([42; 32]).expect("test key");
-        let block = chain_block(GENESIS_BLOCK_ID);
-        assert_eq!(
-            screen_peer_block(&block, &[other.clone(), signer]),
-            Ok(chain_hash(GENESIS_BLOCK_ID)),
-            "any listed key admits the block, whatever its position"
-        );
-
-        // A set none of whose keys signed refuses, exactly like a wrong single
-        // key.
-        let third = lee::PublicKey::new_from_private_key(
-            &lee::PrivateKey::try_new([99; 32]).expect("test key"),
-        );
-        assert!(matches!(
-            screen_peer_block(&block, &[other, third]),
-            Err(ScreenRefusal::KeyMismatch {
-                block_id: GENESIS_BLOCK_ID
-            })
         ));
     }
 
