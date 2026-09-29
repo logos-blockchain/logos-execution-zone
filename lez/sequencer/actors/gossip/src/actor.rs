@@ -469,7 +469,7 @@ impl GossipActor {
                     // Advisory: the tx is forwarded either way, and a refused
                     // one stays unseen so a rebroadcast can retry once e.g.
                     // its payer is funded or the mempool has room.
-                    match (self.submit)(tx).await {
+                    match (self.submit)(*tx).await {
                         Ok(()) => {
                             self.seen.insert(hash);
                         }

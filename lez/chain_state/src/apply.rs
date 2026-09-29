@@ -422,9 +422,9 @@ fn settle_charged_transaction(
     let reserve_msg = fee_reserve_invocation(payer, reserved);
     let payer_authorized = HashSet::from([payer]);
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-        reserve_msg.program_account_id,
-        &reserve_msg.shard_selectors,
-        &reserve_msg.instruction_data,
+        reserve_msg.to,
+        &reserve_msg.message,
+        &reserve_msg.public_actors,
         &payer_authorized,
         state,
         block_id,
@@ -487,9 +487,9 @@ fn settle_charged_transaction(
     if refund > 0 {
         let refund_msg = fee_refund_invocation(payer, refund);
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-            refund_msg.program_account_id,
-            &refund_msg.shard_selectors,
-            &refund_msg.instruction_data,
+            refund_msg.to,
+            &refund_msg.message,
+            &refund_msg.public_actors,
             &HashSet::new(),
             state,
             block_id,
@@ -523,25 +523,17 @@ mod tests {
         },
     };
     use lee::{AccountId, Actor, PublicTransaction, program::Program, public_transaction};
-    use lee_core::{
-        account::Nonce,
-        program::{InstructionData, ProgramEvent},
-    };
+    use lee_core::{account::Nonce, program::ProgramEvent};
+    use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
 
-    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-    struct EmitterInstruction {
-        events: Vec<ProgramEvent>,
-        chain: Vec<(AccountId, InstructionData)>,
-    }
-
     #[must_use]
     const fn event_emitter() -> Program {
         Program::new_unchecked(
-            test_methods::EVENT_EMITTER_ID,
-            Cow::Borrowed(test_methods::EVENT_EMITTER_ELF),
+            test_methods::SCRIPTED_ID,
+            Cow::Borrowed(test_methods::SCRIPTED_ELF),
         )
     }
 
@@ -861,18 +853,20 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let fee_program_id = fee_invocation(BlockFeeSummary::default(), 0, attacker)
+        let fee_state = fee_invocation(BlockFeeSummary::default(), 0, attacker)
             .message()
-            .program_account_id;
+            .to;
         let message = lee::public_transaction::Message::try_new_with_fees(
-            fee_program_id,
+            fee_state,
             vec![
+                fee_state,
                 lee::Actor::native_balance(system_accounts::fee_inbox_account_id()),
                 lee::Actor::native_balance(attacker),
             ],
             vec![state.get_account_by_id(attacker).nonce],
-            fee_core::Instruction::Refund {
+            fee_core::Message::Refund {
                 amount: inbox_revenue,
+                payer: attacker,
             },
             common::test_utils::test_fee_declaration(attacker),
         )
@@ -1072,13 +1066,14 @@ mod tests {
         let sign_key = accounts[0].pub_sign_key.clone();
         let emitter_id = AccountId::from_builtin_program(event_emitter().id());
 
+        let emitter = Actor::new(from, emitter_id);
         let message = public_transaction::Message::try_new_with_fees(
-            emitter_id,
-            vec![Actor::native_balance(from)],
+            emitter,
+            vec![emitter],
             vec![Nonce(0)],
-            EmitterInstruction {
+            Script {
                 events: vec![emitted(5)],
-                chain: vec![],
+                ..Script::default()
             },
             test_fee_declaration(from),
         )

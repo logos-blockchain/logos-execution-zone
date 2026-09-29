@@ -26,7 +26,7 @@ use lee::{
 use logos_blockchain_binary_codec::bincode::SerializeOp as _;
 use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
 use logos_blockchain_zone_sdk::ZoneBlock;
-use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
+use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::MockBedrockActor,
     protocol::{Checkpoint, HeaderId, MsgId, ReadChannel, Slot, ZoneMessage},
@@ -376,10 +376,10 @@ fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
 /// A delivery of `payload` to the ping receiver, read off peer block `src_block_id`.
 fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    let instruction = borsh::to_vec(&ReceiverInstruction::Record {
+    let message = borsh::to_vec(&ReceiverMessage::Record {
         payload: payload.to_vec(),
     })
-    .expect("ping instruction serializes");
+    .expect("ping message serializes");
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
         &cross_zone::EmissionSource {
             src_zone: PEER_ZONE,
@@ -393,27 +393,27 @@ fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
             Actor::new(receiver_config_account_id(receiver_id), receiver_id),
             Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
-        instruction,
+        message,
     ))
 }
 
 /// The mint a finalized L1 deposit event injects, as the sequencer builds it.
 fn deposit_tx(op_id: [u8; 32], recipient: AccountId, amount: u64) -> LeeTransaction {
     let bridge_program_id = programs::bridge_account_id();
-    let message = Message::try_new(
+    // The receipt PDA carries the exactly-once check, so the deposit is addressed to it.
+    let receipt = Actor::new(
+        bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
         bridge_program_id,
+    );
+    let message = Message::try_new(
+        receipt,
         vec![
+            receipt,
             Actor::native_balance(system_accounts::bridge_account_id()),
             Actor::native_balance(recipient),
-            // The receipt PDA carries the exactly-once check, so the program
-            // needs it in the account list.
-            Actor::new(
-                bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
-                bridge_program_id,
-            ),
         ],
         Vec::new(),
-        bridge_core::Instruction::Deposit {
+        bridge_core::Message::Deposit {
             l1_deposit_op_id: op_id,
             recipient_id: recipient,
             amount,

@@ -8,7 +8,9 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::{AccountId, Actor};
-use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
+use ping_core::{
+    SenderMessage, ping_record_pda, receiver_config_account_id, sender_config_account_id,
+};
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
 /// each block carrying the transactions `txs_at(block_id)` returns. Empty when
@@ -32,7 +34,15 @@ pub fn ping_emission(
     payload: &[u8],
 ) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let outbox_id = programs::cross_zone_outbox_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let outbox = Actor::new(
+        cross_zone_outbox_core::outbox_pda(outbox_id, sender_id, &target_zone, 0),
+        outbox_id,
+    );
+    let send = SenderMessage::Send {
+        outbox,
         target_zone,
         target_account_id,
         target_accounts: vec![
@@ -42,8 +52,8 @@ pub fn ping_emission(
         payload: payload.to_vec(),
         ordinal: 0,
     };
-    let message = Message::try_new(programs::ping_sender_account_id(), vec![], vec![], send)
-        .expect("emission serializes");
+    let message =
+        Message::try_new(config, vec![config, outbox], vec![], send).expect("emission serializes");
     LeeTransaction::Public(PublicTransaction::new(
         message,
         WitnessSet::from_raw_parts(vec![]),

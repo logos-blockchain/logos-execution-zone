@@ -12,7 +12,7 @@ use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID};
+use lee_core::native_token::Message as NativeMessage;
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
@@ -75,16 +75,24 @@ fn test_transaction() -> LeeTransaction {
 
     let nonces = vec![0_u128.into(), 0_u128.into()];
     let message = Message::try_new_with_fees(
-        NATIVE_TOKEN_PROGRAM_ID,
+        Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
         nonces,
-        NativeInstruction::Transfer { amount: 1337 },
+        transfer_to(acc2),
         common::test_utils::test_fee_declaration(payer),
     )
     .unwrap();
 
     let witness_set = WitnessSet::for_message(&message, &[&payer_key, &key2]);
     PublicTransaction::new(message, witness_set).into()
+}
+
+fn transfer_to(recipient: AccountId) -> NativeMessage {
+    NativeMessage::Transfer {
+        to: recipient,
+        amount: 1337,
+        expect_balance: None,
+    }
 }
 
 /// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
@@ -568,10 +576,10 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
-        NATIVE_TOKEN_PROGRAM_ID,
+        Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
         vec![0_u128.into(), 0_u128.into()],
-        NativeInstruction::Transfer { amount: 1337 },
+        transfer_to(acc2),
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
     )
     .unwrap();

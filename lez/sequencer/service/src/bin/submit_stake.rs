@@ -87,26 +87,29 @@ async fn main() -> Result<()> {
             let has_record = !stake_shard(&wallet, ownership_account, sequencer_stake_program_id)
                 .await?
                 .is_empty();
-            let instruction_data =
-                Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-                    sequencer_key,
-                    amount,
-                    has_record,
-                })
-                .context("Failed to serialize Stake instruction")?;
+            let message = Program::serialize_message(sequencer_stake_core::Message::Stake {
+                sequencer_key,
+                amount,
+                has_record,
+                funding: funding_account,
+            })
+            .context("Failed to serialize Stake message")?;
+            // The ownership signature authorizes the ownership actor, the funding signature
+            // the transfer out of the funding balance.
+            let root = AccountIdentity::Public(ownership_account)
+                .select_program_shard(sequencer_stake_program_id);
 
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(funding_account).balance(),
-                        AccountIdentity::Public(ownership_account)
-                            .select_program_shard(sequencer_stake_program_id),
+                        root,
                         AccountIdentity::PublicNoSign(funds_account).balance(),
+                        AccountIdentity::Public(funding_account).balance(),
                         AccountIdentity::PublicNoSign(config_id)
                             .select_program_shard(sequencer_stake_program_id),
                     ],
-                    instruction_data,
-                    sequencer_stake_program_id,
+                    0,
+                    message,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit Stake transaction: {err:?}"))?
@@ -127,25 +130,26 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to read the chain height")?
                 .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
-            let instruction_data =
-                Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+            let message =
+                Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
                     sequencer_key: record.sequencer_key,
                     amount,
                     destination,
                     requested_at,
                 })
-                .context("Failed to serialize UnstakeRequest instruction")?;
+                .context("Failed to serialize UnstakeRequest message")?;
+            let root = AccountIdentity::Public(ownership_account)
+                .select_program_shard(sequencer_stake_program_id);
 
             wallet
                 .send_pub_tx(
                     vec![
-                        AccountIdentity::Public(ownership_account)
-                            .select_program_shard(sequencer_stake_program_id),
+                        root,
                         AccountIdentity::PublicNoSign(config_id)
                             .select_program_shard(sequencer_stake_program_id),
                     ],
-                    instruction_data,
-                    sequencer_stake_program_id,
+                    0,
+                    message,
                 )
                 .await
                 .map_err(|err| anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?

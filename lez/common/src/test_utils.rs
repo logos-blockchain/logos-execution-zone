@@ -105,14 +105,14 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
-    let shard_selectors = vec![];
+    let nowhere = Actor::native_balance(AccountId::default());
+    let public_actors = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
-        program_id,
-        shard_selectors,
+        nowhere,
+        public_actors,
         nonces,
-        lee_core::native_token::Instruction::Transfer { amount: 0 },
+        native_transfer(nowhere.account_id, 0),
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -157,16 +157,13 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signing_key: &lee::PrivateKey,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let shard_selectors = vec![Actor::native_balance(from), Actor::native_balance(to)];
+    let public_actors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let nonces = vec![nonce.into()];
-    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
     let message = lee::public_transaction::Message::try_new_with_fees(
-        program_id,
-        shard_selectors,
+        Actor::native_balance(from),
+        public_actors,
         nonces,
-        lee_core::native_token::Instruction::Transfer {
-            amount: balance_to_move,
-        },
+        native_transfer(to, balance_to_move),
         fee_declaration,
     )
     .unwrap();
@@ -190,15 +187,21 @@ pub fn create_transaction_native_token_transfer_without_fee(
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
-        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        Actor::native_balance(from),
         vec![Actor::native_balance(from), Actor::native_balance(to)],
         vec![nonce.into()],
-        lee_core::native_token::Instruction::Transfer {
-            amount: balance_to_move,
-        },
+        native_transfer(to, balance_to_move),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
 
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+}
+
+const fn native_transfer(to: AccountId, amount: u128) -> lee_core::native_token::Message {
+    lee_core::native_token::Message::Transfer {
+        to,
+        amount,
+        expect_balance: None,
+    }
 }

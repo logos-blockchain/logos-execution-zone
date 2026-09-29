@@ -647,8 +647,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
             continue;
         };
         let message = public_tx.message();
-        let Some(emission) =
-            extract_emission(message.program_account_id, &message.instruction_data)
+        let Some(emission) = extract_emission(message.to.program_account_id, &message.message)
         else {
             continue;
         };
@@ -677,7 +676,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
                 src_block_id: block.header.block_id,
                 src_block_hash: block_hash.0,
                 src_tx_index,
-                src_account_id: message.program_account_id,
+                src_account_id: message.to.program_account_id,
             },
             emission.target_account_id,
             &emission.target_accounts,
@@ -1198,8 +1197,8 @@ mod tests {
         let LeeTransaction::Public(public_tx) = tx else {
             panic!("a dispatch is a public transaction");
         };
-        let Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) =
-            borsh::from_slice(&public_tx.message().instruction_data)
+        let Ok(cross_zone_inbox_core::Message::Dispatch(msg)) =
+            borsh::from_slice(&public_tx.message().message)
         else {
             panic!("the recorded transaction is an inbox dispatch");
         };

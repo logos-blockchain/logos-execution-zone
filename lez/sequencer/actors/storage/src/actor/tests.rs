@@ -542,7 +542,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
     let block_1b_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
 
-    let clock_1_acc = genesis_clock_tx.message.shard_selectors[0].account_id;
+    let clock_1_acc = genesis_clock_tx.message.to.account_id;
 
     assert_eq!(
         storage_ref
@@ -1236,7 +1236,7 @@ async fn the_first_block_written_starts_the_chain() {
     let block_1_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
+    let clock_1_acc = block_1_clock_tx.message.to.account_id;
 
     assert_eq!(
         storage_ref
@@ -1332,7 +1332,7 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_clock_tx = clock_invocation(3, 3_u64.saturating_mul(100));
     let block_4_clock_tx = clock_invocation(4, 4_u64.saturating_mul(100));
 
-    let clock_1_acc = block_1_clock_tx.message.shard_selectors[0].account_id;
+    let clock_1_acc = block_1_clock_tx.message.to.account_id;
 
     // A later block extends the chain rather than restarting it.
     let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);

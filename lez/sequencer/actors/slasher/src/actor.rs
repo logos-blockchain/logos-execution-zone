@@ -394,10 +394,11 @@ pub fn build_slash_tx(
     total_staked: u128,
 ) -> anyhow::Result<LeeTransaction> {
     let program_id = programs::sequencer_stake_account_id();
+    let ownership = Actor::new(ownership_id, program_id);
     let message = LeeMessage::try_new(
-        program_id,
+        ownership,
         vec![
-            Actor::new(ownership_id, program_id),
+            ownership,
             Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
             Actor::native_balance(sequencer_stake_core::slash_sink_account_id(program_id)),
             Actor::new(
@@ -406,7 +407,7 @@ pub fn build_slash_tx(
             ),
         ],
         vec![],
-        sequencer_stake_core::Instruction::Slash {
+        sequencer_stake_core::Message::Slash {
             sequencer_key: offence.offender,
             inscription: offence.inscription,
             approvals,
@@ -604,11 +605,10 @@ mod tests {
         let [LeeTransaction::Public(tx)] = txs else {
             panic!("expected exactly one public slash transaction");
         };
-        let sequencer_stake_core::Instruction::Slash { approvals, .. } =
-            borsh::from_slice(tx.message().instruction_data.as_ref())
-                .expect("the instruction should decode")
+        let sequencer_stake_core::Message::Slash { approvals, .. } =
+            borsh::from_slice(tx.message().message.as_ref()).expect("the message should decode")
         else {
-            panic!("expected a Slash instruction");
+            panic!("expected a Slash message");
         };
 
         approvals.into_iter().map(|a| a.signer).collect()
