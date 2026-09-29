@@ -756,6 +756,42 @@ mod tests {
     }
 
     #[test]
+    fn a_swap_promises_its_exact_payout_only_into_a_private_holding() {
+        let terms = offer(TOKEN_A, 100, 45);
+        let payout_to = |destination: AccountIdentity| {
+            terms.promised_payout(
+                &terms.accounts(AccountIdentity::PrivateOwned(SOURCE), destination),
+            )
+        };
+        let vault = Actor::new(terms.output_vault_id, terms.token_program_id);
+        let credit = expected_sends(
+            vault,
+            &token_core::Message::Transfer {
+                to: DESTINATION,
+                descriptor: super::fungible(terms.definition_id_out),
+                amount: 45,
+                notify: None,
+            },
+        )
+        .remove(0);
+
+        assert_eq!(
+            payout_to(AccountIdentity::PrivateOwned(DESTINATION)),
+            vec![vec![Assumption {
+                from: vault,
+                to: credit.to,
+                message: credit.message,
+                grants: vec![terms.output_vault_id],
+                pda_seeds: Vec::new(),
+            }]]
+        );
+        assert_eq!(
+            payout_to(AccountIdentity::Public(DESTINATION)),
+            vec![Vec::new()]
+        );
+    }
+
+    #[test]
     fn a_quote_estimates_either_amount_from_the_current_reserves() {
         // 100 of A into 1000/500 is quoted 500 * 100 / 1100 = 45 of B; 45 of B out costs
         // ceil(1000 * 45 / 455) = 99 of A.
