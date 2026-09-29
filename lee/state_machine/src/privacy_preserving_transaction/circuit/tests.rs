@@ -27,6 +27,8 @@ use crate::{
     },
 };
 
+const BOB: AccountId = AccountId::new([8; 32]);
+
 fn regular_id(keys: &TestPrivateKeys, identifier: Identifier) -> AccountId {
     AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier)
 }
@@ -392,6 +394,31 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     .unwrap();
     assert_eq!(kind, PrivateAccountKind::Regular(identifier));
     assert_eq!(post.data, expected_post_data);
+}
+
+#[test]
+fn circuit_fails_when_turn_validity_windows_have_empty_intersection() {
+    let account_keys = test_private_account_keys_1();
+    let later = Script {
+        block_window: (4..7).try_into().unwrap(),
+        ..Script::default()
+    };
+    let earlier = Script {
+        block_window: (1..4).try_into().unwrap(),
+        ..Script::default()
+    }
+    .send(Envelope::new(
+        Actor::new(regular_id(&account_keys, Identifier::ZERO), scripted_id()),
+        &later,
+    ));
+
+    let result = prove_scripted(
+        init_witness(&account_keys, Identifier::ZERO),
+        &earlier,
+        None,
+    );
+
+    assert!(matches!(result, Err(LeeError::OutOfValidityWindow)));
 }
 
 /// A private PDA bound with a non-default identifier produces a ciphertext that decrypts
@@ -912,6 +939,23 @@ fn the_prover_never_reads_a_public_shard() {
     );
 }
 
+#[test]
+fn a_send_to_an_actor_the_transaction_never_declared_is_rejected() {
+    let keys = test_private_account_keys_1();
+    let undeclared = Actor::native_balance(AccountId::new([8; 32]));
+
+    let result = prove_scripted(
+        init_witness(&keys, Identifier::ZERO),
+        &Script::default().send(Envelope::new(undeclared, &Script::default())),
+        None,
+    );
+
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::UndeclaredActor { actor } if actor == undeclared
+    ));
+}
+
 fn prove_circuit_directly(
     circuit_input: &PrivacyPreservingCircuitInput,
     receipts: Vec<Receipt>,
@@ -1053,4 +1097,52 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     let result = prove_circuit_directly(&input, vec![receipt]);
 
     assert_circuit_rejects(&result, "echoed an input it was not given");
+}
+
+#[test]
+fn an_undeclared_actor_is_rejected_by_the_circuit() {
+    let scripted = crate::test_methods::scripted();
+    let script = Script::default().send(Envelope::new(
+        Actor::native_balance(BOB),
+        &Script::default(),
+    ));
+    let (receipt, turn) = receive_receipt(&scripted, &scripted_root_input(&script, true));
+    let input = direct_input(scripted_id(), &script, &[&scripted], vec![turn]);
+
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(
+        &result,
+        "which is neither a declared public actor nor private",
+    );
+}
+
+#[test]
+fn missing_turns_are_rejected_by_the_circuit() {
+    let scripted = crate::test_methods::scripted();
+    let input = direct_input(scripted_id(), &Script::default(), &[&scripted], Vec::new());
+
+    let result = prove_circuit_directly(&input, Vec::new());
+
+    assert_circuit_rejects(&result, "a scheduled turn must carry its transition");
+}
+
+#[test]
+fn surplus_turns_are_rejected_by_the_circuit() {
+    let scripted = crate::test_methods::scripted();
+    let (receipt, turn) =
+        receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
+    let input = direct_input(
+        scripted_id(),
+        &Script::default(),
+        &[&scripted],
+        vec![turn.clone(), turn],
+    );
+
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(
+        &result,
+        "A transition was supplied for a turn nothing scheduled",
+    );
 }

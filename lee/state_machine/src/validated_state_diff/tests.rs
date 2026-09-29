@@ -1,12 +1,18 @@
-use lee_core::account::{AccountId, Actor, Nonce};
+use lee_core::{
+    account::{AccountId, Actor, Nonce},
+    execution_state::ExecutionError,
+    program::Envelope,
+};
 use test_guest_core::Script;
 
 use crate::{
     PrivateKey, PublicKey, V03State,
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     state::tests::{public_tx, scripted_id, transfer},
     validated_state_diff::ValidatedStateDiff,
 };
+
+const SENDS: usize = 3;
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -156,6 +162,48 @@ fn exhausted_budget_surfaces_out_of_gas() {
 }
 
 #[test]
+fn turns_share_one_budget() {
+    // A sending tx must exhaust when the budget covers less than all of its turns, even though
+    // each individual turn would fit.
+    let (from_key, from) = signer();
+    let state = V03State::new()
+        .with_public_account_balances([(from, 1_000)])
+        .with_programs([crate::test_methods::scripted()]);
+    let sender = Actor::new(from, scripted_id());
+    let callee = Envelope::new(sender, &Script::default());
+    let sending = |sends: usize| {
+        let script = (0..sends).fold(Script::default(), |script, _| script.send(callee.clone()));
+        public_tx(sender, vec![sender], vec![Nonce(0)], script, &[&from_key])
+    };
+    let one_callee = sending(1);
+    let chain = sending(SENDS);
+    let cycles_under = |tx, budget| {
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(tx, &state, 1, 0, budget)
+    };
+    let spent = |tx| {
+        cycles_under(tx, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
+            .expect("executes under the default budget")
+            .1
+            .cycles
+    };
+
+    let budget = spent(&one_callee);
+
+    assert!(
+        cycles_under(&one_callee, budget).is_ok(),
+        "the budget must cover the root turn and a whole sent turn"
+    );
+    assert!(
+        budget < spent(&chain),
+        "the budget must not cover every turn"
+    );
+    assert!(matches!(
+        cycles_under(&chain, budget),
+        Err(LeeError::OutOfGas { budget: remaining }) if remaining < budget
+    ));
+}
+
+#[test]
 fn free_charge_is_zero_cycles() {
     assert_eq!(crate::ExecutionCharge::FREE.cycles, 0);
 }
@@ -219,6 +267,64 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
 }
 
 #[test]
+fn a_sent_turns_nonzero_exit_adds_its_cycles_to_its_senders() {
+    // The accumulation branch only matters once the sender has burned cycles: a sent turn's
+    // non-zero exit must charge sender + receiver, not just the receiver.
+    let (from_key, from) = signer();
+    let exits_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
+    let state = V03State::new()
+        .with_public_account_balances([(from, 1_000)])
+        .with_programs([
+            crate::test_methods::scripted(),
+            crate::test_methods::exits_nonzero(),
+        ]);
+    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
+    let sender = Actor::new(from, scripted_id());
+    let exiting = Actor::new(from, exits_id);
+    let run = |sends: usize| {
+        let script = (0..sends).fold(Script::default(), |script, _| {
+            script.send(Envelope {
+                to: exiting,
+                message: Vec::new(),
+                pda_seeds: Vec::new(),
+            })
+        });
+        let tx = public_tx(
+            sender,
+            vec![sender, exiting],
+            vec![Nonce(0)],
+            script,
+            &[&from_key],
+        );
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget)
+    };
+
+    let (sender_only, ok) = run(0);
+    ok.expect("the sender alone succeeds");
+
+    // The receiver alone, so the assertion below fails if its cycles are never folded in: a
+    // sender with one send burns only marginally more than with none.
+    let receiver_tx = public_tx(exiting, vec![exiting], vec![Nonce(0)], (), &[&from_key]);
+    let (receiver_alone, _) =
+        ValidatedStateDiff::from_public_transaction_metered(&receiver_tx, &state, 1, 0, budget);
+
+    let (charge, result) = run(1);
+    assert!(
+        charge.cycles >= sender_only.cycles.saturating_add(receiver_alone.cycles)
+            && charge.cycles < budget,
+        "sender + receiver cycles are metered: {} vs sender-only {} + receiver-only {}",
+        charge.cycles,
+        sender_only.cycles,
+        receiver_alone.cycles
+    );
+    let diff = result.expect("a charged revert still yields an applicable diff");
+    assert!(
+        diff.public_diff().is_empty(),
+        "a reverted action moves no balances"
+    );
+}
+
+#[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let (mut state, tx) = metering_write_fixture();
     let (_, from) = signer();
@@ -250,4 +356,79 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
+}
+
+#[test]
+fn an_undeclared_root_actor_is_invalid_input_and_not_charged() {
+    let (from_key, from) = signer();
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_programs([crate::test_methods::scripted()]);
+    let root = Actor::new(from, scripted_id());
+    let tx = public_tx(
+        root,
+        vec![Actor::native_balance(from)],
+        vec![Nonce(0)],
+        Script::default(),
+        &[&from_key],
+    );
+
+    let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+
+    let Err(error) = result else {
+        panic!("an undeclared root actor must reject the block");
+    };
+    assert!(
+        matches!(&error, LeeError::InvalidInput(message) if message == "Root actor is not declared"),
+        "expected the undeclared root to be invalid input, got {error:?}"
+    );
+    assert!(!error.is_chargeable());
+}
+
+#[test]
+fn a_send_to_an_undeclared_actor_from_a_later_turn_is_charged() {
+    let (from_key, from) = signer();
+    let state = V03State::new()
+        .with_public_account_balances([(from, 100)])
+        .with_programs([crate::test_methods::scripted()]);
+    let sender = Actor::new(from, scripted_id());
+    let undeclared = Actor::new(AccountId::new([2_u8; 32]), scripted_id());
+    let tx = public_tx(
+        sender,
+        vec![sender],
+        vec![Nonce(0)],
+        Script::write(vec![7_u8; 4]).send(Envelope::new(undeclared, &Script::default())),
+        &[&from_key],
+    );
+
+    let error = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+        .err()
+        .expect("a send to an undeclared actor must fail");
+    assert!(
+        matches!(
+            &error,
+            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::UndeclaredActor { actor }
+            )) if *actor == undeclared
+        ),
+        "expected the undeclared send to be rejected, got {error:?}"
+    );
+    assert!(error.is_chargeable());
+
+    // Charged and reverted: the block stays valid and only the signer's nonce advances.
+    let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+    let diff = result.expect("a charged failure still yields an applicable diff");
+    assert!(diff.public_diff().is_empty());
 }

@@ -1,5 +1,6 @@
 use lee_core::{
     EncryptionScheme, Identifier, SharedSecretKey,
+    execution_state::Output,
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -88,6 +89,86 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
         )
     );
     assert_eq!(action.commitment, Commitment::new(&account_id, &expected));
+}
+
+#[test]
+fn a_private_account_may_act_under_two_shards_in_one_transaction() {
+    let program_id = scripted_id();
+    let stranger = AccountId::new([9; 32]);
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let written = vec![7; 4];
+    let amount: u128 = 30;
+    let keys = test_private_account_keys_1();
+    let sender_id = regular_id(&keys, Identifier::ZERO);
+    let recipient = Actor::native_balance(AccountId::new([88; 32]));
+    let pre_account = Account {
+        nonce: Nonce(9),
+        ..Account::funded(100).with_shard(stranger, stranger_data.clone())
+    };
+    let state = V03State::new().with_private_account(&keys, &pre_account);
+    let membership_proof = state
+        .get_proof_for_commitment(&Commitment::new(&sender_id, &pre_account))
+        .expect("the account's commitment must be in state");
+    let credit = Envelope::new(recipient, &NativeMessage::Credit(amount));
+
+    let (output, _proof) = execute_and_prove(
+        ProvingInput {
+            public_actors: vec![recipient],
+            private_witnesses: vec![update_witness(
+                &keys,
+                Identifier::ZERO,
+                pre_account.clone(),
+                membership_proof,
+            )],
+            ..proving_input(root(
+                Actor::new(sender_id, program_id),
+                &Script::write(written.clone()).send(Envelope::new(
+                    Actor::native_balance(sender_id),
+                    &transfer(recipient.account_id, amount),
+                )),
+            ))
+        },
+        &synthetic_program(crate::test_methods::scripted()),
+    )
+    .unwrap();
+
+    let [action] = <[_; 1]>::try_from(output.private_actions).unwrap();
+    let expected = Account {
+        nonce: pre_account
+            .nonce
+            .private_account_nonce_increment(&keys.nsk()),
+        ..Account::funded(100 - amount)
+            .with_shard(stranger, stranger_data)
+            .with_shard(program_id, written.try_into().unwrap())
+    };
+    let shared_secret =
+        SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &keys.d, &keys.z)
+            .expect("the emitted epk is a well-formed ML-KEM ciphertext");
+
+    assert_eq!(
+        EncryptionScheme::decrypt(
+            &action.encrypted_post_state.ciphertext,
+            &shared_secret,
+            &action.nullifier,
+        )
+        .unwrap(),
+        (
+            PrivateAccountKind::Regular(Identifier::ZERO),
+            expected.clone()
+        )
+    );
+    assert_eq!(action.commitment, Commitment::new(&sender_id, &expected));
+
+    assert_eq!(
+        output.boundary.outputs,
+        vec![Output {
+            to: recipient,
+            message: credit.message,
+            origin: Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            grants: Vec::new(),
+            pda_seeds: Vec::new(),
+        }]
+    );
 }
 
 #[test]
@@ -366,6 +447,106 @@ fn inherited_scope_passes_through_nested_intermediate_calls() {
         false,
     )
     .expect("an account authorized in an ancestor's turn stays authorized two turns below it");
+}
+
+fn prove_public_outputs(
+    script: &Script,
+    public_actors: Vec<Actor>,
+    signers: HashSet<AccountId>,
+) -> (PrivacyPreservingCircuitOutput, Proof) {
+    let keys = test_private_account_keys_1();
+    // Assumes each public output delivers nothing back, without running it.
+    execute_and_prove_assuming(
+        ProvingInput {
+            public_actors,
+            signers,
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            ..proving_input(root(
+                Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id()),
+                script,
+            ))
+        },
+        vec![Vec::new(); script.sends.len()],
+        &scripted_programs(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_grant() {
+    let account_id = AccountId::for_public_pda(&scripted_id(), &DELEGATED_SEED);
+    let callee = Actor::new(account_id, TWIN);
+
+    let (output, proof) = prove_public_outputs(
+        &Script::default()
+            .send(Envelope::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED])),
+        vec![callee],
+        HashSet::new(),
+    );
+
+    // The statement carries the seed, not a grant: a seed grant is not a signer-backed claim, so
+    // settlement re-derives it.
+    let [delegated] = <[_; 1]>::try_from(output.boundary.outputs.clone()).unwrap();
+    assert_eq!(delegated.to, callee);
+    assert!(delegated.grants.is_empty());
+    assert_eq!(delegated.pda_seeds, vec![DELEGATED_SEED]);
+
+    V03State::new()
+        .with_test_programs()
+        .transition_from_privacy_preserving_transaction(
+            &private_tx((output, proof), vec![], &[]),
+            1,
+            0,
+        )
+        .expect("the seed must authorize the public PDA at settlement");
+}
+
+#[test]
+fn a_wrong_seed_leaves_a_signer_on_its_credential() {
+    let signer_keys = test_public_account_keys_1();
+    let signer_id = signer_keys.account_id();
+    let callee = Actor::new(signer_id, TWIN);
+    let wrong_seed = PdaSeed::new([88; 32]);
+
+    let proven = prove_public_outputs(
+        &Script::default()
+            .send(Envelope::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
+        vec![callee],
+        [signer_id].into(),
+    );
+
+    V03State::new()
+        .with_test_programs()
+        .transition_from_privacy_preserving_transaction(
+            &private_tx(proven, vec![Nonce(0)], &[&signer_keys.signing_key]),
+            1,
+            0,
+        )
+        .expect("an unmatched seed must leave the credential in force");
+}
+
+#[test]
+fn a_public_pda_seed_from_a_private_turn_does_not_extend_to_a_sibling_output() {
+    let account_id = AccountId::for_public_pda(&scripted_id(), &DELEGATED_SEED);
+    let callee = Actor::new(account_id, TWIN);
+
+    let proven = prove_public_outputs(
+        &Script::default()
+            .send(Envelope::new(callee, &authorized()).with_pda_seeds(vec![DELEGATED_SEED]))
+            .send(Envelope::new(callee, &authorized())),
+        vec![callee],
+        HashSet::new(),
+    );
+
+    let result = V03State::new()
+        .with_test_programs()
+        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 1, 0);
+
+    assert!(
+        matches!(result, Err(LeeError::ProgramExecutionFailed(_))),
+        "a sibling output handed the public PDA but no pda_seeds must not see it as authorized, \
+         but got: {result:?}"
+    );
 }
 
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
@@ -805,6 +986,39 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
             )
         )) if account_id == sender_id
     ));
+}
+
+#[test]
+fn a_forged_echo_is_caught_before_proving() {
+    let program_id = AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
+    let keys = test_private_account_keys_1();
+
+    for field in [
+        ForgeField::Receiver,
+        ForgeField::Origin,
+        ForgeField::IsAuthorized,
+        ForgeField::PreData,
+        ForgeField::Message,
+    ] {
+        let result = execute_and_prove(
+            ProvingInput {
+                private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+                ..proving_input(root(
+                    Actor::new(regular_id(&keys, Identifier::ZERO), program_id),
+                    &field,
+                ))
+            },
+            &synthetic_program(crate::test_methods::forges_echo()),
+        );
+
+        assert!(matches!(
+            execution_error(result),
+            ExecutionError::ExecutionValidation {
+                program_account_id,
+                source: ExecutionValidationError::TransitionInputMismatch { .. },
+            } if program_account_id == program_id
+        ));
+    }
 }
 
 /// A program never deployed anywhere, dispatched as a shadow program instead — its identity is

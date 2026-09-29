@@ -122,14 +122,14 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
         Nullifier, NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
-        account::Account,
+        account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
-        execution_state::{Boundary, Declared},
-        program::{BlockValidityWindow, TimestampValidityWindow},
+        execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp},
+        program::{BlockValidityWindow, Origin, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
-    use super::{EncryptedAccountData, Message};
+    use super::{EncryptedAccountData, Message, PREFIX};
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -178,6 +178,84 @@ pub mod tests {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
         }
+    }
+
+    #[test]
+    fn a_privacy_preserving_message_has_a_pinned_layout_and_hash() {
+        let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
+        let private = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+        let message = Message {
+            declared: Declared {
+                public_actors: vec![public],
+                authorized_accounts: vec![AccountId::new([7; 32])],
+            },
+            boundary: Boundary {
+                outputs: vec![Output {
+                    to: public,
+                    message: b"o".to_vec(),
+                    origin: Origin::Program(private.program_account_id),
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                assumptions: vec![Assumption {
+                    from: public,
+                    to: private,
+                    message: b"a".to_vec(),
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                schedule: vec![
+                    ScheduleOp::CallPublic,
+                    ScheduleOp::EnterPrivate,
+                    ScheduleOp::LeavePrivate,
+                    ScheduleOp::ReturnPublic,
+                ],
+            },
+            nonces: vec![Nonce(1)],
+            private_actions: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
+        };
+
+        let expected: Vec<u8> = [
+            &[1, 0, 0, 0][..], // declared.public_actors: one actor
+            &[5; 32],
+            &[6; 32],
+            &[1, 0, 0, 0], // declared.authorized_accounts: one account
+            &[7; 32],
+            &[1, 0, 0, 0], // boundary.outputs: one output
+            &[5; 32],      // to
+            &[6; 32],
+            &[1, 0, 0, 0], // message
+            b"o",
+            &[1], // origin: Origin::Program
+            &[8; 32],
+            &[0, 0, 0, 0], // grants: none
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[1, 0, 0, 0], // boundary.assumptions: one assumption
+            &[5; 32],      // from
+            &[6; 32],
+            &[9; 32], // to
+            &[8; 32],
+            &[1, 0, 0, 0], // message
+            b"a",
+            &[0, 0, 0, 0], // grants: none
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[4, 0, 0, 0], // boundary.schedule: four ops
+            &[0, 1, 2, 3],
+            &[1, 0, 0, 0], // nonces: one nonce, a little-endian u128
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0], // private_actions: none
+            &[0, 0],       // block_validity_window: from None, to None
+            &[0, 0],       // timestamp_validity_window: from None, to None
+            &[0, 0, 0, 0], // program_image_claims: none
+        ]
+        .concat();
+
+        assert_eq!(message.to_bytes(), expected);
+        let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
+        assert_eq!(message.hash(), digest);
     }
 
     #[test]

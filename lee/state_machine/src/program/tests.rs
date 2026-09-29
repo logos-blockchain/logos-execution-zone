@@ -1,7 +1,9 @@
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Origin, ReceiveInput},
+    program::{Origin, ReceiveInput, Transition},
+    to_frame,
 };
+use risc0_zkvm::{ExecutorEnv, default_executor};
 use test_guest_core::Script;
 
 use crate::{
@@ -47,6 +49,29 @@ fn program_execution() {
 }
 
 #[test]
+fn journal_is_the_borsh_frame_of_the_transition_and_echoes_the_message() {
+    let (program, input, _) = write_fixture();
+
+    let mut env_builder = ExecutorEnv::builder();
+    Program::write_receive_input(&input, &mut env_builder).unwrap();
+    let session_info = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .unwrap();
+
+    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
+    let transition: Transition = borsh::from_slice(payload).unwrap();
+
+    // The journal must be byte-identical to `to_frame(borsh(transition))`: the privacy circuit
+    // reconstructs exactly these bytes for `env::verify`, so any drift breaks recursion.
+    assert_eq!(
+        session_info.journal.bytes,
+        lee_core::to_frame(&borsh::to_vec(&transition).unwrap())
+    );
+    // The guest must echo the message bytes verbatim: delivery binding compares them.
+    assert_eq!(transition.input.message, input.message);
+}
+
+#[test]
 fn malformed_journal_frame_is_an_error_not_a_panic() {
     let program = crate::test_methods::malformed_journal();
     let err = program
@@ -82,6 +107,25 @@ fn tiny_budget_is_out_of_gas() {
     let (program, input, _) = write_fixture();
     let result = program.receive(&input, 1_024);
     assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1_024 })));
+}
+
+/// There is no capability probe in this model: a guest handed an input it cannot decode must
+/// fail rather than answer with a no-op that would count as success.
+#[test]
+fn an_undecodable_input_fails_the_guest() {
+    let (program, _, _) = write_fixture();
+
+    let mut env_builder = ExecutorEnv::builder();
+    env_builder.write_slice(&to_frame(&[77_u8]));
+
+    let err = default_executor()
+        .execute(env_builder.build().unwrap(), program.elf())
+        .expect_err("an undecodable input must fail guest execution");
+
+    assert!(
+        format!("{err:#}").contains("receive input must be valid borsh"),
+        "expected an input decode failure, got: {err:#}"
+    );
 }
 
 /// A guest that halts with a non-zero code is rejected, but unlike a panic the session survives:

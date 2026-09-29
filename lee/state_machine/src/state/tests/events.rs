@@ -71,6 +71,71 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
 }
 
 #[test]
+fn events_of_sent_turns_follow_depth_first_pre_order() {
+    let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
+    let to_emitter = emitter();
+
+    let grandchild = emitting(vec![emitted(2)]);
+    let first_callee = emitting(vec![emitted(1)]).send(Envelope::new(to_emitter, &grandchild));
+    let second_callee = emitting(vec![emitted(3)]);
+
+    let tx = emitter_transaction(
+        emitting(vec![emitted(0)])
+            .send(Envelope::new(to_emitter, &first_callee))
+            .send(Envelope::new(to_emitter, &second_callee)),
+    );
+
+    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(
+        payloads(&events),
+        vec![vec![0; 4], vec![1; 4], vec![2; 4], vec![3; 4]],
+        "depth-first pre-order: the first callee's subtree must complete before the second \
+         callee runs (breadth-first would yield 0, 1, 3, 2)"
+    );
+}
+
+#[test]
+fn a_sent_turns_events_are_attributed_to_its_program_not_its_sender() {
+    let initiator = crate::test_methods::flash_swap_initiator();
+
+    let vault_id = AccountId::for_public_pda(
+        &AccountId::from_builtin_program(initiator.id()),
+        &PdaSeed::new([0; 32]),
+    );
+    let receiver_id = AccountId::new([2; 32]);
+    let callback = Actor::new(receiver_id, scripted_id());
+
+    let mut state = V03State::new().with_programs([
+        crate::test_methods::scripted(),
+        crate::test_methods::flash_swap_initiator(),
+    ]);
+    state.force_insert_account(vault_id, Account::funded(1000));
+
+    // Zero-amount flash swap: the emitter runs as the callback, the second of the initiator's
+    // three sends, so the only emitting program is neither the root program nor its sender.
+    let message = FlashSwapMessage::Initiate {
+        vault: vault_id,
+        receiver: receiver_id,
+        callback,
+        amount_out: 0,
+        vault_balance: 1000,
+        callback_message: borsh::to_vec(&emitting(vec![emitted(0)])).unwrap(),
+    };
+
+    let tx = flash_swap_tx(vault_id, receiver_id, callback, &message);
+    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(payloads(&events), vec![vec![0; 4]]);
+    assert_eq!(events[0].account_id, scripted_id());
+    assert_ne!(
+        events[0].account_id,
+        AccountId::from_builtin_program(initiator.id())
+    );
+    assert_ne!(events[0].account_id, NATIVE_TOKEN_PROGRAM_ID);
+}
+
+#[test]
 fn program_that_emits_nothing_yields_no_events() {
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
 

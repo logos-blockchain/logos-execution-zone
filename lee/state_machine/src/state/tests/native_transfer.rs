@@ -85,6 +85,76 @@ fn transition_from_sequence_of_native_transfer_invocations() {
 }
 
 #[test]
+fn a_guest_writes_its_own_shard_and_sends_a_transfer_of_the_same_account() {
+    let program_id = scripted_id();
+    let stranger = AccountId::new([9; 32]);
+    let stranger_record: ShardData = b"untouched".to_vec().try_into().unwrap();
+
+    let sender_key = PrivateKey::try_new([11; 32]).unwrap();
+    let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let recipient = AccountId::new([12; 32]);
+    let written: Vec<u8> = vec![7; 4];
+    let amount: u128 = 30;
+
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            sender,
+            Account::funded(100).with_shard(stranger, stranger_record.clone()),
+        )])
+        .with_programs([crate::test_methods::scripted()]);
+
+    let writer = Actor::new(sender, program_id);
+    let script = Script::write(written.clone()).send(Envelope::new(
+        Actor::native_balance(sender),
+        &transfer(recipient, amount),
+    ));
+    let tx = public_tx(
+        writer,
+        vec![
+            writer,
+            Actor::native_balance(sender),
+            Actor::native_balance(recipient),
+        ],
+        vec![Nonce(0)],
+        script,
+        &[&sender_key],
+    );
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let sender_post = state.get_account_by_id(sender);
+    assert_eq!(sender_post.data.shard(program_id).as_ref(), written);
+    assert_eq!(sender_post.data.native_balance(), Ok(70));
+    assert_eq!(sender_post.data.shard(stranger), &stranger_record);
+    assert_eq!(sender_post.nonce, Nonce(1));
+    assert_eq!(
+        state.get_account_by_id(recipient).data.native_balance(),
+        Ok(30)
+    );
+}
+
+#[test]
+fn a_repeated_public_actor_is_rejected() {
+    let account = Actor::native_balance(AccountId::new([4; 32]));
+    let mut state = V03State::new();
+
+    let tx = public_tx(
+        account,
+        vec![account, account],
+        vec![],
+        transfer(account.account_id, 0),
+        &[],
+    );
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let Err(LeeError::InvalidInput(message)) = result else {
+        panic!("a duplicate public actor was accepted: {result:?}");
+    };
+    assert!(message.contains("declared twice"), "{message}");
+}
+
+#[test]
 fn a_transfer_that_overflows_the_recipient_is_rejected() {
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));

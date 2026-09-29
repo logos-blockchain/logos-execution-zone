@@ -5,6 +5,69 @@ fn native_send(from: AccountId, to: AccountId, amount: u128) -> Envelope {
 }
 
 #[test]
+fn public_sent_calls() {
+    let key = PrivateKey::try_new([1; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let to = AccountId::new([2; 32]);
+    let initial_balance = 1000;
+    let mut state = V03State::new()
+        .with_public_account_balances([(from, initial_balance), (to, 0)])
+        .with_programs([crate::test_methods::scripted()]);
+    let amount: u128 = 37;
+
+    // The scripted actor sends the transfer twice
+    let expected_to_post = Account::funded(amount * 2);
+
+    let sender = Actor::new(from, scripted_id());
+    let tx = public_tx(
+        sender,
+        vec![
+            sender,
+            Actor::native_balance(from),
+            Actor::native_balance(to),
+        ],
+        vec![Nonce(0)],
+        Script::default()
+            .send(native_send(from, to, amount))
+            .send(native_send(from, to, amount)),
+        &[&key],
+    );
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let from_post = state.get_account_by_id(from);
+    let to_post = state.get_account_by_id(to);
+    assert_eq!(
+        from_post.data.native_balance(),
+        Ok(initial_balance - 2 * amount)
+    );
+    assert_eq!(to_post, expected_to_post);
+}
+
+fn self_sends(actor: Actor, depth: usize) -> Script {
+    (0..depth).fold(Script::default(), |script, _| {
+        Script::default().send(Envelope::new(actor, &script))
+    })
+}
+
+#[test]
+fn execution_allows_more_than_sixty_four_turns() {
+    let revisited = Actor::new(AccountId::new([1; 32]), scripted_id());
+    let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
+    let tx = public_tx(
+        revisited,
+        vec![revisited],
+        vec![],
+        self_sends(revisited, 64),
+        &[],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("the root and 64 self-sends fit within the execution budget");
+}
+
+#[test]
 fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
     let pda_seed = PdaSeed::new([37; 32]);
     let from = AccountId::for_public_pda(&scripted_id(), &pda_seed);
@@ -117,5 +180,101 @@ fn a_credit_leaves_a_stranger_shard_at_the_recipient_untouched() {
             nonce: Nonce(1),
             ..Account::funded(amount).with_shard(stranger, stranger_data)
         }
+    );
+}
+
+#[test_case::test_case(1; "single call")]
+#[test_case::test_case(2; "two calls")]
+fn private_sent_calls(number_of_calls: u32) {
+    // Arrange
+    let from_keys = test_private_account_keys_1();
+    let to_keys = test_private_account_keys_2();
+    let initial_balance = 100;
+    let from_pre = Account::funded(initial_balance);
+    let to_pre = Account::default();
+
+    let from_account_id = AccountId::for_regular_private_account(
+        &from_keys.npk(),
+        &from_keys.vpk(),
+        Identifier::ZERO,
+    );
+    let to_account_id =
+        AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), Identifier::ZERO);
+    let from_commitment = Commitment::new(&from_account_id, &from_pre);
+    let to_commitment = Commitment::new(&to_account_id, &to_pre);
+    let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
+    let to_init_nullifier = Nullifier::for_account_initialization(&to_account_id);
+    let mut state = V03State::new()
+        .with_private_accounts([
+            (from_commitment, from_init_nullifier),
+            (to_commitment, to_init_nullifier),
+        ])
+        .with_programs([crate::test_methods::scripted()]);
+    let amount: u128 = 37;
+    let send = Envelope::new(
+        Actor::native_balance(from_account_id),
+        &transfer(to_account_id, amount),
+    );
+    let script =
+        (0..number_of_calls).fold(Script::default(), |script, _| script.send(send.clone()));
+
+    let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
+    let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());
+
+    let from_expected_post = Account {
+        nonce: from_new_nonce,
+        ..Account::funded(initial_balance - u128::from(number_of_calls) * amount)
+    };
+    let from_expected_commitment = Commitment::new(&from_account_id, &from_expected_post);
+
+    let to_expected_post = Account {
+        nonce: to_new_nonce,
+        ..Account::funded(u128::from(number_of_calls) * amount)
+    };
+    let to_expected_commitment = Commitment::new(&to_account_id, &to_expected_post);
+
+    // Act
+    let proven = execute_and_prove(
+        ProvingInput {
+            private_witnesses: vec![
+                update_witness(
+                    &from_keys,
+                    Identifier::ZERO,
+                    from_pre,
+                    state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
+                ),
+                update_witness(
+                    &to_keys,
+                    Identifier::ZERO,
+                    to_pre,
+                    state
+                        .get_proof_for_commitment(&to_commitment)
+                        .expect("to's commitment must be in state"),
+                ),
+            ],
+            ..proving_input(root(Actor::new(from_account_id, scripted_id()), &script))
+        },
+        &synthetic_program(crate::test_methods::scripted()),
+    )
+    .unwrap();
+
+    let transaction = private_tx(proven, vec![], &[]);
+
+    state
+        .transition_from_privacy_preserving_transaction(&transaction, 1, 0)
+        .unwrap();
+
+    // Assert
+    assert!(
+        state
+            .get_proof_for_commitment(&from_expected_commitment)
+            .is_some()
+    );
+    assert!(
+        state
+            .get_proof_for_commitment(&to_expected_commitment)
+            .is_some()
     );
 }

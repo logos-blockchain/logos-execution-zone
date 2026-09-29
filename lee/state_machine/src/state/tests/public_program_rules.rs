@@ -139,6 +139,34 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
 }
 
 #[test]
+fn program_should_fail_if_it_forges_its_pre_data() {
+    let account_id = AccountId::new([1; 32]);
+    let program_id = AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
+    let mut state = V03State::new()
+        .with_public_account_balances([(account_id, 0)])
+        .with_programs([crate::test_methods::forges_echo()]);
+    let forger = Actor::new(account_id, program_id);
+    let tx = public_tx(forger, vec![forger], vec![], ForgeField::PreData, &[]);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            &result,
+            Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::Execution(
+                ExecutionError::ExecutionValidation {
+                    program_account_id: err_program_id,
+                    source: ExecutionValidationError::TransitionInputMismatch { expected, actual },
+                }
+            ))) if *err_program_id == program_id
+                && expected.pre_data.is_empty()
+                && actual.pre_data.as_ref() == b"forged"
+        ),
+        "expected a transition input mismatch for the forged pre-data, got {result:?}"
+    );
+}
+
+#[test]
 fn insufficient_balance_transfer_leaves_state_untouched() {
     let from_key = PrivateKey::try_new([21; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
@@ -173,4 +201,46 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 
     assert_eq!(state.get_account_by_id(from), sender_pre);
     assert_eq!(state.get_account_by_id(to), recipient_pre);
+}
+
+#[test]
+fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
+    let account_id = AccountId::new([1; 32]);
+    let stranger = AccountId::new([9; 32]);
+    let on_chain: ShardData = b"on-chain".to_vec().try_into().unwrap();
+    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let written = vec![7; 4];
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            account_id,
+            Account {
+                nonce: Nonce(3),
+                ..Account::funded(5)
+                    .with_shard(TWIN, on_chain)
+                    .with_shard(stranger, stranger_data.clone())
+            },
+        )])
+        .with_test_programs();
+
+    let sender = Actor::new(account_id, scripted_id());
+    let callee = Actor::new(account_id, TWIN);
+    let tx = public_tx(
+        sender,
+        vec![sender, callee],
+        vec![],
+        Script::default().send(Envelope::new(callee, &Script::write(written.clone()))),
+        &[],
+    );
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(account_id),
+        Account {
+            nonce: Nonce(3),
+            ..Account::funded(5)
+                .with_shard(TWIN, written.try_into().unwrap())
+                .with_shard(stranger, stranger_data)
+        }
+    );
 }

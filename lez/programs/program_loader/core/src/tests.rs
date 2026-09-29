@@ -139,6 +139,27 @@ fn create_header_rejects_an_occupied_loader_shard() {
 }
 
 #[test]
+#[should_panic(expected = "must decode as a valid ProgramSegment")]
+fn create_header_rejects_a_chain_that_does_not_end() {
+    let target_id = AccountId::new([1; 32]);
+    let first_segment = AccountId::new([2; 32]);
+    let second_segment = AccountId::new([3; 32]);
+    let dangling = AccountId::new([4; 32]);
+    let shards = Shards::default()
+        .segment(first_segment, vec![1], Some(second_segment))
+        .segment(second_segment, vec![2], Some(dangling));
+    let message = Message::CreateHeader {
+        first_segment,
+        immutable: false,
+    };
+
+    let _transition = receive(
+        &input(target_id, true, ShardData::empty(), &message),
+        shards.read(),
+    );
+}
+
+#[test]
 #[should_panic(expected = "use CreateHeader to make one")]
 fn update_header_rejects_a_target_with_no_existing_header() {
     let target_id = AccountId::new([1; 32]);
