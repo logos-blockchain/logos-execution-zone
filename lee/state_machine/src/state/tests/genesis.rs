@@ -49,7 +49,7 @@ fn new_includes_nullifiers_for_private_accounts() {
 #[test]
 fn insert_program() {
     let mut state = V03State::new();
-    let program_to_insert = crate::test_methods::data_changer();
+    let program_to_insert = crate::test_methods::scripted();
     let account_id = AccountId::from_builtin_program(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
@@ -66,9 +66,9 @@ fn insert_program() {
 
 #[test]
 fn genesis_immutable_program_lands_immutable_mirror_commitment() {
-    let state = V03State::new().with_programs([crate::test_methods::noop()]);
+    let state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let header_account_id =
-        lee_core::account::AccountId::from_builtin_program(crate::test_methods::noop().id());
+        lee_core::account::AccountId::from_builtin_program(crate::test_methods::scripted().id());
     let program_header = lee_core::program::ProgramHeader::from_bytes(
         state.public_state[&header_account_id]
             .data
@@ -85,10 +85,9 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
 #[test]
 fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
     let state =
-        V03State::new().with_genesis_programs([(crate::test_methods::shard_forwarder(), false)]);
-    let header_account_id = lee_core::account::AccountId::from_builtin_program(
-        crate::test_methods::shard_forwarder().id(),
-    );
+        V03State::new().with_genesis_programs([(crate::test_methods::forges_echo(), false)]);
+    let header_account_id =
+        lee_core::account::AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
     let program_header = lee_core::program::ProgramHeader::from_bytes(
         state.public_state[&header_account_id]
             .data
@@ -139,8 +138,8 @@ fn state_serialization_roundtrip() {
     let state = V03State::new()
         .with_public_account_balances(initial_data)
         .with_programs([
-            crate::test_methods::data_changer(),
-            crate::test_methods::noop(),
+            crate::test_methods::scripted(),
+            crate::test_methods::forges_echo(),
         ]);
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();

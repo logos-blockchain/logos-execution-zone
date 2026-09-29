@@ -12497,6 +12497,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "lee_core",
+ "risc0-zkvm",
 ]
 
 [[package]]

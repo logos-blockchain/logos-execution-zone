@@ -1,46 +1,57 @@
-//! Instruction types shared between the test guests and the hosts that drive them, so a guest
-//! and its callers cannot drift apart.
+//! Message types shared between the test guests and the hosts that drive them, so a guest and its
+//! callers cannot drift apart. `Script` is what `scripted` runs.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::AccountId,
-    program::{InstructionData, PdaSeed},
+use lee_core::program::{
+    BlockValidityWindow, Envelope, Origin, ProgramEvent, TimestampValidityWindow,
 };
 
 pub mod guests;
 
-/// What `chain_caller` dispatches.
-///
-/// The callee is named by address rather than by bytecode identity: a program may be deployed at
-/// an address that is not its own bijection, and a native program has no bytecode to identify.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct ChainCall {
-    pub callee_account_id: AccountId,
-    pub instruction_data: InstructionData,
-    pub calls: u32,
-    pub pda_seed: Option<PdaSeed>,
+#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
+pub struct Script {
+    pub write: Option<Vec<u8>>,
+    pub sends: Vec<Envelope>,
+    pub events: Vec<ProgramEvent>,
+    pub block_window: BlockValidityWindow,
+    pub timestamp_window: TimestampValidityWindow,
+    pub require_authorized: bool,
+    pub require_origin: Option<Origin>,
 }
 
-impl ChainCall {
+impl Script {
     #[must_use]
-    pub const fn new(callee_account_id: AccountId, instruction_data: InstructionData) -> Self {
+    pub fn write(data: Vec<u8>) -> Self {
         Self {
-            callee_account_id,
-            instruction_data,
-            calls: 1,
-            pda_seed: None,
+            write: Some(data),
+            ..Self::default()
         }
     }
 
     #[must_use]
-    pub const fn repeated(mut self, calls: u32) -> Self {
-        self.calls = calls;
+    pub fn send(mut self, envelope: Envelope) -> Self {
+        self.sends.push(envelope);
         self
     }
 
     #[must_use]
-    pub const fn delegating(mut self, seed: PdaSeed) -> Self {
-        self.pda_seed = Some(seed);
+    pub const fn authorized(mut self) -> Self {
+        self.require_authorized = true;
         self
     }
+
+    #[must_use]
+    pub const fn from(mut self, origin: Origin) -> Self {
+        self.require_origin = Some(origin);
+        self
+    }
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+pub enum ForgeField {
+    Receiver,
+    Origin,
+    IsAuthorized,
+    PreData,
+    Message,
 }

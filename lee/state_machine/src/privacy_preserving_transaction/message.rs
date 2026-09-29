@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
     ProgramImageClaim,
     account::Nonce,
-    execution_state::DeferredPublicEffect,
+    execution_state::{Boundary, Declared},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
@@ -13,15 +15,10 @@ use crate::AccountId;
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    pub effects: Vec<DeferredPublicEffect>,
-}
-
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub public_actions: Vec<PublicActionWithID>,
+    pub declared: Declared,
+    pub boundary: Boundary,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
@@ -52,7 +49,8 @@ impl std::fmt::Debug for Message {
             })
             .collect();
         f.debug_struct("Message")
-            .field("public_actions", &self.public_actions)
+            .field("declared", &self.declared)
+            .field("boundary", &self.boundary)
             .field("nonces", &self.nonces)
             .field("private_actions", &private_actions)
             .field("block_validity_window", &self.block_validity_window)
@@ -65,16 +63,9 @@ impl std::fmt::Debug for Message {
 impl Message {
     #[must_use]
     pub fn from_circuit_output(nonces: Vec<Nonce>, output: PrivacyPreservingCircuitOutput) -> Self {
-        let public_actions = output
-            .public_actions
-            .into_iter()
-            .map(|action| PublicActionWithID {
-                account_id: action.account_id,
-                effects: action.effects,
-            })
-            .collect();
         Self {
-            public_actions,
+            declared: output.declared,
+            boundary: output.boundary,
             nonces,
             private_actions: output.private_actions,
             block_validity_window: output.block_validity_window,
@@ -101,9 +92,12 @@ impl Message {
 
     #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
-        self.public_actions
+        let mut seen = HashSet::new();
+        self.declared
+            .public_actors
             .iter()
-            .map(|action| action.account_id)
+            .map(|actor| actor.account_id)
+            .filter(|account_id| seen.insert(*account_id))
             .collect()
     }
 
@@ -128,13 +122,14 @@ pub mod tests {
     use lee_core::{
         Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
         Nullifier, NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
-        account::{Account, AccountId, Nonce},
+        account::Account,
         encryption::{Ciphertext, ViewingPublicKey},
+        execution_state::{Boundary, Declared},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
-    use super::{EncryptedAccountData, Message, PREFIX, PublicActionWithID};
+    use super::{EncryptedAccountData, Message};
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -166,10 +161,8 @@ pub mod tests {
         let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
         Message {
-            public_actions: vec![PublicActionWithID {
-                account_id: AccountId::new([1; 32]),
-                effects: Vec::new(),
-            }],
+            declared: Declared::default(),
+            boundary: Boundary::default(),
             nonces,
             private_actions: vec![PrivateAction {
                 nullifier,
@@ -185,54 +178,6 @@ pub mod tests {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
         }
-    }
-
-    #[test]
-    fn hash_privacy_pinned() {
-        let msg = Message {
-            public_actions: vec![],
-            nonces: vec![Nonce(5)],
-            private_actions: vec![],
-            block_validity_window: BlockValidityWindow::new_unbounded(),
-            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![],
-        };
-
-        // empty vec fields: u32 len=0
-        let public_actions_bytes: &[u8] = &[0, 0, 0, 0];
-        let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let private_actions_bytes: &[u8] = &[0, 0, 0, 0];
-        // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
-        let unbounded_window_bytes: &[u8] = &[0, 0];
-        let program_image_claims_bytes: &[u8] = &[0, 0, 0, 0];
-
-        let expected_borsh_vec: Vec<u8> = [
-            public_actions_bytes,
-            nonces_bytes,
-            private_actions_bytes,
-            unbounded_window_bytes, // block_validity_window
-            unbounded_window_bytes, // timestamp_validity_window
-            program_image_claims_bytes,
-        ]
-        .concat();
-        let expected_borsh: &[u8] = &expected_borsh_vec;
-
-        assert_eq!(
-            borsh::to_vec(&msg).unwrap(),
-            expected_borsh,
-            "`privacy_preserving_transaction::hash()`: expected borsh order has changed"
-        );
-
-        let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
-        preimage.extend_from_slice(PREFIX);
-        preimage.extend_from_slice(expected_borsh);
-        let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
-
-        assert_eq!(
-            msg.hash(),
-            expected_hash,
-            "`privacy_preserving_transaction::hash()`: serialization has changed"
-        );
     }
 
     #[test]

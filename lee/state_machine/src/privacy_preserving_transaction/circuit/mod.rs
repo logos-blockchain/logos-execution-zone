@@ -3,15 +3,12 @@ use std::collections::{HashMap, HashSet};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
-    account::{AccountId, Actor},
-    execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
+    PrivateWitness, ProgramImageWitness, ShadowProgramWitness,
+    account::{AccountId, Actor, Cycles, ShardData},
+    execution_state::{Assumption, Backend, Declared, ExecutionState, Mode, RootCall},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{
-        ApplyInput, ApplyOutput, InstructionData, PlanInput, PlanOutput, ProgramEvent,
-        ProgramHeader,
-    },
+    program::{ProgramHeader, ReceiveInput, Transition},
     to_frame,
 };
 use risc0_zkvm::{
@@ -21,7 +18,8 @@ use risc0_zkvm::{
 use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::{Program, apply_journal, check_exit_code, plan_journal},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
+    validated_state_diff::sorted,
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -73,76 +71,48 @@ pub struct Dependency {
     pub kind: ProgramKind,
 }
 
-#[derive(Clone)]
-pub struct ProgramWithDependencies {
-    /// Where the top-level call is dispatched — never assumed to be the root bytecode's
-    /// bijection address, since the same bytecode may be deployed more than once at different
-    /// addresses.
-    pub self_account_id: AccountId,
+#[derive(Clone, Default)]
+pub struct ProgramCatalog {
     // TODO: avoid having a copy of the bytecode of each program.
-    /// Every program this execution may dispatch, root included, keyed by the account address
-    /// it's deployed at — never its bytecode identity, for the same reason. The caller building
-    /// this off-chain (e.g. the wallet) already knows which program lives where; there's no live
-    /// state to look it up against inside a pure proving function.
+    /// Every program this execution may dispatch, keyed by the account address it's deployed at
+    /// — never its bytecode identity, since the same bytecode may be deployed more than once at
+    /// different addresses. The caller building this off-chain (e.g. the wallet) already knows
+    /// which program lives where; there's no live state to look it up against inside a pure
+    /// proving function.
     pub programs: HashMap<AccountId, Dependency>,
 }
 
-impl ProgramWithDependencies {
-    #[must_use]
-    pub fn new(
-        program: Program,
-        self_account_id: AccountId,
-        dependencies: HashMap<AccountId, Program>,
-    ) -> Self {
-        let programs = dependencies
-            .into_iter()
-            .chain([(self_account_id, program)])
-            .map(|(account_id, dep_program)| {
-                (
-                    account_id,
-                    Dependency {
-                        program: dep_program,
-                        kind: ProgramKind::Disclosed,
-                    },
-                )
-            })
-            .collect();
+impl FromIterator<(AccountId, Program)> for ProgramCatalog {
+    fn from_iter<I: IntoIterator<Item = (AccountId, Program)>>(iter: I) -> Self {
         Self {
-            self_account_id,
-            programs,
+            programs: iter
+                .into_iter()
+                .map(|(account_id, program)| {
+                    (
+                        account_id,
+                        Dependency {
+                            program,
+                            kind: ProgramKind::Disclosed,
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
 
-impl ProgramWithDependencies {
-    #[must_use]
-    pub fn native() -> Self {
-        Self {
-            self_account_id: NATIVE_TOKEN_PROGRAM_ID,
-            programs: HashMap::new(),
-        }
+impl<const N: usize> From<[(AccountId, Program); N]> for ProgramCatalog {
+    fn from(entries: [(AccountId, Program); N]) -> Self {
+        entries.into_iter().collect()
     }
+}
 
-    /// Marks the root program as a shadow program: dispatched at
-    /// `AccountId::for_shadow_program(program.id())`, resolved via a fresh
-    /// [`ShadowProgramWitness`] instead of a public claim.
+impl ProgramCatalog {
+    /// Resolves the program at `account_id`, which must be
+    /// `AccountId::for_shadow_program(&program.id())`, via a fresh [`ShadowProgramWitness`]
+    /// instead of a public claim.
     #[must_use]
-    pub fn as_shadow_program(mut self) -> Self {
-        if let Some(root) = self.programs.remove(&self.self_account_id) {
-            self.self_account_id = AccountId::for_shadow_program(&root.program.id());
-            self.programs.insert(
-                self.self_account_id,
-                Dependency {
-                    kind: ProgramKind::Shadow,
-                    ..root
-                },
-            );
-        }
-        self
-    }
-
-    #[must_use]
-    pub fn with_shadow_dependency(mut self, account_id: AccountId) -> Self {
+    pub fn with_shadow(mut self, account_id: AccountId) -> Self {
         if let Some(dependency) = self.programs.get_mut(&account_id) {
             dependency.kind = ProgramKind::Shadow;
         }
@@ -151,17 +121,7 @@ impl ProgramWithDependencies {
 
     /// `ProgramImageClaim::Undisclosed` instead of `Disclosed`.
     #[must_use]
-    pub fn as_undisclosed_program(
-        self,
-        program_header: ProgramHeader,
-        membership_proof: MembershipProof,
-    ) -> Self {
-        let root = self.self_account_id;
-        self.with_undisclosed_dependency(root, program_header, membership_proof)
-    }
-
-    #[must_use]
-    pub fn with_undisclosed_dependency(
+    pub fn with_undisclosed(
         mut self,
         account_id: AccountId,
         program_header: ProgramHeader,
@@ -178,124 +138,154 @@ impl ProgramWithDependencies {
 }
 
 /// Inputs for proving an LEE program's execution.
-#[derive(Default)]
 pub struct ProvingInput {
-    pub shard_selectors: Vec<Actor>,
+    pub root: RootCall,
+    pub public_actors: Vec<Actor>,
     pub signers: HashSet<AccountId>,
     pub private_witnesses: Vec<PrivateWitness>,
-    pub instruction_data: InstructionData,
+    pub public_shards: HashMap<Actor, ShardData>,
     pub dummy_inputs: Vec<DummyInput>,
     /// Minimum length each emitted note is padded to, so notes do not leak their
     /// account's size. `None` leaves them at their natural length.
     pub ciphertext_padding: Option<u32>,
 }
 
+impl ProvingInput {
+    fn declared(&self) -> Declared {
+        Declared {
+            public_actors: self.public_actors.clone(),
+            authorized_accounts: sorted(self.signers.iter().copied()),
+        }
+    }
+}
+
+struct Simulator<'input> {
+    programs: &'input HashMap<AccountId, Dependency>,
+    public_shards: &'input HashMap<Actor, ShardData>,
+}
+
+impl Backend for Simulator<'_> {
+    type Error = LeeError;
+
+    fn receive(
+        &mut self,
+        input: &ReceiveInput,
+        execution: &ExecutionState<'_>,
+    ) -> Result<Transition, LeeError> {
+        // A private turn is bounded only by what its prover can prove, as when it is proven.
+        let budget = if execution.runs_privately(input.receiver.account_id) {
+            Cycles::MAX
+        } else {
+            DEFAULT_PUBLIC_CYCLE_BUDGET
+        };
+        receive_with(self.programs, input, |program| {
+            Ok(program.receive(input, budget)?.0)
+        })
+    }
+
+    fn public_shard(&mut self, actor: Actor) -> Result<ShardData, LeeError> {
+        Ok(self
+            .public_shards
+            .get(&actor)
+            .map_or_else(ShardData::empty, Clone::clone))
+    }
+}
+
 struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
-    calls: Vec<ProvenCall>,
+    turns: Vec<Transition>,
 }
 
-impl<'programs> Backend for Prover<'programs> {
-    type Call = Option<(&'programs Program, ProvenCall)>;
+impl Backend for Prover<'_> {
     type Error = LeeError;
-    type PublicEffects = DeferPublicEffects;
 
-    fn plan(
+    fn receive(
         &mut self,
-        input: &PlanInput,
+        input: &ReceiveInput,
         _execution: &ExecutionState<'_>,
-    ) -> Result<(PlanOutput, Self::Call), LeeError> {
-        let self_account_id = input.self_account_id;
-        // The native token program is recomputed by the circuit from the protocol's own
-        // implementation, so it has neither an ELF to prove nor a transcript to carry.
-        if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
-            let plan = native_token::plan(
-                input.caller_account_id,
-                &input.accounts,
-                &input.instruction_data,
-            )
-            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
-            return Ok((plan, None));
-        }
-        let program = &self
-            .programs
-            .get(&self_account_id)
-            .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                program_account_id: self_account_id,
-            })?
-            .program;
-        let receipt = prove_session(program, |env| Program::write_plan_inputs(input, env))?;
-        let plan = plan_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
-        let proven = ProvenCall {
-            plan: plan.clone(),
-            private_apply_outputs: Vec::new(),
-        };
-        Ok((plan, Some((program, proven))))
+    ) -> Result<Transition, LeeError> {
+        receive_with(self.programs, input, |program| {
+            let receipt = prove_session(program, |env| Program::write_receive_input(input, env))?;
+            let transition = transition_journal(&receipt.journal.bytes)?;
+            self.env_builder.add_assumption(receipt);
+            self.turns.push(transition.clone());
+            Ok(transition)
+        })
     }
+}
 
-    fn apply(
-        &mut self,
-        call: &mut Self::Call,
-        input: &ApplyInput,
-    ) -> Result<ApplyOutput, LeeError> {
-        let Some((program, proven)) = call else {
-            return Ok(native_token::apply_output(input)
-                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
-        };
-        let receipt = prove_session(program, |env| Program::write_apply_inputs(input, env))?;
-        let output = apply_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
-        proven.private_apply_outputs.push(output.clone());
-        Ok(output)
+fn receive_with(
+    programs: &HashMap<AccountId, Dependency>,
+    input: &ReceiveInput,
+    run: impl FnOnce(&Program) -> Result<Transition, LeeError>,
+) -> Result<Transition, LeeError> {
+    let program_account_id = input.receiver.program_account_id;
+    // The native token program is recomputed by the circuit from the protocol's own
+    // implementation, so it has neither an ELF to prove nor a transition to carry.
+    if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+        return Ok(native_token::receive(input)
+            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
     }
-
-    fn complete(
-        &mut self,
-        call: Self::Call,
-        _events: Vec<ProgramEvent>,
-        _execution: &ExecutionState<'_>,
-    ) -> Result<(), LeeError> {
-        self.calls.extend(call.map(|(_, proven)| proven));
-        Ok(())
-    }
+    run(&programs
+        .get(&program_account_id)
+        .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency { program_account_id })?
+        .program)
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
-/// circuit.
+/// circuit, assuming of public execution what running it against `input.public_shards` delivers.
 pub fn execute_and_prove(
     input: ProvingInput,
-    program_with_dependencies: &ProgramWithDependencies,
+    programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let assumed = ExecutionState::initialize(
+        input.declared(),
+        &input.private_witnesses,
+        Mode::Derive(input.root.clone()),
+    )?
+    .run(&mut Simulator {
+        programs: &programs.programs,
+        public_shards: &input.public_shards,
+    })?
+    .assumed;
+    execute_and_prove_assuming(input, assumed, programs)
+}
+
+/// Like [`execute_and_prove`], but under the given assumptions, which settlement matches against
+/// live public execution; a prover that did not derive them may produce a proof settlement refuses.
+pub fn execute_and_prove_assuming(
+    input: ProvingInput,
+    assumed: Vec<Vec<Assumption>>,
+    programs: &ProgramCatalog,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let declared = input.declared();
     let ProvingInput {
-        shard_selectors,
-        signers,
+        root,
         private_witnesses,
-        instruction_data,
         dummy_inputs,
         ciphertext_padding,
+        ..
     } = input;
-    let ProgramWithDependencies {
-        self_account_id: initial_account_id,
-        programs,
-    } = program_with_dependencies;
+    let ProgramCatalog { programs } = programs;
 
-    let root = RootCall {
-        program_account_id: *initial_account_id,
-        shard_selectors,
-        instruction_data,
-        authorized_accounts: signers.into_iter().collect(),
-    };
     let mut backend = Prover {
         programs,
         env_builder: ExecutorEnv::builder(),
-        calls: Vec::new(),
+        turns: Vec::new(),
     };
-    ExecutionState::initialize(root.clone(), &private_witnesses)?.run(&mut backend)?;
+    ExecutionState::initialize(
+        declared.clone(),
+        &private_witnesses,
+        Mode::Record {
+            root: root.clone(),
+            assumed: assumed.clone(),
+        },
+    )?
+    .run(&mut backend)?;
     let Prover {
         mut env_builder,
-        calls,
+        turns,
         ..
     } = backend;
 
@@ -333,12 +323,14 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         root,
+        declared,
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
         program_image_witnesses,
         shadow_program_witnesses,
-        calls,
+        turns,
+        assumed,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

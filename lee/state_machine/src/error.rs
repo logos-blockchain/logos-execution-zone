@@ -75,9 +75,6 @@ pub enum LeeError {
     #[error("Program already exists")]
     ProgramAlreadyExists,
 
-    #[error("Chain of calls is too long")]
-    MaxChainedCallsDepthExceeded,
-
     #[error("Max account nonce reached")]
     MaxAccountNonceReached,
 
@@ -126,18 +123,24 @@ pub enum InvalidProgramBehaviorError {
 impl From<ExecutionError> for LeeError {
     fn from(error: ExecutionError) -> Self {
         match error {
-            ExecutionError::MaxChainedCallsExceeded => Self::MaxChainedCallsDepthExceeded,
             ExecutionError::EmptyBlockWindowIntersection
             | ExecutionError::EmptyTimestampWindowIntersection => Self::OutOfValidityWindow,
             ExecutionError::PublicShardUnavailable { .. }
             | ExecutionError::DuplicateWitness { .. }
-            | ExecutionError::WitnessNotInRoot { .. }
             | ExecutionError::InvalidAuthorizationKey { .. }
             | ExecutionError::FamilyBindingConflict { .. }
-            | ExecutionError::UnknownAccount { .. }
-            | ExecutionError::ExecutionValidation { .. } => {
-                Self::InvalidProgramBehavior(error.into())
-            }
+            | ExecutionError::PublicFamilyMemberDeclared { .. }
+            | ExecutionError::LoaderOutsideLiveExecution { .. }
+            | ExecutionError::UndeclaredActor { .. }
+            | ExecutionError::ExecutionValidation { .. }
+            | ExecutionError::PublicAndPrivate { .. }
+            | ExecutionError::DuplicatePublicActor { .. }
+            | ExecutionError::MissingAssumedDeliveries { .. }
+            | ExecutionError::UnusedAssumedDeliveries
+            | ExecutionError::UndeclaredAssumedSender { .. }
+            | ExecutionError::ScheduleMismatch { .. }
+            | ExecutionError::AssumptionMismatch { .. }
+            | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
         }
     }
 }
@@ -172,7 +175,6 @@ mod tests {
         // `assert!`) surfaces as `ProgramExecutionFailed` — the common case.
         assert!(LeeError::ProgramExecutionFailed("guest panicked".into()).is_chargeable());
         assert!(LeeError::OutOfGas { budget: 0 }.is_chargeable());
-        assert!(LeeError::MaxChainedCallsDepthExceeded.is_chargeable());
         // Post-execution: the validity window is read off the program output.
         assert!(LeeError::OutOfValidityWindow.is_chargeable());
 

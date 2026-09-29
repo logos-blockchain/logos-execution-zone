@@ -1,20 +1,12 @@
-use lee_core::{
-    account::{AccountId, Actor, Nonce},
-    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
-    program::InstructionData,
-};
-use test_guest_core::ChainCall;
+use lee_core::account::{AccountId, Actor, Nonce};
+use test_guest_core::Script;
 
 use crate::{
     PrivateKey, PublicKey, V03State,
     error::LeeError,
-    public_transaction::{Message, WitnessSet},
+    state::tests::{public_tx, scripted_id, transfer},
     validated_state_diff::ValidatedStateDiff,
 };
-
-const CHAINED_CALLS: usize = 3;
-
-type ForwarderInstruction = Vec<(AccountId, Actor, InstructionData)>;
 
 #[test]
 fn public_diff_reflects_a_successful_transfer() {
@@ -27,15 +19,13 @@ fn public_diff_reflects_a_successful_transfer() {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
     let state = V03State::new().with_public_account_balances([(from, 100)]);
-    let message = Message::try_new(
-        NATIVE_TOKEN_PROGRAM_ID,
+    let tx = public_tx(
+        Actor::native_balance(from),
         vec![Actor::native_balance(from), Actor::native_balance(to)],
         vec![Nonce(0), Nonce(0)],
-        NativeInstruction::Transfer { amount: 5 },
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
-    let tx = crate::PublicTransaction::new(message, witness_set);
+        transfer(to, 5),
+        &[&from_key, &to_key],
+    );
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("a valid native transfer must validate");
@@ -60,6 +50,7 @@ fn privacy_garbage_proof_is_rejected() {
         Commitment, EncryptedAccountData, Nullifier, PrivateAction,
         account::Account,
         encryption::{Ciphertext, EphemeralPublicKey},
+        execution_state::{Boundary, Declared},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
@@ -81,7 +72,8 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        public_actions: vec![],
+        declared: Declared::default(),
+        boundary: Boundary::default(),
         nonces: vec![],
         private_actions: vec![PrivateAction {
             nullifier: Nullifier::for_account_initialization(&account_id),
@@ -112,89 +104,28 @@ fn privacy_garbage_proof_is_rejected() {
     }
 }
 
+fn signer() -> (PrivateKey, AccountId) {
+    let key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    (key, account_id)
+}
+
 fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let (from_key, from) = signer();
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
 
-    let program = crate::test_methods::data_changer();
-    let program_id = AccountId::from_builtin_program(program.id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(program));
-    let message = Message::try_new(
-        program_id,
-        vec![Actor::new(from, program_id)],
+        .with_programs([crate::test_methods::scripted()]);
+    let writer = Actor::new(from, scripted_id());
+    let tx = public_tx(
+        writer,
+        vec![writer],
         vec![Nonce(0), Nonce(0)],
-        vec![7_u8; 4],
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
-    (state, crate::PublicTransaction::new(message, witness_set))
-}
-
-/// Plan-only baseline: `noop` emits no effect, so it never triggers an `Apply` call.
-fn metering_noop_fixture() -> (V03State, crate::PublicTransaction) {
-    let from_key = PrivateKey::try_new([9_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let program = crate::test_methods::noop();
-    let program_id = AccountId::from_builtin_program(program.id());
-    let state = V03State::new()
-        .with_public_account_balances([(from, 100)])
-        .with_programs(std::iter::once(program));
-    let message = Message::try_new(
-        program_id,
-        vec![Actor::new(from, program_id)],
-        vec![Nonce(0)],
-        (),
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-    (state, crate::PublicTransaction::new(message, witness_set))
-}
-
-#[test]
-fn apply_cycles_are_charged_against_the_budget() {
-    let (noop_state, noop_tx) = metering_noop_fixture();
-    let (_, noop_charge) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &noop_tx,
-        &noop_state,
-        1,
-        0,
-        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-    )
-    .expect("noop executes");
-
-    let (write_state, write_tx) = metering_write_fixture();
-    let (_, write_charge) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &write_tx,
-        &write_state,
-        1,
-        0,
-        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-    )
-    .expect("data_changer plans and applies");
-
-    assert!(
-        write_charge.cycles > noop_charge.cycles,
-        "a write's apply call must add real cycle cost beyond a trivial plan-only call"
+        Script::write(vec![7_u8; 4]),
+        &[&from_key, &to_key],
     );
-
-    // Sized above the plan-only baseline but below the write's full plan+apply total:
-    // covers the plan call, but not apply's on top of it.
-    let starved_budget = noop_charge.cycles.midpoint(write_charge.cycles);
-    assert!(starved_budget < write_charge.cycles);
-    let result = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &write_tx,
-        &write_state,
-        1,
-        0,
-        starved_budget,
-    );
-    assert!(
-        matches!(result, Err(LeeError::OutOfGas { .. })),
-        "a budget that covers only the plan call must reject once apply's cycles are added"
-    );
+    (state, tx)
 }
 
 #[test]
@@ -225,90 +156,27 @@ fn exhausted_budget_surfaces_out_of_gas() {
 }
 
 #[test]
-fn chained_calls_share_one_budget() {
-    // A chain-calling tx must exhaust when the budget covers less than the
-    // whole chain, even though each individual call would fit.
-    let forwarder_id = AccountId::from_builtin_program(crate::test_methods::shard_forwarder().id());
-    let echo_id = AccountId::from_builtin_program(crate::test_methods::noop().id());
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let state = V03State::new()
-        .with_public_account_balances([(from, 1_000)])
-        .with_programs([
-            crate::test_methods::noop(),
-            crate::test_methods::shard_forwarder(),
-        ]);
-    let callee = (echo_id, Actor::new(from, echo_id), InstructionData::new());
-    let forwarding = |callees: Vec<_>| {
-        let instruction: ForwarderInstruction = callees;
-        let message = Message::try_new(
-            forwarder_id,
-            vec![Actor::new(from, forwarder_id)],
-            vec![Nonce(0)],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-        crate::PublicTransaction::new(message, witness_set)
-    };
-    let one_callee = forwarding(vec![callee.clone()]);
-    let chain = forwarding(vec![callee; CHAINED_CALLS]);
-    let cycles_under = |tx, budget| {
-        ValidatedStateDiff::from_public_transaction_with_cycle_budget(tx, &state, 1, 0, budget)
-    };
-    let spent = |tx| {
-        cycles_under(tx, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
-            .expect("executes under the default budget")
-            .1
-            .cycles
-    };
-
-    let budget = spent(&one_callee);
-
-    assert!(
-        cycles_under(&one_callee, budget).is_ok(),
-        "the budget must cover the root call and a whole chained callee"
-    );
-    assert!(
-        budget < spent(&chain),
-        "the budget must not cover the whole chain"
-    );
-    assert!(matches!(
-        cycles_under(&chain, budget),
-        Err(LeeError::OutOfGas { budget: remaining }) if remaining < budget
-    ));
-}
-
-#[test]
 fn free_charge_is_zero_cycles() {
     assert_eq!(crate::ExecutionCharge::FREE.cycles, 0);
 }
 
 #[test]
 fn metered_guest_panic_is_charged_the_full_budget() {
-    // An unauthorized handle panics the guest mid-execution — a chargeable
+    // An unauthorized receiver panics the guest mid-execution — a chargeable
     // failure that is not OutOfGas. It still pays the whole declared budget:
     // metering written back on an error path must never undercharge.
-    let program_id =
-        AccountId::from_builtin_program(crate::test_methods::auth_asserting_noop().id());
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let unsigned = AccountId::new([2_u8; 32]);
+    let (from_key, from) = signer();
+    let unsigned = Actor::new(AccountId::new([2_u8; 32]), scripted_id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
-        .with_programs([crate::test_methods::auth_asserting_noop()]);
-    let message = Message::try_new(
-        program_id,
-        vec![
-            Actor::new(from, program_id),
-            Actor::new(unsigned, program_id),
-        ],
+        .with_programs([crate::test_methods::scripted()]);
+    let tx = public_tx(
+        unsigned,
+        vec![unsigned],
         vec![Nonce(0)],
-        (),
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-    let tx = crate::PublicTransaction::new(message, witness_set);
+        Script::default().authorized(),
+        &[&from_key],
+    );
 
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let (charge, result) =
@@ -324,8 +192,7 @@ fn metered_guest_panic_is_charged_the_full_budget() {
 fn metered_nonzero_exit_is_charged_its_metered_cycles() {
     // Unlike a panic, `env::exit(n)` keeps the session, so the revert pays what
     // it actually ran rather than the whole budget.
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let (from_key, from) = signer();
     let program_id = AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id());
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
@@ -333,15 +200,8 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
             program_id,
             crate::test_methods::exits_nonzero(),
         )));
-    let message = Message::try_new(
-        program_id,
-        vec![Actor::native_balance(from)],
-        vec![Nonce(0)],
-        (),
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-    let tx = crate::PublicTransaction::new(message, witness_set);
+    let exiting = Actor::new(from, program_id);
+    let tx = public_tx(exiting, vec![exiting], vec![Nonce(0)], (), &[&from_key]);
 
     let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
     let (charge, result) =
@@ -359,77 +219,9 @@ fn metered_nonzero_exit_is_charged_its_metered_cycles() {
 }
 
 #[test]
-fn chained_nonzero_exit_adds_callee_cycles_to_callers() {
-    // The accumulation branch only matters once the caller has burned cycles: a chained
-    // callee's non-zero exit must charge caller + callee, not just the callee.
-    let chain_caller = crate::test_methods::chain_caller();
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to = AccountId::new([2_u8; 32]);
-    let state = V03State::new()
-        .with_public_account_balances([(from, 1_000), (to, 0)])
-        .with_programs([
-            crate::test_methods::chain_caller(),
-            crate::test_methods::exits_nonzero(),
-        ]);
-    let budget = crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET;
-    let run = |num_chain_calls: u32| {
-        let instruction = ChainCall::new(
-            AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
-            Vec::new(),
-        )
-        .repeated(num_chain_calls);
-        let message = Message::try_new(
-            AccountId::from_builtin_program(chain_caller.id()),
-            vec![Actor::native_balance(to), Actor::native_balance(from)],
-            vec![Nonce(0)],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = WitnessSet::for_message(&message, &[&from_key]);
-        let tx = crate::PublicTransaction::new(message, witness_set);
-        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget)
-    };
-
-    let (caller_only, ok) = run(0);
-    ok.expect("the caller alone succeeds");
-
-    // The callee alone, so the assertion below fails if its cycles are never folded in: a
-    // caller with one chained call burns only marginally more than with none.
-    let callee_message = Message::try_new(
-        AccountId::from_builtin_program(crate::test_methods::exits_nonzero().id()),
-        vec![Actor::native_balance(from)],
-        vec![Nonce(0)],
-        (),
-    )
-    .unwrap();
-    let callee_witness_set = WitnessSet::for_message(&callee_message, &[&from_key]);
-    let callee_tx = crate::PublicTransaction::new(callee_message, callee_witness_set);
-    let (callee_alone, _) =
-        ValidatedStateDiff::from_public_transaction_metered(&callee_tx, &state, 1, 0, budget);
-
-    let (charge, result) = run(1);
-    assert!(
-        charge.cycles >= caller_only.cycles.saturating_add(callee_alone.cycles)
-            && charge.cycles < budget,
-        "caller + callee cycles are metered: {} vs caller-only {} + callee-only {}",
-        charge.cycles,
-        caller_only.cycles,
-        callee_alone.cycles
-    );
-    let diff = result.expect("a charged revert still yields an applicable diff");
-    assert!(
-        diff.public_diff().is_empty(),
-        "a reverted action moves no balances"
-    );
-}
-
-#[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let (mut state, tx) = metering_write_fixture();
-    let from = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([1_u8; 32]).unwrap(),
-    ));
+    let (_, from) = signer();
     let to = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([2_u8; 32]).unwrap(),
     ));

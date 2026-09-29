@@ -4,11 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Cycles, ShardData},
     from_frame,
-    program::{
-        ApplyInput, ApplyOutput, CallKind, GuestOutput, InstructionData, PlanInput, PlanOutput,
-        ProgramId, get_program_via,
-    },
-    to_borsh_frame, to_frame,
+    program::{MessageData, ProgramId, ReceiveInput, Transition, get_program_via},
+    to_frame,
 };
 #[cfg(not(feature = "prove"))]
 use risc0_zkvm::default_executor;
@@ -76,31 +73,18 @@ impl Program {
             .to_vec())
     }
 
-    pub fn serialize_instruction<T: BorshSerialize>(
-        instruction: T,
-    ) -> Result<InstructionData, LeeError> {
-        borsh::to_vec(&instruction)
-            .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
+    pub fn serialize_message<T: BorshSerialize>(message: T) -> Result<MessageData, LeeError> {
+        borsh::to_vec(&message).map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
     }
 
-    pub(crate) fn plan(
+    pub(crate) fn receive(
         &self,
-        input: &PlanInput,
+        input: &ReceiveInput,
         cycle_budget: Cycles,
-    ) -> Result<(PlanOutput, Cycles), LeeError> {
+    ) -> Result<(Transition, Cycles), LeeError> {
         let (journal, cycles) =
-            self.run(|env| Self::write_plan_inputs(input, env), cycle_budget)?;
-        Ok((plan_journal(&journal)?, cycles))
-    }
-
-    pub(crate) fn apply(
-        &self,
-        input: &ApplyInput,
-        cycle_budget: Cycles,
-    ) -> Result<(ApplyOutput, Cycles), LeeError> {
-        let (journal, cycles) =
-            self.run(|env| Self::write_apply_inputs(input, env), cycle_budget)?;
-        Ok((apply_journal(&journal)?, cycles))
+            self.run(|env| Self::write_receive_input(input, env), cycle_budget)?;
+        Ok((transition_journal(&journal)?, cycles))
     }
 
     fn run(
@@ -163,29 +147,12 @@ impl Program {
         Ok(outcome)
     }
 
-    pub fn write_plan_inputs(
-        input: &PlanInput,
+    pub fn write_receive_input(
+        input: &ReceiveInput,
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
-        Self::write_call(CallKind::Plan, input, env_builder)
-    }
-
-    pub fn write_apply_inputs(
-        input: &ApplyInput,
-        env_builder: &mut ExecutorEnvBuilder,
-    ) -> Result<(), LeeError> {
-        Self::write_call(CallKind::Apply, input, env_builder)
-    }
-
-    fn write_call<T: BorshSerialize>(
-        kind: CallKind,
-        payload: &T,
-        env_builder: &mut ExecutorEnvBuilder,
-    ) -> Result<(), LeeError> {
-        env_builder.write_slice(&to_borsh_frame(&kind));
-
         let payload =
-            borsh::to_vec(payload).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+            borsh::to_vec(input).map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder.write_slice(&to_frame(&payload));
         Ok(())
     }
@@ -234,31 +201,9 @@ pub(crate) fn resolve_program<'state>(
     Some((image_id, attach_kernel(&user_elf)))
 }
 
-pub(crate) fn decode_guest_output(journal: &[u8]) -> Result<GuestOutput, LeeError> {
+pub(crate) fn transition_journal(journal: &[u8]) -> Result<Transition, LeeError> {
     let payload = from_frame(journal).ok_or_else(|| {
         LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
     })?;
     borsh::from_slice(payload).map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))
-}
-
-/// A journal of the other entrypoint's shape is a hard reject, not a decode fallback: it is
-/// what stops a plan receipt standing in for an apply receipt under one image id.
-pub(crate) fn plan_journal(journal: &[u8]) -> Result<PlanOutput, LeeError> {
-    match decode_guest_output(journal)? {
-        GuestOutput::Plan(plan) => Ok(plan),
-        GuestOutput::Apply(_) => Err(wrong_entrypoint("plan", "an apply")),
-    }
-}
-
-pub(crate) fn apply_journal(journal: &[u8]) -> Result<ApplyOutput, LeeError> {
-    match decode_guest_output(journal)? {
-        GuestOutput::Apply(output) => Ok(output),
-        GuestOutput::Plan(_) => Err(wrong_entrypoint("apply", "a plan")),
-    }
-}
-
-fn wrong_entrypoint(scheduled: &str, returned: &str) -> LeeError {
-    LeeError::ProgramExecutionFailed(format!(
-        "a scheduled {scheduled} returned {returned} journal"
-    ))
 }

@@ -83,7 +83,10 @@ mod tests {
 
     fn charged_message(payer: AccountId) -> Message {
         Message::try_new_with_fees(
-            AccountId::from_builtin_program([0_u32; 8]),
+            Actor::new(
+                account_id_of(&keys().0),
+                AccountId::from_builtin_program([0_u32; 8]),
+            ),
             vec![Actor::native_balance(account_id_of(&keys().0))],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],
@@ -94,7 +97,10 @@ mod tests {
 
     fn exempt_message() -> Message {
         Message::try_new(
-            AccountId::from_builtin_program([0_u32; 8]),
+            Actor::new(
+                account_id_of(&keys().0),
+                AccountId::from_builtin_program([0_u32; 8]),
+            ),
             vec![Actor::native_balance(account_id_of(&keys().0))],
             vec![0_u128.into()],
             vec![1_u8, 2, 3],

@@ -1,31 +1,23 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
-    PublicAction, Timestamp,
+    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
-    execution_state::{DeferredPublicEffect, ExecutionError, ExecutionState, RootCall},
-    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{
-        ApplyInput, ApplyOutput, PROGRAM_LOADER_ACCOUNT_ID, PlanInput, PlanOutput,
-        TransactionEvent, validate_apply_output,
-    },
+    execution_state::{Declared, ExecutionState, Mode, RootCall},
+    program::{Origin, PROGRAM_LOADER_ACCOUNT_ID, TransactionEvent},
 };
-use program_loader_core::Instruction as ProgramLoaderInstruction;
 use public_backend::PublicBackend;
 
 use crate::{
     V03State, ensure,
-    error::{InvalidProgramBehaviorError, LeeError},
+    error::LeeError,
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction,
-        circuit::Proof,
-        message::{Message, PublicActionWithID},
+        PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
     program::Program,
     public_transaction::PublicTransaction,
@@ -144,9 +136,9 @@ impl ValidatedStateDiff {
         let authorized: HashSet<AccountId> = signers.iter().copied().collect();
         let mut cycles_used: u64 = 0;
         let result = Self::execute_authorized(
-            message.program_account_id,
-            &message.shard_selectors,
-            &message.instruction_data,
+            message.to,
+            &message.message,
+            &message.public_actors,
             &authorized,
             signers.clone(),
             state,
@@ -192,9 +184,9 @@ impl ValidatedStateDiff {
     /// not read as a general escape hatch. `authorized` is the guest's
     /// `is_authorized` set — the payer for the reserve, empty for the refund.
     pub fn from_fee_settlement_invocation(
-        program_account_id: AccountId,
-        shard_selectors: &[Actor],
-        instruction_data: &[u8],
+        to: Actor,
+        message: &[u8],
+        public_actors: &[Actor],
         authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
@@ -202,9 +194,9 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
-            program_account_id,
-            shard_selectors,
-            instruction_data,
+            to,
+            message,
+            public_actors,
             authorized,
             Vec::new(), // no nonces to advance!
             state,
@@ -228,9 +220,9 @@ impl ValidatedStateDiff {
         // Signers both authorize the execution and advance their replay nonces.
         let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
         Self::execute_authorized(
-            message.program_account_id,
-            &message.shard_selectors,
-            &message.instruction_data,
+            message.to,
+            &message.message,
+            &message.public_actors,
             &authorized,
             signer_account_ids,
             state,
@@ -250,9 +242,9 @@ impl ValidatedStateDiff {
         reason = "the execution core threads the full invocation context"
     )]
     fn execute_authorized(
-        program_account_id: AccountId,
-        shard_selectors: &[Actor],
-        instruction_data: &[u8],
+        to: Actor,
+        message: &[u8],
+        public_actors: &[Actor],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
         state: &V03State,
@@ -262,44 +254,28 @@ impl ValidatedStateDiff {
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
         ensure!(
-            !shard_selectors.is_empty(),
-            LeeError::InvalidInput("Public transaction must have at least one account".into())
+            public_actors.contains(&to),
+            LeeError::InvalidInput("Root actor is not declared".into())
         );
-
-        // An account may select several shards, but never the same one twice.
-        ensure!(
-            shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
-            LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
-        );
-
-        let execution = ExecutionState::initialize(
-            RootCall {
-                program_account_id,
-                shard_selectors: shard_selectors.to_vec(),
-                instruction_data: instruction_data.to_vec(),
-                authorized_accounts: authorized.iter().copied().collect(),
+        let settled = settle(
+            state,
+            Declared {
+                public_actors: public_actors.to_vec(),
+                authorized_accounts: sorted(authorized.iter().copied()),
             },
-            &[],
+            Mode::Live(RootCall {
+                to,
+                message: message.to_vec(),
+            }),
+            block_id,
+            timestamp,
+            cycle_budget,
+            cycles_used,
         )?;
-        let mut backend = PublicBackend::new(state, block_id, timestamp, cycle_budget, cycles_used);
-        let public_diff = execution
-            .run(&mut backend)?
-            .public
-            .into_iter()
-            .map(|(account_id, data)| {
-                let mut account = state.get_account_by_id(account_id);
-                account.data.update(&data);
-                (account_id, account)
-            })
-            .collect();
-        let (events, new_commitments) = backend.into_outputs();
 
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
-            public_diff,
-            new_commitments,
-            new_nullifiers: vec![],
-            events,
+            ..settled
         }))
     }
 
@@ -374,6 +350,11 @@ impl ValidatedStateDiff {
             );
         }
 
+        ensure!(
+            sorted(signer_account_ids.iter().copied()) == message.declared.authorized_accounts,
+            LeeError::InvalidInput("Authorized accounts do not match the signers".into())
+        );
+
         // Verify validity window
         ensure!(
             message.block_validity_window.is_valid_for(block_id)
@@ -381,26 +362,8 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // The journal carries no public state, only the effects settlement must fold. Its
-        // authorization bits are reconstructed here from the verified signatures, never taken
-        // from the prover's claim.
-        let public_actions: Vec<PublicAction> = message
-            .public_actions
-            .iter()
-            .map(|action| PublicAction {
-                account_id: action.account_id,
-                is_authorized: signer_account_ids.contains(&action.account_id),
-                effects: action.effects.clone(),
-            })
-            .collect();
-
         // 4. Proof verification
-        check_privacy_preserving_circuit_proof_is_valid(
-            state,
-            &witness_set.proof,
-            public_actions,
-            message,
-        )?;
+        check_privacy_preserving_circuit_proof_is_valid(state, &witness_set.proof, message)?;
 
         // 5. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
@@ -408,19 +371,37 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = apply_public_effects(
+        if let Some(root) = message
+            .boundary
+            .outputs
+            .first()
+            .filter(|output| output.origin == Origin::Root)
+        {
+            ensure!(
+                message.declared.public_actors.contains(&root.to),
+                LeeError::InvalidInput("Root actor is not declared".into())
+            );
+        }
+        let mut cycles_used = 0;
+        let settled = settle(
             state,
-            &message.public_actions,
+            message.declared.clone(),
+            Mode::Check(message.boundary.clone()),
+            block_id,
+            timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+            &mut cycles_used,
         )?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
             signer_account_ids,
-            public_diff,
-            new_commitments: commitments,
+            new_commitments: commitments
+                .into_iter()
+                .chain(settled.new_commitments)
+                .collect(),
             new_nullifiers,
-            events: vec![],
+            ..settled
         }))
     }
 
@@ -435,38 +416,6 @@ impl ValidatedStateDiff {
 
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
-    }
-}
-
-enum Applier {
-    Loader,
-    Native,
-    Guest(Program),
-}
-
-impl Applier {
-    fn apply(
-        &self,
-        input: &ApplyInput,
-        cycle_budget: Cycles,
-        cycles_used: &mut Cycles,
-    ) -> Result<ApplyOutput, LeeError> {
-        match self {
-            Self::Loader => Ok(ApplyOutput::new(
-                input.clone(),
-                Some(catch_program_loader_panic(|| {
-                    program_loader_core::apply(input)
-                })?),
-            )),
-            Self::Native => Ok(native_token::apply_output(input)
-                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?),
-            Self::Guest(program) => {
-                let (output, call_cycles) =
-                    program.apply(input, remaining(cycle_budget, *cycles_used))?;
-                charge(cycles_used, call_cycles);
-                Ok(output)
-            }
-        }
     }
 }
 
@@ -515,94 +464,54 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
     })
 }
 
-/// Produces the same [`PlanOutput`] shape a guest call would, so the rest of the dispatch loop
-/// treats it identically either way. Its plan reads live loader shards through `shard` because it
-/// is trusted, public-only protocol code, not a guest planning from state-free metadata.
-fn plan_program_loader<'state>(
-    input: &PlanInput,
-    shard: impl Fn(AccountId) -> &'state ShardData,
-) -> Result<(PlanOutput, Option<Commitment>), LeeError> {
-    let accounts = &input.accounts;
-    let instruction: ProgramLoaderInstruction = borsh::from_slice(&input.instruction_data)
-        .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
-
-    let (effects, new_commitment) = catch_program_loader_panic(|| match instruction {
-        ProgramLoaderInstruction::WriteSegment {
-            bytecode,
-            next_segment,
-        } => (
-            program_loader_core::write_segment(accounts, shard, bytecode, next_segment),
-            None,
-        ),
-        ProgramLoaderInstruction::CreateHeader {
-            first_segment,
-            immutable,
-        } => program_loader_core::create_header(accounts, shard, first_segment, immutable),
-        ProgramLoaderInstruction::UpdateHeader {
-            first_segment,
-            immutable,
-        } => program_loader_core::update_header(accounts, shard, first_segment, immutable),
-    })?;
-
-    Ok((
-        PlanOutput::new(input.clone()).with_effects(effects),
-        new_commitment,
-    ))
+fn settle(
+    state: &V03State,
+    declared: Declared,
+    mode: Mode,
+    block_id: BlockId,
+    timestamp: Timestamp,
+    cycle_budget: Cycles,
+    cycles_used: &mut Cycles,
+) -> Result<StateDiff, LeeError> {
+    let execution = ExecutionState::initialize(declared, &[], mode)
+        .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
+    let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
+    let outcome = execution.run(&mut backend)?;
+    ensure!(
+        outcome.block_validity_window.is_valid_for(block_id)
+            && outcome.timestamp_validity_window.is_valid_for(timestamp),
+        LeeError::OutOfValidityWindow
+    );
+    let public_diff = outcome
+        .public
+        .into_iter()
+        .map(|(account_id, data)| {
+            let mut account = state.get_account_by_id(account_id);
+            account.data.update(&data);
+            (account_id, account)
+        })
+        .collect();
+    let events = outcome
+        .events
+        .into_iter()
+        .map(|(actor, event)| TransactionEvent {
+            account_id: actor.program_account_id,
+            event,
+        })
+        .collect();
+    Ok(StateDiff {
+        signer_account_ids: Vec::new(),
+        public_diff,
+        new_commitments: backend.into_outputs(),
+        new_nullifiers: Vec::new(),
+        events,
+    })
 }
 
-/// Applies public effects to live state under one shared cycle budget.
-/// Private transactions are currently fee-exempt, so failed settlement attempts
-/// can be repeated without paying a fee.
-fn apply_public_effects(
-    state: &V03State,
-    actions: &[PublicActionWithID],
-    cycle_budget: Cycles,
-) -> Result<HashMap<AccountId, Account>, LeeError> {
-    let mut pending: HashMap<AccountId, Account> = HashMap::new();
-    let mut cycles_used: Cycles = 0;
-    let mut appliers: HashMap<AccountId, Applier> = HashMap::new();
-    for action in actions {
-        let account = pending
-            .entry(action.account_id)
-            .or_insert_with(|| state.get_account_by_id(action.account_id));
-        for effect in &action.effects {
-            let DeferredPublicEffect {
-                program_account_id,
-                shard_program_account_id,
-                data,
-            } = effect;
-            let input = ApplyInput {
-                self_account_id: *program_account_id,
-                selector: Actor::new(action.account_id, *shard_program_account_id),
-                pre_data: account.data.shard(*shard_program_account_id).clone(),
-                effect_data: data.clone(),
-            };
-            // Native balance is protocol-recomputed; every other evaluator is the guest the
-            // proof's image claims already bound to this account.
-            let applier = match appliers.entry(*program_account_id) {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    entry.insert(if *program_account_id == NATIVE_TOKEN_PROGRAM_ID {
-                        Applier::Native
-                    } else {
-                        Applier::Guest(
-                            load_program(*program_account_id, |id| state.loader_shard(id))
-                                .ok_or(LeeError::UnknownProgram { chained: false })?,
-                        )
-                    })
-                }
-            };
-            let output = applier.apply(&input, cycle_budget, &mut cycles_used)?;
-            validate_apply_output(&input, &output).map_err(|source| {
-                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
-                    program_account_id: *program_account_id,
-                    source,
-                })
-            })?;
-            account.data.apply_output(&output);
-        }
-    }
-    Ok(pending)
+pub fn sorted(ids: impl IntoIterator<Item = AccountId>) -> Vec<AccountId> {
+    let mut ids: Vec<AccountId> = ids.into_iter().collect();
+    ids.sort_unstable();
+    ids
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
@@ -649,7 +558,6 @@ fn authenticate_public_transaction_signers(
 fn check_privacy_preserving_circuit_proof_is_valid(
     state: &V03State,
     proof: &Proof,
-    public_actions: Vec<PublicAction>,
     message: &Message,
 ) -> Result<(), LeeError> {
     // Anchor each `Disclosed` claim to real chain state, reconstructing it independently rather
@@ -681,7 +589,8 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .collect::<Result<Vec<_>, LeeError>>()?;
 
     let output = PrivacyPreservingCircuitOutput {
-        public_actions,
+        declared: message.declared.clone(),
+        boundary: message.boundary.clone(),
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,

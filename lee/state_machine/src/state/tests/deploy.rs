@@ -2,31 +2,19 @@
 //! `ValidatedStateDiff::execute_authorized`, and `get_program_via`'s segment-chain resolution
 //! that a live deploy (or a hand-assembled one, here) must decode back out of.
 
-use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, PROGRAM_LOADER_ACCOUNT_ID, PlanInput, ProgramHeader, ProgramSegment,
-};
-use program_loader_core::Instruction;
+use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ReceiveInput};
+use program_loader_core::Message as LoaderMessage;
 
 use super::*;
 
 fn loader_tx(
-    account_ids: Vec<AccountId>,
+    target: AccountId,
     nonces: Vec<Nonce>,
-    instruction: Instruction,
+    message: &LoaderMessage,
     signers: &[&PrivateKey],
 ) -> PublicTransaction {
-    let message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        account_ids
-            .into_iter()
-            .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
-            .collect(),
-        nonces,
-        instruction,
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, signers);
-    PublicTransaction::new(message, witness_set)
+    let to = Actor::new(target, PROGRAM_LOADER_ACCOUNT_ID);
+    public_tx(to, vec![to], nonces, message, signers)
 }
 
 /// Proof that a program's bytecode split across multiple segment accounts reconstructs into
@@ -36,7 +24,7 @@ fn loader_tx(
 /// output as a direct run against the untouched original.
 #[test]
 fn manually_segmented_program_reconstructs_and_executes_identically() {
-    let program = crate::test_methods::noop();
+    let program = crate::test_methods::scripted();
     let full_binary = program.elf();
     // Segments only ever hold `user_elf`.
     let user_elf = risc0_binfmt::ProgramBinary::decode(full_binary)
@@ -118,18 +106,20 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
         "the reconstructed binary must recompute to the same image_id"
     );
 
-    let input = PlanInput {
-        self_account_id: header_account_id,
-        caller_account_id: None,
-        accounts: vec![AccountMeta::native_balance(AccountId::new([21; 32]), true)],
-        instruction_data: Program::serialize_instruction(()).unwrap(),
+    let receiver = Actor::new(AccountId::new([21; 32]), header_account_id);
+    let input = ReceiveInput {
+        receiver,
+        origin: Origin::Root,
+        is_authorized: true,
+        pre_data: ShardData::empty(),
+        message: Program::serialize_message(Script::write(vec![7; 4])).unwrap(),
     };
 
     let direct_output = program
-        .plan(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
+        .receive(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
         .expect("direct execution against the original binary should succeed");
     let reconstructed_output = reconstructed_program
-        .plan(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
+        .receive(&input, crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET)
         .expect("execution against the manually-reconstructed binary should succeed");
 
     assert_eq!(direct_output, reconstructed_output);
@@ -243,12 +233,10 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
     let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut account_ids = vec![header_account_id];
-    account_ids.extend_from_slice(&segment_account_ids);
     let tx = loader_tx(
-        account_ids,
+        header_account_id,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
@@ -273,7 +261,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
 #[test]
 fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     let mut state = V03State::new();
-    let program = crate::test_methods::noop();
+    let program = crate::test_methods::scripted();
 
     let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
         .unwrap()
@@ -291,53 +279,19 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
         .collect();
 
-    // Linked tail-to-head: the last chunk's segment has no `next_segment`.
-    for i in (0..chunks.len()).rev() {
-        let mut account_ids = vec![segment_account_ids[i]];
-        account_ids.extend(segment_account_ids.get(i.saturating_add(1)).copied());
-        let write_segment_message = public_transaction::Message::try_new(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            account_ids
-                .into_iter()
-                .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
-                .collect(),
-            vec![Nonce(0)],
-            Instruction::WriteSegment {
-                bytecode: chunks[i].to_vec(),
-                next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
-            },
-        )
-        .expect("WriteSegment instruction data should always be serializable");
-        let write_segment_witness = public_transaction::WitnessSet::for_message(
-            &write_segment_message,
-            &[&segment_keys[i]],
-        );
-        let write_segment_tx = PublicTransaction::new(write_segment_message, write_segment_witness);
-        state
-            .transition_from_public_transaction(&write_segment_tx, 1, 0)
-            .expect("WriteSegment should succeed against a fresh account");
-    }
+    write_segments(&mut state, &chunks, &segment_keys, &segment_account_ids);
 
     let header_key = PrivateKey::try_new([2; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
-    let mut header_account_ids = vec![header_account_id];
-    header_account_ids.extend(&segment_account_ids);
-    let create_header_message = public_transaction::Message::try_new(
-        PROGRAM_LOADER_ACCOUNT_ID,
-        header_account_ids
-            .into_iter()
-            .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
-            .collect(),
+    let create_header_tx = loader_tx(
+        header_account_id,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
-    )
-    .expect("CreateHeader instruction data should always be serializable");
-    let create_header_witness =
-        public_transaction::WitnessSet::for_message(&create_header_message, &[&header_key]);
-    let create_header_tx = PublicTransaction::new(create_header_message, create_header_witness);
+        &[&header_key],
+    );
     state
         .transition_from_public_transaction(&create_header_tx, 2, 0)
         .expect("CreateHeader should succeed once the segment it names already exists");
@@ -353,44 +307,35 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         program.elf().to_vec()
     );
 
-    // Dispatch a top-level call to the freshly-deployed address, exactly like calling any
+    // Dispatch a root delivery to the freshly-deployed address, exactly like calling any
     // builtin — the loader's native handling of the deploy is invisible from here on.
     let target_id = AccountId::new([9; 32]);
-    let call_message = public_transaction::Message::try_new(
-        header_account_id,
-        vec![Actor::native_balance(target_id)],
-        vec![],
-        (),
-    )
-    .expect("noop call instruction data should always be serializable");
-    let call_witness = public_transaction::WitnessSet::from_raw_parts(vec![]);
-    let call_tx = PublicTransaction::new(call_message, call_witness);
+    let target = Actor::new(target_id, header_account_id);
+    let call_tx = public_tx(target, vec![target], vec![], Script::default(), &[]);
     state
         .transition_from_public_transaction(&call_tx, 3, 0)
         .expect("dispatching to the deployed program must succeed like any other account");
     assert_eq!(
         state.get_account_by_id(target_id),
         Account::default(),
-        "noop changes nothing"
+        "an empty script changes nothing"
     );
 }
 
 #[test]
 fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
     let mut state = V03State::new();
-    let honest_program = crate::test_methods::noop();
-    let weakened_program = crate::test_methods::shard_forwarder();
+    let honest_program = crate::test_methods::scripted();
+    let weakened_program = crate::test_methods::forges_echo();
     let segment_account_ids = force_insert_segment_chain(&mut state, honest_program.elf(), 0x20);
 
     let shadow_addr = AccountId::for_shadow_program(&weakened_program.id());
 
     let unrelated_key = PrivateKey::try_new([0x77; 32]).unwrap();
-    let mut account_ids = vec![shadow_addr];
-    account_ids.extend_from_slice(&segment_account_ids);
     let tx = loader_tx(
-        account_ids,
+        shadow_addr,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
@@ -417,18 +362,16 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
 #[test]
 fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
     let mut state = V03State::new();
-    let program = crate::test_methods::noop();
+    let program = crate::test_methods::scripted();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x01);
 
     let header_key = PrivateKey::try_new([0xAB; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut account_ids = vec![header_account_id];
-    account_ids.extend_from_slice(&segment_account_ids);
     let tx = loader_tx(
-        account_ids,
+        header_account_id,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
@@ -457,19 +400,17 @@ fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
 #[test]
 fn create_header_mutable_leaves_commitment_tree_unchanged() {
     let mut state = V03State::new();
-    let program = crate::test_methods::noop();
+    let program = crate::test_methods::scripted();
     let root_before = state.commitment_root();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x02);
 
     let header_key = PrivateKey::try_new([0xCD; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut account_ids = vec![header_account_id];
-    account_ids.extend_from_slice(&segment_account_ids);
     let tx = loader_tx(
-        account_ids,
+        header_account_id,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
         },
@@ -492,18 +433,16 @@ fn create_header_mutable_leaves_commitment_tree_unchanged() {
 #[test]
 fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
     let mut state = V03State::new();
-    let program = crate::test_methods::noop();
+    let program = crate::test_methods::scripted();
     let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x03);
 
     let header_key = PrivateKey::try_new([0xEF; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
 
-    let mut account_ids = vec![header_account_id];
-    account_ids.extend_from_slice(&segment_account_ids);
     let create_tx = loader_tx(
-        account_ids.clone(),
+        header_account_id,
         vec![Nonce(0)],
-        Instruction::CreateHeader {
+        &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
         },
@@ -517,9 +456,9 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
     let current_nonce = state.get_account_by_id(header_account_id).nonce;
 
     let update_tx = loader_tx(
-        account_ids,
+        header_account_id,
         vec![current_nonce],
-        Instruction::UpdateHeader {
+        &LoaderMessage::UpdateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
         },
@@ -548,11 +487,33 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
     );
 }
 
+fn write_segments(
+    state: &mut V03State,
+    chunks: &[&[u8]],
+    segment_keys: &[PrivateKey],
+    segment_account_ids: &[AccountId],
+) {
+    // Linked tail-to-head: the last chunk's segment has no `next_segment`.
+    for i in (0..chunks.len()).rev() {
+        let tx = loader_tx(
+            segment_account_ids[i],
+            vec![Nonce(0)],
+            &LoaderMessage::WriteSegment {
+                bytecode: chunks[i].to_vec(),
+                next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+            },
+            &[&segment_keys[i]],
+        );
+        state
+            .transition_from_public_transaction(&tx, 1, 0)
+            .expect("WriteSegment should succeed against a fresh account");
+    }
+}
+
 #[test]
 fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call() {
     let mut state = V03State::new().with_test_programs();
-    let program = crate::test_methods::noop();
-    let emitter_id = AccountId::from_builtin_program(crate::test_methods::event_emitter().id());
+    let program = crate::test_methods::scripted();
 
     let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
         .unwrap()
@@ -568,76 +529,42 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         .iter()
         .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
         .collect();
-    let segment_account_id = segment_account_ids[0];
-
-    // Linked tail-to-head: the last chunk's segment has no `next_segment`.
-    for i in (0..chunks.len()).rev() {
-        let mut account_ids = vec![segment_account_ids[i]];
-        account_ids.extend(segment_account_ids.get(i.saturating_add(1)).copied());
-        let write_segment_message = public_transaction::Message::try_new(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            account_ids
-                .into_iter()
-                .map(|id| Actor::new(id, PROGRAM_LOADER_ACCOUNT_ID))
-                .collect(),
-            vec![Nonce(0)],
-            Instruction::WriteSegment {
-                bytecode: chunks[i].to_vec(),
-                next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
-            },
-        )
-        .unwrap();
-        let write_segment_witness = public_transaction::WitnessSet::for_message(
-            &write_segment_message,
-            &[&segment_keys[i]],
-        );
-        state
-            .transition_from_public_transaction(
-                &PublicTransaction::new(write_segment_message, write_segment_witness),
-                1,
-                0,
-            )
-            .unwrap();
-    }
+    write_segments(&mut state, &chunks, &segment_keys, &segment_account_ids);
 
     let header_key = PrivateKey::try_new([30; 32]).unwrap();
     let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
-    let mut header_shard_selectors = vec![Actor::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID)];
-    header_shard_selectors.extend(
-        segment_account_ids
-            .iter()
-            .map(|id| Actor::new(*id, PROGRAM_LOADER_ACCOUNT_ID)),
-    );
-    let message = public_transaction::Message::try_new(
-        emitter_id,
-        header_shard_selectors,
+    let deployer = Actor::new(header_account_id, scripted_id());
+    let header = Actor::new(header_account_id, PROGRAM_LOADER_ACCOUNT_ID);
+    let deployed = Actor::new(AccountId::new([9; 32]), header_account_id);
+    let tx = public_tx(
+        deployer,
+        vec![deployer, header, deployed],
         vec![Nonce(0)],
-        EmitterInstruction {
-            events: vec![],
-            chain: vec![
-                (
-                    PROGRAM_LOADER_ACCOUNT_ID,
-                    Program::serialize_instruction(Instruction::CreateHeader {
-                        first_segment: segment_account_id,
-                        immutable: true,
-                    })
-                    .unwrap(),
-                ),
-                (
-                    header_account_id,
-                    Program::serialize_instruction(()).unwrap(),
-                ),
-            ],
-        },
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&header_key]);
+        Script::default()
+            .send(Envelope::new(
+                header,
+                &LoaderMessage::CreateHeader {
+                    first_segment: segment_account_ids[0],
+                    immutable: true,
+                },
+            ))
+            .send(Envelope::new(deployed, &Script::write(vec![7; 4]))),
+        &[&header_key],
+    );
 
     state
-        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
-        .expect("the header written by the first chained call must dispatch the second");
+        .transition_from_public_transaction(&tx, 2, 0)
+        .expect("the header written by the first send must dispatch the second");
 
     let (image_id, _) =
         lee_core::program::get_program_via(header_account_id, |id| state.loader_shard(id)).unwrap();
     assert_eq!(image_id, program.id());
+    assert_eq!(
+        state
+            .get_account_by_id(deployed.account_id)
+            .data
+            .shard(header_account_id)
+            .as_ref(),
+        [7; 4]
+    );
 }

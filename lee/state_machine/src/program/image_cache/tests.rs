@@ -4,35 +4,24 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{AccountId, Cycles},
-    program::{AccountMeta, PlanInput},
-    to_borsh_frame, to_frame,
+    account::{AccountId, Actor, Cycles, ShardData},
+    program::{Origin, ReceiveInput},
 };
 use risc0_binfmt::ProgramBinary;
 use risc0_zkvm::{ExecutorEnv, ExecutorImpl, default_executor};
+use test_guest_core::{ForgeField, Script};
 
 use crate::{
     error::LeeError,
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, SessionOutcome},
 };
 
-fn data_changer_target() -> AccountMeta {
-    AccountMeta::new(
-        AccountId::new([3; 32]),
-        true,
-        AccountId::from_builtin_program(crate::test_methods::data_changer().id()),
-    )
+fn write_message() -> Vec<u8> {
+    Program::serialize_message(Script::write(vec![1_u8; 4])).expect("the message serializes")
 }
 
-fn data_changer_instruction() -> Vec<u8> {
-    Program::serialize_instruction(vec![1_u8; 4]).expect("the instruction serializes")
-}
-
-fn balance_handles() -> Vec<AccountMeta> {
-    vec![
-        AccountMeta::native_balance(AccountId::new([0; 32]), true),
-        AccountMeta::native_balance(AccountId::new([1; 32]), false),
-    ]
+fn keep_message() -> Vec<u8> {
+    Program::serialize_message(Script::default()).expect("the message serializes")
 }
 
 /// An env carrying nothing but the cycle budget, for the guests that read no input.
@@ -42,21 +31,21 @@ fn bare_env(budget: Cycles) -> ExecutorEnv<'static> {
     builder.build().expect("env builds")
 }
 
-/// A fresh `ExecutorEnv` carrying the same inputs `Program::execute` would write.
-fn env_for(
-    program: &Program,
-    handles: &[AccountMeta],
-    instruction: &[u8],
-    budget: Cycles,
-) -> ExecutorEnv<'static> {
+/// A fresh `ExecutorEnv` carrying the same inputs `Program::receive` would write.
+fn env_for(program: &Program, message: &[u8], budget: Cycles) -> ExecutorEnv<'static> {
+    let receiver = Actor::new(
+        AccountId::new([3; 32]),
+        AccountId::from_builtin_program(program.id()),
+    );
     let mut builder = ExecutorEnv::builder();
     builder.session_limit(Some(budget));
-    Program::write_plan_inputs(
-        &PlanInput {
-            self_account_id: AccountId::from_builtin_program(program.id()),
-            caller_account_id: None,
-            accounts: handles.to_vec(),
-            instruction_data: instruction.to_vec(),
+    Program::write_receive_input(
+        &ReceiveInput {
+            receiver,
+            origin: Origin::Root,
+            is_authorized: true,
+            pre_data: ShardData::empty(),
+            message: message.to_vec(),
         },
         &mut builder,
     )
@@ -78,44 +67,27 @@ fn baseline(env: ExecutorEnv<'_>, elf: &[u8]) -> anyhow::Result<SessionOutcome> 
 /// real programs with several shapes of input.
 #[test]
 fn cached_path_matches_rebuild_path() {
-    let cases: Vec<(&str, Program, Vec<AccountMeta>, Vec<u8>)> = vec![
+    let cases: Vec<(&str, Program, Vec<u8>)> = vec![
+        ("keep", crate::test_methods::scripted(), keep_message()),
         (
-            "noop",
-            crate::test_methods::noop(),
-            balance_handles(),
-            Vec::new(),
-        ),
-        (
-            "data_changer",
-            crate::test_methods::data_changer(),
-            vec![data_changer_target()],
-            Program::serialize_instruction(vec![9_u8; 32]).unwrap(),
+            "write",
+            crate::test_methods::scripted(),
+            Program::serialize_message(Script::write(vec![9_u8; 32])).unwrap(),
         ),
         (
             "malformed_journal",
             crate::test_methods::malformed_journal(),
             Vec::new(),
-            Vec::new(),
         ),
     ];
 
-    for (name, program, handles, instruction) in cases {
+    for (name, program, message) in cases {
         let a = baseline(
-            env_for(
-                &program,
-                &handles,
-                &instruction,
-                DEFAULT_PUBLIC_CYCLE_BUDGET,
-            ),
+            env_for(&program, &message, DEFAULT_PUBLIC_CYCLE_BUDGET),
             program.elf(),
         );
         let b = super::execute(
-            env_for(
-                &program,
-                &handles,
-                &instruction,
-                DEFAULT_PUBLIC_CYCLE_BUDGET,
-            ),
+            env_for(&program, &message, DEFAULT_PUBLIC_CYCLE_BUDGET),
             program.elf(),
         );
 
@@ -138,22 +110,15 @@ fn cached_path_matches_rebuild_path() {
 /// error text from both paths so any wording drift is visible.
 #[test]
 fn session_limit_still_maps_to_out_of_gas() {
-    let program = crate::test_methods::data_changer();
-    let handles = vec![data_changer_target()];
-    let instruction = data_changer_instruction();
+    let program = crate::test_methods::scripted();
+    let message = write_message();
     let budget: Cycles = 1_024;
 
-    let base_err = baseline(
-        env_for(&program, &handles, &instruction, budget),
-        program.elf(),
-    )
-    .expect_err("tiny budget must bail");
+    let base_err = baseline(env_for(&program, &message, budget), program.elf())
+        .expect_err("tiny budget must bail");
 
-    let cached_err = super::execute(
-        env_for(&program, &handles, &instruction, budget),
-        program.elf(),
-    )
-    .expect_err("tiny budget must bail");
+    let cached_err = super::execute(env_for(&program, &message, budget), program.elf())
+        .expect_err("tiny budget must bail");
 
     for (path, err) in [("baseline", &base_err), ("cached", &cached_err)] {
         assert!(
@@ -163,12 +128,9 @@ fn session_limit_still_maps_to_out_of_gas() {
     }
 
     // The mapping itself, through the real function.
-    let mapped = Program::execute_session(
-        env_for(&program, &handles, &instruction, budget),
-        program.elf(),
-        budget,
-    )
-    .expect_err("tiny budget must bail");
+    let mapped =
+        Program::execute_session(env_for(&program, &message, budget), program.elf(), budget)
+            .expect_err("tiny budget must bail");
     assert!(
         matches!(mapped, LeeError::OutOfGas { budget: b } if b == budget),
         "session limit no longer maps to OutOfGas: {mapped:?}"
@@ -179,9 +141,9 @@ fn session_limit_still_maps_to_out_of_gas() {
 /// itself contains the session-limit phrase.
 #[test]
 fn guest_panic_is_not_out_of_gas() {
-    let program = crate::test_methods::data_changer();
+    let program = crate::test_methods::scripted();
 
-    // No input at all: `read_program_call` panics inside the guest.
+    // No input at all: reading the receive input panics inside the guest.
     let cached_panic = super::execute(bare_env(DEFAULT_PUBLIC_CYCLE_BUDGET), program.elf())
         .expect_err("guest must panic on missing input");
 
@@ -209,18 +171,8 @@ fn guest_panic_is_not_out_of_gas() {
     // And the spoofing case the string match exists to defend against: a guest that
     // panics with the literal session-limit phrase.
     let spoof = crate::test_methods::panics_with_session_limit_text();
-    let mut builder = ExecutorEnv::builder();
-    builder.session_limit(Some(DEFAULT_PUBLIC_CYCLE_BUDGET));
-    builder.write_slice(&to_borsh_frame(&lee_core::program::CallKind::Plan));
-    let input = PlanInput {
-        self_account_id: AccountId::from_builtin_program(spoof.id()),
-        caller_account_id: None,
-        accounts: Vec::new(),
-        instruction_data: Vec::<u8>::new(),
-    };
-    builder.write_slice(&to_frame(&borsh::to_vec(&input).unwrap()));
     let spoofed = Program::execute_session(
-        builder.build().unwrap(),
+        env_for(&spoof, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
         spoof.elf(),
         DEFAULT_PUBLIC_CYCLE_BUDGET,
     )
@@ -235,8 +187,8 @@ fn guest_panic_is_not_out_of_gas() {
 /// id but not an ELF must still each get their own image.
 #[test]
 fn cache_is_keyed_on_elf_bytes_not_program_id() {
-    let a = crate::test_methods::data_changer();
-    let b = crate::test_methods::noop();
+    let a = crate::test_methods::forges_echo();
+    let b = crate::test_methods::scripted();
 
     // `new_unchecked` lets the id lie; the cache must not care.
     let liar = Program::new_unchecked(a.id(), std::borrow::Cow::Owned(b.elf().to_vec()));
@@ -249,8 +201,7 @@ fn cache_is_keyed_on_elf_bytes_not_program_id() {
     let warm = super::execute(
         env_for(
             &a,
-            &[data_changer_target()],
-            &data_changer_instruction(),
+            &borsh::to_vec(&ForgeField::Message).unwrap(),
             DEFAULT_PUBLIC_CYCLE_BUDGET,
         ),
         a.elf(),
@@ -258,14 +209,13 @@ fn cache_is_keyed_on_elf_bytes_not_program_id() {
     .unwrap();
     std::hint::black_box(warm);
 
-    let handles = balance_handles();
     let honest = super::execute(
-        env_for(&b, &handles, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&b, &keep_message(), DEFAULT_PUBLIC_CYCLE_BUDGET),
         b.elf(),
     )
     .unwrap();
     let via_liar = super::execute(
-        env_for(&b, &handles, &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&b, &keep_message(), DEFAULT_PUBLIC_CYCLE_BUDGET),
         liar.elf(),
     )
     .unwrap();
@@ -301,7 +251,7 @@ fn multi_segment_session_agrees_on_cycles_and_journal() {
 /// the same bytes abort the thread on the pre-change path whenever `prove` is on.
 #[test]
 fn malformed_elf_is_an_error_not_a_panic() {
-    let program = crate::test_methods::data_changer();
+    let program = crate::test_methods::scripted();
     let truncated = &program.elf()[..64];
 
     super::execute(bare_env(DEFAULT_PUBLIC_CYCLE_BUDGET), truncated)
@@ -313,7 +263,7 @@ fn malformed_elf_is_an_error_not_a_panic() {
 /// that copy ever drifts from upstream.
 #[test]
 fn incompatible_abi_is_rejected_on_both_paths() {
-    let good = crate::test_methods::noop();
+    let good = crate::test_methods::scripted();
     let decoded = ProgramBinary::decode(good.elf()).expect("a committed guest decodes");
 
     let mut bad = ProgramBinary::new(decoded.user_elf, decoded.kernel_elf);
@@ -321,7 +271,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     let blob = bad.encode();
 
     let upstream = ExecutorImpl::from_elf(
-        env_for(&good, &balance_handles(), &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&good, &keep_message(), DEFAULT_PUBLIC_CYCLE_BUDGET),
         &blob,
     );
     assert!(
@@ -330,7 +280,7 @@ fn incompatible_abi_is_rejected_on_both_paths() {
     );
 
     let ours = super::execute(
-        env_for(&good, &balance_handles(), &[], DEFAULT_PUBLIC_CYCLE_BUDGET),
+        env_for(&good, &keep_message(), DEFAULT_PUBLIC_CYCLE_BUDGET),
         &blob,
     );
     assert!(

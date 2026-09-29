@@ -45,7 +45,13 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(self.message.shard_selectors.iter().map(|p| p.account_id));
+        acc_set.insert(self.message.to.account_id);
+        acc_set.extend(
+            self.message
+                .public_actors
+                .iter()
+                .map(|actor| actor.account_id),
+        );
 
         acc_set.into_iter().collect()
     }
@@ -61,10 +67,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use lee_core::{
-        account::Actor,
-        native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
-    };
+    use lee_core::{account::Actor, native_token::Message as NativeMessage};
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -82,6 +85,14 @@ pub mod tests {
         (key1, key2, addr1, addr2)
     }
 
+    const fn transfer_to(recipient: AccountId) -> NativeMessage {
+        NativeMessage::Transfer {
+            to: recipient,
+            amount: 1337,
+            expect_balance: None,
+        }
+    }
+
     fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
@@ -91,12 +102,11 @@ pub mod tests {
     fn transaction_for_tests() -> PublicTransaction {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
@@ -169,12 +179,11 @@ pub mod tests {
         let (key1, _, addr1, _) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr1)],
             nonces,
-            instruction,
+            transfer_to(addr1),
         )
         .unwrap();
 
@@ -190,12 +199,11 @@ pub mod tests {
         let state = state_for_tests();
         // both nonces match the current state, so only the repeat is at fault
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
@@ -213,12 +221,11 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
@@ -233,12 +240,11 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
@@ -254,12 +260,11 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 1_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
@@ -272,8 +277,13 @@ pub mod tests {
     #[test]
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
-        let message =
-            Message::new_preserialized(NATIVE_TOKEN_PROGRAM_ID, vec![], vec![], vec![0; 4], None);
+        let message = Message::new_preserialized(
+            Actor::native_balance(AccountId::default()),
+            vec![0; 4],
+            vec![],
+            vec![],
+            None,
+        );
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
@@ -287,9 +297,10 @@ pub mod tests {
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
         let unknown_program_id = AccountId::from_builtin_program([0xdead_beef; 8]);
+        let to = Actor::new(addr1, unknown_program_id);
         let message = Message::try_new(
-            unknown_program_id,
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
+            to,
+            vec![to, Actor::native_balance(addr2)],
             nonces,
             instruction,
         )
