@@ -6,10 +6,10 @@ use crate::{
     account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{DeferredPublicEffect, RootCall},
+    execution_state::{Assumption, Boundary, Declared, RootCall},
     program::{
-        ApplyOutput, BlockValidityWindow, PdaSeed, PlanOutput, ProgramHeader, ProgramId,
-        TimestampValidityWindow, immutable_mirror_commitment,
+        BlockValidityWindow, PdaSeed, ProgramHeader, ProgramId, TimestampValidityWindow,
+        Transition, immutable_mirror_commitment,
     },
 };
 
@@ -103,6 +103,7 @@ pub struct ShadowProgramWitness {
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     pub root: RootCall,
+    pub declared: Declared,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
     pub dummy_inputs: Vec<DummyInput>,
@@ -114,20 +115,8 @@ pub struct PrivacyPreservingCircuitInput {
     pub program_image_witnesses: Vec<ProgramImageWitness>,
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
-    /// One entry per scheduled guest call, in traversal order.
-    pub calls: Vec<ProvenCall>,
-}
-
-/// One scheduled guest call's transcript: its plan output, and the apply outputs of the private
-/// effects that planner emitted, in effect order.
-///
-/// Native-token calls are recomputed from the protocol's own implementation, so they carry no
-/// receipt and have no transcript.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct ProvenCall {
-    pub plan: PlanOutput,
-    pub private_apply_outputs: Vec<ApplyOutput>,
+    pub turns: Vec<Transition>,
+    pub assumed: Vec<Vec<Assumption>>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -143,8 +132,8 @@ pub struct PrivateWitness {
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
-    /// the handle's `account_id`. An honest authorized account's `npk` for Id computation gets
-    /// derived from the supplied `ask`.
+    /// the addressed actor's `account_id`. An honest authorized account's `npk` for Id computation
+    /// gets derived from the supplied `ask`.
     Regular { ask: Option<AuthorizationSecretKey> },
     /// A private PDA with its authority's account ID and seed.
     Pda { binding: (AccountId, PdaSeed) },
@@ -235,20 +224,11 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-/// A public account's root-authorization bit and the effects the execution deferred to
-/// settlement, in the order its traversal emitted them.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct PublicAction {
-    pub account_id: AccountId,
-    pub is_authorized: bool,
-    pub effects: Vec<DeferredPublicEffect>,
-}
-
 #[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
-    pub public_actions: Vec<PublicAction>,
+    pub declared: Declared,
+    pub boundary: Boundary,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -297,32 +277,9 @@ mod tests {
 
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
-        let touched = AccountId::new([8; 32]);
-        let also_touched = AccountId::new([9; 32]);
         let output = PrivacyPreservingCircuitOutput {
-            public_actions: vec![
-                PublicAction {
-                    account_id: AccountId::new([0; 32]),
-                    is_authorized: true,
-                    effects: vec![
-                        DeferredPublicEffect {
-                            program_account_id: touched,
-                            shard_program_account_id: touched,
-                            data: b"post state data".to_vec(),
-                        },
-                        DeferredPublicEffect {
-                            program_account_id: touched,
-                            shard_program_account_id: also_touched,
-                            data: b"fresh record".to_vec(),
-                        },
-                    ],
-                },
-                PublicAction {
-                    account_id: AccountId::new([1; 32]),
-                    is_authorized: false,
-                    effects: Vec::new(),
-                },
-            ],
+            declared: Declared::default(),
+            boundary: Boundary::default(),
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(
                     &Commitment::new(&AccountId::new([2; 32]), &Account::default()),

@@ -10,7 +10,6 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use crate::{
     NullifierSecretKey,
     native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::ApplyOutput,
 };
 
 pub mod data;
@@ -168,12 +167,6 @@ impl AccountData {
         decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
     }
 
-    pub fn apply_output(&mut self, output: &ApplyOutput) {
-        if let Some(data) = &output.post_data {
-            self.set_shard(output.input.selector.program_account_id, data.clone());
-        }
-    }
-
     /// Returns the requested shards, with empty data for missing shards.
     #[must_use]
     pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
@@ -304,7 +297,6 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::ApplyInput;
 
     #[test]
     fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
@@ -433,15 +425,7 @@ mod tests {
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.data.apply_output(&ApplyOutput::new(
-            ApplyInput {
-                self_account_id: program,
-                selector: Actor::new(AccountId::new([1; 32]), program),
-                pre_data: b"record".to_vec().try_into().unwrap(),
-                effect_data: Vec::new(),
-            },
-            Some(ShardData::empty()),
-        ));
+        account.data.set_shard(program, ShardData::empty());
 
         assert!(!account.data.shards.contains_key(&program));
         assert_eq!(account, Account::funded(10));
