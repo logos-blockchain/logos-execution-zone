@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, data::DATA_MAX_LENGTH};
 
 use super::*;
 
@@ -331,5 +331,28 @@ fn a_header_cannot_be_created_at_the_loader_address() {
         shards.read(),
         first_segment,
         true,
+    );
+}
+
+/// Genesis chunks every seeded program by `MAX_SEGMENT_DATA_LEN`, so a full segment must still
+/// fit in one shard, or seeding panics.
+#[test]
+fn a_full_segment_fits_a_shard() {
+    // Empty bytecode, so every encoded byte is overhead. `Some` is the worst case: a segment that
+    // links onward carries the next id. Built field by field on purpose: a new field fails to
+    // compile here instead of being silently defaulted.
+    let overhead = ProgramSegment {
+        bytecode: Vec::new(),
+        next_segment: Some(AccountId::default()),
+    }
+    .to_bytes()
+    .len();
+
+    let full = MAX_SEGMENT_DATA_LEN
+        .checked_add(overhead)
+        .expect("segment size fits in usize");
+    assert!(
+        u64::try_from(full).expect("usize fits in u64") <= DATA_MAX_LENGTH.as_u64(),
+        "a full segment ({full} bytes) must fit under DATA_MAX_LENGTH"
     );
 }
