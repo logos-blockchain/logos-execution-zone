@@ -57,7 +57,7 @@ async fn main() {
         .unwrap();
 
     // Deploy both programs through `program_loader`; `tail_call_with_pda` reads the callee's
-    // address from its own instruction data.
+    // address from its own message.
     let caller_bytecode: Vec<u8> = std::fs::read(caller_path).unwrap();
     let caller_account_id = deploy_program(&mut wallet_core, caller_bytecode, payer)
         .await
@@ -69,13 +69,13 @@ async fn main() {
 
     // Compute the PDA to pass as the input account.
     let pda = AccountId::for_public_pda(&caller_account_id, &PDA_SEED);
-    // The caller only needs the account ID; the callee selects its shard.
-    let shard_selectors = vec![Actor::native_balance(pda)];
-    let instruction_data = callee_account_id;
+    // The caller's actor on the PDA receives the message and sends the greeting, with the PDA seed,
+    // to the callee's actor on the same account, so both are declared.
+    let caller = Actor::new(pda, caller_account_id);
+    let public_actors = vec![caller, Actor::new(pda, callee_account_id)];
     let nonces = vec![];
     let signing_keys = [];
-    let message =
-        Message::try_new(caller_account_id, shard_selectors, nonces, instruction_data).unwrap();
+    let message = Message::try_new(caller, public_actors, nonces, callee_account_id).unwrap();
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 

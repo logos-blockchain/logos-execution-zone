@@ -93,13 +93,14 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .data
         .shard(stake_id)
         .is_empty();
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: demo_stake_key,
-            amount: u128::from(funding_balance),
-            has_record,
-        })
-        .context("Failed to serialize Stake instruction")?;
+    let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
+        sequencer_key: demo_stake_key,
+        amount: u128::from(funding_balance),
+        has_record,
+        funding: funding_id,
+    })
+    .context("Failed to serialize Stake message")?;
+    let ownership = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
 
     info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -108,13 +109,13 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id).balance(),
-                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                ownership.clone(),
                 AccountIdentity::PublicNoSign(funds_id).balance(),
+                AccountIdentity::Public(funding_id).balance(),
                 AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
             ],
-            stake_instruction_data,
-            stake_id,
+            0,
+            stake_message,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -245,22 +246,22 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .get_last_block_id()
         .await?
         .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
-    let unstake_request_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+    let unstake_request_message =
+        Program::serialize_message(sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key: demo_stake_key,
             amount: u128::from(funding_balance),
             destination: destination_id,
             requested_at,
         })
-        .context("Failed to serialize UnstakeRequest instruction")?;
+        .context("Failed to serialize UnstakeRequest message")?;
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                ownership,
                 AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
             ],
-            unstake_request_data,
-            stake_id,
+            0,
+            unstake_request_message,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit UnstakeRequest transaction: {err:?}"))?;

@@ -3,9 +3,9 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use amm_core::Instruction;
+use amm_core::{SwapOffer, swap_transfer};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
@@ -16,35 +16,72 @@ use integration_tests::{
     wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, execute_and_prove,
+    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, RootCall,
+    execute_and_prove_assuming,
     privacy_preserving_transaction::{
-        circuit::ProgramWithDependencies, message::Message, witness_set::WitnessSet,
+        circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
     },
     program::Program,
 };
 use lee_core::{NullifierWitness, PrivateWitness, WitnessKind};
 use sequencer_service_rpc::RpcClient as _;
-use token_core::TokenHolding;
+use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 use tokio::test;
 use wallet::{AccountIdentity, program_facades::amm::Amm};
 
 const SUPPLY: u128 = 10_000;
 const OFFER_IN: u128 = 100;
 const OFFER_OUT: u128 = 75;
-
+// The trader's input note pays into vault A and notifies the pool with the offer; the payout goes
+// to the output note.
 struct Trader {
     input: AccountId,
     output: AccountId,
 }
 
-fn swap_instruction(pool: &PoolFixture) -> Result<Vec<u8>> {
-    Ok(Program::serialize_instruction(Instruction::Swap {
-        token_program_id: token_program_id(),
-        definition_id_in: pool.definition_a,
-        definition_id_out: pool.definition_b,
-        amount_in: OFFER_IN,
-        amount_out: OFFER_OUT,
-    })?)
+const fn fungible(definition_id: AccountId) -> TokenDescriptor {
+    TokenDescriptor {
+        definition_id,
+        kind: TokenKind::Fungible,
+    }
+}
+
+fn swap_message(pool: &PoolFixture, trader: &Trader) -> Result<Vec<u8>> {
+    Ok(Program::serialize_message(swap_transfer(
+        Actor::new(pool.pool_id, amm_program_id()),
+        pool.vault_a,
+        fungible(pool.definition_a),
+        OFFER_IN,
+        SwapOffer {
+            definition_id_out: pool.definition_b,
+            amount_out: OFFER_OUT,
+            payout: trader.output,
+        },
+    ))?)
+}
+
+// Vault B's payout into the output note, the one delivery the proof assumes of public execution,
+// made under the pool's grant of vault B: promised whatever the pool's price is at preparation.
+fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumption>> {
+    let vault_b = Actor::new(pool.vault_b, token_program_id());
+    let payout = token_core::Message::Transfer {
+        to: trader.output,
+        descriptor: fungible(pool.definition_b),
+        amount: OFFER_OUT,
+        notify: None,
+    };
+    vec![
+        expected_sends(vault_b, &payout)
+            .into_iter()
+            .map(|credit| lee::Assumption {
+                from: vault_b,
+                to: credit.to,
+                message: credit.message,
+                grants: vec![pool.vault_b],
+                pda_seeds: credit.pda_seeds,
+            })
+            .collect(),
+    ]
 }
 
 fn private_holding(ctx: &TestContext, account_id: AccountId) -> Result<TokenHolding> {
@@ -96,15 +133,18 @@ async fn prepare_offer(
         .context("the trader's input note is not on chain")?;
     let spent_keys = &spent.key_chain.private_key_holder;
 
-    let (output, proof) = execute_and_prove(
+    let (output, proof) = execute_and_prove_assuming(
         ProvingInput {
-            shard_selectors: vec![
+            root: RootCall {
+                to: Actor::new(trader.input, token_program_id()),
+                message: swap_message(pool, trader)?,
+            },
+            public_actors: vec![
                 Actor::new(pool.pool_id, amm_program_id()),
                 Actor::new(pool.vault_a, token_program_id()),
                 Actor::new(pool.vault_b, token_program_id()),
-                Actor::new(trader.input, token_program_id()),
-                Actor::new(trader.output, token_program_id()),
             ],
+            signers: HashSet::new(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: spent.key_chain.viewing_public_key.clone(),
@@ -131,14 +171,15 @@ async fn prepare_offer(
                     },
                 },
             ],
-            instruction_data: swap_instruction(pool)?,
-            ..Default::default()
+            public_shards: HashMap::new(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
         },
-        &ProgramWithDependencies::new(
-            programs::amm(),
-            amm_program_id(),
-            HashMap::from([(token_program_id(), programs::token())]),
-        ),
+        payout_assumed(pool, trader),
+        &ProgramCatalog::from([
+            (amm_program_id(), programs::amm()),
+            (token_program_id(), programs::token()),
+        ]),
     )?;
     let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
@@ -200,7 +241,7 @@ async fn offers_prepared_at_one_price_settle_against_the_live_pool() -> Result<(
         ..
     } = pool;
 
-    let (created_pool, created) = Amm(ctx.wallet())
+    let (created_pool, created, _) = Amm(ctx.wallet())
         .send_new_pool(
             AccountIdentity::Public(holding_a),
             AccountIdentity::Public(holding_b),

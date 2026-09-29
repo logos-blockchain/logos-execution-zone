@@ -195,13 +195,13 @@ pub fn joining_setup() -> Result<JoiningSetup> {
 
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: joining_stake_key,
-            amount: FUNDING_BALANCE,
-            has_record: false,
-        })
-        .context("Failed to serialize Stake instruction")?;
+    let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
+        sequencer_key: joining_stake_key,
+        amount: FUNDING_BALANCE,
+        has_record: false,
+        funding: funding_id,
+    })
+    .context("Failed to serialize Stake message")?;
 
     log::info!(
         "Submitting Stake transaction for sequencer key {}",
@@ -209,17 +209,18 @@ pub fn joining_setup() -> Result<JoiningSetup> {
     );
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
+    let root = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
     ctx.block_on(|ctx| async {
         ctx.wallet()
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(funding_id).balance(),
-                    AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                    root,
                     AccountIdentity::PublicNoSign(funds_id).balance(),
+                    AccountIdentity::Public(funding_id).balance(),
                     AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
                 ],
-                stake_instruction_data,
-                stake_id,
+                0,
+                stake_message,
             )
             .await
             .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))

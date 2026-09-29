@@ -150,13 +150,14 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         .data
         .shard(stake_id)
         .is_empty();
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: joiner_stake_key,
-            amount: FUNDING_BALANCE,
-            has_record,
-        })
-        .context("Failed to serialize Stake instruction")?;
+    let stake_message = Program::serialize_message(sequencer_stake_core::Message::Stake {
+        sequencer_key: joiner_stake_key,
+        amount: FUNDING_BALANCE,
+        has_record,
+        funding: funding_id,
+    })
+    .context("Failed to serialize Stake message")?;
+    let root = AccountIdentity::Public(ownership_id).select_program_shard(stake_id);
 
     info!(
         "Staking sequencer key {}",
@@ -165,14 +166,14 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     ctx.wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::Public(funding_id).balance(),
-                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
+                root,
                 AccountIdentity::PublicNoSign(funds_id).balance(),
+                AccountIdentity::Public(funding_id).balance(),
                 AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
                     .select_program_shard(stake_id),
             ],
-            stake_instruction_data,
-            stake_id,
+            0,
+            stake_message,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;

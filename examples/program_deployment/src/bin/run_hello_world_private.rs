@@ -1,8 +1,4 @@
-use std::collections::HashMap;
-
-use lee::{
-    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
 use program_deployment::deploy_program;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -58,21 +54,23 @@ async fn main() {
     let program_account_id = deploy_program(&mut wallet_core, bytecode, payer)
         .await
         .unwrap();
-    let program_with_dependencies =
-        ProgramWithDependencies::new(program, program_account_id, HashMap::new());
+    let programs = ProgramCatalog::from([(program_account_id, program)]);
 
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
-    let accounts =
-        vec![AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id)];
+    // The private account's actor under the program is the root; nothing reaches public state, so
+    // the transaction assumes nothing of it.
+    let account =
+        AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id);
 
     // Construct and submit the privacy-preserving transaction
     wallet_core
         .send_privacy_preserving_tx(
-            accounts,
-            Program::serialize_instruction(greeting).unwrap(),
-            &program_with_dependencies,
+            vec![account],
+            0,
+            Program::serialize_message(greeting).unwrap(),
+            &programs,
         )
         .await
         .unwrap();

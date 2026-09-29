@@ -182,7 +182,7 @@ fn build_lock_tx(
     let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    let mint = wrapped_token_core::Instruction::Mint {
+    let mint = wrapped_token_core::Message::Mint {
         recipient: RECIPIENT,
         amount: LOCK_AMOUNT,
     };
@@ -198,7 +198,13 @@ fn build_lock_tx(
             wrapped_token_id,
         ),
     ];
-    let lock = bridge_lock_core::Instruction::Lock {
+    let holder = Actor::new(holder_id, bridge_lock_id);
+    let outbox = Actor::new(
+        outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
+        outbox_id,
+    );
+    let lock = bridge_lock_core::Message::Lock {
+        outbox,
         amount: LOCK_AMOUNT,
         target_zone,
         target_account_id: wrapped_token_id,
@@ -207,27 +213,26 @@ fn build_lock_tx(
         ordinal,
     };
 
+    // The lock is received at the holder's own actor, which its signature authorizes; it
+    // checks the route at the config, moves the holding into escrow and emits to the outbox.
     let accounts = vec![
+        holder,
         Actor::new(
             bridge_lock_core::config_account_id(bridge_lock_id),
             bridge_lock_id,
         ),
-        Actor::native_balance(holder_id),
         Actor::native_balance(bridge_lock_core::holding_account_id(
             programs::bridge_lock_account_id(),
             &holder_id.into_value(),
         )),
         Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-        Actor::new(
-            outbox_pda(outbox_id, bridge_lock_id, &target_zone, ordinal),
-            outbox_id,
-        ),
+        outbox,
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
     // declaration.
-    let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)
-        .expect("build lock message");
+    let message =
+        Message::try_new(holder, accounts, vec![0_u128.into()], lock).expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }

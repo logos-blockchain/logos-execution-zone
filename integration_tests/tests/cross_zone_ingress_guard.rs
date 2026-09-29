@@ -12,7 +12,7 @@
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use cross_zone_inbox_core::{
-    CrossZoneMessage, Instruction, inbox_config_account_id, inbox_seen_shard_account_id,
+    CrossZoneMessage, Message as InboxMessage, inbox_config_account_id, inbox_seen_shard_account_id,
 };
 use integration_tests::config::{self, SequencerPartialConfig};
 use lee::{
@@ -56,14 +56,12 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         l1_inclusion_witness: None,
     };
     let seen_id = inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id);
+    let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
     let message = Message::try_new(
-        inbox_id,
-        vec![
-            Actor::new(inbox_config_account_id(inbox_id), inbox_id),
-            Actor::new(seen_id, inbox_id),
-        ],
+        config,
+        vec![config, Actor::new(seen_id, inbox_id)],
         vec![],
-        Instruction::Dispatch(msg),
+        InboxMessage::Dispatch(msg),
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

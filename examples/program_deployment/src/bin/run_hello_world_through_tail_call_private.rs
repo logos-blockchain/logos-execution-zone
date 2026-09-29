@@ -1,8 +1,4 @@
-use std::collections::HashMap;
-
-use lee::{
-    AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
 use program_deployment::deploy_program;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -68,22 +64,26 @@ async fn main() {
         .await
         .unwrap();
 
-    let dependencies: HashMap<AccountId, Program> =
-        std::iter::once((hello_world_id, hello_world)).collect();
-    let program_with_dependencies =
-        ProgramWithDependencies::new(simple_tail_call, simple_tail_call_id, dependencies);
+    let programs = ProgramCatalog::from([
+        (simple_tail_call_id, simple_tail_call),
+        (hello_world_id, hello_world),
+    ]);
 
-    // The caller only needs the account ID; the callee selects its shard.
-    let accounts = vec![AccountIdentity::PrivateOwned(account_id).balance()];
+    // The caller's actor on the private account is the root; it sends the greeting to the
+    // callee's actor on the same account.
+    let caller =
+        AccountIdentity::PrivateOwned(account_id).select_program_shard(simple_tail_call_id);
+    let callee = AccountIdentity::PrivateOwned(account_id).select_program_shard(hello_world_id);
 
-    // The instruction carries the callee's `AccountId`, which `simple_tail_call`'s guest reads
-    // from here.
-    let instruction = hello_world_id;
+    // The message names the callee actor, which `simple_tail_call`'s guest sends the greeting to.
+    let message = callee.actor();
+    let accounts = vec![caller, callee];
     wallet_core
         .send_privacy_preserving_tx(
             accounts,
-            Program::serialize_instruction(instruction).unwrap(),
-            &program_with_dependencies,
+            0,
+            Program::serialize_message(message).unwrap(),
+            &programs,
         )
         .await
         .unwrap();

@@ -19,16 +19,17 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    RootCall,
     privacy_preserving_transaction::{
-        circuit::ProgramWithDependencies,
+        circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
     },
 };
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
-    program::InstructionData,
+    program::MessageData,
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -795,22 +796,74 @@ impl WalletCore {
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        root: usize,
+        message: MessageData,
+        programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
-            Ok(())
-        })
+        self.send_privacy_preserving_tx_with_pre_check(
+            accounts,
+            root,
+            message,
+            programs,
+            |_| Ok(()),
+        )
         .await
+    }
+
+    // Public when every account is, privacy-preserving otherwise; the prover derives the boundary.
+    pub async fn send_tx(
+        &self,
+        accounts: Vec<AccountMention>,
+        root: usize,
+        message: MessageData,
+        programs: &ProgramCatalog,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        if accounts.iter().any(|mention| mention.identity.is_private()) {
+            self.send_privacy_preserving_tx(accounts, root, message, programs)
+                .await
+        } else {
+            self.send_pub_tx(accounts, root, message)
+                .await
+                .map(|tx_hash| (tx_hash, Vec::new()))
+        }
     }
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        root: usize,
+        message: MessageData,
+        programs: &ProgramCatalog,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        self.send_proven(accounts, root, message, programs, None, tx_pre_check)
+            .await
+    }
+
+    // Proves under `assumed` instead of deriving it from current public state: a conditional
+    // promise, such as a fixed offer's payout, that settlement checks against live execution.
+    pub async fn send_privacy_preserving_tx_assuming(
+        &self,
+        accounts: Vec<AccountMention>,
+        root: usize,
+        message: MessageData,
+        assumed: Vec<Vec<Assumption>>,
+        programs: &ProgramCatalog,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        self.send_proven(accounts, root, message, programs, Some(assumed), |_| Ok(()))
+            .await
+    }
+
+    async fn send_proven(
+        &self,
+        accounts: Vec<AccountMention>,
+        root: usize,
+        message: MessageData,
+        programs: &ProgramCatalog,
+        assumed: Option<Vec<Vec<Assumption>>>,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let to = root_actor(&accounts, root)?;
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -824,17 +877,19 @@ impl WalletCore {
 
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
-            shard_selectors: acc_manager.shard_selectors(),
+            root: RootCall { to, message },
+            public_actors: acc_manager.public_actors(),
             signers: acc_manager.signers(),
             private_witnesses: acc_manager.private_witnesses()?,
-            instruction_data,
+            public_shards: acc_manager.public_shards(),
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
-        let program = program.clone();
-        let (output, proof) = tokio::task::spawn_blocking(move || {
-            lee::privacy_preserving_transaction::circuit::execute_and_prove(input, &program)
+        let programs = programs.clone();
+        let (output, proof) = tokio::task::spawn_blocking(move || match assumed {
+            None => lee::execute_and_prove(input, &programs),
+            Some(assumed) => lee::execute_and_prove_assuming(input, assumed, &programs),
         })
         .await??;
 
@@ -873,10 +928,10 @@ impl WalletCore {
     pub async fn send_pub_tx(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program_account_id: AccountId,
+        root: usize,
+        message: MessageData,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_paid_by(accounts, instruction_data, program_account_id, None)
+        self.send_pub_tx_paid_by(accounts, root, message, None)
             .await
     }
 
@@ -885,18 +940,12 @@ impl WalletCore {
     pub async fn send_pub_tx_paid_by(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program_account_id: AccountId,
+        root: usize,
+        message: MessageData,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(
-            accounts,
-            instruction_data,
-            program_account_id,
-            payer,
-            |_| Ok(()),
-        )
-        .await
+        self.send_pub_tx_with_pre_check(accounts, root, message, payer, |_| Ok(()))
+            .await
     }
 
     /// Sends a public transaction over `accounts`, paid by `payer` if given.
@@ -912,8 +961,8 @@ impl WalletCore {
     pub async fn send_pub_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program_account_id: AccountId,
+        root: usize,
+        message: MessageData,
         payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -926,11 +975,12 @@ impl WalletCore {
             ));
         }
 
+        let to = root_actor(&accounts, root)?;
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
 
-        let shard_selectors = acc_manager.shard_selectors();
+        let public_actors = acc_manager.public_actors();
         let account_ids = acc_manager.public_account_ids();
         let mut nonces = acc_manager.public_account_nonces();
 
@@ -969,10 +1019,10 @@ impl WalletCore {
         };
 
         let message = lee::public_transaction::Message::new_preserialized(
-            program_account_id,
-            shard_selectors,
+            to,
+            message,
+            public_actors,
             nonces,
-            instruction_data,
             Some(lee::FeeDeclaration::new(
                 payer,
                 self.config.gas_limit,
@@ -1232,6 +1282,18 @@ fn decrypt_note_at(
         secret,
         &message.private_actions[i].nullifier,
     )
+}
+
+// The root is one of the transaction's accounts, so it runs with the placement declared for it.
+fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, ExecutionFailureKind> {
+    accounts
+        .get(root)
+        .map(AccountMention::actor)
+        .ok_or_else(|| {
+            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                format!("Root index {root} is not one of the transaction's accounts"),
+            ))
+        })
 }
 
 #[cfg(test)]

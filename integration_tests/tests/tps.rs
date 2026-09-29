@@ -9,7 +9,10 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
@@ -17,7 +20,7 @@ use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
 use lee::{
     Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
-    PublicTransaction,
+    PublicTransaction, RootCall,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
@@ -87,14 +90,17 @@ impl TpsTestManager {
             .windows(2)
             .map(|pair| {
                 let amount: u128 = 1;
+                let sender = Actor::native_balance(pair[0].1);
+                let recipient = Actor::native_balance(pair[1].1);
                 let message = putx::Message::try_new_with_fees(
-                    lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-                    vec![
-                        Actor::native_balance(pair[0].1),
-                        Actor::native_balance(pair[1].1),
-                    ],
+                    sender,
+                    vec![sender, recipient],
                     [Nonce(0_u128)].to_vec(),
-                    lee_core::native_token::Instruction::Transfer { amount },
+                    lee_core::native_token::Message::Transfer {
+                        to: recipient.account_id,
+                        amount,
+                        expect_balance: None,
+                    },
                     // A generous max_fee (a ceiling, not the fee paid) so the
                     // base-fee rise this test's own sustained load causes cannot
                     // push the reserve past it and drop later txs.
@@ -264,10 +270,17 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     );
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                Actor::native_balance(sender_id),
-                Actor::native_balance(recipient_id),
-            ],
+            root: RootCall {
+                to: Actor::native_balance(sender_id),
+                message: Program::serialize_message(lee_core::native_token::Message::Transfer {
+                    to: recipient_id,
+                    amount: balance_to_move,
+                    expect_balance: None,
+                })
+                .unwrap(),
+            },
+            public_actors: Vec::new(),
+            signers: HashSet::new(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: sender_vpk,
@@ -296,15 +309,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                     },
                 },
             ],
-            instruction_data: Program::serialize_instruction(
-                lee_core::native_token::Instruction::Transfer {
-                    amount: balance_to_move,
-                },
-            )
-            .unwrap(),
-            ..Default::default()
+            public_shards: HashMap::new(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
         },
-        &lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::native(),
+        &lee::privacy_preserving_transaction::circuit::ProgramCatalog::default(),
     )
     .unwrap();
     let message = pptx::message::Message::from_circuit_output(vec![], output);

@@ -1,5 +1,5 @@
 use common::HashType;
-use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog};
 
 use super::{NativeTokenTransfer, native_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};
@@ -11,19 +11,21 @@ impl NativeTokenTransfer<'_> {
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, lee_core::SharedSecretKey), ExecutionFailureKind> {
-        let (instruction_data, tx_pre_check) = native_transfer_preparation(balance_to_move);
+        let accounts = [
+            self.0
+                .resolve_private_account(from)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                .balance(),
+            AccountIdentity::PublicNoSign(to).balance(),
+        ];
+        let (message, tx_pre_check) = native_transfer_preparation(&accounts, balance_to_move);
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![
-                    self.0
-                        .resolve_private_account(from)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .balance(),
-                    AccountIdentity::PublicNoSign(to).balance(),
-                ],
-                instruction_data,
-                &ProgramWithDependencies::native(),
+                accounts.into(),
+                0,
+                message,
+                &ProgramCatalog::default(),
                 tx_pre_check,
             )
             .await

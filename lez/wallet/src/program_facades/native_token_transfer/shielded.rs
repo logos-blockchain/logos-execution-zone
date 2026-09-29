@@ -1,5 +1,5 @@
 use common::HashType;
-use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies};
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog};
 use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
     encryption::ViewingPublicKey,
@@ -15,18 +15,20 @@ impl NativeTokenTransfer<'_> {
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let (instruction_data, tx_pre_check) = native_transfer_preparation(balance_to_move);
+        let accounts = [
+            from.balance(),
+            self.0
+                .resolve_private_account(to)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?
+                .balance(),
+        ];
+        let (message, tx_pre_check) = native_transfer_preparation(&accounts, balance_to_move);
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![
-                    from.balance(),
-                    self.0
-                        .resolve_private_account(to)
-                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?
-                        .balance(),
-                ],
-                instruction_data,
-                &ProgramWithDependencies::native(),
+                accounts.into(),
+                0,
+                message,
+                &ProgramCatalog::default(),
                 tx_pre_check,
             )
             .await
@@ -47,20 +49,22 @@ impl NativeTokenTransfer<'_> {
         to_identifier: Identifier,
         balance_to_move: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let (instruction_data, tx_pre_check) = native_transfer_preparation(balance_to_move);
+        let accounts = [
+            from.balance(),
+            AccountIdentity::PrivateForeign {
+                npk: to_npk,
+                vpk: to_vpk,
+                kind: PrivateAccountKind::Regular(to_identifier),
+            }
+            .balance(),
+        ];
+        let (message, tx_pre_check) = native_transfer_preparation(&accounts, balance_to_move);
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![
-                    from.balance(),
-                    AccountIdentity::PrivateForeign {
-                        npk: to_npk,
-                        vpk: to_vpk,
-                        kind: PrivateAccountKind::Regular(to_identifier),
-                    }
-                    .balance(),
-                ],
-                instruction_data,
-                &ProgramWithDependencies::native(),
+                accounts.into(),
+                0,
+                message,
+                &ProgramCatalog::default(),
                 tx_pre_check,
             )
             .await

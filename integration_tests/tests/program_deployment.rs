@@ -23,7 +23,7 @@ use wallet::{
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let deployed = test_programs::data_writer();
+    let deployed = test_programs::scripted();
     // Every account a deploy touches is freshly claimed and unfunded, so a genesis-funded wallet
     // account covers the fees instead (see `ProgramLoader::send`).
     let payer_id = ctx.existing_public_accounts()[0];
@@ -59,11 +59,12 @@ async fn deploy_and_execute_program() -> Result<()> {
         .get_accounts_nonces(&[target_id, payer_id])
         .await?;
     let written: Vec<u8> = vec![9; 4];
+    let target = lee::Actor::new(target_id, account_id);
     let message = lee::public_transaction::Message::try_new_with_fees(
-        account_id,
-        vec![lee::Actor::new(target_id, account_id)],
+        target,
+        vec![target],
         nonces,
-        written.clone(),
+        test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer_id),
     )?;
     let target_key = ctx

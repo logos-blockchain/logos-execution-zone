@@ -1,37 +1,22 @@
 use lee_core::{
-    account::{AccountId, Actor},
-    program::{ChainedCall, Plan, ProgramCall, read_program_call},
+    account::Actor,
+    program::{Envelope, ReceiveInput, Response, run_actor},
 };
 
 // Tail Call example program.
 //
-// Reads a single account, emits it unchanged, and performs a tail call to the callee program
-// named in its own instruction data, with a fixed greeting.
+// Keeps its own shard unchanged and sends a fixed greeting to the callee actor named in its
+// message.
 //
-// The callee's `AccountId` is caller-supplied: a deployed program's address isn't known until
-// deploy time, so it can't be a compile-time constant.
-
-type Instruction = AccountId;
+// The callee is caller-supplied: a deployed program's address isn't known until deploy time, so
+// it can't be a compile-time constant.
 
 fn main() {
-    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
-        panic!("simple_tail_call emits no effect to apply")
-    };
-    let callee_account_id = instruction;
+    run_actor(receive)
+}
 
-    // Unpack the single input account handle.
-    let [account] = <[_; 1]>::try_from(input.accounts.clone())
-        .unwrap_or_else(|_| panic!("Input accounts should consist of a single account"));
-
+fn receive(_input: &ReceiveInput, callee: Actor) -> Response {
     let greeting: Vec<u8> = b"Hello from tail call".to_vec();
 
-    // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to commit
-    // it.
-    let mut plan = Plan::new(&input);
-    plan.call(ChainedCall::new(
-        callee_account_id,
-        vec![Actor::new(account.account_id, callee_account_id)],
-        &greeting,
-    ));
-    plan.write()
+    Response::keep().send(Envelope::new(callee, &greeting))
 }

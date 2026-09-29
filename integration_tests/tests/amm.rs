@@ -3,7 +3,6 @@
     reason = "We don't care about these in tests"
 )]
 
-use amm_core::Instruction;
 use anyhow::Result;
 use integration_tests::{
     TestContext, account_balance,
@@ -91,11 +90,12 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
     for signer in signers {
         nonces_before.push(nonce(&ctx, signer).await?);
     }
+    let pool = AccountIdentity::PublicNoSign(pool_id).select_program_shard(amm_program_id());
     let mismatched = ctx
         .wallet()
         .send_pub_tx(
             vec![
-                AccountIdentity::PublicNoSign(pool_id).select_program_shard(amm_program_id()),
+                pool,
                 AccountIdentity::PublicNoSign(vault_a).select_program_shard(token_program_id()),
                 AccountIdentity::PublicNoSign(vault_b).select_program_shard(token_program_id()),
                 AccountIdentity::PublicNoSign(lp_definition)
@@ -104,15 +104,17 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
                 AccountIdentity::Public(holding_a).select_program_shard(token_program_id()),
                 AccountIdentity::Public(holding_lp).select_program_shard(token_program_id()),
             ],
-            Program::serialize_instruction(Instruction::NewDefinition {
+            0,
+            Program::serialize_message(amm_core::Message::NewDefinition {
                 token_a_amount: 1_000,
                 token_b_amount: 500,
                 token_program_id: token_program_id(),
                 definition_token_a_id: definition_a,
                 definition_token_b_id: definition_b,
-                pool_is_empty: true,
+                user_a: holding_b,
+                user_b: holding_a,
+                user_lp: holding_lp,
             })?,
-            amm_program_id(),
         )
         .await?;
     wait_for_inclusion(&ctx, mismatched).await?;
@@ -149,7 +151,7 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
         );
     }
 
-    let (created_pool, created) = amm
+    let (created_pool, created, _) = amm
         .send_new_pool(
             AccountIdentity::Public(holding_a),
             AccountIdentity::Public(holding_b),
@@ -164,7 +166,7 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
     check("created", (1_000, 500, 707), (9_000, 9_500), 0).await?;
 
     // Up to 100 of each deposits 100 of A and 50 of B, minting 707 * 100 / 1000 = 70.
-    let added = amm
+    let (added, _) = amm
         .send_add_liquidity(
             AccountIdentity::Public(holding_a),
             AccountIdentity::Public(holding_b),
@@ -206,10 +208,10 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
     check("sold B", (1_140, 540, 777), (8_860, 9_460), 0).await?;
 
     // Burning 70 of 777 withdraws 1140 * 70 / 777 = 102 of A and 540 * 70 / 777 = 48 of B.
-    let removed = amm
+    let (removed, _) = amm
         .send_remove_liquidity(
-            holding_a,
-            holding_b,
+            AccountIdentity::PublicNoSign(holding_a),
+            AccountIdentity::PublicNoSign(holding_b),
             AccountIdentity::Public(holding_lp),
             70,
             102,

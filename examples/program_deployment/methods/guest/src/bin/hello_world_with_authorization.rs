@@ -1,48 +1,25 @@
-use lee_core::{
-    account::ShardData,
-    program::{Plan, PlanInput, run_program},
-};
+use lee_core::program::{ReceiveInput, Response, run_actor};
 
 // Hello-world with authorization example program.
 //
-// This program reads an arbitrary sequence of bytes as its instruction
-// and appends those bytes to this program's own shard on the single input account.
+// This program reads an arbitrary sequence of bytes as its message
+// and appends those bytes to this program's own shard on the receiving account.
 //
-// Execution succeeds only if the input account **is authorized**.
-
-type Instruction = Vec<u8>;
+// Execution succeeds only if the receiving account **is authorized**.
 
 fn main() {
-    run_program(plan, apply)
+    run_actor(receive)
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "run_program passes the decoded instruction by value; this planner only reads it"
-)]
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    let mut plan = Plan::new(input);
-    let [account] = input.accounts.as_slice() else {
-        panic!("Input accounts should consist of a single account");
-    };
-
+fn receive(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
     // #### Difference with `hello_world` example here:
-    // Fail if the input account is not authorized
-    // The `is_authorized` field will be correctly populated or verified by the system if
-    // authorization is provided.
-    assert!(account.is_authorized, "Missing required authorization");
+    // Fail if the receiving account is not authorized
+    // The `is_authorized` field is set by the system from the account's signature or from a PDA
+    // seed the sending program grants.
+    assert!(input.is_authorized, "Missing required authorization");
     // ####
 
-    plan.effect(account, &instruction);
-    plan
-}
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(greeting: Vec<u8>, pre_data: &ShardData) -> Option<Vec<u8>> {
-    let mut bytes = pre_data.clone().into_inner();
+    let mut bytes = input.pre_data.to_vec();
     bytes.extend(greeting);
-    Some(bytes)
+    Response::write(bytes)
 }

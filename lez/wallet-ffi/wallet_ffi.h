@@ -349,19 +349,15 @@ typedef struct FfiDependency {
 } FfiDependency;
 
 /**
- * Every program an execution may dispatch, root included, each paired with the account it is
- * deployed at, plus the address the top-level call is dispatched to.
- *
- * The root is the entry supplied at `self_account_id`; a shadow root dispatches at its derived
- * address instead. `programs` is empty for native execution, which has no bytecode to supply.
+ * Every program an execution may dispatch, each paired with the account it is deployed at.
+ * `programs` is empty for native execution, which has no bytecode to supply.
  *
  * Intended to be created manually.
  */
-typedef struct FfiProgramWithDependencies {
-  struct FfiBytes32 self_account_id;
+typedef struct FfiProgramCatalog {
   const struct FfiDependency *programs;
   uintptr_t programs_size;
-} FfiProgramWithDependencies;
+} FfiProgramCatalog;
 
 /**
  * Public key info for a public account.
@@ -677,8 +673,8 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
  * - `account_mentions`: Valid pointer to list of `FfiAccountMention`
- * - `instruction_data`: Valid pointer to instruction data bytes
- * - `program_account_id`: Account id the target program is deployed at
+ * - `root_mention`: Index into `account_mentions` of the actor the message is delivered to
+ * - `message`: Valid pointer to the message bytes
  * - `payer`: Fee payer, or null to self-pay from the first funded signing account in
  *   `account_mentions` (the first signing account if none is funded). May be one of those signing
  *   accounts, or any other public account whose signing key the wallet holds (it co-signs without
@@ -692,16 +688,16 @@ enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
  * # Safety
  * - `handle` must be a valid pointer
  * - `account_mentions` must be a valid pointer
- * - `instruction_data` must be a valid pointer
+ * - `message` must be a valid pointer
  * - `payer` must be null or a valid pointer to a `FfiBytes32`
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
                                                                const struct FfiAccountMention *account_mentions,
                                                                uintptr_t account_mentions_size,
-                                                               const uint8_t *instruction_data,
-                                                               uintptr_t instruction_data_size,
-                                                               struct FfiBytes32 program_account_id,
+                                                               uintptr_t root_mention,
+                                                               const uint8_t *message,
+                                                               uintptr_t message_size,
                                                                const struct FfiBytes32 *payer,
                                                                struct FfiTransactionResult *out_result);
 
@@ -711,7 +707,9 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
  * - `account_mentions`: Valid pointer to list of `FfiAccountMention`
- * - `instruction_data`: Valid pointer to instruction data bytes
+ * - `root_mention`: Index into `account_mentions` of the actor the message is delivered to
+ * - `message`: Valid pointer to the message bytes
+ * - `programs`: Valid pointer to the catalog of programs the transaction may run
  * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
  * # Returns
@@ -721,15 +719,17 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
  * # Safety
  * - `handle` must be a valid pointer
  * - `account_mentions` must be a valid pointer
- * - `instruction_data` must be a valid pointer
+ * - `message` must be a valid pointer
+ * - `programs` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
 enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
                                                                 const struct FfiAccountMention *account_mentions,
                                                                 uintptr_t account_mentions_size,
-                                                                const uint8_t *instruction_data,
-                                                                uintptr_t instruction_data_size,
-                                                                const struct FfiProgramWithDependencies *program_with_dependencies,
+                                                                uintptr_t root_mention,
+                                                                const uint8_t *message,
+                                                                uintptr_t message_size,
+                                                                const struct FfiProgramCatalog *programs,
                                                                 struct FfiTransactionResult *out_result);
 
 /**

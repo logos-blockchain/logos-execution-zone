@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -12,9 +12,9 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
+    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey, RootCall,
     privacy_preserving_transaction::{
-        circuit::{ProgramWithDependencies, execute_and_prove},
+        circuit::{ProgramCatalog, execute_and_prove},
         message::Message,
         witness_set::WitnessSet,
     },
@@ -22,10 +22,13 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
-    PrivateWitness, WitnessKind, encryption::ViewingPublicKey,
-    native_token::Instruction as NativeInstruction, program::PdaSeed,
+    PrivateWitness, WitnessKind,
+    encryption::ViewingPublicKey,
+    native_token::{Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID},
+    program::{Envelope, PdaSeed},
 };
 use sequencer_service_rpc::RpcClient as _;
+use test_guest_core::Script;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
@@ -55,15 +58,21 @@ async fn fund_private_pda(
         .get_account_public_signing_key(sender)
         .context("sender signing key not found")?;
 
-    let instruction = Program::serialize_instruction(NativeInstruction::Transfer { amount })
-        .context("failed to serialize the native transfer instruction")?;
+    let sender_actor = Actor::native_balance(sender);
+    let transfer = Program::serialize_message(NativeMessage::Transfer {
+        to: pda_account_id,
+        amount,
+        expect_balance: None,
+    })
+    .context("failed to serialize the native transfer message")?;
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                Actor::native_balance(sender),
-                Actor::native_balance(pda_account_id),
-            ],
+            root: RootCall {
+                to: sender_actor,
+                message: transfer,
+            },
+            public_actors: vec![sender_actor],
             signers: [sender].into(),
             private_witnesses: vec![PrivateWitness {
                 vpk,
@@ -77,10 +86,15 @@ async fn fund_private_pda(
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             }],
-            instruction_data: instruction,
-            ..Default::default()
+            public_shards: [(
+                sender_actor,
+                sender_account.data.shard(NATIVE_TOKEN_PROGRAM_ID).clone(),
+            )]
+            .into(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
         },
-        &ProgramWithDependencies::native(),
+        &ProgramCatalog::default(),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
@@ -100,7 +114,9 @@ async fn fund_private_pda(
 
 /// Spends from an owned private PDA to a fresh private-foreign recipient.
 ///
-/// Alice must own the PDA in the wallet (i.e. it must have been synced after a receive).
+/// Alice must own the PDA in the wallet (i.e. it must have been synced after a receive). The
+/// PDA's own actor under the proxy program is the root; it transfers out of the PDA's native
+/// balance under the seed that binds the PDA to the proxy.
 async fn spend_private_pda(
     wallet: &WalletCore,
     pda_account_id: AccountId,
@@ -108,21 +124,35 @@ async fn spend_private_pda(
     recipient_vpk: ViewingPublicKey,
     seed: PdaSeed,
     amount: u128,
-    spend_program: &ProgramWithDependencies,
+    (proxy_id, spend_program): (AccountId, &ProgramCatalog),
 ) -> Result<()> {
+    let accounts = vec![
+        AccountIdentity::PrivateOwned(pda_account_id).select_program_shard(proxy_id),
+        AccountIdentity::PrivateOwned(pda_account_id).balance(),
+        AccountIdentity::PrivateForeign {
+            npk: recipient_npk,
+            vpk: recipient_vpk,
+            kind: PrivateAccountKind::Regular(Identifier::ZERO),
+        }
+        .balance(),
+    ];
+    let spend = Script::default().send(
+        Envelope::new(
+            accounts[1].actor(),
+            &NativeMessage::Transfer {
+                to: accounts[2].identity.account_id(),
+                amount,
+                expect_balance: None,
+            },
+        )
+        .with_pda_seeds(vec![seed]),
+    );
     wallet
         .send_privacy_preserving_tx(
-            vec![
-                AccountIdentity::PrivateOwned(pda_account_id).balance(),
-                AccountIdentity::PrivateForeign {
-                    npk: recipient_npk,
-                    vpk: recipient_vpk,
-                    kind: PrivateAccountKind::Regular(Identifier::ZERO),
-                }
-                .balance(),
-            ],
-            Program::serialize_instruction((seed, amount))
-                .context("failed to serialize pda_spend_proxy instruction")?,
+            accounts,
+            0,
+            Program::serialize_message(spend)
+                .context("failed to serialize the proxy's spend script")?,
             spend_program,
         )
         .await
@@ -152,8 +182,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         (kc.nullifier_public_key, kc.viewing_public_key.clone())
     };
 
-    let proxy = test_programs::pda_spend_proxy();
-    // `pda_spend_proxy` is deployed fresh below, so its header target must be a real key the
+    let proxy = test_programs::scripted();
+    // The scripted proxy is deployed fresh below, so its header target must be a real key the
     // wallet signs for — `program_loader` requires `is_authorized` for `CreateHeader`.
     let proxy_key = PrivateKey::try_new([209; 32]).unwrap();
     let proxy_id = AccountId::from(&PublicKey::new_from_private_key(&proxy_key));
@@ -161,7 +191,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let amount: u128 = 100;
 
     // The circuit anchors the PDAs' authority binding to `proxy_id`'s real on-chain image, so
-    // `pda_spend_proxy` must actually be deployed there through `program_loader`, not just known
+    // the proxy must actually be deployed there through `program_loader`, not just known
     // locally — one `WriteSegment` per `MAX_SEGMENT_DATA_LEN` chunk of the ELF (linked
     // tail-to-head), then a `CreateHeader` naming `proxy_id` itself as the header.
     let payer = &initial_pub_accounts_private_keys()[0];
@@ -183,19 +213,15 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     let mut next_payer_nonce = payer_nonce.0;
     for i in (0..chunks.len()).rev() {
-        let mut write_segment_account_ids = vec![segment_ids[i]];
-        write_segment_account_ids.extend(segment_ids.get(i.saturating_add(1)).copied());
+        let segment = Actor::new(segment_ids[i], lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
         let segment_message = lee::public_transaction::Message::try_new_with_fees(
-            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-            write_segment_account_ids
-                .into_iter()
-                .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
-                .collect(),
+            segment,
+            vec![segment],
             vec![
                 lee_core::account::Nonce(0),
                 lee_core::account::Nonce(next_payer_nonce),
             ],
-            program_loader_core::Instruction::WriteSegment {
+            program_loader_core::Message::WriteSegment {
                 bytecode: chunks[i].to_vec(),
                 next_segment: segment_ids.get(i.saturating_add(1)).copied(),
             },
@@ -218,19 +244,15 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     }
 
-    let mut header_account_ids = vec![proxy_id];
-    header_account_ids.extend(&segment_ids);
+    let header = Actor::new(proxy_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let header_message = lee::public_transaction::Message::try_new_with_fees(
-        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-        header_account_ids
-            .into_iter()
-            .map(|id| Actor::new(id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID))
-            .collect(),
+        header,
+        vec![header],
         vec![
             lee_core::account::Nonce(0),
             lee_core::account::Nonce(next_payer_nonce),
         ],
-        program_loader_core::Instruction::CreateHeader {
+        program_loader_core::Message::CreateHeader {
             first_segment: segment_ids[0],
             immutable: true,
         },
@@ -249,7 +271,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let spend_program = ProgramWithDependencies::new(proxy, proxy_id, HashMap::new());
+    let spend_program = ProgramCatalog::from([(proxy_id, proxy)]);
 
     let alice_pda_0_id =
         AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, Identifier::ZERO);
@@ -356,7 +378,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         recipient_vpk_0,
         seed,
         amount_spend_0,
-        &spend_program,
+        (proxy_id, &spend_program),
     )
     .await?;
 
@@ -368,7 +390,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         recipient_vpk_1,
         seed,
         amount_spend_1,
-        &spend_program,
+        (proxy_id, &spend_program),
     )
     .await?;
 

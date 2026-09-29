@@ -3,8 +3,6 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::borrow::Cow;
-
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{
@@ -14,19 +12,16 @@ use integration_tests::{
         wait_for_indexer_to_catch_up, wait_until,
     },
 };
-use lee::{
-    AccountId, Actor, PrivateKey, PublicKey,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-};
+use lee::{AccountId, Actor, PrivateKey, PublicKey, program::Program};
 use lee_core::{
     account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
 };
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::RpcClient as _;
+use test_guest_core::Script;
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 use wallet::{
-    AccountIdentity,
     cli::{
         Command,
         account::{AccountSubcommand, ReadScope},
@@ -76,18 +71,18 @@ fn fresh_key(seed: u8) -> (PrivateKey, AccountId) {
 
 async fn submit(
     ctx: &TestContext,
-    program: AccountId,
-    shard_selectors: Vec<Actor>,
+    root: Actor,
+    public_actors: Vec<Actor>,
     nonces: Vec<Nonce>,
-    instruction: impl borsh::BorshSerialize,
+    message: impl borsh::BorshSerialize,
     payer: &PublicAccountPrivateInitialData,
     extra_signers: &[&PrivateKey],
 ) -> Result<()> {
     let message = lee::public_transaction::Message::try_new_with_fees(
-        program,
-        shard_selectors,
+        root,
+        public_actors,
         nonces,
-        instruction,
+        message,
         // A bloat shard write costs far more than `test_fee_declaration`'s 2M cycle cap,
         // and an over-cap call is a charged revert: it settles and writes nothing.
         lee::FeeDeclaration::new(
@@ -146,25 +141,12 @@ async fn fresh_segments(ctx: &mut TestContext, program: &Program) -> Result<Vec<
     Ok(segments)
 }
 
-async fn deploy_fresh_program(
-    ctx: &mut TestContext,
-    payer: AccountId,
-    program: &Program,
-) -> Result<AccountId> {
-    let segments = fresh_segments(ctx, program).await?;
-    let header = new_account(ctx, false, None).await?;
-
-    ProgramLoader(ctx.wallet())
-        .deploy(header, &segments, program.elf().to_vec(), true, Some(payer))
-        .await
-}
-
 async fn bloat_account(
     ctx: &mut TestContext,
     victim: AccountId,
 ) -> Result<[AccountId; BLOAT_WRITERS]> {
     let payer = &genesis_payer(ctx);
-    let writer = test_programs::data_writer();
+    let writer = test_programs::scripted();
 
     let segments = fresh_segments(ctx, &writer).await?;
     let first_header = new_account(ctx, false, None).await?;
@@ -186,7 +168,7 @@ async fn bloat_account(
         // has not spent yet, and the sequencer rejects the later two on nonce mismatch.
         let payer_nonce_before = get_account(ctx, payer.account_id).await?.nonce;
         ProgramLoader(ctx.wallet())
-            .create_header(header, segments[0], &segments, true, Some(payer.account_id))
+            .create_header(header, segments[0], true, Some(payer.account_id))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         wait_until(&format!("header {header} to be created"), || async {
@@ -199,12 +181,13 @@ async fn bloat_account(
     let shard = vec![0xFF_u8; BLOAT_SHARD_BYTES];
     for writer_id in &writers {
         let payer_nonce = get_account(ctx, payer.account_id).await?.nonce;
+        let bloated = Actor::new(victim, *writer_id);
         submit(
             ctx,
-            *writer_id,
-            vec![Actor::new(victim, *writer_id)],
+            bloated,
+            vec![bloated],
             vec![payer_nonce],
-            shard.clone(),
+            Script::write(shard.clone()),
             payer,
             &[],
         )
@@ -529,12 +512,13 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
 
     let (segment_key, segment_id) = fresh_key(0xD0);
     let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
+    let segment = Actor::new(segment_id, PROGRAM_LOADER_ACCOUNT_ID);
     submit(
         &ctx,
-        PROGRAM_LOADER_ACCOUNT_ID,
-        vec![Actor::new(segment_id, PROGRAM_LOADER_ACCOUNT_ID)],
+        segment,
+        vec![segment],
         vec![Nonce(0), payer_nonce],
-        program_loader_core::Instruction::WriteSegment {
+        program_loader_core::Message::WriteSegment {
             bytecode: vec![0xAB_u8; SEGMENT_FILLER_BYTES],
             next_segment: None,
         },
@@ -569,64 +553,6 @@ async fn loader_reads_survive_a_bloated_segment_account() -> Result<()> {
 
     let chain_from_head = loader.resolve_chain(head_id).await?;
     assert_eq!(chain_from_head, vec![head_id, segment_id]);
-
-    Ok(())
-}
-
-#[test]
-async fn a_chained_call_resolves_a_shard_the_mention_never_named() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-    let payer = &genesis_payer(&mut ctx);
-    let account_id = ctx.existing_public_accounts()[0];
-
-    let q = test_programs::data_writer();
-    let p = Program::new_unchecked(
-        test_methods::SHARD_FORWARDER_ID,
-        Cow::Borrowed(test_methods::SHARD_FORWARDER_ELF),
-    );
-    let q_id = deploy_fresh_program(&mut ctx, payer.account_id, &q).await?;
-    let p_id = deploy_fresh_program(&mut ctx, payer.account_id, &p).await?;
-
-    let existing = vec![0xAB_u8; 32];
-    let payer_nonce = get_account(&ctx, payer.account_id).await?.nonce;
-    submit(
-        &ctx,
-        q_id,
-        vec![Actor::new(account_id, q_id)],
-        vec![payer_nonce],
-        existing.clone(),
-        payer,
-        &[],
-    )
-    .await?;
-
-    let before = get_account_view(&ctx, Actor::new(account_id, q_id)).await?;
-    assert_eq!(before.data.shards[&q_id].as_ref(), existing.as_slice());
-
-    let rewritten = vec![0xCD_u8; 48];
-    let program = ProgramWithDependencies::new(p, p_id, [(q_id, q)].into());
-
-    let (tx_hash, _) = ctx
-        .wallet()
-        .send_privacy_preserving_tx(
-            vec![AccountIdentity::Public(account_id).select_program_shard(p_id)],
-            Program::serialize_instruction(vec![(
-                q_id,
-                Actor::new(account_id, q_id),
-                Program::serialize_instruction(rewritten.clone())?,
-            )])?,
-            &program,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    ctx.wallet().poll_transaction(tx_hash).await?;
-
-    let after = get_account_view(&ctx, Actor::new(account_id, q_id)).await?;
-    assert_eq!(
-        after.data.shards[&q_id].as_ref(),
-        rewritten.as_slice(),
-        "the chained call must have rewritten the shard it opened"
-    );
 
     Ok(())
 }

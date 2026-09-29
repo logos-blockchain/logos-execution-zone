@@ -134,22 +134,13 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
     let payer = unsafe { read_optional_account_id(payer) };
 
     let loader = ProgramLoader(&wallet);
-    let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
-        Ok(chain_segment_ids) => chain_segment_ids,
-        Err(e) => {
-            print_error(format!("Failed to resolve segment chain: {e:?}"));
-            write_failure(out_result);
-            return WalletFfiError::NetworkError;
-        }
-    };
+    if let Err(e) = block_on(loader.resolve_chain(first_segment)) {
+        print_error(format!("Failed to resolve segment chain: {e:?}"));
+        write_failure(out_result);
+        return WalletFfiError::NetworkError;
+    }
 
-    match block_on(loader.create_header(
-        target,
-        first_segment,
-        &chain_segment_ids,
-        immutable,
-        payer,
-    )) {
+    match block_on(loader.create_header(target, first_segment, immutable, payer)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success
@@ -203,22 +194,13 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     let payer = unsafe { read_optional_account_id(payer) };
 
     let loader = ProgramLoader(&wallet);
-    let chain_segment_ids = match block_on(loader.resolve_chain(first_segment)) {
-        Ok(chain_segment_ids) => chain_segment_ids,
-        Err(e) => {
-            print_error(format!("Failed to resolve segment chain: {e:?}"));
-            write_failure(out_result);
-            return WalletFfiError::NetworkError;
-        }
-    };
+    if let Err(e) = block_on(loader.resolve_chain(first_segment)) {
+        print_error(format!("Failed to resolve segment chain: {e:?}"));
+        write_failure(out_result);
+        return WalletFfiError::NetworkError;
+    }
 
-    match block_on(loader.update_header(
-        header,
-        first_segment,
-        &chain_segment_ids,
-        immutable,
-        payer,
-    )) {
+    match block_on(loader.update_header(header, first_segment, immutable, payer)) {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
             WalletFfiError::Success

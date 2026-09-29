@@ -54,7 +54,9 @@ use axum::{
     routing::{get, post},
 };
 use common::{block::BedrockStatus, transaction::LeeTransaction};
-use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Instruction, ZoneId};
+use cross_zone_inbox_core::{
+    CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Message as InboxMessage, ZoneId,
+};
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
     AccountId, Actor, PublicTransaction,
@@ -62,7 +64,7 @@ use lee::{
 };
 use log::{info, warn};
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -469,8 +471,8 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                         let LeeTransaction::Public(public) = tx else {
                             continue;
                         };
-                        let program_id = public.message.program_account_id;
-                        let data = &public.message.instruction_data;
+                        let program_id = public.message.to.program_account_id;
+                        let data = &public.message.message;
                         // A tx targets at most one of these programs; check both
                         // independently rather than chaining (avoids an empty else).
                         if program_id == inbox_id
@@ -515,20 +517,18 @@ async fn poll_finality(state: Arc<AppState>) {
     }
 }
 
-/// Recovers the chat text from an inbox dispatch tx's instruction data.
-fn decode_inbox_text(instruction_data: &[u8]) -> Option<String> {
-    let instruction: Instruction = borsh::from_slice::<Instruction>(instruction_data).ok()?;
-    let Instruction::Dispatch(message) = instruction else {
+/// Recovers the chat text from an inbox dispatch tx's message.
+fn decode_inbox_text(message: &[u8]) -> Option<String> {
+    let InboxMessage::Dispatch(delivery) = borsh::from_slice::<InboxMessage>(message).ok()? else {
         return None;
     };
-    decode_payload(&message.payload)
+    decode_payload(&delivery.payload)
 }
 
-/// Recovers the outbox ordinal from a `ping_sender::Send` tx's instruction data.
-fn decode_send_ordinal(instruction_data: &[u8]) -> Option<u32> {
-    let instruction: SenderInstruction =
-        borsh::from_slice::<SenderInstruction>(instruction_data).ok()?;
-    let SenderInstruction::Send { ordinal, .. } = instruction else {
+/// Recovers the outbox ordinal from a `ping_sender::Send` tx's message.
+fn decode_send_ordinal(message: &[u8]) -> Option<u32> {
+    let SenderMessage::Send { ordinal, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
+    else {
         return None;
     };
     Some(ordinal)
@@ -536,9 +536,9 @@ fn decode_send_ordinal(instruction_data: &[u8]) -> Option<u32> {
 
 /// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
 fn decode_payload(payload: &[u8]) -> Option<String> {
-    let instruction: ReceiverInstruction =
-        borsh::from_slice::<ReceiverInstruction>(payload).ok()?;
-    let ReceiverInstruction::Record { payload: bytes } = instruction else {
+    let ReceiverMessage::Record { payload: bytes } =
+        borsh::from_slice::<ReceiverMessage>(payload).ok()?
+    else {
         return None;
     };
     Some(String::from_utf8_lossy(&bytes).into_owned())
@@ -550,12 +550,19 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let receiver_id = programs::ping_receiver_account_id();
     let outbox_id = programs::cross_zone_outbox_account_id();
 
-    let payload = borsh::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: text.as_bytes().to_vec(),
     })
-    .expect("serialize record instruction");
+    .expect("serialize record message");
 
-    let send = SenderInstruction::Send {
+    let sender_id = programs::ping_sender_account_id();
+    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
+    let outbox = Actor::new(
+        outbox_pda(outbox_id, sender_id, &other_zone, ordinal),
+        outbox_id,
+    );
+    let send = SenderMessage::Send {
+        outbox,
         target_zone: other_zone,
         target_account_id: receiver_id,
         target_accounts: vec![
@@ -566,18 +573,8 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         ordinal,
     };
 
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
-    let message = Message::try_new(
-        sender_id,
-        vec![
-            Actor::new(sender_config_account_id(sender_id), sender_id),
-            Actor::new(outbox_account, outbox_id),
-        ],
-        vec![],
-        send,
-    )
-    .expect("build ping_sender message");
+    let message = Message::try_new(config, vec![config, outbox], vec![], send)
+        .expect("build ping_sender message");
 
     LeeTransaction::Public(PublicTransaction::new(
         message,

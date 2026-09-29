@@ -3,7 +3,10 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
@@ -12,7 +15,8 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    Actor, execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
+    Actor, RootCall, execute_and_prove_assuming, privacy_preserving_transaction, program::Program,
+    public_transaction,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -27,15 +31,16 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let receipt_id =
         bridge_core::deposit_receipt_account_id(programs::bridge_account_id(), [0_u8; 32]);
 
+    let receipt = Actor::new(receipt_id, programs::bridge_account_id());
     let message = public_transaction::Message::try_new(
-        programs::bridge_account_id(),
+        receipt,
         vec![
+            receipt,
             Actor::native_balance(bridge_account_id),
             Actor::native_balance(recipient_id),
-            Actor::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
-        bridge_core::Instruction::Deposit {
+        bridge_core::Message::Deposit {
             l1_deposit_op_id: [0_u8; 32],
             recipient_id,
             amount: 1,
@@ -78,15 +83,16 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let receipt_id =
         bridge_core::deposit_receipt_account_id(programs::bridge_account_id(), [0_u8; 32]);
 
+    let receipt = Actor::new(receipt_id, programs::bridge_account_id());
     let message = public_transaction::Message::try_new(
-        programs::bridge_account_id(),
+        receipt,
         vec![
+            receipt,
             Actor::native_balance(bridge_account_id),
             Actor::native_balance(recipient_id),
-            Actor::new(receipt_id, programs::bridge_account_id()),
         ],
         vec![],
-        bridge_core::Instruction::Deposit {
+        bridge_core::Message::Deposit {
             l1_deposit_op_id: [0_u8; 32],
             recipient_id,
             amount: 0,
@@ -147,26 +153,24 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let recipient_account = get_account(&ctx, recipient_id).await?;
     let receipt_account = lee::Account::default();
 
-    // Create program with dependencies
-    let program_with_deps =
-        lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
-            programs::bridge(),
-            programs::bridge_account_id(),
-            HashMap::new(),
-        );
+    let programs = lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
+        programs::bridge_account_id(),
+        programs::bridge(),
+    )]);
 
-    // Serialize the bridge deposit instruction
-    let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
+    // Serialize the bridge deposit message
+    let deposit = Program::serialize_message(bridge_core::Message::Deposit {
         l1_deposit_op_id: [0_u8; 32],
         recipient_id,
         amount: 1,
     })
-    .context("Failed to serialize bridge deposit instruction")?;
+    .context("Failed to serialize bridge deposit message")?;
 
-    let shard_selectors = vec![
+    let receipt = Actor::new(receipt_id, programs::bridge_account_id());
+    let public_actors = vec![
+        receipt,
         Actor::native_balance(bridge_account_id),
         Actor::native_balance(recipient_id),
-        Actor::new(receipt_id, programs::bridge_account_id()),
     ];
     let nonces = vec![
         bridge_account.nonce,
@@ -175,13 +179,23 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     ];
 
     // Execute and prove the bridge deposit
-    let (output, proof) = execute_and_prove(
+    // Proven without running the deposit, which settlement refuses.
+    let (output, proof) = execute_and_prove_assuming(
         lee::ProvingInput {
-            shard_selectors,
-            instruction_data: instruction,
-            ..Default::default()
+            root: RootCall {
+                to: receipt,
+                message: deposit,
+            },
+            public_actors,
+            signers: HashSet::new(),
+            private_witnesses: Vec::new(),
+            public_shards: HashMap::new(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
         },
-        &program_with_deps,
+        // The receipt's own delivery is the one public output; it sends nothing private.
+        vec![Vec::new()],
+        &programs,
     )
     .context("Failed to execute/prove bridge deposit")?;
 

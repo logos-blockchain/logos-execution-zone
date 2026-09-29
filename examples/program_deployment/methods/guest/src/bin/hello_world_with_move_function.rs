@@ -1,66 +1,56 @@
-use lee_core::program::{Plan, PlanInput, run_program};
+use lee_core::{
+    account::{AccountId, Actor},
+    program::{Envelope, ReceiveInput, Response, run_actor},
+};
 
 // Hello-world with write + move_data example program.
 //
-// This program reads an instruction of the form `(function_id, data)` and
-// dispatches to either:
+// This program reads a message and either:
 //
-// - `write`: appends `data` to this program's own shard on a single input account.
-// - `move_data`: moves bytes out of one account's shard into another's. The source shard is cleared
-//   and the destination shard receives the appended bytes.
+// - `Write(data)`: appends `data` to this program's own shard on the receiving account.
+// - `MoveData { data, to }`: moves bytes out of the receiving account's shard into the shard of
+//   `to`, the destination account under this same program. The source shard is cleared and the
+//   destination shard receives the appended bytes.
 //
-// `plan` never sees account contents, so `move_data` cannot read what it is about to move.
-// The caller states the source's contents in `data`; the source's own effect applies first and
-// refuses unless the shard really holds exactly those bytes, which is what makes the value the
-// destination appends a pinned one rather than a caller's claim.
-
-const WRITE_FUNCTION_ID: u8 = 0;
-const MOVE_DATA_FUNCTION_ID: u8 = 1;
-
-type Instruction = (u8, Vec<u8>);
+// The caller states the source's contents in `data`; the source refuses unless its shard really
+// holds exactly those bytes, which is what makes the value the destination appends a pinned one
+// rather than a caller's claim. The destination appends only on a message from this program.
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
+enum Message {
+    Write(Vec<u8>),
+    MoveData { data: Vec<u8>, to: AccountId },
     Append(Vec<u8>),
-    MoveOut(Vec<u8>),
-}
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    Some(match effect {
-        Effect::Append(data) => {
-            let mut bytes = pre_data.to_vec();
-            bytes.extend_from_slice(&data);
-            bytes
-        }
-        Effect::MoveOut(data) => {
-            assert_eq!(
-                pre_data, data,
-                "the source account does not hold the bytes the instruction moves out of it"
-            );
-            Vec::new()
-        }
-    })
 }
 
 fn main() {
-    run_program(plan, apply)
+    run_actor(receive)
 }
 
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    let mut plan = Plan::new(input);
-    let (function_id, data) = instruction;
-
-    match (input.accounts.as_slice(), function_id) {
-        ([account], WRITE_FUNCTION_ID) => plan.effect(account, &Effect::Append(data)),
-        ([from, to], MOVE_DATA_FUNCTION_ID) => {
-            plan.effect(from, &Effect::MoveOut(data.clone()));
-            plan.effect(to, &Effect::Append(data));
+fn receive(input: &ReceiveInput, message: Message) -> Response {
+    match message {
+        Message::Write(data) => append(input, &data),
+        Message::MoveData { data, to } => {
+            assert_eq!(
+                input.pre_data.as_ref(),
+                data.as_slice(),
+                "the source account does not hold the bytes the instruction moves out of it"
+            );
+            Response::write(Vec::new()).send(Envelope::new(
+                Actor::new(to, input.receiver.program_account_id),
+                &Message::Append(data),
+            ))
         }
-        _ => panic!("invalid params"),
+        Message::Append(data) => {
+            assert!(
+                input.from_own_program(),
+                "only a move of this program appends to its destination"
+            );
+            append(input, &data)
+        }
     }
-    plan
+}
+
+fn append(input: &ReceiveInput, data: &[u8]) -> Response {
+    Response::write([input.pre_data.as_ref(), data].concat())
 }

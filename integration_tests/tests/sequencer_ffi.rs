@@ -357,8 +357,8 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         unsafe { owner_id_transactions.get(i) };
 
         match owner_id_selector_position(owner_id_tx, *owner_id.value())? {
-            // Stake: funding, ownership, funds, config.
-            Some(1) => stake_txs += 1,
+            // Stake: ownership (the root), funds, funding, config.
+            Some(0) => stake_txs += 1,
             // Fee distribution: fee state, escrow, inbox, producer payout.
             Some(3) => reward_txs += 1,
             position => anyhow::bail!(
@@ -522,18 +522,18 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
     Ok(())
 }
 
-/// Which shard selector of `tx` names `account`, if any.
+/// Which declared public actor of `tx` names `account`, if any.
 fn owner_id_selector_position(tx: &FfiTransaction, account: [u8; 32]) -> Result<Option<usize>> {
     let FfiTransactionKind::Public = tx.kind else {
         return Err(anyhow::anyhow!("All owner_id transactions must be public"));
     };
 
-    let shard_selectors =
+    let public_actors =
         // SAFETY: the kind says the public body is the live union member.
-        unsafe { tx.body.public_body.read().message.shard_selectors };
+        unsafe { tx.body.public_body.read().message.public_actors };
 
-    Ok((0..shard_selectors.len).find(|&i| {
+    Ok((0..public_actors.len).find(|&i| {
         // SAFETY: `i` is below the vector's length.
-        unsafe { shard_selectors.get(i).account_id.data == account }
+        unsafe { public_actors.get(i).account_id.data == account }
     }))
 }

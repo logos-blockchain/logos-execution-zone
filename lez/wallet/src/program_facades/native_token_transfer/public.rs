@@ -1,5 +1,4 @@
 use common::HashType;
-use lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
 
 use super::NativeTokenTransfer;
 use crate::{
@@ -14,16 +13,11 @@ impl NativeTokenTransfer<'_> {
         to: AccountIdentity,
         balance_to_move: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let (instruction_data, tx_pre_check) = native_transfer_preparation(balance_to_move);
+        let accounts = [from.balance(), to.balance()];
+        let (message, tx_pre_check) = native_transfer_preparation(&accounts, balance_to_move);
 
         self.0
-            .send_pub_tx_with_pre_check(
-                vec![from.balance(), to.balance()],
-                instruction_data,
-                NATIVE_TOKEN_PROGRAM_ID,
-                None,
-                tx_pre_check,
-            )
+            .send_pub_tx_with_pre_check(accounts.into(), 0, message, None, tx_pre_check)
             .await
     }
 }

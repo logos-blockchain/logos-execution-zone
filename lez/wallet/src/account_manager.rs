@@ -202,9 +202,17 @@ impl AccountIdentity {
 }
 
 /// An account identity with the program shard it selects.
+#[derive(Clone)]
 pub struct AccountMention {
     pub identity: AccountIdentity,
     pub program_account_id: AccountId,
+}
+
+impl AccountMention {
+    #[must_use]
+    pub fn actor(&self) -> Actor {
+        Actor::new(self.identity.account_id(), self.program_account_id)
+    }
 }
 
 /// A shard the wallet read. Execution binds the account handle and applies against live state,
@@ -379,9 +387,28 @@ impl AccountManager {
             .collect()
     }
 
-    /// The shard selectors, in declaration order.
-    pub fn shard_selectors(&self) -> Vec<Actor> {
-        self.rows.iter().map(|row| self.row_selector(row)).collect()
+    // The declared public actors' shards as read, from which the prover derives the boundary.
+    pub fn public_shards(&self) -> HashMap<Actor, ShardData> {
+        self.rows
+            .iter()
+            .filter(|row| !matches!(self.states[row.account], State::Private(_)))
+            .map(|row| {
+                let shard = self.states[row.account].selected(self.row_selector(row));
+                (shard.selector, shard.data)
+            })
+            .collect()
+    }
+
+    // In mention order, deduplicated.
+    pub fn public_actors(&self) -> Vec<Actor> {
+        let mut actors = Vec::new();
+        for row in &self.rows {
+            let actor = self.row_selector(row);
+            if !matches!(self.states[row.account], State::Private(_)) && !actors.contains(&actor) {
+                actors.push(actor);
+            }
+        }
+        actors
     }
 
     /// The public accounts whose signature this transaction carries.

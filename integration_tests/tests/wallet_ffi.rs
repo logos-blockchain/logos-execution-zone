@@ -30,15 +30,15 @@ use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::{
     Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::{NewTokenDefinition, TokenDefinition, TokenHolding};
 use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
     FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult,
     WalletHandle, error,
     generic_transaction::{
-        FfiDependency, FfiMembershipProof, FfiProgramHeader, FfiProgramKind,
-        FfiProgramWithDependencies, FfiTransactionResult,
+        FfiDependency, FfiMembershipProof, FfiProgramCatalog, FfiProgramHeader, FfiProgramKind,
+        FfiTransactionResult,
     },
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -212,9 +212,9 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         account_mentions: *const FfiAccountMention,
         account_mentions_size: usize,
-        instruction_data: *const u8,
-        instruction_data_size: usize,
-        program_account_id: FfiBytes32,
+        root_mention: usize,
+        message: *const u8,
+        message_size: usize,
         payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
@@ -229,9 +229,10 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         account_mentions: *const FfiAccountMention,
         account_mentions_size: usize,
-        instruction_data: *const u8,
-        instruction_data_size: usize,
-        program_with_dependencies: *const FfiProgramWithDependencies,
+        root_mention: usize,
+        message: *const u8,
+        message_size: usize,
+        programs: *const FfiProgramCatalog,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -1631,7 +1632,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
-    let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
+    let to_id = ctx.ctx().existing_public_accounts()[1];
+    let to: FfiBytes32 = to_id.into();
     let amount = 100_u128;
 
     let from_before = ffi_balance(wallet_ffi_handle, &from, true);
@@ -1663,22 +1665,24 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let account_mentions_size = ffi_accs.len();
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
-    let instruction_data =
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
-            .unwrap();
-    let instruction_data_size = instruction_data.len();
-    let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
-
-    let program_account_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+    // The sender's native actor, mention 0, is the root.
+    let message = Program::serialize_message(lee_core::native_token::Message::Transfer {
+        to: to_id,
+        amount,
+        expect_balance: None,
+    })
+    .unwrap();
+    let message_size = message.len();
+    let message_ptr = Box::into_raw(message.into_boxed_slice()) as *const u8;
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
             wallet_ffi_handle,
             account_mentions,
             account_mentions_size,
-            instruction_data_ptr,
-            instruction_data_size,
-            program_account_id.into(),
+            0,
+            message_ptr,
+            message_size,
             std::ptr::null(),
             &raw mut transaction_result,
         )
@@ -1730,9 +1734,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
         wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
-        let instruction_data =
-            std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
-        drop(Box::from_raw(std::ptr::from_mut(instruction_data)));
+        let message = std::slice::from_raw_parts_mut(message_ptr.cast_mut(), message_size);
+        drop(Box::from_raw(std::ptr::from_mut(message)));
 
         wallet_ffi_free_transaction_result(&raw mut transaction_result);
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -1785,14 +1788,18 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     let account_mentions_size = ffi_accs.len();
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
-    let instruction_data =
-        Program::serialize_instruction(token_core::Instruction::NewFungibleDefinition {
+    // The definition, mention 0, is the root; it creates the holding, mention 1.
+    let message = Program::serialize_message(token_core::Message::NewDefinition {
+        definition: NewTokenDefinition::Fungible {
             name: "FFI".to_owned(),
             total_supply,
-        })
-        .unwrap();
-    let instruction_data_size = instruction_data.len();
-    let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
+        },
+        holding: holding.into(),
+        metadata: None,
+    })
+    .unwrap();
+    let message_size = message.len();
+    let message_ptr = Box::into_raw(message.into_boxed_slice()) as *const u8;
 
     let ffi_programs = vec![FfiDependency {
         program: programs::token().into(),
@@ -1803,8 +1810,7 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
     }];
     let programs_size = ffi_programs.len();
     let programs_ptr = Box::into_raw(ffi_programs.into_boxed_slice()) as *const FfiDependency;
-    let program_with_dependencies = FfiProgramWithDependencies {
-        self_account_id: FfiBytes32::from_account_id(token_program),
+    let programs = FfiProgramCatalog {
         programs: programs_ptr,
         programs_size,
     };
@@ -1814,9 +1820,10 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
             wallet_ffi_handle,
             account_mentions,
             account_mentions_size,
-            instruction_data_ptr,
-            instruction_data_size,
-            &raw const program_with_dependencies,
+            0,
+            message_ptr,
+            message_size,
+            &raw const programs,
             &raw mut transaction_result,
         )
         .unwrap();
@@ -1883,9 +1890,8 @@ fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
         wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
         wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
-        let instruction_data =
-            std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
-        drop(Box::from_raw(std::ptr::from_mut(instruction_data)));
+        let message = std::slice::from_raw_parts_mut(message_ptr.cast_mut(), message_size);
+        drop(Box::from_raw(std::ptr::from_mut(message)));
 
         wallet_ffi_free_account_data(&raw mut out_definition);
         wallet_ffi_free_account_data(&raw mut out_holding);

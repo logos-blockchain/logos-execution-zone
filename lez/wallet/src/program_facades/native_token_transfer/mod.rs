@@ -1,10 +1,10 @@
 use lee::program::Program;
 use lee_core::{
-    native_token::{NATIVE_TOKEN_PROGRAM_ID, decode_balance},
-    program::InstructionData,
+    native_token::{Message, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    program::MessageData,
 };
 
-use crate::{ExecutionFailureKind, SelectedShard, WalletCore};
+use crate::{AccountMention, ExecutionFailureKind, SelectedShard, WalletCore};
 
 pub mod deshielded;
 pub mod private;
@@ -17,17 +17,20 @@ pub mod shielded;
 )]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
+// `accounts` is `[sender, recipient]`; the sender's native actor is the root.
 fn native_transfer_preparation(
+    accounts: &[AccountMention; 2],
     balance_to_move: u128,
 ) -> (
-    InstructionData,
-    impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+    MessageData,
+    impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind> + use<>,
 ) {
-    let instruction_data =
-        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer {
-            amount: balance_to_move,
-        })
-        .unwrap();
+    let message = Program::serialize_message(Message::Transfer {
+        to: accounts[1].identity.account_id(),
+        amount: balance_to_move,
+        expect_balance: None,
+    })
+    .unwrap();
 
     // TODO: handle large Err-variant properly
     let tx_pre_check = move |accounts: &[SelectedShard]| {
@@ -41,5 +44,5 @@ fn native_transfer_preparation(
         }
     };
 
-    (instruction_data, tx_pre_check)
+    (message, tx_pre_check)
 }

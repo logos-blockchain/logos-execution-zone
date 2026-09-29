@@ -62,11 +62,11 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        if public.message().program_account_id != programs::sequencer_stake_account_id() {
+        if public.message().to.program_account_id != programs::sequencer_stake_account_id() {
             return None;
         }
-        match borsh::from_slice(&public.message().instruction_data) {
-            Ok(sequencer_stake_core::Instruction::Slash { approvals, .. }) => Some(approvals),
+        match borsh::from_slice(&public.message().message) {
+            Ok(sequencer_stake_core::Message::Slash { approvals, .. }) => Some(approvals),
             _ => None,
         }
     })

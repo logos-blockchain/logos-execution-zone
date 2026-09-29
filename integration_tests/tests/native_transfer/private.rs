@@ -8,12 +8,12 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, ProvingInput, execute_and_prove,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    AccountId, Actor, ProvingInput, RootCall, execute_and_prove,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind, encryption::ViewingPublicKey,
+    PrivateWitness, WitnessKind, encryption::ViewingPublicKey, native_token,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -602,12 +602,18 @@ fn prove_init_with_commitment_root(
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
+    let sender = Actor::native_balance(sender_id);
     let (output, _) = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                Actor::native_balance(sender_id),
-                Actor::native_balance(recipient_account_id),
-            ],
+            root: RootCall {
+                to: sender,
+                message: Program::serialize_message(native_token::Message::Transfer {
+                    to: recipient_account_id,
+                    amount: 1,
+                    expect_balance: None,
+                })?,
+            },
+            public_actors: vec![sender],
             signers: [sender_id].into(),
             private_witnesses: vec![PrivateWitness {
                 vpk,
@@ -619,12 +625,13 @@ fn prove_init_with_commitment_root(
                     commitment_root,
                 },
             }],
-            instruction_data: Program::serialize_instruction(
-                lee_core::native_token::Instruction::Transfer { amount: 1 },
-            )?,
-            ..Default::default()
+            // The proof is only inspected, never settled, so the snapshot states just enough
+            // balance.
+            public_shards: [(sender, native_token::encode_balance(1))].into(),
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
         },
-        &ProgramWithDependencies::native(),
+        &ProgramCatalog::default(),
     )?;
 
     Ok(output)

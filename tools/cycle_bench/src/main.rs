@@ -4,9 +4,9 @@
 //! drawn from the existing per-program unit tests, then prints a table and writes a
 //! JSON dump for regression comparison.
 //!
-//! A program instruction is two kinds of guest invocation, not one: a planner run that sees
-//! only account handles and emits shard effects, and one apply run per effect that sees a
-//! single shard's data. Both are measured, one row each, because a caller pays for all of them.
+//! An operation is not one guest invocation: its root delivery and every send it triggers are
+//! turns, each a guest run that sees only its receiver's shard. Every turn is measured, one row
+//! each, because a caller pays for all of them.
 //!
 //! Run with `cargo run --release -p cycle_bench`. `RISC0_DEV_MODE` has no effect on
 //! executor cycle counts.
@@ -16,8 +16,6 @@
     clippy::as_conversions,
     clippy::cast_precision_loss,
     clippy::float_arithmetic,
-    clippy::integer_division,
-    clippy::integer_division_remainder_used,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
     clippy::print_stderr,
@@ -28,11 +26,11 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
-use anyhow::{Result, bail};
-use associated_token_account_core::{
-    AtaContents, compute_ata_seed, get_associated_token_account_id,
+use amm_core::{
+    PoolDefinition, SwapOffer, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda,
 };
+use anyhow::{Result, anyhow};
+use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
@@ -43,9 +41,10 @@ use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ShardData},
+    execution_state::{Backend, Declared, ExecutionState, Mode, RootCall},
     from_frame,
-    native_token::encode_balance,
-    program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
+    program::{MessageData, ReceiveInput, Transition},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -54,6 +53,9 @@ use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 /// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
 const AMM_RESERVE_A: u128 = 1_000;
 const AMM_RESERVE_B: u128 = 500;
+const AMM_USER_A: AccountId = AccountId::new([45; 32]);
+const AMM_USER_B: AccountId = AccountId::new([46; 32]);
+const AMM_USER_LP: AccountId = AccountId::new([47; 32]);
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -63,8 +65,8 @@ struct Cli {
     prove: bool,
 
     /// Also run privacy-preserving execution circuit (PPE) composition cases:
-    /// (a) single native Transfer through `execute_and_prove`, (b) `chain_caller`
-    /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
+    /// (a) single native Transfer through `execute_and_prove`, (b) a scripted actor sending
+    /// N=1,3,5,9 token transfers. Requires --features ppe at build time. Very slow.
     #[arg(long)]
     ppe: bool,
 
@@ -77,15 +79,13 @@ struct Cli {
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum Phase {
-    Plan,
-    Apply,
+    Receive,
 }
 
 impl Phase {
     const fn label(self) -> &'static str {
         match self {
-            Self::Plan => "plan",
-            Self::Apply => "apply",
+            Self::Receive => "receive",
         }
     }
 }
@@ -202,115 +202,124 @@ impl Calibration {
 }
 
 struct Fixture {
-    account: AccountMeta,
+    actor: Actor,
+    is_authorized: bool,
     data: ShardData,
 }
 
 impl Fixture {
-    fn new(
+    const fn new(
         account_id: AccountId,
         is_authorized: bool,
         program_account_id: AccountId,
         data: ShardData,
     ) -> Self {
         Self {
-            account: AccountMeta::new(account_id, is_authorized, program_account_id),
+            actor: Actor::new(account_id, program_account_id),
+            is_authorized,
             data,
         }
     }
-
-    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
-        Self {
-            account: AccountMeta::native_balance(account_id, is_authorized),
-            data: encode_balance(balance),
-        }
-    }
 }
 
+// A root delivery to `root` over the declared `fixtures`; a fixture flagged authorized is a
+// signer.
 struct Case {
-    program_name: &'static str,
-    instruction_label: &'static str,
-    program: Program,
+    label: &'static str,
+    root: Actor,
     fixtures: Vec<Fixture>,
-    instruction_data: InstructionData,
+    message: MessageData,
 }
 
 impl Case {
-    fn new<I: borsh::BorshSerialize>(
-        program_name: &'static str,
-        instruction_label: &'static str,
-        program: Program,
+    fn new<M: borsh::BorshSerialize>(
+        label: &'static str,
+        root: Actor,
         fixtures: Vec<Fixture>,
-        instruction: &I,
+        message: &M,
     ) -> Result<Self> {
         Ok(Self {
-            program_name,
-            instruction_label,
-            program,
+            label,
+            root,
             fixtures,
-            instruction_data: borsh::to_vec(instruction)?,
+            message: borsh::to_vec(message)?,
         })
     }
 
     fn run(self, prove: bool, exec_iters: usize) -> Result<Vec<BenchResult>> {
         let Self {
-            program_name,
-            instruction_label,
-            program,
+            label,
+            root,
             fixtures,
-            instruction_data,
+            message,
         } = self;
-        let self_account_id = AccountId::from_builtin_program(program.id());
-
-        let mut shards: HashMap<Actor, ShardData> = fixtures
-            .iter()
-            .map(|f| (Actor::from(&f.account), f.data.clone()))
-            .collect();
-        let input = PlanInput {
-            self_account_id,
-            caller_account_id: None,
-            accounts: fixtures.into_iter().map(|f| f.account).collect(),
-            instruction_data,
+        let declared = Declared {
+            public_actors: fixtures.iter().map(|f| f.actor).collect(),
+            authorized_accounts: fixtures
+                .iter()
+                .filter(|f| f.is_authorized)
+                .map(|f| f.actor.account_id)
+                .collect(),
         };
-
-        let mut rows = Vec::new();
-        let (journal, row) = sample(
-            program_name,
-            instruction_label,
-            Phase::Plan,
-            &program,
+        let mut meter = Meter {
+            label,
+            shards: fixtures.into_iter().map(|f| (f.actor, f.data)).collect(),
             prove,
             exec_iters,
-            |env| Ok(Program::write_plan_inputs(&input, env)?),
-        )?;
-        rows.push(row);
-
-        let plan = plan_journal(&journal)?;
-        for effect in plan.effects {
-            let apply_input = ApplyInput {
-                self_account_id,
-                selector: effect.selector,
-                pre_data: shards.get(&effect.selector).cloned().unwrap_or_default(),
-                effect_data: effect.data,
-            };
-            let (output, apply_row) = sample(
-                program_name,
-                instruction_label,
-                Phase::Apply,
-                &program,
-                prove,
-                exec_iters,
-                |env| Ok(Program::write_apply_inputs(&apply_input, env)?),
-            )?;
-            rows.push(apply_row);
-
-            if let Some(post_data) = apply_journal(&output)?.post_data {
-                shards.insert(effect.selector, post_data);
-            }
-        }
-
-        Ok(rows)
+            rows: Vec::new(),
+        };
+        ExecutionState::initialize(declared, &[], Mode::Live(RootCall { to: root, message }))?
+            .run(&mut meter)?;
+        Ok(meter.rows)
     }
+}
+
+struct Meter {
+    label: &'static str,
+    shards: HashMap<Actor, ShardData>,
+    prove: bool,
+    exec_iters: usize,
+    rows: Vec<BenchResult>,
+}
+
+impl Backend for Meter {
+    type Error = anyhow::Error;
+
+    fn receive(&mut self, input: &ReceiveInput, _: &ExecutionState<'_>) -> Result<Transition> {
+        let program_account_id = input.receiver.program_account_id;
+        if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            return Ok(native_token::receive(input)?);
+        }
+        let (program_name, program) = guest(program_account_id)
+            .ok_or_else(|| anyhow!("no guest is registered at {program_account_id}"))?;
+        let (journal, row) = sample(
+            program_name,
+            self.label,
+            &program,
+            self.prove,
+            self.exec_iters,
+            |env| Ok(Program::write_receive_input(input, env)?),
+        )?;
+        self.rows.push(row);
+        let payload = from_frame(&journal).ok_or_else(|| anyhow!("malformed journal frame"))?;
+        Ok(borsh::from_slice(payload)?)
+    }
+
+    fn public_shard(&mut self, actor: Actor) -> Result<ShardData> {
+        Ok(self.shards.get(&actor).cloned().unwrap_or_default())
+    }
+}
+
+fn guest(program_account_id: AccountId) -> Option<(&'static str, Program)> {
+    [
+        ("token", programs::token_account_id(), programs::token()),
+        ("amm", programs::amm_account_id(), programs::amm()),
+        ("clock", programs::clock_account_id(), programs::clock()),
+        ("ata", programs::ata_account_id(), programs::ata()),
+    ]
+    .into_iter()
+    .find(|(_, account_id, _)| *account_id == program_account_id)
+    .map(|(name, _, program)| (name, program))
 }
 
 /// One warmup pass discarded. The executor has
@@ -319,7 +328,6 @@ impl Case {
 fn sample(
     program_name: &'static str,
     instruction_label: &'static str,
-    phase: Phase,
     program: &Program,
     prove: bool,
     exec_iters: usize,
@@ -367,7 +375,7 @@ fn sample(
         prove_segments = Some(prove_info.stats.segments);
         eprintln!(
             "  prove({program_name}/{instruction_label}/{}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
-            phase.label(),
+            Phase::Receive.label(),
             prove_ms / 1_000.0,
             prove_info.stats.total_cycles,
             prove_info.stats.segments,
@@ -377,7 +385,7 @@ fn sample(
     let result = BenchResult {
         program_name,
         instruction: instruction_label.to_owned(),
-        phase,
+        phase: Phase::Receive,
         user_cycles: info.cycles(),
         segments: info.segments.len(),
         exec_stats,
@@ -390,25 +398,6 @@ fn sample(
         prove_segments,
     };
     Ok((info.journal.bytes, result))
-}
-
-fn guest_output(journal: &[u8]) -> Result<GuestOutput> {
-    let payload = from_frame(journal).ok_or_else(|| anyhow::anyhow!("malformed journal frame"))?;
-    Ok(borsh::from_slice(payload)?)
-}
-
-fn plan_journal(journal: &[u8]) -> Result<PlanOutput> {
-    match guest_output(journal)? {
-        GuestOutput::Plan(plan) => Ok(plan),
-        GuestOutput::Apply(_) => bail!("a scheduled plan returned an apply journal"),
-    }
-}
-
-fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
-    match guest_output(journal)? {
-        GuestOutput::Apply(output) => Ok(output),
-        GuestOutput::Plan(_) => bail!("a scheduled apply returned a plan journal"),
-    }
 }
 
 fn token_holding(
@@ -450,6 +439,10 @@ fn fungible(definition_id: AccountId) -> TokenDescriptor {
         definition_id,
         kind: TokenKind::Fungible,
     }
+}
+
+fn token_actor(account_id: AccountId) -> Actor {
+    Actor::new(account_id, programs::token_account_id())
 }
 
 fn token_transfer_accounts() -> Vec<Fixture> {
@@ -525,10 +518,14 @@ fn amm_lp_def_id() -> AccountId {
     compute_liquidity_token_pda(programs::amm_account_id(), amm_pool_id())
 }
 
+fn amm_pool_actor() -> Actor {
+    Actor::new(amm_pool_id(), programs::amm_account_id())
+}
+
 fn amm_pool_account() -> Fixture {
     Fixture::new(
         amm_pool_id(),
-        true,
+        false,
         programs::amm_account_id(),
         ShardData::from(&PoolDefinition {
             token_program_id: programs::token_account_id(),
@@ -546,35 +543,45 @@ fn amm_pool_account() -> Fixture {
     )
 }
 
+// The pool and its vaults are PDAs: they sign nothing, and the pool's seeds authorize the vaults.
 fn amm_swap_accounts() -> Vec<Fixture> {
     vec![
         amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, false),
+        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, false),
+        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, false),
+        token_holding(amm_token_a_def_id(), AMM_USER_A, 1_000, true),
+        token_holding(amm_token_b_def_id(), AMM_USER_B, 500, false),
     ]
 }
 
 fn amm_add_liquidity_accounts() -> Vec<Fixture> {
     vec![
         amm_pool_account(),
-        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, true),
-        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, true),
-        token_definition(amm_lp_def_id(), amm_lp_supply(), true),
-        token_holding(amm_token_a_def_id(), AccountId::new([45; 32]), 1_000, true),
-        token_holding(amm_token_b_def_id(), AccountId::new([46; 32]), 500, true),
-        token_holding(amm_lp_def_id(), AccountId::new([47; 32]), 0, true),
+        token_holding(amm_token_a_def_id(), amm_vault_a_id(), AMM_RESERVE_A, false),
+        token_holding(amm_token_b_def_id(), amm_vault_b_id(), AMM_RESERVE_B, false),
+        token_definition(amm_lp_def_id(), amm_lp_supply(), false),
+        token_holding(amm_token_a_def_id(), AMM_USER_A, 1_000, true),
+        token_holding(amm_token_b_def_id(), AMM_USER_B, 500, true),
+        token_holding(amm_lp_def_id(), AMM_USER_LP, 0, true),
     ]
 }
 
+fn ata_owner() -> Actor {
+    Actor::new(AccountId::new([91; 32]), programs::ata_account_id())
+}
+
 fn ata_create_accounts() -> Vec<Fixture> {
-    let owner_id = AccountId::new([91; 32]);
+    let owner_id = ata_owner().account_id;
     let definition_id = token_definition_id();
     let seed = compute_ata_seed(owner_id, definition_id, programs::token_account_id());
     let ata_id = get_associated_token_account_id(&programs::ata_account_id(), &seed);
     vec![
-        Fixture::balance(owner_id, true, 0),
+        Fixture::new(
+            owner_id,
+            true,
+            programs::ata_account_id(),
+            ShardData::empty(),
+        ),
         token_definition(definition_id, 100_000, false),
         Fixture::new(
             ata_id,
@@ -585,8 +592,115 @@ fn ata_create_accounts() -> Vec<Fixture> {
     ]
 }
 
-fn mul_div(factor: u128, multiplier: u128, divisor: u128) -> u128 {
-    factor * multiplier / divisor
+fn cases() -> Result<[Case; 7]> {
+    // Priced off the pool fixture exactly as `wallet::program_facades::amm` prices a real swap
+    // off the pool it observed; the pool refuses an offer its live curve cannot afford.
+    let swap_amount_in: u128 = 200;
+    let swap_amount_out = amm_core::quote_exact_input(AMM_RESERVE_A, AMM_RESERVE_B, swap_amount_in)
+        .expect("the fixture quote fits u128");
+
+    let max_amount_to_add_token_a: u128 = 400;
+    let max_amount_to_add_token_b: u128 = 200;
+    let amount_to_add_token_a =
+        amm_core::ideal_deposit(AMM_RESERVE_A, AMM_RESERVE_B, max_amount_to_add_token_b)
+            .expect("the fixture deposit fits u128")
+            .min(max_amount_to_add_token_a);
+    let amount_to_add_token_b =
+        amm_core::ideal_deposit(AMM_RESERVE_B, AMM_RESERVE_A, max_amount_to_add_token_a)
+            .expect("the fixture deposit fits u128")
+            .min(max_amount_to_add_token_b);
+    let amount_liquidity = amm_core::liquidity_minted(
+        amm_lp_supply(),
+        amount_to_add_token_a,
+        amount_to_add_token_b,
+        AMM_RESERVE_A,
+        AMM_RESERVE_B,
+    )
+    .expect("the fixture mint fits u128");
+
+    let holder = AccountId::new([17; 32]);
+    Ok([
+        Case::new(
+            "Transfer",
+            token_actor(holder),
+            token_transfer_accounts(),
+            &token_core::Message::Transfer {
+                to: AccountId::new([42; 32]),
+                descriptor: fungible(token_definition_id()),
+                amount: 5_000,
+                notify: None,
+            },
+        )?,
+        Case::new(
+            "Mint",
+            token_actor(token_definition_id()),
+            token_definition_and_holding_accounts(),
+            &token_core::Message::Mint {
+                to: holder,
+                amount: 5_000,
+            },
+        )?,
+        Case::new(
+            "Burn",
+            token_actor(holder),
+            token_definition_and_holding_accounts(),
+            &token_core::Message::Burn {
+                descriptor: fungible(token_definition_id()),
+                amount: 500,
+                definition: token_definition_id(),
+            },
+        )?,
+        Case::new(
+            "Tick (block_id+1, no multiples)",
+            Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, programs::clock_account_id()),
+            clock_accounts_tick_at(0),
+            &clock_core::Message::Tick {
+                timestamp: Timestamp::from(1_700_000_000_u64),
+                block_id: 1,
+            },
+        )?,
+        Case::new(
+            "Swap",
+            token_actor(AMM_USER_A),
+            amm_swap_accounts(),
+            &amm_core::swap_transfer(
+                amm_pool_actor(),
+                amm_vault_a_id(),
+                fungible(amm_token_a_def_id()),
+                swap_amount_in,
+                SwapOffer {
+                    definition_id_out: amm_token_b_def_id(),
+                    amount_out: swap_amount_out,
+                    payout: AMM_USER_B,
+                },
+            ),
+        )?,
+        Case::new(
+            "AddLiquidity",
+            amm_pool_actor(),
+            amm_add_liquidity_accounts(),
+            &amm_core::Message::AddLiquidity {
+                max_amount_to_add_token_a,
+                max_amount_to_add_token_b,
+                amount_to_add_token_a,
+                amount_to_add_token_b,
+                amount_liquidity,
+                user_a: AMM_USER_A,
+                user_b: AMM_USER_B,
+                user_lp: AMM_USER_LP,
+            },
+        )?,
+        Case::new(
+            "Create",
+            ata_owner(),
+            ata_create_accounts(),
+            &associated_token_account_core::Message::Create {
+                token_program_id: programs::token_account_id(),
+                definition_id: token_definition_id(),
+                kind: TokenKind::Fungible,
+            },
+        )?,
+    ])
 }
 
 fn main() -> Result<()> {
@@ -597,109 +711,7 @@ fn main() -> Result<()> {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    // Priced off the pool fixture exactly as `wallet::program_facades::amm` prices a real
-    // swap off the pool it observed, because the pool's `apply` recomputes both and refuses
-    // anything else.
-    let swap_amount_in: u128 = 200;
-    let swap_amount_out = mul_div(
-        AMM_RESERVE_B,
-        swap_amount_in,
-        AMM_RESERVE_A + swap_amount_in,
-    );
-
-    let max_amount_to_add_token_a: u128 = 400;
-    let max_amount_to_add_token_b: u128 = 200;
-    let amount_to_add_token_a = mul_div(AMM_RESERVE_A, max_amount_to_add_token_b, AMM_RESERVE_B)
-        .min(max_amount_to_add_token_a);
-    let amount_to_add_token_b = mul_div(AMM_RESERVE_B, max_amount_to_add_token_a, AMM_RESERVE_A)
-        .min(max_amount_to_add_token_b);
-    let amount_liquidity = mul_div(amm_lp_supply(), amount_to_add_token_a, AMM_RESERVE_A).min(
-        mul_div(amm_lp_supply(), amount_to_add_token_b, AMM_RESERVE_B),
-    );
-
-    let cases = [
-        Case::new(
-            "token",
-            "Transfer",
-            programs::token(),
-            token_transfer_accounts(),
-            &token_core::Instruction::Transfer {
-                amount_to_transfer: 5_000,
-                descriptor: fungible(token_definition_id()),
-            },
-        )?,
-        Case::new(
-            "token",
-            "Mint",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Mint {
-                amount_to_mint: 5_000,
-            },
-        )?,
-        Case::new(
-            "token",
-            "Burn",
-            programs::token(),
-            token_definition_and_holding_accounts(),
-            &token_core::Instruction::Burn {
-                amount_to_burn: 500,
-                kind: TokenKind::Fungible,
-            },
-        )?,
-        Case::new(
-            "clock",
-            "Tick (block_id+1, no multiples)",
-            programs::clock(),
-            clock_accounts_tick_at(0),
-            &clock_core::Instruction {
-                timestamp: Timestamp::from(1_700_000_000_u64),
-                block_id: 1,
-            },
-        )?,
-        Case::new(
-            "amm",
-            "Swap",
-            programs::amm(),
-            amm_swap_accounts(),
-            &amm_core::Instruction::Swap {
-                token_program_id: programs::token_account_id(),
-                definition_id_in: amm_token_a_def_id(),
-                definition_id_out: amm_token_b_def_id(),
-                amount_in: swap_amount_in,
-                amount_out: swap_amount_out,
-            },
-        )?,
-        Case::new(
-            "amm",
-            "AddLiquidity",
-            programs::amm(),
-            amm_add_liquidity_accounts(),
-            &amm_core::Instruction::AddLiquidity {
-                max_amount_to_add_token_a,
-                max_amount_to_add_token_b,
-                token_program_id: programs::token_account_id(),
-                definition_token_a_id: amm_token_a_def_id(),
-                definition_token_b_id: amm_token_b_def_id(),
-                amount_to_add_token_a,
-                amount_to_add_token_b,
-                amount_liquidity,
-            },
-        )?,
-        Case::new(
-            "ata",
-            "Create",
-            programs::ata(),
-            ata_create_accounts(),
-            &associated_token_account_core::Instruction::Create {
-                token_program_id: programs::token_account_id(),
-                kind: TokenKind::Fungible,
-                contents: AtaContents::Empty,
-            },
-        )?,
-    ];
-
-    let mut results: Vec<BenchResult> = cases
+    let mut results: Vec<BenchResult> = cases()?
         .into_iter()
         .map(|c| c.run(prove, exec_iters))
         .collect::<Result<Vec<_>>>()?
@@ -875,7 +887,7 @@ mod tests {
         BenchResult {
             program_name: "test",
             instruction: "test".to_owned(),
-            phase: Phase::Plan,
+            phase: Phase::Receive,
             user_cycles,
             segments: 1,
             exec_stats: Stats::from_samples(&[best_ms]),

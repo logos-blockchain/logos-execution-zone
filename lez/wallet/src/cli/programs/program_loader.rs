@@ -160,18 +160,12 @@ impl ProgramLoaderSubcommand {
             .as_ref()
             .map(|p| resolve_public(p, wallet_core))
             .transpose()?;
-        let chain_segment_ids = ProgramLoader(wallet_core)
+        ProgramLoader(wallet_core)
             .resolve_chain(first_segment)
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .create_header(
-                target_id,
-                first_segment,
-                &chain_segment_ids,
-                immutable,
-                payer_id,
-            )
+            .create_header(target_id, first_segment, immutable, payer_id)
             .await?;
 
         println!("Header uploaded at {target_id}");
@@ -192,18 +186,12 @@ impl ProgramLoaderSubcommand {
             .as_ref()
             .map(|p| resolve_public(p, wallet_core))
             .transpose()?;
-        let chain_segment_ids = ProgramLoader(wallet_core)
+        ProgramLoader(wallet_core)
             .resolve_chain(first_segment)
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .update_header(
-                header_id,
-                first_segment,
-                &chain_segment_ids,
-                immutable,
-                payer_id,
-            )
+            .update_header(header_id, first_segment, immutable, payer_id)
             .await?;
 
         println!("Header {header_id} updated");
