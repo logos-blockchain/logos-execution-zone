@@ -10,7 +10,6 @@ use integration_tests::{
     get_account, new_account, public_mention, send, wait_for_inclusion, wait_until,
 };
 use lee::{AccountId, program::Program};
-use token_core::Delivery;
 use tokio::test;
 use wallet::{
     AccountIdentity,
@@ -243,7 +242,6 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
                 AccountIdentity::Public(holding_a),
                 AccountIdentity::PublicNoSign(recipient),
                 amount,
-                Delivery::Call,
             )
             .await?;
         wait_for_inclusion(&ctx, funded).await?;
@@ -303,7 +301,6 @@ async fn a_pool_round_trips_through_the_wallet_and_rejects_an_unaffordable_offer
             AccountIdentity::Public(donor),
             AccountIdentity::PublicNoSign(vault_a),
             DONATION,
-            Delivery::Call,
         )
         .await?;
     wait_for_inclusion(&ctx, donated).await?;

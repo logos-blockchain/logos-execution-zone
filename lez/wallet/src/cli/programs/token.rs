@@ -1,13 +1,15 @@
 use anyhow::Result;
 use clap::Subcommand;
 use lee::AccountId;
-use token_core::Delivery;
 
 use crate::{
     AccDecodeData::Decode,
     AccountIdentity, WalletCore,
     account::AccountIdWithPrivacy,
-    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
+    cli::{
+        CliAccountMention, SubcommandReturnValue, WalletSubcommand,
+        programs::amm::{finalize, identity},
+    },
     program_facades::token::Token,
 };
 
@@ -58,7 +60,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         amount: u128,
         /// Cast the recipient's credit as a pending message for a later transaction to receive,
-        /// instead of crediting it in this one.
+        /// instead of crediting it in this one. A cast to foreign keys requires `--to-identifier`.
         #[arg(long)]
         cast: bool,
     },
@@ -181,7 +183,6 @@ impl TokenProgramAgnosticSubcommand {
         from_mention: CliAccountMention,
         to_mention: Option<CliAccountMention>,
         amount: u128,
-        delivery: Delivery,
     ) -> TokenProgramSubcommand {
         match (from, to) {
             (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
@@ -191,7 +192,6 @@ impl TokenProgramAgnosticSubcommand {
                         "`wallet::cli::programs::token::Send`: Invalid to_mention account provided",
                     ),
                     balance_to_move: amount,
-                    delivery,
                 })
             }
             (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Private(to)) => {
@@ -200,7 +200,6 @@ impl TokenProgramAgnosticSubcommand {
                         sender_account_id: from,
                         recipient_account_id: to,
                         balance_to_move: amount,
-                        delivery,
                     },
                 )
             }
@@ -210,7 +209,6 @@ impl TokenProgramAgnosticSubcommand {
                         sender_account_id: from,
                         recipient_account_id: to,
                         balance_to_move: amount,
-                        delivery,
                     },
                 )
             }
@@ -220,7 +218,6 @@ impl TokenProgramAgnosticSubcommand {
                         sender: Some(from_mention.into_public_identity(from, true)),
                         recipient_account_id: to,
                         balance_to_move: amount,
-                        delivery,
                     },
                 )
             }
@@ -234,7 +231,6 @@ impl TokenProgramAgnosticSubcommand {
         to_vpk: String,
         to_identifier: Option<lee_core::Identifier>,
         amount: u128,
-        delivery: Delivery,
     ) -> TokenProgramSubcommand {
         match from {
             AccountIdWithPrivacy::Private(from) => TokenProgramSubcommand::Private(
@@ -244,7 +240,6 @@ impl TokenProgramAgnosticSubcommand {
                     recipient_vpk: to_vpk,
                     recipient_identifier: to_identifier,
                     balance_to_move: amount,
-                    delivery,
                 },
             ),
             AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
@@ -254,7 +249,6 @@ impl TokenProgramAgnosticSubcommand {
                     recipient_vpk: to_vpk,
                     recipient_identifier: to_identifier,
                     balance_to_move: amount,
-                    delivery,
                 },
             ),
         }
@@ -275,7 +269,6 @@ impl TokenProgramAgnosticSubcommand {
         cast: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let delivery = crate::cli::delivery(cast);
         let from_mention = from.clone();
         let to_mention = to.clone();
         let (to_npk, to_vpk) = if let Some(path) = to_keys {
@@ -301,21 +294,50 @@ impl TokenProgramAgnosticSubcommand {
             (_, Some(_), None) | (_, None, Some(_)) => {
                 anyhow::bail!("List of public keys is uncomplete");
             }
-            (Some(to), None, None) => {
-                Self::route_send_owned(from, to, from_mention, to_mention, amount, delivery)
+            (
+                Some(AccountIdWithPrivacy::Public(to) | AccountIdWithPrivacy::Private(to)),
+                None,
+                None,
+            ) if cast => {
+                return Self::handle_cast(from_mention, to, amount, wallet_core).await;
             }
-            (None, Some(to_npk), Some(to_vpk)) => Self::route_send_foreign(
-                from,
-                from_mention,
-                to_npk,
-                to_vpk,
-                to_identifier,
-                amount,
-                delivery,
-            ),
+            (None, Some(to_npk), Some(to_vpk)) if cast => {
+                let Some(to_identifier) = to_identifier else {
+                    anyhow::bail!(
+                        "A cast to foreign keys needs `--to-identifier`: the recipient must already know the identifier it will receive at"
+                    );
+                };
+                let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
+                return Self::handle_cast(
+                    from_mention,
+                    AccountId::for_regular_private_account(&to_npk, &to_vpk, to_identifier),
+                    amount,
+                    wallet_core,
+                )
+                .await;
+            }
+            (Some(to), None, None) => {
+                Self::route_send_owned(from, to, from_mention, to_mention, amount)
+            }
+            (None, Some(to_npk), Some(to_vpk)) => {
+                Self::route_send_foreign(from, from_mention, to_npk, to_vpk, to_identifier, amount)
+            }
         };
 
         underlying_subcommand.handle_subcommand(wallet_core).await
+    }
+
+    async fn handle_cast(
+        from: CliAccountMention,
+        recipient: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let sender = identity(from, true, wallet_core)?;
+        let (tx_hash, secrets) = Token(wallet_core)
+            .send_cast_transfer(sender.clone(), recipient, amount)
+            .await?;
+        finalize(wallet_core, tx_hash, secrets, &[sender]).await
     }
 
     async fn handle_burn(
@@ -601,8 +623,6 @@ pub enum TokenProgramSubcommandPublic {
         recipient_account_id: CliAccountMention,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Burn tokens using the token program
     BurnToken {
@@ -635,8 +655,6 @@ pub enum TokenProgramSubcommandPrivate {
         recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Transfer tokens using the token program
     TransferTokenPrivateForeign {
@@ -653,8 +671,6 @@ pub enum TokenProgramSubcommandPrivate {
         recipient_identifier: Option<lee_core::Identifier>,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Burn tokens using the token program
     BurnTokenPrivateOwned {
@@ -701,8 +717,6 @@ pub enum TokenProgramSubcommandDeshielded {
         recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Burn tokens using the token program
     BurnTokenDeshieldedOwned {
@@ -735,8 +749,6 @@ pub enum TokenProgramSubcommandShielded {
         recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
@@ -753,8 +765,6 @@ pub enum TokenProgramSubcommandShielded {
         recipient_identifier: Option<lee_core::Identifier>,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(skip = Delivery::Call)]
-        delivery: Delivery,
     },
     // Burn tokens using the token program
     BurnTokenShielded {
@@ -852,7 +862,6 @@ impl TokenProgramSubcommandPublic {
         sender_account_id: CliAccountMention,
         recipient_account_id: CliAccountMention,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let sender = sender_account_id.resolve(wallet_core.storage())?;
@@ -869,7 +878,6 @@ impl TokenProgramSubcommandPublic {
                 sender_account_id.into_public_identity(sender_id, true),
                 recipient_account_id.into_public_identity(recipient_id, false),
                 balance_to_move,
-                delivery,
             )
             .await?;
         wallet_core
@@ -939,13 +947,11 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token(
                     sender_account_id,
                     recipient_account_id,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await
@@ -985,7 +991,6 @@ impl TokenProgramSubcommandPrivate {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
@@ -993,7 +998,6 @@ impl TokenProgramSubcommandPrivate {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             )
             .await?;
 
@@ -1014,7 +1018,6 @@ impl TokenProgramSubcommandPrivate {
         recipient_vpk: String,
         recipient_identifier: Option<lee_core::Identifier>,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (recipient_npk, recipient_vpk) =
@@ -1027,7 +1030,6 @@ impl TokenProgramSubcommandPrivate {
                 recipient_vpk,
                 crate::cli::identifier_or_random(recipient_identifier),
                 balance_to_move,
-                delivery,
             )
             .await?;
 
@@ -1125,13 +1127,11 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token_private_owned(
                     sender_account_id,
                     recipient_account_id,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await
@@ -1142,7 +1142,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_vpk,
                 recipient_identifier,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token_private_foreign(
                     sender_account_id,
@@ -1150,7 +1149,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     recipient_vpk,
                     recipient_identifier,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await
@@ -1207,7 +1205,6 @@ impl TokenProgramSubcommandDeshielded {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret_sender) = Token(wallet_core)
@@ -1215,7 +1212,6 @@ impl TokenProgramSubcommandDeshielded {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             )
             .await?;
 
@@ -1275,13 +1271,11 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token_deshielded(
                     sender_account_id,
                     recipient_account_id,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await
@@ -1323,7 +1317,6 @@ impl TokenProgramSubcommandShielded {
         recipient_vpk: String,
         recipient_identifier: Option<lee_core::Identifier>,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (recipient_npk, recipient_vpk) =
@@ -1336,7 +1329,6 @@ impl TokenProgramSubcommandShielded {
                 recipient_vpk,
                 crate::cli::identifier_or_random(recipient_identifier),
                 balance_to_move,
-                delivery,
             )
             .await?;
 
@@ -1349,7 +1341,6 @@ impl TokenProgramSubcommandShielded {
         sender: Option<AccountIdentity>,
         recipient_account_id: AccountId,
         balance_to_move: u128,
-        delivery: Delivery,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret_recipient) = Token(wallet_core)
@@ -1357,7 +1348,6 @@ impl TokenProgramSubcommandShielded {
                 sender.expect("sender set during Send dispatch"),
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             )
             .await?;
 
@@ -1441,7 +1431,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_vpk,
                 recipient_identifier,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token_shielded_foreign(
                     sender,
@@ -1449,7 +1438,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     recipient_vpk,
                     recipient_identifier,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await
@@ -1458,13 +1446,11 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 sender,
                 recipient_account_id,
                 balance_to_move,
-                delivery,
             } => {
                 Self::handle_transfer_token_shielded_owned(
                     sender,
                     recipient_account_id,
                     balance_to_move,
-                    delivery,
                     wallet_core,
                 )
                 .await

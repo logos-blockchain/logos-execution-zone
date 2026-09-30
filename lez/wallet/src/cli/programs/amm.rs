@@ -199,7 +199,8 @@ impl AmmProgramAgnosticSubcommand {
             }
             _ => anyhow::bail!("Give exactly one of --amount-out and --min-amount-out"),
         };
-        finalize(wallet_core, tx_hash, secrets, &traders).await
+        let participants = if cast { &traders[..1] } else { &traders[..] };
+        finalize(wallet_core, tx_hash, secrets, participants).await
     }
 
     async fn handle_quote(
@@ -362,7 +363,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
 }
 
 // A public mention signs when `sign`; a private one needs the wallet's keys for it.
-fn identity(
+pub(super) fn identity(
     mention: CliAccountMention,
     sign: bool,
     wallet_core: &WalletCore,
@@ -378,7 +379,7 @@ fn identity(
 }
 
 // The shared secrets come back one per private account, in the order the accounts were named.
-async fn finalize(
+pub(super) async fn finalize(
     wallet_core: &mut WalletCore,
     tx_hash: HashType,
     secrets: Vec<SharedSecretKey>,
