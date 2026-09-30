@@ -22,11 +22,13 @@ pub fn compute_circuit_output(
         timestamp_validity_window,
         mut private_accounts,
         boundary,
+        consumed,
         ..
     } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
         declared,
         boundary,
+        consumed,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
@@ -302,6 +304,8 @@ mod tests {
                 boundary: Boundary::default(),
                 assumed: Vec::new(),
                 events: Vec::new(),
+                consumed: Vec::new(),
+                published: Vec::new(),
             },
             Declared::default(),
             witnesses,

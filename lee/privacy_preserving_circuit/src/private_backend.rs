@@ -7,20 +7,26 @@ use lee_core::{
     account::AccountId,
     execution_state::{Backend, ExecutionError, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{ProgramId, ReceiveInput, Transition},
+    program::{MessageId, ProgramId, ReceiveInput, StoredMessage, Transition},
 };
 use risc0_zkvm::guest::env;
 
 pub struct PrivateBackend {
     image_ids: HashMap<AccountId, ProgramId>,
     turns: vec::IntoIter<Transition>,
+    messages: Vec<StoredMessage>,
 }
 
 impl PrivateBackend {
-    pub fn new(image_ids: HashMap<AccountId, ProgramId>, turns: Vec<Transition>) -> Self {
+    pub fn new(
+        image_ids: HashMap<AccountId, ProgramId>,
+        turns: Vec<Transition>,
+        messages: Vec<StoredMessage>,
+    ) -> Self {
         Self {
             image_ids,
             turns: turns.into_iter(),
+            messages,
         }
     }
 
@@ -55,5 +61,13 @@ impl Backend for PrivateBackend {
         env::verify(image_id, &lee_core::to_borsh_frame(&transition))
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
         Ok(transition)
+    }
+
+    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, ExecutionError> {
+        self.messages
+            .iter()
+            .find(|message| message.id() == id)
+            .cloned()
+            .ok_or(ExecutionError::UnknownMessage { id })
     }
 }
