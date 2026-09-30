@@ -102,6 +102,7 @@ const fn proving_input(
         public_shards,
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
+        messages: Vec::new(),
     }
 }
 
