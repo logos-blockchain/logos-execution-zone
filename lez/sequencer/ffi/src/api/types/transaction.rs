@@ -344,7 +344,7 @@ impl From<ProgramImageClaim> for FfiProgramImageClaim {
                 root: std::ptr::null(),
             },
             ProgramImageClaim::Undisclosed { root } => Self {
-                image_claim_kind: FfiProgramImageClaimKind::Disclosed,
+                image_claim_kind: FfiProgramImageClaimKind::Undisclosed,
                 account_id: std::ptr::null(),
                 image_id: std::ptr::null(),
                 root: Box::into_raw(Box::new(root)),
