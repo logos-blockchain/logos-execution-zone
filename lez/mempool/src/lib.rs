@@ -12,15 +12,15 @@ impl<T> MemPool<T> {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
         let handle = MemPoolHandle::new(sender);
 
-        let mem_pool = Self {
+        Self {
             receiver,
-            handle: handle.clone(),
+            handle,
             front_buffer: Vec::new(),
-        };
-        mem_pool
+        }
     }
 
-    pub fn handle(&self) -> &MemPoolHandle<T> {
+    #[must_use]
+    pub const fn handle(&self) -> &MemPoolHandle<T> {
         &self.handle
     }
 
