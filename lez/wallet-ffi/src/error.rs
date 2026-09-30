@@ -4,6 +4,8 @@
 
 use std::str::Utf8Error;
 
+use primitives_ffi::errors::PrimitiveOperationStatus;
+
 /// Error codes returned by FFI functions.
 #[repr(C)]
 #[must_use]
@@ -73,4 +75,13 @@ impl WalletFfiError {
 )]
 pub fn print_error(msg: impl Into<String>) {
     eprintln!("[wallet-ffi] {}", msg.into());
+}
+
+impl From<PrimitiveOperationStatus> for WalletFfiError {
+    fn from(value: PrimitiveOperationStatus) -> Self {
+        match value {
+            PrimitiveOperationStatus::Ok => WalletFfiError::Success,
+            PrimitiveOperationStatus::CastError => WalletFfiError::InvalidTypeConversion,
+        }
+    }
 }

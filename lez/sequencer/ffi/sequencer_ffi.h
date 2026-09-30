@@ -5,6 +5,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef enum OperationStatus {
+  Ok = 0,
+  NullPointer = 1,
+  InitializationError = 2,
+  ClientError = 3,
+  CastError = 4,
+  NotSupported = 5,
+  InvalidArgument = 6,
+  ResponseTooBig = 7,
+} OperationStatus;
+
 /**
  * FFI-owned sequencer.
  *
@@ -30,7 +41,7 @@ typedef PointerResult<SequencerServiceFFI, OperationStatus> InitializedSequencer
 typedef struct LastBlockIdResult {
   uint64_t block_id;
   bool is_some;
-  OperationStatus error;
+  enum OperationStatus error;
 } LastBlockIdResult;
 
 #ifdef __cplusplus
@@ -78,7 +89,7 @@ InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const Runtime
  * - The `SequencerServiceFFI` instance was created by this library
  * - The pointer will not be used after this function returns
  */
-OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
+enum OperationStatus sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *sequencer);
 
 /**
  * Initializes logging for the sequencer at `level`.
@@ -369,6 +380,10 @@ PointerResult<FfiVec<FfiEventRecord>, OperationStatus> sequencer_ffi_query_event
                                                                                   const FfiHashType *tx_hash,
                                                                                   const FfiAccountId *program_account_id,
                                                                                   const FfiSelector *selector);
+
+bool is_ok(const enum OperationStatus *self);
+
+bool is_error(const enum OperationStatus *self);
 
 /**
  * # Safety

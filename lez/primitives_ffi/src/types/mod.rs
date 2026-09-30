@@ -1,7 +1,9 @@
 use common::HashType;
-use lee::{AccountId, ProgramId, PublicKey, Signature};
-use lee_core::account::Nonce;
+use lee::{AccountId, ProgramId, PublicKey, SharedSecretKey, Signature};
+use lee_core::{NullifierPublicKey, account::Nonce, encryption::MlKem768EncapsulationKey, program::PdaSeed};
 use sequencer_storage_actor::actor::event_filter::Selector;
+
+use crate::{errors::PrimitiveOperationStatus, types::vectors::FfiVecU8};
 
 pub mod account;
 pub mod block;
@@ -11,28 +13,40 @@ pub mod vectors;
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
 }
 
+impl From<[u8; 32]> for FfiBytes32 {
+    fn from(value: [u8; 32]) -> Self {
+        Self { data: value }
+    }
+}
+
+impl From<FfiBytes32> for [u8; 32] {
+    fn from(value: FfiBytes32) -> Self {
+        value.data
+    }
+}
+
 /// 8-byte array type for event selectors.
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiBytes8 {
     pub data: [u8; 8],
 }
 
 /// 64-byte array type for signatures, etc.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FfiBytes64 {
     pub data: [u8; 64],
 }
 
 /// Program ID - 8 u32 values (32 bytes total).
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiProgramId {
     pub data: [u32; 8],
 }
@@ -45,7 +59,7 @@ impl From<ProgramId> for FfiProgramId {
 
 /// U128 - 16 bytes little endian.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiU128 {
     pub data: [u8; 16],
 }
@@ -151,6 +165,159 @@ impl From<PublicKey> for FfiPublicKey {
     }
 }
 
+pub type FfiPdaSeed = FfiBytes32;
+
+impl From<FfiPdaSeed> for PdaSeed {
+    fn from(value: FfiPdaSeed) -> Self {
+        Self::new(value.data)
+    }
+}
+
+impl From<PdaSeed> for FfiPdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self {
+            data: *value.as_bytes(),
+        }
+    }
+}
+
+pub type FfiNullifierPublicKey = FfiBytes32;
+
+impl From<FfiNullifierPublicKey> for NullifierPublicKey {
+    fn from(value: FfiNullifierPublicKey) -> Self {
+        Self(value.data)
+    }
+}
+
+impl From<NullifierPublicKey> for FfiNullifierPublicKey {
+    fn from(value: NullifierPublicKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+pub type FfiIdentifier = FfiBytes32;
+
+impl From<lee_core::Identifier> for FfiIdentifier {
+    fn from(value: lee_core::Identifier) -> Self {
+        Self {
+            data: value.into_value(),
+        }
+    }
+}
+
+impl From<FfiIdentifier> for lee_core::Identifier {
+    fn from(value: FfiIdentifier) -> Self {
+        Self::new(value.data)
+    }
+}
+
+impl From<SharedSecretKey> for FfiBytes32 {
+    fn from(value: SharedSecretKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+/// Public keys for a private account (safe to expose).
+#[repr(C)]
+pub struct FfiPrivateAccountKeys {
+    /// Nullifier public key (32 bytes).
+    pub nullifier_public_key: FfiBytes32,
+    /// Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
+    pub viewing_public_key: FfiVecU8,
+}
+
+impl TryFrom<FfiVecU8> for MlKem768EncapsulationKey {
+    type Error = PrimitiveOperationStatus;
+
+    fn try_from(value: FfiVecU8) -> Result<Self, Self::Error> {
+        if value.len == 1184 {
+            let std_vec = value.into();
+            Ok(
+                lee_core::encryption::ViewingPublicKey::from_bytes(std_vec)
+                    .expect("primitives_ffi: length already validated to 1184 bytes"),
+            )
+        } else {
+            Err(PrimitiveOperationStatus::CastError)
+        }
+    }
+}
+
+impl FfiPrivateAccountKeys {
+    #[must_use]
+    pub const fn npk(&self) -> lee_core::NullifierPublicKey {
+        lee_core::NullifierPublicKey(self.nullifier_public_key.data)
+    }
+
+    pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, PrimitiveOperationStatus> {
+        if self.viewing_public_key.len == 1184 {
+            let std_vec = unsafe{ self.viewing_public_key.read_to_vec() };
+            Ok(
+                lee_core::encryption::ViewingPublicKey::from_bytes(std_vec)
+                    .expect("primitives_ffi: length already validated to 1184 bytes"),
+            )
+        } else {
+            Err(PrimitiveOperationStatus::CastError)
+        }
+    }
+}
+
+/// Free private account keys struct.
+///
+/// # Safety
+/// The keys must be valid.
+pub unsafe fn primitives_ffi_free_private_account_keys_owned(keys: FfiPrivateAccountKeys) {
+    if keys.viewing_public_key.entries.is_null() {
+        return;
+    }
+
+    let FfiPrivateAccountKeys { nullifier_public_key: _, viewing_public_key } = keys;
+
+    let std_vec: Vec<_> = viewing_public_key.into();
+
+    drop(std_vec);
+}
+
+/// Free private account keys pointer.
+///
+/// # Safety
+/// The keys must be valid. Pointer must not be used again.
+pub unsafe fn primitives_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
+    if keys.is_null() {
+        log::error!("Trying to free a null pointer. Exiting");
+        return;
+    }
+
+    let boxed = unsafe { Box::from_raw(keys) };
+
+    unsafe{ primitives_ffi_free_private_account_keys_owned(*boxed) }
+}
+
+/// Public key info for a public account.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiPublicAccountKey {
+    pub public_key: FfiBytes32,
+}
+
+impl From<lee::PublicKey> for FfiPublicAccountKey {
+    fn from(value: lee::PublicKey) -> Self {
+        Self {
+            public_key: FfiBytes32::from_bytes(*value.value()),
+        }
+    }
+}
+
+impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
+    type Error = PrimitiveOperationStatus;
+
+    fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
+        let public_key = Self::try_new(value.public_key.data)
+            .map_err(|_err| PrimitiveOperationStatus::CastError)?;
+        Ok(public_key)
+    }
+}
+
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct FfiVec<T> {
@@ -184,6 +351,24 @@ impl<T> FfiVec<T> {
     pub unsafe fn get(&self, index: usize) -> &T {
         let ptr = unsafe { self.entries.add(index) };
         unsafe { &*ptr }
+    }
+}
+
+impl<T: Clone> FfiVec<T> { 
+    /// Reads data from pointer into new vector.
+    ///
+    /// # Safety
+    /// `self` must be valid.
+    pub unsafe fn read_to_vec(&self) -> Vec<T> {
+        let mut std_vec = Vec::with_capacity(self.capacity);
+        for i in 0..self.len {
+            std_vec.push(
+                unsafe{
+                    self.get(i)
+                }.clone()
+            );
+        }
+        std_vec
     }
 }
 

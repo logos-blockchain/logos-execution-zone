@@ -13,7 +13,7 @@ use lee_core::{
 };
 use sequencer_executor_actor::protocol::Transaction;
 
-use crate::{errors::OperationStatus, types::{
+use crate::{errors::PrimitiveOperationStatus, types::{
         FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
         FfiVec,
         vectors::{
@@ -53,7 +53,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
 }
 
 impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: Box<FfiPublicTransactionBody>) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -82,7 +82,7 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
                         },
                         PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
                             log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
-                            OperationStatus::CastError
+                            PrimitiveOperationStatus::CastError
                         })?,
                     ));
                 }
@@ -289,7 +289,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 }
 
 impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -356,7 +356,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                             },
                             PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
                                 log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
-                                OperationStatus::CastError
+                                PrimitiveOperationStatus::CastError
                             })?,
                         ));
                     }
@@ -577,7 +577,7 @@ impl From<Transaction> for FfiTransaction {
 }
 
 impl TryFrom<FfiTransaction> for LeeTransaction {
-    type Error = OperationStatus;
+    type Error = PrimitiveOperationStatus;
 
     fn try_from(value: FfiTransaction) -> Result<Self, Self::Error> {
         match value.kind {
@@ -619,7 +619,7 @@ pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
     match val.kind {
         FfiTransactionKind::Public => {
             let body = unsafe { Box::from_raw(val.body.public_body) };
-            let std_body_res: Result<PublicTransaction, OperationStatus> =
+            let std_body_res: Result<PublicTransaction, PrimitiveOperationStatus> =
                 body.try_into().inspect_err(|_| {
                     log::error!(
                         "Failed to cast `Box<FfiPublicTransactionBody>` into `PublicTransaction`"
@@ -632,7 +632,7 @@ pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
         }
         FfiTransactionKind::Private => {
             let body = unsafe { Box::from_raw(val.body.private_body) };
-            let std_body_res: Result<PrivacyPreservingTransaction, OperationStatus> = body.try_into()
+            let std_body_res: Result<PrivacyPreservingTransaction, PrimitiveOperationStatus> = body.try_into()
             .inspect_err(|_| log::error!("Failed to cast `Box<FfiPrivateTransactionBody>` into `PrivacyPreservingTransaction`"));
 
             if let Ok(std_body) = std_body_res {
@@ -729,7 +729,7 @@ fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
     ]
 }
 
-fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>, OperationStatus> {
+fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>, PrimitiveOperationStatus> {
     let left = if ffi_window[0] == 0 {
         None
     } else {
@@ -744,7 +744,7 @@ fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>,
 
     ValidityWindow::try_from((left, right)).map_err(|e| {
         log::error!("Failed to cast ffi validity window: {e}");
-        OperationStatus::CastError
+        PrimitiveOperationStatus::CastError
     })
 }
 

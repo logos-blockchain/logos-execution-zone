@@ -8,11 +8,12 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId, ShardData, SharedSecretKey};
+use lee::{AccountId};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
 };
+use primitives_ffi::types::{FfiBytes32, FfiIdentifier, FfiPdaSeed};
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity, AccountMention};
 
 use crate::error::WalletFfiError;
@@ -24,66 +25,6 @@ use crate::error::WalletFfiError;
 #[repr(C)]
 pub struct WalletHandle {
     _private: [u8; 0],
-}
-
-/// 32-byte array type for `AccountId`, keys, hashes, etc.
-#[repr(C)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct FfiBytes32 {
-    pub data: [u8; 32],
-}
-
-pub type FfiPdaSeed = FfiBytes32;
-
-impl From<FfiPdaSeed> for PdaSeed {
-    fn from(value: FfiPdaSeed) -> Self {
-        Self::new(value.data)
-    }
-}
-
-impl From<PdaSeed> for FfiPdaSeed {
-    fn from(value: PdaSeed) -> Self {
-        Self {
-            data: *value.as_bytes(),
-        }
-    }
-}
-
-pub type FfiNullifierPublicKey = FfiBytes32;
-
-impl From<FfiNullifierPublicKey> for NullifierPublicKey {
-    fn from(value: FfiNullifierPublicKey) -> Self {
-        Self(value.data)
-    }
-}
-
-impl From<NullifierPublicKey> for FfiNullifierPublicKey {
-    fn from(value: NullifierPublicKey) -> Self {
-        Self { data: value.0 }
-    }
-}
-
-/// U128 - 16 bytes little endian.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiU128 {
-    pub data: [u8; 16],
-}
-
-pub type FfiIdentifier = FfiBytes32;
-
-impl From<lee_core::Identifier> for FfiIdentifier {
-    fn from(value: lee_core::Identifier) -> Self {
-        Self {
-            data: value.into_value(),
-        }
-    }
-}
-
-impl From<FfiIdentifier> for lee_core::Identifier {
-    fn from(value: FfiIdentifier) -> Self {
-        Self::new(value.data)
-    }
 }
 
 /// One program's shard on an account.
@@ -105,59 +46,6 @@ impl Default for FfiShard {
             data_len: 0,
         }
     }
-}
-
-/// Account data structure - C-compatible version of lee Account.
-///
-/// Note: `nonce` is a u128 value represented as a little-endian
-/// byte arrays since C doesn't have native u128 support.
-#[repr(C)]
-pub struct FfiAccount {
-    /// Pointer to this account's shards, ordered by program address. The native balance is the
-    /// shard of the native token program.
-    pub shards: *const FfiShard,
-    /// Number of shards.
-    pub shards_len: usize,
-    /// Nonce as little-endian [u8; 16].
-    pub nonce: FfiU128,
-}
-
-impl Default for FfiAccount {
-    fn default() -> Self {
-        Self {
-            shards: std::ptr::null(),
-            shards_len: 0,
-            nonce: FfiU128::default(),
-        }
-    }
-}
-
-/// Public keys for a private account (safe to expose).
-#[repr(C)]
-pub struct FfiPrivateAccountKeys {
-    /// Nullifier public key (32 bytes).
-    pub nullifier_public_key: FfiBytes32,
-    /// Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
-    pub viewing_public_key: *const u8,
-    /// Length of viewing public key (always 1184 bytes for ML-KEM-768).
-    pub viewing_public_key_len: usize,
-}
-
-impl Default for FfiPrivateAccountKeys {
-    fn default() -> Self {
-        Self {
-            nullifier_public_key: FfiBytes32::default(),
-            viewing_public_key: std::ptr::null(),
-            viewing_public_key_len: 0,
-        }
-    }
-}
-
-/// Public key info for a public account.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiPublicAccountKey {
-    pub public_key: FfiBytes32,
 }
 
 /// Single entry in the account list.
@@ -221,47 +109,6 @@ impl FfiTransferResult {
 }
 
 // Helper functions to convert between Rust and FFI types
-
-impl FfiBytes32 {
-    /// Create from a 32-byte array.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self { data: bytes }
-    }
-
-    /// Create from an `AccountId`.
-    #[must_use]
-    pub const fn from_account_id(id: lee::AccountId) -> Self {
-        Self { data: *id.value() }
-    }
-}
-
-impl From<SharedSecretKey> for FfiBytes32 {
-    fn from(value: SharedSecretKey) -> Self {
-        Self { data: value.0 }
-    }
-}
-
-impl FfiPrivateAccountKeys {
-    #[must_use]
-    pub const fn npk(&self) -> lee_core::NullifierPublicKey {
-        lee_core::NullifierPublicKey(self.nullifier_public_key.data)
-    }
-
-    pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, WalletFfiError> {
-        if self.viewing_public_key_len == 1184 {
-            let slice = unsafe {
-                slice::from_raw_parts(self.viewing_public_key, self.viewing_public_key_len)
-            };
-            Ok(
-                lee_core::encryption::ViewingPublicKey::from_bytes(slice.to_vec())
-                    .expect("wallet_ffi: length already validated to 1184 bytes"),
-            )
-        } else {
-            Err(WalletFfiError::InvalidKeyValue)
-        }
-    }
-}
 
 /// Enumeration to represent kinds of `FfiAccountIdentity`.
 #[repr(C)]
@@ -332,129 +179,6 @@ impl TryFrom<&FfiAccountMention> for AccountMention {
     fn try_from(value: &FfiAccountMention) -> Result<Self, Self::Error> {
         Ok(AccountIdentity::try_from(&value.identity)?
             .select_program_shard(value.program_account_id.into()))
-    }
-}
-
-impl From<u128> for FfiU128 {
-    fn from(value: u128) -> Self {
-        Self {
-            data: value.to_le_bytes(),
-        }
-    }
-}
-
-impl From<FfiU128> for u128 {
-    fn from(value: FfiU128) -> Self {
-        Self::from_le_bytes(value.data)
-    }
-}
-
-impl From<lee::AccountId> for FfiBytes32 {
-    fn from(id: lee::AccountId) -> Self {
-        Self::from_account_id(id)
-    }
-}
-
-impl From<[u8; 32]> for FfiBytes32 {
-    fn from(value: [u8; 32]) -> Self {
-        Self { data: value }
-    }
-}
-
-impl From<FfiBytes32> for lee::AccountId {
-    fn from(bytes: FfiBytes32) -> Self {
-        Self::new(bytes.data)
-    }
-}
-
-impl From<lee::Account> for FfiAccount {
-    #[expect(
-        clippy::as_conversions,
-        reason = "We need to convert to byte arrays for FFI"
-    )]
-    fn from(value: lee::Account) -> Self {
-        let shards_vec: Vec<FfiShard> = value
-            .data
-            .shards
-            .into_iter()
-            .map(|(program, record)| {
-                let record: Vec<u8> = record.into();
-                let data_len = record.len();
-                let data = if data_len > 0 {
-                    Box::into_raw(record.into_boxed_slice()) as *const u8
-                } else {
-                    ptr::null()
-                };
-                FfiShard {
-                    program: program.into(),
-                    data,
-                    data_len,
-                }
-            })
-            .collect();
-
-        let shards_len = shards_vec.len();
-        let shards = if shards_len > 0 {
-            Box::into_raw(shards_vec.into_boxed_slice()) as *const FfiShard
-        } else {
-            ptr::null()
-        };
-
-        Self {
-            shards,
-            shards_len,
-            nonce: value.nonce.0.into(),
-        }
-    }
-}
-
-impl TryFrom<&FfiAccount> for lee::Account {
-    type Error = WalletFfiError;
-
-    fn try_from(value: &FfiAccount) -> Result<Self, Self::Error> {
-        let mut account = Self {
-            nonce: lee_core::account::Nonce(value.nonce.into()),
-            data: lee_core::account::AccountData {
-                shards: std::collections::BTreeMap::new(),
-            },
-        };
-
-        if value.shards_len > 0 {
-            if value.shards.is_null() {
-                return Err(WalletFfiError::NullPointer);
-            }
-            let shards = unsafe { slice::from_raw_parts(value.shards, value.shards_len) };
-            for shard in shards {
-                let data = if shard.data_len > 0 {
-                    let bytes = unsafe { slice::from_raw_parts(shard.data, shard.data_len) };
-                    ShardData::try_from(bytes.to_vec())
-                        .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
-                } else {
-                    ShardData::default()
-                };
-                account.data.set_shard(shard.program.into(), data);
-            }
-        }
-
-        Ok(account)
-    }
-}
-
-impl From<lee::PublicKey> for FfiPublicAccountKey {
-    fn from(value: lee::PublicKey) -> Self {
-        Self {
-            public_key: FfiBytes32::from_bytes(*value.value()),
-        }
-    }
-}
-
-impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
-    type Error = WalletFfiError;
-
-    fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
-        let public_key = Self::try_new(value.public_key.data)
-            .map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
-        Ok(public_key)
     }
 }
 
@@ -751,9 +475,10 @@ mod tests {
         encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, Identifier,
         NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
     };
-    use wallet::AccountIdentity;
+    use primitives_ffi::types::FfiBytes32;
+use wallet::AccountIdentity;
 
-    use crate::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind, FfiBytes32};
+    use crate::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind};
 
     #[test]
     fn account_identity_roundtrip() {

@@ -6,6 +6,7 @@ use std::{
 };
 
 use lee::AccountId;
+use primitives_ffi::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys};
 use wallet::{
     account::AccountIdWithPrivacy, cli::CliAccountMention,
     program_facades::native_token_transfer::NativeTokenTransfer, AccountIdentity,
@@ -15,9 +16,8 @@ use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiIdentifier, FfiTransferResult, WalletHandle},
+    types::{FfiTransferResult, WalletHandle},
     wallet::get_wallet,
-    FfiPrivateAccountKeys,
 };
 
 fn optional_c_str(ptr: *const c_char) -> Option<String> {
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         Ok(vpk) => vpk,
         Err(e) => {
             print_error("Invalid viewing key");
-            return e;
+            return e.into();
         }
     };
     let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
@@ -364,7 +364,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         Ok(vpk) => vpk,
         Err(e) => {
             print_error("Invalid viewing key");
-            return e;
+            return e.into();
         }
     };
     let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });

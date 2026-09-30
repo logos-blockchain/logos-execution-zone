@@ -32,6 +32,7 @@ use std::{
     sync::OnceLock,
 };
 
+use primitives_ffi::types::FfiBytes32;
 use ::wallet::ExecutionFailureKind;
 use error::WalletFfiError;
 // Re-export public types for cbindgen
@@ -53,6 +54,8 @@ pub mod sync;
 pub mod transfer;
 pub mod types;
 pub mod wallet;
+
+pub mod reexports;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 

@@ -1,18 +1,12 @@
 #[derive(Debug, Default, PartialEq, Eq)]
 #[repr(C)]
-pub enum OperationStatus {
+pub enum PrimitiveOperationStatus {
     #[default]
     Ok = 0x0,
-    NullPointer = 0x1,
-    InitializationError = 0x2,
-    ClientError = 0x3,
-    CastError = 0x4,
-    NotSupported = 0x5,
-    InvalidArgument = 0x6,
-    ResponseTooBig = 0x7,
+    CastError = 0x1,
 }
 
-impl OperationStatus {
+impl PrimitiveOperationStatus {
     #[must_use]
     #[unsafe(no_mangle)]
     pub extern "C" fn is_ok(&self) -> bool {

@@ -370,16 +370,3 @@ pub unsafe extern "C" fn wallet_ffi_get_sequencer_addr(handle: *mut WalletHandle
         }
     }
 }
-
-/// Free a string returned by wallet FFI functions.
-///
-/// # Safety
-/// The pointer must be either null or a valid string returned by an FFI function.
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe {
-            drop(std::ffi::CString::from_raw(ptr));
-        }
-    }
-}
