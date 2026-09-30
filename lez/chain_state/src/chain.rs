@@ -283,45 +283,46 @@ impl ChainState {
 
     /// A finalized entry, `parent` when the caller knows it. Returns the final
     /// tier's outcome for its block, `None` when it carries none. `final_msg`
-    /// moves only on the lineage's next entry; anything else is a re-delivery.
+    /// moves only to an entry whose block applied or that chains on it;
+    /// anything else is a re-delivery, and leaves the view if held.
     pub fn apply_finalized(
         &mut self,
         msg: MsgId,
         parent: Option<MsgId>,
         block: Option<&Block>,
     ) -> Option<AcceptOutcome> {
-        // Finality is prefix-monotone: an entry chained on a view entry
-        // finalizes the view up to it.
+        // Finality is prefix-monotone: the held entries this one chains on
+        // finalize first, found by parent link since a stale re-report can
+        // sit out of order in the view.
+        let parent = parent.or_else(|| {
+            self.view
+                .iter()
+                .find(|entry| entry.msg == msg)
+                .map(|entry| entry.parent)
+        });
         if let Some(parent) = parent
-            && let Some(idx) = self.view.iter().position(|entry| entry.msg == parent)
+            && let Some(ancestor) = self.view.iter().find(|entry| entry.msg == parent).cloned()
         {
-            let ancestors: Vec<ChannelEntry> = self.view[..=idx].to_vec();
-            for ancestor in ancestors {
-                self.apply_finalized(ancestor.msg, None, ancestor.block.as_ref());
-            }
-        }
-
-        // The same for the entries before it in the view.
-        if let Some(idx) = self.view.iter().position(|entry| entry.msg == msg)
-            && idx > 0
-        {
-            let earlier: Vec<ChannelEntry> = self.view[..idx].to_vec();
-            for entry in earlier {
-                self.apply_finalized(entry.msg, None, entry.block.as_ref());
-            }
+            self.apply_finalized(ancestor.msg, None, ancestor.block.as_ref());
         }
 
         let outcome = block.map(|block| self.apply_final_block(block));
         let held_at = self.view.iter().position(|entry| entry.msg == msg);
-        let is_next = matches!(outcome, Some(AcceptOutcome::Applied(_)))
-            || parent == Some(self.final_msg)
-            || held_at.is_some();
+        let is_next =
+            matches!(outcome, Some(AcceptOutcome::Applied(_))) || parent == Some(self.final_msg);
         if !is_next {
+            // A held entry off the final lineage is stale or past a gap, so it
+            // leaves the view without rewinding `final_msg`.
+            if let Some(idx) = held_at {
+                self.view.remove(idx);
+                self.refold();
+            }
             return outcome;
         }
 
         self.final_msg = msg;
         if let Some(idx) = held_at {
+            // Its ancestors are already final, so anything left before it is off the lineage.
             self.view.drain(..=idx);
             self.trim_head();
         } else {
@@ -1163,6 +1164,184 @@ mod tests {
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
+    }
+
+    /// Finalizes `blocks` as entries `1..`, each chained on the one before.
+    fn finalize_all(chain: &mut ChainState, blocks: &[Block]) {
+        let mut parent = MsgId::root();
+        for (block, n) in blocks.iter().zip(1_u8..) {
+            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            parent = msg(n);
+        }
+    }
+
+    #[test]
+    fn a_stale_adopted_entry_finalized_below_the_tier_does_not_rewind_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+
+        // The sdk reports entry 1 as adopted after the tier already passed it.
+        chain.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0])),
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::UnexpectedBlockId { .. }
+            ))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+        assert_eq!(chain.pin(), msg(3));
+
+        // The final tip's own entry, re-adopted and re-finalized.
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            Some(AcceptOutcome::AlreadyApplied)
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(4));
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn stale_adopted_entries_in_one_extension_leave_the_view() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks);
+
+        chain.apply_extension(entries_for(&blocks[..2]));
+        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
+        assert_eq!(chain.pin(), msg(3));
+        assert_eq!(chain.final_tip().unwrap().block_id, 3);
+    }
+
+    #[test]
+    fn a_held_misplaced_block_on_the_final_tier_is_still_next() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(1);
+        finalize_all(&mut chain, &blocks);
+
+        let skips_ahead = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
+        chain.apply_extension(vec![entry(2, msg(1), Some(&skips_ahead))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(2), Some(msg(1)), Some(&skips_ahead)),
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::UnexpectedBlockId { .. }
+            ))
+        ));
+
+        assert_eq!(chain.final_msg(), msg(2));
+        assert!(chain.view().is_empty());
+    }
+
+    #[test]
+    fn a_held_entry_past_a_gap_is_not_taken_as_final() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks[..1]);
+
+        // Chained on an entry never seen, carrying a block that does not apply.
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+        assert!(matches!(
+            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            Some(AcceptOutcome::Parked(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(1));
+        assert!(chain.view().is_empty());
+
+        // A block that applies still resyncs the lineage.
+        assert!(matches!(
+            chain.apply_finalized(msg(9), Some(msg(8)), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(9));
+    }
+
+    #[test]
+    fn a_stale_reported_entry_behind_a_held_one_does_not_finalize_it() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+
+        let mut restored = ChainState::from_final(chain.final_state().clone(), chain.final_tip());
+        restored.restore_view(&chain.encode_view()).unwrap();
+
+        // After a restart the sdk re-reports the final tip's entry after entry 4.
+        restored.apply_extension(vec![
+            entry(3, msg(2), Some(&blocks[2])),
+            entry(4, msg(3), Some(&blocks[3])),
+        ]);
+        let view: Vec<MsgId> = restored.view().iter().map(|entry| entry.msg).collect();
+        assert_eq!(view, vec![msg(4), msg(3)]);
+
+        assert!(matches!(
+            restored.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            Some(AcceptOutcome::AlreadyApplied)
+        ));
+        assert_eq!(
+            restored.final_tip().unwrap().block_id,
+            3,
+            "entry 4 is not final yet"
+        );
+        assert_eq!(restored.final_msg(), msg(3));
+        assert_eq!(restored.pin(), msg(4));
+        assert_eq!(head_id(&restored), Some(4));
+
+        assert!(matches!(
+            restored.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(restored.final_msg(), msg(4));
+        assert!(restored.view().is_empty());
+        assert_head_is_the_fold(&restored);
+    }
+
+    #[test]
+    fn a_held_entry_finalizes_past_a_stale_entry_it_chains_on() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(4);
+        finalize_all(&mut chain, &blocks[..3]);
+        chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+
+        // Entry 4 finalizes first, so the walk reaches the stale entry 3.
+        assert!(matches!(
+            chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(4));
+        assert!(chain.view().is_empty());
+        assert_head_is_the_fold(&chain);
+    }
+
+    #[test]
+    fn a_held_entry_without_a_block_finalizes_as_an_ancestor() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        finalize_all(&mut chain, &blocks[..1]);
+        chain.apply_extension(vec![
+            entry(2, msg(1), None),
+            entry(3, msg(2), Some(&blocks[1])),
+        ]);
+
+        assert!(matches!(
+            chain.apply_finalized(msg(3), None, Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert!(chain.view().is_empty());
     }
 
     #[test]
