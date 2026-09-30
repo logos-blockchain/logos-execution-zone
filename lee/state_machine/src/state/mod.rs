@@ -12,6 +12,7 @@ use lee_core::{
 };
 
 use crate::{
+    ensure,
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -112,7 +113,8 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 struct PendingMessages {
-    records: BTreeMap<MessageId, StoredMessage>,
+    records: BTreeMap<u128, StoredMessage>,
+    ids: BTreeMap<MessageId, u128>,
     next_sequence: u128,
 }
 
@@ -286,8 +288,10 @@ impl V03State {
         }
     }
 
-    #[must_use]
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
+    pub fn apply_state_diff(
+        &mut self,
+        diff: ValidatedStateDiff,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let StateDiff {
             signer_account_ids,
             public_diff,
@@ -297,6 +301,17 @@ impl V03State {
             consumed,
             published,
         } = diff.into_state_diff();
+        ensure!(
+            consumed
+                .iter()
+                .all(|id| self.pending_messages.ids.contains_key(id)),
+            LeeError::InvalidInput("A consumed message is no longer pending".into())
+        );
+        ensure!(
+            u128::try_from(published.len())
+                .is_ok_and(|count| self.next_message_sequence().checked_add(count).is_some()),
+            LeeError::InvalidInput("Message sequence exhausted".into())
+        );
         #[expect(
             clippy::iter_over_hash_type,
             reason = "Iteration order doesn't matter here"
@@ -312,7 +327,9 @@ impl V03State {
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
         for id in consumed {
-            self.pending_messages.records.remove(&id);
+            if let Some(sequence) = self.pending_messages.ids.remove(&id) {
+                self.pending_messages.records.remove(&sequence);
+            }
         }
         for body in published {
             let record = StoredMessage {
@@ -322,10 +339,15 @@ impl V03State {
             self.pending_messages.next_sequence = record
                 .sequence
                 .checked_add(1)
-                .expect("settlement reserved the message sequence");
-            self.pending_messages.records.insert(record.id(), record);
+                .expect("the message sequence was checked to have room");
+            self.pending_messages
+                .ids
+                .insert(record.id(), record.sequence);
+            self.pending_messages
+                .records
+                .insert(record.sequence, record);
         }
-        events
+        Ok(events)
     }
 
     pub fn transition_from_public_transaction(
@@ -335,7 +357,7 @@ impl V03State {
         timestamp: Timestamp,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
-        Ok(self.apply_state_diff(diff))
+        self.apply_state_diff(diff)
     }
 
     pub fn transition_from_privacy_preserving_transaction(
@@ -346,7 +368,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        drop(self.apply_state_diff(diff));
+        self.apply_state_diff(diff)?;
         Ok(())
     }
 
@@ -370,11 +392,20 @@ impl V03State {
 
     #[must_use]
     pub fn pending_message(&self, id: MessageId) -> Option<&StoredMessage> {
-        self.pending_messages.records.get(&id)
+        self.pending_messages
+            .ids
+            .get(&id)
+            .and_then(|sequence| self.pending_messages.records.get(sequence))
     }
 
-    pub fn pending_messages(&self) -> impl Iterator<Item = &StoredMessage> {
-        self.pending_messages.records.values()
+    pub fn pending_messages_from(
+        &self,
+        from_sequence: u128,
+    ) -> impl Iterator<Item = &StoredMessage> {
+        self.pending_messages
+            .records
+            .range(from_sequence..)
+            .map(|(_, record)| record)
     }
 
     /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at

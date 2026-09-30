@@ -359,7 +359,12 @@ pub fn settle_transaction(
                 }
             })?;
 
-            state.apply_state_diff(diff)
+            state
+                .apply_state_diff(diff)
+                .map_err(|err| BlockIngestError::StateTransition {
+                    tx_index,
+                    reason: format!("{:#}", anyhow::Error::from(err)),
+                })?
         }
         FeeClass::Charged(view) => settle_charged_transaction(
             transaction,
@@ -439,7 +444,9 @@ fn settle_charged_transaction(
     )
     .map_err(|err| fee_validity(format!("fee reserve failed: {err}")))?;
     // Reserve is a fee-internal move; its events are not the user's.
-    drop(state.apply_state_diff(reserve_diff));
+    state
+        .apply_state_diff(reserve_diff)
+        .map_err(|err| fee_validity(format!("fee reserve failed: {err}")))?;
 
     // Phase 2: Action
     //
@@ -478,7 +485,9 @@ fn settle_charged_transaction(
         }
     })?;
     // The action's events are the transaction's user-facing events.
-    let action_events = state.apply_state_diff(action_diff);
+    let action_events = state
+        .apply_state_diff(action_diff)
+        .map_err(|err| fee_validity(format!("fee action failed: {err}")))?;
 
     // Phase 3: Refund
     //
@@ -511,7 +520,9 @@ fn settle_charged_transaction(
         )
         .map_err(|err| fee_validity(format!("fee refund failed: {err}")))?;
         // Refund is a fee-internal move; its events are not the user's.
-        drop(state.apply_state_diff(refund_diff));
+        state
+            .apply_state_diff(refund_diff)
+            .map_err(|err| fee_validity(format!("fee refund failed: {err}")))?;
     }
 
     summary.revenue_base = summary

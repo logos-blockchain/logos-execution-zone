@@ -352,7 +352,9 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
         diff.public_diff().is_empty(),
         "a reverted action writes no shard"
     );
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     assert_eq!(
         state.get_account_by_id(from).data,
         from_before.data,

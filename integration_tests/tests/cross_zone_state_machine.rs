@@ -598,7 +598,9 @@ fn rejects_on_cap(state: &V03State, amount: u128, src_tx_index: u32, block: u64)
 fn a_mint_that_reaches_the_lifetime_cap_is_accepted() {
     let mut state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
     let diff = dispatch_mint_on(&state, LOCK_AMOUNT, 0, 1).expect("the cap itself is spendable");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), LOCK_AMOUNT);
 }
 
@@ -617,10 +619,14 @@ fn a_mint_over_the_lifetime_cap_is_rejected() {
 fn mints_accumulate_into_the_lifetime_cap() {
     let mut state = capped_mint_state(Some(100), 0, None);
     let first = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
-    drop(state.apply_state_diff(first));
+    state
+        .apply_state_diff(first)
+        .expect("the validated diff applies");
     rejects_on_cap(&state, 60, 1, 2);
     let exact = dispatch_mint_on(&state, 40, 1, 2).expect("the remainder is spendable");
-    drop(state.apply_state_diff(exact));
+    state
+        .apply_state_diff(exact)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 100);
 }
 
@@ -637,7 +643,9 @@ fn an_uncapped_source_counts_but_never_refuses() {
             u64::from(index) + 1,
         )
         .expect("an uncapped source refuses nothing");
-        drop(state.apply_state_diff(diff));
+        state
+            .apply_state_diff(diff)
+            .expect("the validated diff applies");
     }
     assert_eq!(
         source_minted(&state),
@@ -653,12 +661,16 @@ fn the_counter_survives_a_source_update() {
     let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
     let mut state = capped_mint_state(Some(100), 0, Some(authority));
     let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
 
     let update = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(70))]);
     let applied = ValidatedStateDiff::from_public_transaction(&update, &state, 2, 0)
         .expect("the authority updates the cap");
-    drop(state.apply_state_diff(applied));
+    state
+        .apply_state_diff(applied)
+        .expect("the validated diff applies");
     assert_eq!(
         source_minted(&state),
         60,
@@ -667,7 +679,9 @@ fn the_counter_survives_a_source_update() {
 
     rejects_on_cap(&state, 11, 1, 3);
     let exact = dispatch_mint_on(&state, 10, 1, 3).expect("the remaining headroom is spendable");
-    drop(state.apply_state_diff(exact));
+    state
+        .apply_state_diff(exact)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 70);
 }
 
@@ -679,21 +693,29 @@ fn a_source_removed_and_re_added_restarts_its_counter() {
     let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
     let mut state = capped_mint_state(Some(100), 0, Some(authority));
     let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
 
     let removed = update_sources_tx(&key, authority, 0, vec![]);
     let applied = ValidatedStateDiff::from_public_transaction(&removed, &state, 2, 0)
         .expect("the authority removes the source");
-    drop(state.apply_state_diff(applied));
+    state
+        .apply_state_diff(applied)
+        .expect("the validated diff applies");
 
     let re_added = update_sources_tx(&key, authority, 1, vec![mint_src_policy(Some(100))]);
     let restored = ValidatedStateDiff::from_public_transaction(&re_added, &state, 3, 0)
         .expect("the authority re-adds the source");
-    drop(state.apply_state_diff(restored));
+    state
+        .apply_state_diff(restored)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 0, "a re-added source starts at zero");
 
     let full = dispatch_mint_on(&state, 100, 1, 4).expect("the fresh allowance is spendable");
-    drop(state.apply_state_diff(full));
+    state
+        .apply_state_diff(full)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 100);
 }
 
@@ -727,11 +749,15 @@ fn a_refused_mint_leaves_the_message_deliverable() {
     let raised = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(60))]);
     let applied = ValidatedStateDiff::from_public_transaction(&raised, &state, 2, 0)
         .expect("the authority raises the cap");
-    drop(state.apply_state_diff(applied));
+    state
+        .apply_state_diff(applied)
+        .expect("the validated diff applies");
 
     let delivered =
         dispatch_mint_on(&state, 60, 0, 3).expect("the refused delivery was never marked seen");
-    drop(state.apply_state_diff(delivered));
+    state
+        .apply_state_diff(delivered)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 60);
 }
 
@@ -770,7 +796,9 @@ fn a_many_source_config_still_fits_and_mints() {
 
     let diff = dispatch_mint_on(&state, 100, 0, 1)
         .expect("a mint against the last of many sources executes");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 100);
 
     // Only the (zone, program) pair that emitted spends; every other entry,
@@ -1046,7 +1074,9 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first lock executes");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
 
     // Same slot, fresh nonce, so the only thing that can reject it is the slot
     // already holding a record. Matched on the guest's own message rather than
@@ -1096,7 +1126,9 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
         .expect("the lock executes");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
 
     let send = send_tx(
         Actor::new(sender_config_account_id(sender_id), sender_id),
@@ -1318,7 +1350,9 @@ fn lock_debits_the_holding_not_the_holder() {
     let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
     let diff =
         ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
 
     assert_eq!(
         state
@@ -1462,7 +1496,9 @@ fn the_bridge_pins_are_written_once_and_replayable() {
         0,
     )
     .expect("the first init claims the config PDA");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     assert_eq!(
         bridge_lock_core::read_config(
             state
@@ -1589,7 +1625,9 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     let first = init(outbox_id);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first init claims the config PDA");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     assert_eq!(
         read_outbox(
             state
@@ -1716,7 +1754,9 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the configured authority changes sources");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     let cfg = wrapped_token_config(&state, config_id);
     assert_eq!(
         cfg.sources,
@@ -1737,7 +1777,9 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the authority acts again");
-    drop(state.apply_state_diff(second));
+    state
+        .apply_state_diff(second)
+        .expect("the validated diff applies");
     let updated_cfg = wrapped_token_config(&state, config_id);
     assert_eq!(
         updated_cfg.sources,
@@ -1755,7 +1797,9 @@ fn the_token_authority_path_holds() {
     let renounced =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
             .expect("the authority renounces itself");
-    drop(state.apply_state_diff(renounced));
+    state
+        .apply_state_diff(renounced)
+        .expect("the validated diff applies");
     let renounced_cfg = wrapped_token_config(&state, config_id);
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
@@ -1915,7 +1959,9 @@ fn the_receiver_authority_path_holds() {
     let diff =
         ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
             .expect("the configured authority changes sources");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     let cfg = receiver_config(&state, config_id);
     assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
     assert_eq!(cfg.deliverer, programs::cross_zone_inbox_account_id());
@@ -1923,7 +1969,9 @@ fn the_receiver_authority_path_holds() {
     let renounce_diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
             .expect("the authority renounces itself");
-    drop(state.apply_state_diff(renounce_diff));
+    state
+        .apply_state_diff(renounce_diff)
+        .expect("the validated diff applies");
     let renounced_cfg = receiver_config(&state, config_id);
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
     assert_eq!(
@@ -2046,7 +2094,9 @@ fn the_governance_path_holds() {
         0,
     )
     .expect("the governance path changes sources");
-    drop(state.apply_state_diff(first));
+    state
+        .apply_state_diff(first)
+        .expect("the validated diff applies");
 
     let cfg = wrapped_token_config(&state, config_id);
     assert_eq!(
@@ -2060,7 +2110,9 @@ fn the_governance_path_holds() {
 
     let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
         .expect("the governance path acts again");
-    drop(state.apply_state_diff(second));
+    state
+        .apply_state_diff(second)
+        .expect("the validated diff applies");
     let cleared_cfg = wrapped_token_config(&state, config_id);
     assert!(
         cleared_cfg.sources.is_empty(),
@@ -2070,7 +2122,9 @@ fn the_governance_path_holds() {
 
     let renounced = ValidatedStateDiff::from_public_transaction(&renounce(), &state, 3, 0)
         .expect("the governance path renounces");
-    drop(state.apply_state_diff(renounced));
+    state
+        .apply_state_diff(renounced)
+        .expect("the validated diff applies");
     let renounced_cfg = wrapped_token_config(&state, config_id);
     assert_eq!(renounced_cfg.authority, None, "the authority is gone");
 
@@ -2219,7 +2273,9 @@ fn the_receiver_governance_path_holds() {
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("the receiver governance path changes sources");
-    drop(state.apply_state_diff(diff));
+    state
+        .apply_state_diff(diff)
+        .expect("the validated diff applies");
     let cfg = receiver_config(&state, config_id);
     assert_eq!(
         cfg.sources,
@@ -2264,7 +2320,9 @@ fn a_shared_authority_serves_both_targets() {
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
         .expect("the token acts for the shared authority");
-    drop(state.apply_state_diff(first));
+    state
+        .apply_state_diff(first)
+        .expect("the validated diff applies");
     assert!(
         state.get_account_by_id(authority).data.shards.is_empty(),
         "a data-free authority is owned by nobody, whichever target uses it first"
@@ -2284,7 +2342,9 @@ fn a_shared_authority_serves_both_targets() {
     );
     let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
         .expect("the other target still acts on the token-owned authority");
-    drop(state.apply_state_diff(second));
+    state
+        .apply_state_diff(second)
+        .expect("the validated diff applies");
     let receiver_cfg = receiver_config(&state, receiver_config_id);
     assert_eq!(
         receiver_cfg.sources,
@@ -2308,7 +2368,9 @@ fn a_shared_authority_serves_both_targets() {
     );
     let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
         .expect("the other target renounces on the token-owned authority");
-    drop(state.apply_state_diff(third));
+    state
+        .apply_state_diff(third)
+        .expect("the validated diff applies");
     let renounced_cfg = receiver_config(&state, receiver_config_id);
     assert_eq!(renounced_cfg.authority, None, "the receiver side is gone");
     let token_cfg = wrapped_token_config(&state, token_config_id);

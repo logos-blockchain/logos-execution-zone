@@ -129,7 +129,7 @@ impl LeeTransaction {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        drop(state.apply_state_diff(diff));
+        state.apply_state_diff(diff)?;
         Ok(self)
     }
 
@@ -149,7 +149,7 @@ impl LeeTransaction {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        Ok(state.apply_state_diff(diff))
+        state.apply_state_diff(diff)
     }
 }
 

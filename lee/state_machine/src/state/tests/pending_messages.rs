@@ -1,7 +1,7 @@
 use lee_core::program::{Cast, MessageBody, MessageId, StoredMessage};
 
 use super::*;
-use crate::PublicIdentity;
+use crate::{PublicIdentity, ValidatedStateDiff};
 
 fn sender() -> Actor {
     Actor::new(AccountId::new([1; 32]), scripted_id())
@@ -19,17 +19,25 @@ fn received() -> Script {
     Script::write(b"received".to_vec()).from(Origin::Program(scripted_id()))
 }
 
+fn replying() -> Script {
+    received().send(Cast::new(sender(), &received()))
+}
+
 fn cast(state: &mut V03State, to: Actor) -> StoredMessage {
+    cast_script(state, to, &received())
+}
+
+fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessage {
     let tx = public_tx(
         sender(),
         vec![sender()],
         vec![],
-        Script::default().send(Cast::new(to, &received())),
+        Script::default().send(Cast::new(to, script)),
         &[],
     );
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
     state
-        .pending_messages()
+        .pending_messages_from(0)
         .max_by_key(|record| record.sequence)
         .cloned()
         .unwrap()
@@ -54,7 +62,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
     let record = cast(&mut state, receiver());
 
     assert_eq!(
-        state.pending_messages().cloned().collect::<Vec<_>>(),
+        state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
         vec![StoredMessage {
             sequence: 0,
             body: MessageBody {
@@ -85,7 +93,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
             .shard(scripted_id()),
         &ShardData::try_from(b"received".to_vec()).unwrap()
     );
-    assert!(state.pending_messages().next().is_none());
+    assert!(state.pending_messages_from(0).next().is_none());
 }
 
 #[test]
@@ -110,7 +118,7 @@ fn pending_records_are_numbered_in_publication_order_across_transactions() {
         .transition_from_public_transaction(&cast_twice, 1, 0)
         .unwrap();
 
-    let mut records: Vec<StoredMessage> = state.pending_messages().cloned().collect();
+    let mut records: Vec<StoredMessage> = state.pending_messages_from(0).cloned().collect();
     records.sort_by_key(|record| record.sequence);
     let [first, second] = <[_; 2]>::try_from(records).unwrap();
     assert_eq!(
@@ -209,7 +217,7 @@ fn a_cast_cannot_be_received_in_the_transaction_that_publishes_it() {
         execution_error(result),
         ExecutionError::UnknownMessage { id: unknown } if unknown == id
     ));
-    assert!(state.pending_messages().next().is_none());
+    assert!(state.pending_messages_from(0).next().is_none());
 }
 
 #[test]
@@ -367,7 +375,7 @@ fn a_cast_from_a_private_root_is_published_at_settlement() {
         .unwrap();
 
     assert_eq!(
-        state.pending_messages().cloned().collect::<Vec<_>>(),
+        state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
         vec![StoredMessage {
             sequence: 0,
             body: MessageBody {
@@ -423,4 +431,89 @@ fn a_pending_record_survives_a_borsh_round_trip_and_enters_the_genesis_fingerpri
         state
     );
     assert_ne!(state.genesis_fingerprint(), fingerprint);
+}
+
+#[test]
+fn a_second_diff_receiving_an_already_received_record_is_refused_at_apply() {
+    let mut state = V03State::new().with_test_programs();
+    let record = cast_script(&mut state, receiver(), &replying());
+    let tx = receipt(
+        record.id(),
+        receiver(),
+        vec![PublicIdentity::Key(receiver_pk())],
+    );
+    let first = ValidatedStateDiff::from_public_transaction(&tx, &state, 2, 0).unwrap();
+    let second = ValidatedStateDiff::from_public_transaction(&tx, &state, 2, 0).unwrap();
+
+    state.apply_state_diff(first).unwrap();
+    let settled = state.clone();
+    let result = state.apply_state_diff(second);
+
+    assert_eq!(
+        settled
+            .pending_messages_from(0)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![StoredMessage {
+            sequence: 1,
+            body: MessageBody {
+                origin_program: scripted_id(),
+                to: sender(),
+                message: borsh::to_vec(&received()).unwrap(),
+            },
+        }]
+    );
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidInput(message)) if message == "A consumed message is no longer pending"
+    ));
+    assert_eq!(state, settled);
+}
+
+#[test]
+fn pending_records_are_listed_in_sequence_order_from_any_sequence() {
+    let mut state = V03State::new().with_test_programs();
+    let records: Vec<StoredMessage> = std::iter::repeat_with(|| cast(&mut state, receiver()))
+        .take(5)
+        .collect();
+
+    for from_sequence in 0..=6 {
+        assert_eq!(
+            state
+                .pending_messages_from(from_sequence)
+                .cloned()
+                .collect::<Vec<_>>(),
+            records
+                .iter()
+                .filter(|record| record.sequence >= from_sequence)
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn a_receipt_that_fails_after_casting_keeps_its_record_pending_and_publishes_nothing() {
+    let mut state = V03State::new().with_test_programs();
+    let record = cast_script(
+        &mut state,
+        receiver(),
+        &replying().send(Call::new(receiver(), &Script::default().authorized())),
+    );
+
+    let result = state.transition_from_public_transaction(
+        &receipt(
+            record.id(),
+            receiver(),
+            vec![PublicIdentity::Key(receiver_pk())],
+        ),
+        2,
+        0,
+    );
+
+    assert!(matches!(result, Err(LeeError::ProgramExecutionFailed(_))));
+    assert_eq!(
+        state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
+        vec![record]
+    );
 }

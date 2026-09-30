@@ -467,12 +467,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPendingMessages>
             .expect("the request limit fits in usize");
         self.sequencer
             .with_state(|state| {
-                let mut pending: Vec<&StoredMessage> = state
-                    .pending_messages()
-                    .filter(|message| message.sequence >= from_sequence)
-                    .collect();
-                pending.sort_unstable_by_key(|message| message.sequence);
-                pending.into_iter().take(limit).cloned().collect()
+                state
+                    .pending_messages_from(from_sequence)
+                    .take(limit)
+                    .cloned()
+                    .collect()
             })
             .await
     }
