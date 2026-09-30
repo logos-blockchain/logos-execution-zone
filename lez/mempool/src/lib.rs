@@ -30,23 +30,22 @@ struct Entry<T, G> {
 /// - items are the nodes of a DAG
 /// - lanes are its edges.
 ///
-/// `lanes_of` runs once per item, and so does `priority` unless a `push_front` overtakes the
-/// item while it is ready.
+/// `lanes_of` and `priority` run once per item.
 ///
 /// A pop costs O(k·(k + log n)), `k` being the lanes of the popped item and `n` the ready items.
 pub struct MemPool<T, K = (), G = ()> {
     receiver: Receiver<T>,
     priority: fn(&T) -> K,
     lanes_of: fn(&T) -> Vec<G>,
-    /// Arrival numbers: received items count up from 0, `push_front` counts
-    /// down from -1, so every lane stays sorted by arrival.
-    next_back: i64,
-    next_front: i64,
-    items: HashMap<i64, Entry<T, G>>,
+    /// Items given back with [`Self::push_front`]; popped before anything else, last in first out.
+    front: Vec<T>,
+    /// Arrival numbers, counting up; every lane is sorted by them.
+    next_arrival: u64,
+    items: HashMap<u64, Entry<T, G>>,
     /// Per lane, arrivals in order; only the front is eligible.
-    lanes: HashMap<G, VecDeque<i64>>,
+    lanes: HashMap<G, VecDeque<u64>>,
     /// Ready items: highest bid first, earlier arrival breaks ties.
-    ready: BinaryHeap<(K, Reverse<i64>)>,
+    ready: BinaryHeap<(K, Reverse<u64>)>,
     /// Every item the pool holds, in the channel or not.
     ///
     /// [`MemPoolHandle`] reserves a slot here before sending, so admission is one atomic op.
@@ -75,8 +74,8 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
             receiver,
             priority,
             lanes_of,
-            next_back: 0,
-            next_front: 0,
+            front: Vec::new(),
+            next_arrival: 0,
             items: HashMap::new(),
             lanes: HashMap::new(),
             ready: BinaryHeap::new(),
@@ -86,35 +85,36 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
         (mem_pool, sender)
     }
 
-    /// Returns the total number of items in the mempool, received or still in the channel.
+    /// Returns the total number of items in the mempool, received, pushed to front, or still in the
+    /// channel.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.items.len().saturating_add(self.receiver.len())
+        self.front
+            .len()
+            .saturating_add(self.items.len())
+            .saturating_add(self.receiver.len())
     }
 
     /// Returns true if the mempool is empty, false otherwise.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty() && self.receiver.is_empty()
+        self.front.is_empty() && self.items.is_empty() && self.receiver.is_empty()
     }
 
-    /// Pop the ready item with the highest priority.
+    /// Pop what was given back first, then the ready item with the highest priority.
     pub fn pop(&mut self) -> Option<T> {
+        // pop the front, if any
+        if let Some(item) = self.front.pop() {
+            self.len.fetch_sub(1, Ordering::Relaxed);
+            return Some(item);
+        }
+
+        // ingest from channel to `self.items`
         self.ingest();
 
-        let entry = loop {
-            let (_, Reverse(arrival)) = self.ready.pop()?;
-            if self.is_ready(arrival)
-                && let Some(entry) = self.items.remove(&arrival)
-            {
-                break entry;
-            }
-            // a `push_front` overtook it; it is enqueued again once that item pops
-            if let Some(entry) = self.items.get_mut(&arrival) {
-                entry.queued = false;
-            }
-        };
-
+        // pop w.r.t priority
+        let (_, Reverse(arrival)) = self.ready.pop()?;
+        let entry = self.items.remove(&arrival).expect("ready items are held");
         for lane in &entry.lanes {
             if let Some(queue) = self.lanes.get_mut(lane) {
                 queue.pop_front();
@@ -139,10 +139,13 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
         Some(entry.item)
     }
 
-    /// Put a popped item back at the front of its lanes; it also wins ties.
+    /// Give a popped item back; it pops before anything else, whatever its priority.
+    ///
+    /// Only for items that were popped from this pool: they were ahead of everything in their
+    /// lanes then, so lane order holds as long as they go first. Several given back pop last in
+    /// first out, so hand a batch back in reverse.
     pub fn push_front(&mut self, item: T) {
-        self.next_front = self.next_front.saturating_sub(1);
-        self.insert(self.next_front, item, true);
+        self.front.push(item);
         self.len.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -151,21 +154,19 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
     /// Note that `len` already counts these.
     fn ingest(&mut self) {
         while let Some(item) = self.try_recv() {
-            let arrival = self.next_back;
-            self.next_back = arrival.saturating_add(1);
-            self.insert(arrival, item, false);
+            let arrival = self.next_arrival;
+            self.next_arrival = arrival.saturating_add(1);
+            self.insert(arrival, item);
         }
     }
 
-    fn insert(&mut self, arrival: i64, item: T, front: bool) {
+    fn insert(&mut self, arrival: u64, item: T) {
         let lanes = (self.lanes_of)(&item);
         for lane in &lanes {
-            let queue = self.lanes.entry(lane.clone()).or_default();
-            if front {
-                queue.push_front(arrival);
-            } else {
-                queue.push_back(arrival);
-            }
+            self.lanes
+                .entry(lane.clone())
+                .or_default()
+                .push_back(arrival);
         }
         let entry = Entry {
             item,
@@ -177,7 +178,7 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
     }
 
     /// Whether the item heads every lane it is in.
-    fn is_ready(&self, arrival: i64) -> bool {
+    fn is_ready(&self, arrival: u64) -> bool {
         self.items.get(&arrival).is_some_and(|entry| {
             entry
                 .lanes
@@ -186,7 +187,7 @@ impl<T, K: Ord, G: Hash + Eq + Clone> MemPool<T, K, G> {
         })
     }
 
-    fn enqueue_if_ready(&mut self, arrival: i64) {
+    fn enqueue_if_ready(&mut self, arrival: u64) {
         if !self.is_ready(arrival) {
             return;
         }
@@ -323,9 +324,8 @@ mod tests {
         handle.push((1, vec!['b'], "b")).await.unwrap();
         handle.push((5, vec!['c'], "c")).await.unwrap();
         handle.push((1, vec!['d'], "d")).await.unwrap();
-        pool.push_front((1, vec!['a'], "a"));
 
-        assert_eq!(drain(&mut pool), vec!["c", "a", "b", "d"]);
+        assert_eq!(drain(&mut pool), vec!["c", "b", "d"]);
     }
 
     #[test]
@@ -358,19 +358,22 @@ mod tests {
     }
 
     #[test]
-    async fn push_front_goes_back_ahead_of_its_lane() {
+    async fn push_front_pops_before_any_tip_and_ahead_of_its_lane() {
         let (mut pool, handle) = laned_pool();
 
         handle.push((0, vec!['A'], "a0")).await.unwrap();
         handle.push((5, vec!['A'], "a1")).await.unwrap();
+        handle.push((9, vec!['H'], "h")).await.unwrap();
 
-        // popping `a0` made the better-paying `a1` ready; putting `a0` back
-        // must make it wait again
+        // popping `h` then `a0` made the better-paying `a1` ready; the two
+        // given back (in reverse) must still pop first and in order
+        let h = pool.pop().unwrap();
         let a0 = pool.pop().unwrap();
-        assert_eq!(a0.2, "a0");
+        assert_eq!((h.2, a0.2), ("h", "a0"));
         pool.push_front(a0);
+        pool.push_front(h);
 
-        assert_eq!(drain(&mut pool), vec!["a0", "a1"]);
+        assert_eq!(drain(&mut pool), vec!["h", "a0", "a1"]);
         assert!(pool.lanes.is_empty(), "drained lanes are dropped");
     }
 
