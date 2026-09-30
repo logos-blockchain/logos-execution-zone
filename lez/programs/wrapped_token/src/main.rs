@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Envelope, Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{Call, Origin, ReceiveInput, Response, run_actor_with, write_once},
 };
 use wrapped_token_core::{
     MAX_MINT_AMOUNT, Message, SourceEntry, WrappedTokenConfig, ZoneId, balance_bytes,
@@ -44,7 +44,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             let mut cfg = decode_config(&input.pre_data);
             mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
-            Response::write(cfg.to_bytes()).send(Envelope::new(
+            Response::write(cfg.to_bytes()).send(Call::new(
                 Actor::new(holding_account_id(program, &recipient), program),
                 &Message::Credit(amount),
             ))
@@ -171,7 +171,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to wrapped_token must carry a Mint");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().send(Envelope::new(
+    Response::keep().send(Call::new(
         Actor::new(config_account_id(program), program),
         &Message::MintFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -189,7 +189,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
     assert!(input.is_authorized, "{unsigned}");
     let program = input.receiver.program_account_id;
-    Response::keep().send(Envelope::new(
+    Response::keep().send(Call::new(
         Actor::new(config_account_id(program), program),
         message,
     ))
@@ -277,7 +277,10 @@ fn mint_source(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{account::ShardData, program::Transition};
+    use lee_core::{
+        account::ShardData,
+        program::{Action, CallInput, Transition},
+    };
     use wrapped_token_core::SourcePolicy;
 
     use super::*;
@@ -408,20 +411,27 @@ mod tests {
         )
     }
 
-    fn to_config(message: &Message) -> Envelope {
-        Envelope::new(config_actor(), message)
+    fn to_config(message: &Message) -> Call {
+        Call::new(config_actor(), message)
     }
 
     // The authority's actor receives `message` from `origin`; the config then receives what it
     // forwards, as the driver would deliver it.
     fn through_authority(origin: Origin, is_authorized: bool, message: &Message) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] = <[Envelope; 1]>::try_from(entry.sends).expect("one forwarded change");
-        assert_eq!(forwarded.to, config_actor());
+        let [forwarded] = <[Action; 1]>::try_from(entry.sends).expect("one forwarded change");
+        let Action::Call(Call {
+            input: CallInput::Inline { to, message: data },
+            ..
+        }) = forwarded
+        else {
+            panic!("the forwarded change is an inline call");
+        };
+        assert_eq!(to, config_actor());
         at_config(
             Origin::Program(WRAPPED_ID),
             &config(),
-            &borsh::from_slice(&forwarded.message).expect("the forwarded change decodes"),
+            &borsh::from_slice(&data).expect("the forwarded change decodes"),
         )
     }
 
@@ -455,7 +465,7 @@ mod tests {
         assert_eq!(transition.post_data, None);
         assert_eq!(
             transition.sends,
-            vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10))],
+            vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10)).into()],
             "the deliverer travels from the runtime's origin, and the config is checked first"
         );
     }
@@ -488,7 +498,7 @@ mod tests {
         );
         assert_eq!(
             transition.sends,
-            vec![Envelope::new(holding_actor(), &Message::Credit(400))]
+            vec![Call::new(holding_actor(), &Message::Credit(400)).into()]
         );
     }
 
@@ -727,11 +737,14 @@ mod tests {
         );
         assert_eq!(
             transition.sends,
-            vec![to_config(&Message::UpdateSources {
-                authority: AUTHORITY,
-                via: None,
-                sources: vec![policy(ZONE_A, PEER_A, None)],
-            })]
+            vec![
+                to_config(&Message::UpdateSources {
+                    authority: AUTHORITY,
+                    via: None,
+                    sources: vec![policy(ZONE_A, PEER_A, None)],
+                })
+                .into()
+            ]
         );
     }
 

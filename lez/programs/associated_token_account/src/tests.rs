@@ -5,7 +5,7 @@ use associated_token_account_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Envelope, Origin, PdaSeed, ReceiveInput, Transition},
+    program::{Action, Call, CallInput, Origin, PdaSeed, ReceiveInput, Transition},
 };
 use token_core::{TokenDescriptor, TokenKind};
 
@@ -133,13 +133,13 @@ fn the_ata_of_a_stranger_program_is_a_different_address() {
 #[test]
 fn create_grants_the_ata_seed_only_when_the_owner_signed() {
     let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
-    let assert_kind = Envelope::new(
+    let assert_kind = Call::new(
         Actor::new(definition_id(), TOKEN_PROGRAM_ID),
         &token_core::Message::AssertKind {
             kind: TokenKind::Fungible,
         },
     );
-    let ensure = Envelope::new(
+    let ensure = Call::new(
         ata,
         &token_core::Message::EnsureHolding {
             descriptor: descriptor(),
@@ -148,10 +148,13 @@ fn create_grants_the_ata_seed_only_when_the_owner_signed() {
 
     let unsigned = turn(false, create(TOKEN_PROGRAM_ID));
     assert_eq!(unsigned.post_data, None);
-    assert_eq!(unsigned.sends, vec![assert_kind.clone(), ensure.clone()]);
+    assert_eq!(
+        unsigned.sends,
+        vec![assert_kind.clone().into(), ensure.clone().into()]
+    );
     assert_eq!(
         turn(true, create(TOKEN_PROGRAM_ID)).sends,
-        vec![assert_kind, ensure.with_pda_seeds(seeds)]
+        vec![assert_kind.into(), ensure.with_pda_seeds(seeds).into()]
     );
 }
 
@@ -165,11 +168,13 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
         transfer(STRANGER_PROGRAM_ID),
         burn(STRANGER_PROGRAM_ID),
     ] {
-        let target = turn(true, message)
-            .sends
-            .last()
-            .expect("every message sends to the ATA")
-            .to;
+        let Some(Action::Call(Call {
+            input: CallInput::Inline { to: target, .. },
+            ..
+        })) = turn(true, message).sends.pop()
+        else {
+            panic!("every message sends to the ATA");
+        };
         assert_eq!(target, stranger_ata);
         assert_ne!(target, real_ata);
     }
@@ -182,7 +187,7 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
     assert_eq!(
         turn(true, transfer(TOKEN_PROGRAM_ID)).sends,
         vec![
-            Envelope::new(
+            Call::new(
                 ata,
                 &token_core::Message::Transfer {
                     to: RECIPIENT_ID,
@@ -192,6 +197,7 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
                 },
             )
             .with_pda_seeds(seeds)
+            .into()
         ]
     );
 }
@@ -209,7 +215,7 @@ fn burn_delegates_the_named_definition_under_the_ata_seed() {
     assert_eq!(
         turn(true, burn(TOKEN_PROGRAM_ID)).sends,
         vec![
-            Envelope::new(
+            Call::new(
                 ata,
                 &token_core::Message::Burn {
                     descriptor: descriptor(),
@@ -218,6 +224,7 @@ fn burn_delegates_the_named_definition_under_the_ata_seed() {
                 },
             )
             .with_pda_seeds(seeds)
+            .into()
         ]
     );
 }

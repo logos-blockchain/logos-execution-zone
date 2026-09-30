@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Envelope, PdaSeed, ReceiveInput, Response, run_actor},
+    program::{Call, PdaSeed, ReceiveInput, Response, run_actor},
 };
 
 // Tail Call with PDA example program.
@@ -23,7 +23,7 @@ fn receive(input: &ReceiveInput, callee_account_id: AccountId) -> Response {
     let greeting: Vec<u8> = b"Hello from tail call with Program Derived Account ID".to_vec();
 
     Response::keep().send(
-        Envelope::new(
+        Call::new(
             Actor::new(input.receiver.account_id, callee_account_id),
             &greeting,
         )

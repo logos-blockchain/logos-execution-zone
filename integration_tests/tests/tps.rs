@@ -20,7 +20,7 @@ use common::transaction::LeeTransaction;
 use integration_tests::config::SequencerPartialConfig;
 use lee::{
     Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
-    PublicTransaction, RootCall,
+    PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
@@ -28,7 +28,7 @@ use lee::{
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, MembershipProof, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind, account::Nonce,
-    encryption::ViewingPublicKey,
+    encryption::ViewingPublicKey, program::CallInput,
 };
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
@@ -270,7 +270,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     );
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
-            root: RootCall {
+            root: CallInput::Inline {
                 to: Actor::native_balance(sender_id),
                 message: Program::serialize_message(lee_core::native_token::Message::Transfer {
                     to: recipient_id,

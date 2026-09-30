@@ -120,7 +120,7 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
             sender,
             vec![sender],
             vec![],
-            Script::default().send(Envelope::new(undeclared, &Script::default())),
+            Script::default().send(Call::new(undeclared, &Script::default())),
             &[],
         );
 
@@ -228,7 +228,7 @@ fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
         sender,
         vec![sender, callee],
         vec![],
-        Script::default().send(Envelope::new(callee, &Script::write(written.clone()))),
+        Script::default().send(Call::new(callee, &Script::write(written.clone()))),
         &[],
     );
 

@@ -19,9 +19,8 @@ use lee_core::{
     WitnessKind,
     account::{Account, AccountId, Actor, ShardData},
     encryption::ViewingPublicKey,
-    execution_state::RootCall,
     native_token,
-    program::Envelope,
+    program::{Call, CallInput},
 };
 use test_guest_core::Script;
 use token_core::{TokenDescriptor, TokenHolding, TokenKind};
@@ -89,7 +88,7 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
 }
 
 const fn proving_input(
-    root: RootCall,
+    root: CallInput,
     public_actors: Vec<Actor>,
     signers: HashSet<AccountId>,
     private_witnesses: Vec<PrivateWitness>,
@@ -121,7 +120,7 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
 
     Ok(execute_and_prove(
         proving_input(
-            RootCall {
+            CallInput::Inline {
                 to: sender,
                 message: to_vec(&native_token::Message::Transfer {
                     to: recipient_id,
@@ -187,7 +186,7 @@ fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutp
 
     Ok(execute_and_prove(
         proving_input(
-            RootCall {
+            CallInput::Inline {
                 to: Actor::new(sender_id, token_id),
                 message: to_vec(&token_transfer_message())?,
             },
@@ -218,13 +217,13 @@ fn prove_scripted_transfers(
     let (sender_id, sender_witness) = private_sender();
 
     // The sender's scripted actor sends every transfer to the sender's own token holding.
-    let transfer = Envelope::new(Actor::new(sender_id, token_id), &token_transfer_message());
+    let transfer = Call::new(Actor::new(sender_id, token_id), &token_transfer_message());
     let script =
         (0..num_transfers).fold(Script::default(), |script, _| script.send(transfer.clone()));
 
     Ok(execute_and_prove(
         proving_input(
-            RootCall {
+            CallInput::Inline {
                 to: Actor::new(sender_id, scripted_id),
                 message: to_vec(&script)?,
             },

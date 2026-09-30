@@ -1,7 +1,7 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Envelope, Origin, ReceiveInput, Response, run_actor_with, write_once},
+    program::{Call, Origin, ReceiveInput, Response, run_actor_with, write_once},
 };
 use ping_core::{ReceiverConfig, ReceiverMessage, ping_record_pda, receiver_config_account_id};
 
@@ -46,7 +46,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 }),
                 "Record is only callable for a peer source this receiver authorizes"
             );
-            Response::keep().send(Envelope::new(
+            Response::keep().send(Call::new(
                 Actor::new(ping_record_pda(program), program),
                 &ReceiverMessage::WriteRecord(payload),
             ))
@@ -135,7 +135,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
         panic!("a delivery to ping_receiver must carry a Record");
     };
     let program = input.receiver.program_account_id;
-    Response::keep().send(Envelope::new(
+    Response::keep().send(Call::new(
         Actor::new(receiver_config_account_id(program), program),
         &ReceiverMessage::RecordFrom {
             deliverer: input.origin_program().expect("a delivery has a sender"),
@@ -155,7 +155,7 @@ fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Resp
         "the configured authority must authorize a change"
     );
     let program = input.receiver.program_account_id;
-    Response::keep().send(Envelope::new(
+    Response::keep().send(Call::new(
         Actor::new(receiver_config_account_id(program), program),
         message,
     ))
@@ -200,7 +200,10 @@ fn assert_authority(
 #[cfg(test)]
 mod tests {
     use borsh::BorshSerialize;
-    use lee_core::{account::ShardData, program::Transition};
+    use lee_core::{
+        account::ShardData,
+        program::{Action, CallInput, Transition},
+    };
     use ping_core::ZoneId;
 
     use super::*;
@@ -259,8 +262,8 @@ mod tests {
         }
     }
 
-    fn to_config(message: &ReceiverMessage) -> Envelope {
-        Envelope::new(config_actor(), message)
+    fn to_config(message: &ReceiverMessage) -> Call {
+        Call::new(config_actor(), message)
     }
 
     // The authority's actor receives `message` from `origin`; the config then receives what it
@@ -271,12 +274,19 @@ mod tests {
         message: &ReceiverMessage,
     ) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] = <[Envelope; 1]>::try_from(entry.sends).expect("one forwarded change");
-        assert_eq!(forwarded.to, config_actor());
+        let [forwarded] = <[Action; 1]>::try_from(entry.sends).expect("one forwarded change");
+        let Action::Call(Call {
+            input: CallInput::Inline { to, message: data },
+            ..
+        }) = forwarded
+        else {
+            panic!("the forwarded change is an inline call");
+        };
+        assert_eq!(to, config_actor());
         at_config(
             Origin::Program(RECEIVER),
             &config(),
-            &borsh::from_slice(&forwarded.message).expect("the forwarded change decodes"),
+            &borsh::from_slice(&data).expect("the forwarded change decodes"),
         )
     }
 
@@ -326,7 +336,7 @@ mod tests {
         assert_eq!(transition.post_data, None);
         assert_eq!(
             transition.sends,
-            vec![to_config(&record_from(INBOX, SOURCE))]
+            vec![to_config(&record_from(INBOX, SOURCE)).into()]
         );
     }
 
@@ -355,10 +365,13 @@ mod tests {
         assert_eq!(transition.post_data, None);
         assert_eq!(
             transition.sends,
-            vec![Envelope::new(
-                actor(ping_record_pda(RECEIVER)),
-                &ReceiverMessage::WriteRecord(b"ping".to_vec()),
-            )]
+            vec![
+                Call::new(
+                    actor(ping_record_pda(RECEIVER)),
+                    &ReceiverMessage::WriteRecord(b"ping".to_vec()),
+                )
+                .into()
+            ]
         );
     }
 
@@ -410,7 +423,10 @@ mod tests {
             &update(AccountId::new([3; 32]), Some(GOVERNANCE)),
         );
 
-        assert_eq!(transition.sends, vec![to_config(&update(AUTHORITY, None))]);
+        assert_eq!(
+            transition.sends,
+            vec![to_config(&update(AUTHORITY, None)).into()]
+        );
     }
 
     // A signed authority does not make any program its governance.

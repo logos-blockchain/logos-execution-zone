@@ -14,7 +14,7 @@ use clock_core::{
 };
 use lee_core::{
     account::Actor,
-    program::{Envelope, ReceiveInput, Response, run_actor},
+    program::{Call, ReceiveInput, Response, run_actor},
 };
 
 fn main() {
@@ -42,7 +42,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 timestamp,
             };
             let record = |account_id| {
-                Envelope::new(
+                Call::new(
                     Actor::new(account_id, input.receiver.program_account_id),
                     &Message::Record(updated_data),
                 )
@@ -123,8 +123,8 @@ mod tests {
         Some(ShardData::try_from(data.to_bytes()).unwrap())
     }
 
-    fn record_to(account_id: AccountId, data: ClockAccountData) -> Envelope {
-        Envelope::new(Actor::new(account_id, CLOCK), &Message::Record(data))
+    fn record_to(account_id: AccountId, data: ClockAccountData) -> Call {
+        Call::new(Actor::new(account_id, CLOCK), &Message::Record(data))
     }
 
     #[test]
@@ -140,7 +140,7 @@ mod tests {
         let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
         assert_eq!(
             at_ten.sends,
-            vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10))]
+            vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10)).into()]
         );
 
         let at_fifty = run(
@@ -152,8 +152,8 @@ mod tests {
         assert_eq!(
             at_fifty.sends,
             vec![
-                record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)),
-                record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)),
+                record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)).into(),
+                record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)).into(),
             ]
         );
     }

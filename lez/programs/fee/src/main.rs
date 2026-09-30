@@ -5,7 +5,7 @@ use fee_core::{
 use lee_core::{
     account::Actor,
     native_token::{Message as NativeMessage, custody_transfer},
-    program::{Envelope, Origin, ReceiveInput, Response, run_actor},
+    program::{Call, Origin, ReceiveInput, Response, run_actor},
 };
 
 fn main() {
@@ -51,7 +51,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             let escrow = compute_fee_escrow_account_id(fee_account_id);
             // Order matters: the escrow receives the base before it pays out of it.
             let mut response = Response::write(fee_state.to_bytes()).send(
-                Envelope::new(
+                Call::new(
                     Actor::native_balance(inbox),
                     &NativeMessage::Transfer {
                         to: escrow,
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                Envelope::new(
+                Call::new(
                     Actor::native_balance(inbox),
                     &NativeMessage::Transfer {
                         to: escrow,
@@ -218,9 +218,10 @@ mod tests {
                         expect_balance: Some(1_007),
                     },
                 )
-                .with_pda_seeds(vec![fee_inbox_seed()]),
-                custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,),
-                custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,),
+                .with_pda_seeds(vec![fee_inbox_seed()])
+                .into(),
+                custody_transfer(inbox, fee_inbox_seed(), PRODUCER, 7,).into(),
+                custody_transfer(escrow, fee_escrow_seed(), PRODUCER, payout,).into(),
             ]
         );
     }
@@ -241,7 +242,7 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                Envelope::new(
+                Call::new(
                     Actor::native_balance(inbox),
                     &NativeMessage::Transfer {
                         to: escrow,
@@ -249,7 +250,8 @@ mod tests {
                         expect_balance: Some(10),
                     },
                 )
-                .with_pda_seeds(vec![fee_inbox_seed()]),
+                .with_pda_seeds(vec![fee_inbox_seed()])
+                .into(),
             ]
         );
     }

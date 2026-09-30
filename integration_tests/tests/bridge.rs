@@ -15,9 +15,10 @@ use integration_tests::{
     utils::{account_balance, get_account},
 };
 use lee::{
-    Actor, RootCall, execute_and_prove_assuming, privacy_preserving_transaction, program::Program,
+    Actor, execute_and_prove_assuming, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
+use lee_core::program::CallInput;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -182,7 +183,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Proven without running the deposit, which settlement refuses.
     let (output, proof) = execute_and_prove_assuming(
         lee::ProvingInput {
-            root: RootCall {
+            root: CallInput::Inline {
                 to: receipt,
                 message: deposit,
             },

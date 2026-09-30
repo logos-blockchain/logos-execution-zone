@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Envelope, Origin, ReceiveInput, Transition},
+    program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification, Notify,
@@ -198,10 +198,16 @@ fn settle(
             state.insert(account, post_data);
         }
         let sender = Origin::Program(token_actor(account).program_account_id);
-        for envelope in transition.sends.into_iter().rev() {
-            let sent =
-                borsh::from_slice(&envelope.message).expect("a token send carries a message");
-            pending.push_front((envelope.to.account_id, sender, sent));
+        for action in transition.sends.into_iter().rev() {
+            let Action::Call(Call {
+                input: CallInput::Inline { to, message: data },
+                ..
+            }) = action
+            else {
+                panic!("a token send is an inline call");
+            };
+            let sent = borsh::from_slice(&data).expect("a token send carries a message");
+            pending.push_front((to.account_id, sender, sent));
         }
     }
 
@@ -322,10 +328,17 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
         let creations: Vec<(AccountId, Message)> =
             expected_sends(Actor::new(receiver, TOKEN_PROGRAM_ID), &message)
                 .into_iter()
-                .filter_map(|envelope| {
-                    let sent: Message = borsh::from_slice(&envelope.message)
-                        .expect("a token send carries a message");
-                    matches!(sent, Message::Create(_)).then_some((envelope.to.account_id, sent))
+                .filter_map(|action| {
+                    let Action::Call(Call {
+                        input: CallInput::Inline { to, message: data },
+                        ..
+                    }) = action
+                    else {
+                        panic!("a token send is an inline call");
+                    };
+                    let sent: Message =
+                        borsh::from_slice(&data).expect("a token send carries a message");
+                    matches!(sent, Message::Create(_)).then_some((to.account_id, sent))
                 })
                 .collect();
         assert_eq!(
@@ -573,15 +586,18 @@ fn a_credit_with_notify_sends_one_notification() {
 
     assert_eq!(
         transition.sends,
-        vec![Envelope::new(
-            listener,
-            &Message::Notification(Notification {
-                credited_account: HOLDING_ID,
-                descriptor: FUNGIBLE,
-                amount: TRANSFER_AMOUNT,
-                payload: b"swap".to_vec(),
-            })
-        )]
+        vec![
+            Call::new(
+                listener,
+                &Message::Notification(Notification {
+                    credited_account: HOLDING_ID,
+                    descriptor: FUNGIBLE,
+                    amount: TRANSFER_AMOUNT,
+                    payload: b"swap".to_vec(),
+                })
+            )
+            .into()
+        ]
     );
 }
 
@@ -609,10 +625,13 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
             Actor::new(HOLDING_ID, TOKEN_PROGRAM_ID),
             &transfer(FUNGIBLE, TRANSFER_AMOUNT)
         ),
-        vec![Envelope::new(
-            token_actor(HOLDING_ID_2),
-            &credit(FUNGIBLE, TRANSFER_AMOUNT)
-        )]
+        vec![
+            Call::new(
+                token_actor(HOLDING_ID_2),
+                &credit(FUNGIBLE, TRANSFER_AMOUNT)
+            )
+            .into()
+        ]
     );
 }
 
@@ -1129,14 +1148,17 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
 
     assert_eq!(
         transition.sends,
-        vec![Envelope::new(
-            token_actor(DEFINITION_ID),
-            &Message::BurnSupply {
-                definition_id: DEFINITION_ID,
-                kind: TokenKind::Fungible,
-                amount: BURN_SUCCESS,
-            }
-        )]
+        vec![
+            Call::new(
+                token_actor(DEFINITION_ID),
+                &Message::BurnSupply {
+                    definition_id: DEFINITION_ID,
+                    kind: TokenKind::Fungible,
+                    amount: BURN_SUCCESS,
+                }
+            )
+            .into()
+        ]
     );
 }
 

@@ -20,7 +20,11 @@ use lee::{
     error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::{account::Account, native_token::TransferError, program::Envelope};
+use lee_core::{
+    account::Account,
+    native_token::TransferError,
+    program::{Call, CallInput},
+};
 use ping_core::{
     ReceiverMessage, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
     sender_config_account_id,
@@ -337,9 +341,11 @@ fn via_proxy(
     let caller = Actor::new(authority, proxy_id);
     let entry = Actor::new(authority, target);
     let config = Actor::new(config, target);
-    let script = Script::default().send(Envelope {
-        to: entry,
-        message: forwarded,
+    let script = Script::default().send(Call {
+        input: CallInput::Inline {
+            to: entry,
+            message: forwarded,
+        },
         pda_seeds: delegated.into_iter().collect(),
     });
     let message = Message::try_new(caller, vec![caller, entry, config], vec![], script)

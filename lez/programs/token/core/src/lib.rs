@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::Envelope,
+    program::{Action, Call},
 };
 use serde::{Deserialize, Serialize};
 
@@ -268,23 +268,28 @@ impl From<&TokenMetadata> for ShardData {
 }
 
 #[must_use]
-pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Envelope> {
+pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
     let own = |account_id: AccountId| Actor::new(account_id, receiver.program_account_id);
-    let create = |to: AccountId, data: ShardData| Envelope::new(own(to), &Message::Create(data));
+    let create = |to: AccountId, data: ShardData| -> Action {
+        Call::new(own(to), &Message::Create(data)).into()
+    };
     match message {
         Message::Transfer {
             to,
             descriptor,
             amount,
             notify,
-        } => vec![Envelope::new(
-            own(*to),
-            &Message::Credit {
-                descriptor: *descriptor,
-                amount: *amount,
-                notify: notify.clone(),
-            },
-        )],
+        } => vec![
+            Call::new(
+                own(*to),
+                &Message::Credit {
+                    descriptor: *descriptor,
+                    amount: *amount,
+                    notify: notify.clone(),
+                },
+            )
+            .into(),
+        ],
         Message::Credit {
             descriptor,
             amount,
@@ -292,7 +297,7 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Envelope> {
         } => notify
             .iter()
             .map(|target| {
-                Envelope::new(
+                Call::new(
                     target.to,
                     &Message::Notification(Notification {
                         credited_account: receiver.account_id,
@@ -301,20 +306,24 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Envelope> {
                         payload: target.payload.clone(),
                     }),
                 )
+                .into()
             })
             .collect(),
         Message::Burn {
             descriptor,
             amount,
             definition,
-        } => vec![Envelope::new(
-            own(*definition),
-            &Message::BurnSupply {
-                definition_id: descriptor.definition_id,
-                kind: descriptor.kind,
-                amount: *amount,
-            },
-        )],
+        } => vec![
+            Call::new(
+                own(*definition),
+                &Message::BurnSupply {
+                    definition_id: descriptor.definition_id,
+                    kind: descriptor.kind,
+                    amount: *amount,
+                },
+            )
+            .into(),
+        ],
         Message::PrintNft {
             printed,
             definition_id,
@@ -357,17 +366,20 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Envelope> {
                 }))
                 .collect()
         }
-        Message::Mint { to, amount } => vec![Envelope::new(
-            own(*to),
-            &Message::Credit {
-                descriptor: TokenDescriptor {
-                    definition_id: receiver.account_id,
-                    kind: TokenKind::Fungible,
+        Message::Mint { to, amount } => vec![
+            Call::new(
+                own(*to),
+                &Message::Credit {
+                    descriptor: TokenDescriptor {
+                        definition_id: receiver.account_id,
+                        kind: TokenKind::Fungible,
+                    },
+                    amount: *amount,
+                    notify: None,
                 },
-                amount: *amount,
-                notify: None,
-            },
-        )],
+            )
+            .into(),
+        ],
         Message::EnsureHolding { .. }
         | Message::BurnSupply { .. }
         | Message::AssertKind { .. }

@@ -12,7 +12,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey, RootCall,
+    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
     privacy_preserving_transaction::{
         circuit::{ProgramCatalog, execute_and_prove},
         message::Message,
@@ -25,7 +25,7 @@ use lee_core::{
     PrivateWitness, WitnessKind,
     encryption::ViewingPublicKey,
     native_token::{Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID},
-    program::{Envelope, PdaSeed},
+    program::{Call, CallInput, PdaSeed},
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_guest_core::Script;
@@ -68,7 +68,7 @@ async fn fund_private_pda(
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            root: RootCall {
+            root: CallInput::Inline {
                 to: sender_actor,
                 message: transfer,
             },
@@ -137,7 +137,7 @@ async fn spend_private_pda(
         .balance(),
     ];
     let spend = Script::default().send(
-        Envelope::new(
+        Call::new(
             accounts[1].actor(),
             &NativeMessage::Transfer {
                 to: accounts[2].identity.account_id(),

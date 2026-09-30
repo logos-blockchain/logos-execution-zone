@@ -6,7 +6,7 @@ use cross_zone_outbox_core::Message as OutboxMessage;
 use lee_core::{
     account::Actor,
     native_token::custody_transfer,
-    program::{Envelope, Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{Call, Origin, ReceiveInput, Response, run_actor, write_once},
 };
 use wrapped_token_core::{MAX_MINT_AMOUNT, Message as WrappedMessage};
 
@@ -77,7 +77,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             // The config checks it before the debit and the emission are delivered, as the read
             // it replaces did.
             Response::keep()
-                .send(Envelope::new(
+                .send(Call::new(
                     Actor::new(config_account_id(program), program),
                     &Message::CheckRoute {
                         outbox_account_id: outbox.program_account_id,
@@ -90,7 +90,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                     escrow_account_id(program),
                     amount,
                 ))
-                .send(Envelope::new(
+                .send(Call::new(
                     outbox,
                     &OutboxMessage::Emit {
                         target_zone,
@@ -288,20 +288,22 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                Envelope::new(
+                Call::new(
                     config_actor(),
                     &Message::CheckRoute {
                         outbox_account_id: OUTBOX_ID,
                         target_account_id: WRAPPED_ID,
                     },
-                ),
+                )
+                .into(),
                 custody_transfer(
                     holding_account_id(BRIDGE_LOCK_ID, &holder),
                     holding_seed(&holder),
                     escrow_account_id(BRIDGE_LOCK_ID),
                     AMOUNT,
-                ),
-                Envelope::new(
+                )
+                .into(),
+                Call::new(
                     outbox_actor(),
                     &OutboxMessage::Emit {
                         target_zone: ZONE,
@@ -310,7 +312,8 @@ mod tests {
                         payload: mint_payload(AMOUNT),
                         ordinal: 0,
                     },
-                ),
+                )
+                .into(),
             ],
             "the route is checked first, then the escrow debit, then the emission"
         );

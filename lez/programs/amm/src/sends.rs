@@ -1,7 +1,7 @@
 use amm_core::{Message, PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
 use lee_core::{
     account::{AccountId, Actor},
-    program::Envelope,
+    program::Call,
 };
 use token_core::{NewTokenDefinition, TokenDescriptor, TokenKind};
 
@@ -17,9 +17,9 @@ pub fn liquidity_sends(
     pool: &PoolDefinition,
     message: &Message,
     creates_lp: bool,
-) -> Vec<Envelope> {
+) -> Vec<Call> {
     let lp_send = |lp_message: &token_core::Message| {
-        Envelope::new(token_actor(pool, pool.liquidity_pool_id), lp_message)
+        Call::new(token_actor(pool, pool.liquidity_pool_id), lp_message)
             .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool_id)])
     };
     match *message {
@@ -97,7 +97,7 @@ pub fn liquidity_sends(
             user_b,
             user_lp,
         } => vec![
-            Envelope::new(
+            Call::new(
                 token_actor(pool, user_lp),
                 &token_core::Message::Burn {
                     descriptor: fungible(pool.liquidity_pool_id),
@@ -132,7 +132,7 @@ pub fn withdrawal(
     definition_id: AccountId,
     to: AccountId,
     amount: u128,
-) -> Envelope {
+) -> Call {
     transfer(pool, vault_id, to, definition_id, amount)
         .with_pda_seeds(vec![compute_vault_pda_seed(pool_id, definition_id)])
 }
@@ -143,8 +143,8 @@ fn transfer(
     to: AccountId,
     definition_id: AccountId,
     amount: u128,
-) -> Envelope {
-    Envelope::new(
+) -> Call {
+    Call::new(
         token_actor(pool, from),
         &token_core::Message::Transfer {
             to,

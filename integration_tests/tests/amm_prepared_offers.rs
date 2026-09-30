@@ -16,14 +16,16 @@ use integration_tests::{
     wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, RootCall,
-    execute_and_prove_assuming,
+    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, execute_and_prove_assuming,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
     },
     program::Program,
 };
-use lee_core::{NullifierWitness, PrivateWitness, WitnessKind};
+use lee_core::{
+    NullifierWitness, PrivateWitness, WitnessKind,
+    program::{Action, Call, CallInput},
+};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 use tokio::test;
@@ -73,12 +75,22 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
     vec![
         expected_sends(vault_b, &payout)
             .into_iter()
-            .map(|credit| lee::Assumption {
-                from: vault_b,
-                to: credit.to,
-                message: credit.message,
-                grants: vec![pool.vault_b],
-                pda_seeds: credit.pda_seeds,
+            .map(|credit| {
+                let Action::Call(Call {
+                    input: CallInput::Inline { to, message },
+                    pda_seeds,
+                }) = credit
+                else {
+                    panic!("the token program's payout is an inline call");
+                };
+                lee::Assumption {
+                    from: vault_b,
+                    to,
+                    message,
+                    in_flight: None,
+                    grants: vec![pool.vault_b],
+                    pda_seeds,
+                }
             })
             .collect(),
     ]
@@ -135,7 +147,7 @@ async fn prepare_offer(
 
     let (output, proof) = execute_and_prove_assuming(
         ProvingInput {
-            root: RootCall {
+            root: CallInput::Inline {
                 to: Actor::new(trader.input, token_program_id()),
                 message: swap_message(pool, trader)?,
             },

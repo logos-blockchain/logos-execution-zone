@@ -12,7 +12,7 @@ use amm_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Envelope, Origin, ReceiveInput, Transition},
+    program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
 };
 use token_core::{NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends};
 
@@ -159,8 +159,8 @@ const fn fungible_of(definition_id: AccountId) -> TokenDescriptor {
     }
 }
 
-fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Envelope {
-    Envelope::new(
+fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Call {
+    Call::new(
         token_actor(from),
         &token_core::Message::Transfer {
             to,
@@ -171,13 +171,13 @@ fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u1
     )
 }
 
-fn withdrawal(vault: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Envelope {
+fn withdrawal(vault: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Call {
     transfer(vault, to, definition_id, amount)
         .with_pda_seeds(vec![compute_vault_pda_seed(pool_id(), definition_id)])
 }
 
-fn lp_send(message: &token_core::Message) -> Envelope {
-    Envelope::new(token_actor(token_lp_id()), message)
+fn lp_send(message: &token_core::Message) -> Call {
+    Call::new(token_actor(token_lp_id()), message)
         .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool_id())])
 }
 
@@ -434,9 +434,10 @@ fn call_add_liquidity_successful() {
             lp_send(&token_core::Message::Mint {
                 to: USER_LP_ID,
                 amount: ADD_LP,
-            }),
-            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, ADD_ACTUAL_B),
-            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, ADD_ACTUAL_A),
+            })
+            .into(),
+            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, ADD_ACTUAL_B).into(),
+            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, ADD_ACTUAL_A).into(),
         ]
     );
 }
@@ -531,16 +532,17 @@ fn call_remove_liquidity_successful() {
     assert_eq!(
         transition.sends,
         vec![
-            Envelope::new(
+            Call::new(
                 token_actor(USER_LP_ID),
                 &token_core::Message::Burn {
                     descriptor: fungible_of(token_lp_id()),
                     amount: REMOVE_LP,
                     definition: token_lp_id(),
                 },
-            ),
-            withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, REMOVE_B),
-            withdrawal(vault_a_id(), USER_A_ID, TOKEN_A_ID, REMOVE_A),
+            )
+            .into(),
+            withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, REMOVE_B).into(),
+            withdrawal(vault_a_id(), USER_A_ID, TOKEN_A_ID, REMOVE_A).into(),
         ]
     );
 }
@@ -647,9 +649,10 @@ fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
                 },
                 holding: USER_LP_ID,
                 metadata: None,
-            }),
-            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, RESERVE_B),
-            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, RESERVE_A),
+            })
+            .into(),
+            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, RESERVE_B).into(),
+            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, RESERVE_A).into(),
         ]
     );
 }
@@ -669,10 +672,13 @@ fn new_definition_lp_asymmetric_amounts() {
     assert_eq!(written(&transition).liquidity_pool_supply, LP_SUPPLY);
     assert_eq!(
         transition.sends.first(),
-        Some(&lp_send(&token_core::Message::Mint {
-            to: USER_LP_ID,
-            amount: LP_SUPPLY,
-        }))
+        Some(
+            &lp_send(&token_core::Message::Mint {
+                to: USER_LP_ID,
+                amount: LP_SUPPLY,
+            })
+            .into()
+        )
     );
 }
 
@@ -684,14 +690,17 @@ fn new_definition_lp_symmetric_amounts() {
     assert_eq!(written(&transition).liquidity_pool_supply, 100);
     assert_eq!(
         transition.sends.first(),
-        Some(&lp_send(&token_core::Message::NewDefinition {
-            definition: NewTokenDefinition::Fungible {
-                name: String::from("LP Token"),
-                total_supply: 100,
-            },
-            holding: USER_LP_ID,
-            metadata: None,
-        }))
+        Some(
+            &lp_send(&token_core::Message::NewDefinition {
+                definition: NewTokenDefinition::Fungible {
+                    name: String::from("LP Token"),
+                    total_supply: 100,
+                },
+                holding: USER_LP_ID,
+                metadata: None,
+            })
+            .into()
+        )
     );
 }
 
@@ -824,12 +833,9 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
 
         assert_eq!(
             swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out).sends,
-            vec![withdrawal(
-                output_vault,
-                user_output,
-                definition_id_out,
-                amount_out
-            )]
+            vec![
+                withdrawal(output_vault, user_output, definition_id_out, amount_out).into()
+            ]
         );
     }
 }
@@ -849,34 +855,52 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
         offer(definition_id_out, 45, user_output),
     );
 
-    let decoded = |envelope: &Envelope| -> token_core::Message {
-        borsh::from_slice(&envelope.message).expect("a token send carries a token message")
+    let inline = |action: Action| {
+        let Action::Call(Call {
+            input: CallInput::Inline { to, message },
+            ..
+        }) = action
+        else {
+            panic!("a token send is an inline call");
+        };
+        (to, message)
     };
-    let [credit] = <[Envelope; 1]>::try_from(expected_sends(token_actor(user_input), &trade))
+    let decoded = |message: &[u8]| -> token_core::Message {
+        borsh::from_slice(message).expect("a token send carries a token message")
+    };
+    let [credit] = <[Action; 1]>::try_from(expected_sends(token_actor(user_input), &trade))
         .expect("a transfer sends one credit");
-    assert_eq!(credit.to, token_actor(input_vault));
-    let [notice] =
-        <[Envelope; 1]>::try_from(expected_sends(token_actor(input_vault), &decoded(&credit)))
-            .expect("a notified credit sends one notification");
-    assert_eq!(notice.to, pool);
+    let (credit_to, credit_message) = inline(credit);
+    assert_eq!(credit_to, token_actor(input_vault));
+    let [notice] = <[Action; 1]>::try_from(expected_sends(
+        token_actor(input_vault),
+        &decoded(&credit_message),
+    ))
+    .expect("a notified credit sends one notification");
+    let (notice_to, notice_message) = inline(notice);
+    assert_eq!(notice_to, pool);
 
     let settled = pool_turn(
         pool_shard(&pool_base()),
         Origin::Program(TOKEN_PROGRAM_ID),
-        notice.message,
+        notice_message,
     );
-    let [payout] = <[Envelope; 1]>::try_from(settled.sends).expect("a swap sends one withdrawal");
-    assert_eq!(payout.to, token_actor(output_vault));
+    let [payout] = <[Action; 1]>::try_from(settled.sends).expect("a swap sends one withdrawal");
+    let (payout_to, payout_message) = inline(payout);
+    assert_eq!(payout_to, token_actor(output_vault));
     assert_eq!(
-        expected_sends(token_actor(output_vault), &decoded(&payout)),
-        vec![Envelope::new(
-            token_actor(user_output),
-            &token_core::Message::Credit {
-                descriptor: fungible_of(definition_id_out),
-                amount: 45,
-                notify: None,
-            },
-        )]
+        expected_sends(token_actor(output_vault), &decoded(&payout_message)),
+        vec![
+            Call::new(
+                token_actor(user_output),
+                &token_core::Message::Credit {
+                    descriptor: fungible_of(definition_id_out),
+                    amount: 45,
+                    notify: None,
+                },
+            )
+            .into()
+        ]
     );
 }
 

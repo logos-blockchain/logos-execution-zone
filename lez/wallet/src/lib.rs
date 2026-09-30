@@ -20,7 +20,6 @@ use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
-    RootCall,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -29,7 +28,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
-    program::MessageData,
+    program::{CallInput, MessageData},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -877,7 +876,7 @@ impl WalletCore {
 
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
-            root: RootCall { to, message },
+            root: CallInput::Inline { to, message },
             public_actors: acc_manager.public_actors(),
             signers: acc_manager.signers(),
             private_witnesses: acc_manager.private_witnesses()?,

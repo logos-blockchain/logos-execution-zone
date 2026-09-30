@@ -14,7 +14,7 @@ use kameo::actor::Spawn as _;
 use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
-use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::Envelope};
+use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::Call};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
@@ -2243,7 +2243,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         caller,
         public_actors,
         vec![], // no signers
-        Script::default().send(Envelope::new(
+        Script::default().send(Call::new(
             clock_actors[0],
             &clock_core::Message::Tick {
                 timestamp,

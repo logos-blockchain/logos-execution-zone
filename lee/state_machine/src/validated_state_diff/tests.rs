@@ -1,7 +1,7 @@
 use lee_core::{
     account::{AccountId, Actor, Nonce},
     execution_state::ExecutionError,
-    program::Envelope,
+    program::{Call, CallInput},
 };
 use test_guest_core::Script;
 
@@ -170,7 +170,7 @@ fn turns_share_one_budget() {
         .with_public_account_balances([(from, 1_000)])
         .with_programs([crate::test_methods::scripted()]);
     let sender = Actor::new(from, scripted_id());
-    let callee = Envelope::new(sender, &Script::default());
+    let callee = Call::new(sender, &Script::default());
     let sending = |sends: usize| {
         let script = (0..sends).fold(Script::default(), |script, _| script.send(callee.clone()));
         public_tx(sender, vec![sender], vec![Nonce(0)], script, &[&from_key])
@@ -283,9 +283,11 @@ fn a_sent_turns_nonzero_exit_adds_its_cycles_to_its_senders() {
     let exiting = Actor::new(from, exits_id);
     let run = |sends: usize| {
         let script = (0..sends).fold(Script::default(), |script, _| {
-            script.send(Envelope {
-                to: exiting,
-                message: Vec::new(),
+            script.send(Call {
+                input: CallInput::Inline {
+                    to: exiting,
+                    message: Vec::new(),
+                },
                 pda_seeds: Vec::new(),
             })
         });
@@ -403,7 +405,7 @@ fn a_send_to_an_undeclared_actor_from_a_later_turn_is_charged() {
         sender,
         vec![sender],
         vec![Nonce(0)],
-        Script::write(vec![7_u8; 4]).send(Envelope::new(undeclared, &Script::default())),
+        Script::write(vec![7_u8; 4]).send(Call::new(undeclared, &Script::default())),
         &[&from_key],
     );
 

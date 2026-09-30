@@ -1,5 +1,5 @@
 use cross_zone_outbox_core::Message as OutboxMessage;
-use lee_core::program::{Envelope, Origin, ReceiveInput, Response, run_actor, write_once};
+use lee_core::program::{Call, Origin, ReceiveInput, Response, run_actor, write_once};
 use ping_core::{SenderMessage, outbox_bytes, read_outbox, sender_config_account_id};
 
 fn main() {
@@ -29,7 +29,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
                 pinned, outbox.program_account_id,
                 "the emission names a program the ping-sender config does not pin as its outbox"
             );
-            Response::keep().send(Envelope::new(
+            Response::keep().send(Call::new(
                 outbox,
                 &OutboxMessage::Emit {
                     target_zone,
@@ -105,16 +105,19 @@ mod tests {
         assert_eq!(transition.post_data, None);
         assert_eq!(
             transition.sends,
-            vec![Envelope::new(
-                Actor::new(AccountId::new([2; 32]), OUTBOX),
-                &OutboxMessage::Emit {
-                    target_zone: [1; 32],
-                    target_account_id: AccountId::new([3; 32]),
-                    target_accounts: vec![],
-                    payload: b"ping".to_vec(),
-                    ordinal: 0,
-                },
-            )]
+            vec![
+                Call::new(
+                    Actor::new(AccountId::new([2; 32]), OUTBOX),
+                    &OutboxMessage::Emit {
+                        target_zone: [1; 32],
+                        target_account_id: AccountId::new([3; 32]),
+                        target_accounts: vec![],
+                        payload: b"ping".to_vec(),
+                        ordinal: 0,
+                    },
+                )
+                .into()
+            ]
         );
     }
 

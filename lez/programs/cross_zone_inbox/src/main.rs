@@ -4,7 +4,7 @@ use cross_zone_inbox_core::{
 };
 use lee_core::{
     account::Actor,
-    program::{Envelope, Origin, ReceiveInput, Response, run_actor, write_once},
+    program::{Call, Origin, ReceiveInput, Response, run_actor, write_once},
 };
 
 fn main() {
@@ -54,7 +54,7 @@ fn dispatch(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         inbox_seen_shard_account_id(inbox, &msg.src_zone, msg.src_block_id),
         inbox,
     );
-    Response::keep().send(Envelope::new(seen, &Message::Mark(msg)))
+    Response::keep().send(Call::new(seen, &Message::Mark(msg)))
 }
 
 fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
@@ -86,7 +86,7 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
     shard.insert(msg.src_block_hash, msg.src_tx_index);
 
     let target = Actor::new(msg.target_account_id, msg.target_account_id);
-    Response::write(shard.to_bytes()).send(Envelope::new(
+    Response::write(shard.to_bytes()).send(Call::new(
         target,
         &Delivery {
             src_zone: msg.src_zone,
@@ -191,14 +191,17 @@ mod tests {
         assert_eq!(first.post_data, Some(written(shard_with(&[3]))));
         assert_eq!(
             first.sends,
-            vec![Envelope::new(
-                Actor::new(TARGET, TARGET),
-                &Delivery {
-                    src_zone: PEER_ZONE,
-                    src_account_id: SOURCE,
-                    payload: b"payload".to_vec(),
-                },
-            )]
+            vec![
+                Call::new(
+                    Actor::new(TARGET, TARGET),
+                    &Delivery {
+                        src_zone: PEER_ZONE,
+                        src_account_id: SOURCE,
+                        payload: b"payload".to_vec(),
+                    },
+                )
+                .into()
+            ]
         );
 
         assert_eq!(
@@ -257,7 +260,7 @@ mod tests {
         assert_eq!(transition.post_data, None);
         assert_eq!(
             transition.sends,
-            vec![Envelope::new(seen_actor(), &Message::Mark(message))]
+            vec![Call::new(seen_actor(), &Message::Mark(message)).into()]
         );
     }
 

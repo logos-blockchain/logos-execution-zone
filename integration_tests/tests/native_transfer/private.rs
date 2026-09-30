@@ -8,12 +8,12 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, ProvingInput, RootCall, execute_and_prove,
+    AccountId, Actor, ProvingInput, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind, encryption::ViewingPublicKey, native_token,
+    PrivateWitness, WitnessKind, encryption::ViewingPublicKey, native_token, program::CallInput,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -605,7 +605,7 @@ fn prove_init_with_commitment_root(
     let sender = Actor::native_balance(sender_id);
     let (output, _) = execute_and_prove(
         ProvingInput {
-            root: RootCall {
+            root: CallInput::Inline {
                 to: sender,
                 message: Program::serialize_message(native_token::Message::Transfer {
                     to: recipient_account_id,

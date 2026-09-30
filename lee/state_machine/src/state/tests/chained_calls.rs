@@ -1,7 +1,7 @@
 use super::*;
 
-fn native_send(from: AccountId, to: AccountId, amount: u128) -> Envelope {
-    Envelope::new(Actor::native_balance(from), &transfer(to, amount))
+fn native_send(from: AccountId, to: AccountId, amount: u128) -> Call {
+    Call::new(Actor::native_balance(from), &transfer(to, amount))
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn public_sent_calls() {
 
 fn self_sends(actor: Actor, depth: usize) -> Script {
     (0..depth).fold(Script::default(), |script, _| {
-        Script::default().send(Envelope::new(actor, &script))
+        Script::default().send(Call::new(actor, &script))
     })
 }
 
@@ -121,8 +121,8 @@ fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
         vec![delegator, Actor::new(pda_id, TWIN)],
         vec![],
         Script::default()
-            .send(Envelope::new(callee, &Script::default().authorized()).with_pda_seeds(vec![seed]))
-            .send(Envelope::new(callee, &Script::default().authorized())),
+            .send(Call::new(callee, &Script::default().authorized()).with_pda_seeds(vec![seed]))
+            .send(Call::new(callee, &Script::default().authorized())),
         &[],
     );
 
@@ -211,7 +211,7 @@ fn private_sent_calls(number_of_calls: u32) {
         ])
         .with_programs([crate::test_methods::scripted()]);
     let amount: u128 = 37;
-    let send = Envelope::new(
+    let send = Call::new(
         Actor::native_balance(from_account_id),
         &transfer(to_account_id, amount),
     );

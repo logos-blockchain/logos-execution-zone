@@ -79,6 +79,7 @@ impl NestedBoundary {
                     from: outer,
                     to: nested_private(),
                     message: borsh::to_vec(&inner_turn()).unwrap(),
+                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -394,7 +395,7 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
 
     // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
     let script =
-        Script::write(vec![1]).send(Envelope::new(sender, &transfer(recipient_id, overdraft)));
+        Script::write(vec![1]).send(Call::new(sender, &transfer(recipient_id, overdraft)));
     let proven = execute_and_prove(
         ProvingInput {
             public_actors: vec![own, sender],
@@ -633,8 +634,8 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
 
     let tx = root.prove(
         &Script::default()
-            .send(Envelope::new(written_to, &Script::write(vec![5; 4])))
-            .send(Envelope::new(
+            .send(Call::new(written_to, &Script::write(vec![5; 4])))
+            .send(Call::new(
                 Actor::native_balance(root.account_id),
                 &transfer(recipient.account_id, amount),
             )),
@@ -672,7 +673,7 @@ fn assert_forged_field_is_refused(forge_field: ForgeField) {
     // The prover assumes the forger delivers nothing back, without running it.
     let proven = execute_and_prove_assuming(
         root.proving_input(
-            &Script::default().send(Envelope::new(forger, &forge_field)),
+            &Script::default().send(Call::new(forger, &forge_field)),
             vec![forger],
         ),
         vec![Vec::new()],
@@ -726,7 +727,7 @@ fn nested_actors() -> (Actor, Actor) {
 }
 
 fn inner_turn() -> Script {
-    Script::default().send(Envelope::new(nested_actors().1, &Script::write(vec![2; 4])))
+    Script::default().send(Call::new(nested_actors().1, &Script::write(vec![2; 4])))
 }
 
 fn nested_private() -> Actor {
@@ -738,7 +739,7 @@ fn nested_private() -> Actor {
 }
 
 fn outer_turn(delivered: &Script) -> Script {
-    Script::write(vec![1; 4]).send(Envelope::new(nested_private(), delivered))
+    Script::write(vec![1; 4]).send(Call::new(nested_private(), delivered))
 }
 
 #[test]

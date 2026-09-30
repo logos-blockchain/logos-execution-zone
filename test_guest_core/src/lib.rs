@@ -2,16 +2,14 @@
 //! callers cannot drift apart. `Script` is what `scripted` runs.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::program::{
-    BlockValidityWindow, Envelope, Origin, ProgramEvent, TimestampValidityWindow,
-};
+use lee_core::program::{Action, BlockValidityWindow, Origin, ProgramEvent, TimestampValidityWindow};
 
 pub mod guests;
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct Script {
     pub write: Option<Vec<u8>>,
-    pub sends: Vec<Envelope>,
+    pub sends: Vec<Action>,
     pub events: Vec<ProgramEvent>,
     pub block_window: BlockValidityWindow,
     pub timestamp_window: TimestampValidityWindow,
@@ -29,8 +27,8 @@ impl Script {
     }
 
     #[must_use]
-    pub fn send(mut self, envelope: Envelope) -> Self {
-        self.sends.push(envelope);
+    pub fn send(mut self, action: impl Into<Action>) -> Self {
+        self.sends.push(action.into());
         self
     }
 

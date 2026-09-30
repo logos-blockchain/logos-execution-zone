@@ -21,7 +21,7 @@
 use lee_core::{
     account::{AccountId, Actor},
     native_token,
-    program::{Envelope, PdaSeed, ReceiveInput, Response, run_actor},
+    program::{Call, CallInput, PdaSeed, ReceiveInput, Response, run_actor},
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -41,8 +41,8 @@ pub enum FlashSwapMessage {
     },
 }
 
-fn pinned_transfer(vault: AccountId, receiver: AccountId, amount: u128, balance: u128) -> Envelope {
-    Envelope::new(
+fn pinned_transfer(vault: AccountId, receiver: AccountId, amount: u128, balance: u128) -> Call {
+    Call::new(
         Actor::native_balance(vault),
         &native_token::Message::Transfer {
             to: receiver,
@@ -65,12 +65,14 @@ fn main() {
                 callback_message,
             } => Response::keep()
                 .send(pinned_transfer(vault, receiver, amount_out, vault_balance))
-                .send(Envelope {
-                    to: callback,
-                    message: callback_message,
+                .send(Call {
+                    input: CallInput::Inline {
+                        to: callback,
+                        message: callback_message,
+                    },
                     pda_seeds: Vec::new(),
                 })
-                .send(Envelope::new(
+                .send(Call::new(
                     input.receiver,
                     &FlashSwapMessage::InvariantCheck {
                         vault,

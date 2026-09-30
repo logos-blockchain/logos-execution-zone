@@ -1,6 +1,6 @@
 use lee_core::{
     account::Actor,
-    program::{Envelope, ReceiveInput, Response, run_actor},
+    program::{Call, ReceiveInput, Response, run_actor},
 };
 
 // Tail Call example program.
@@ -18,5 +18,5 @@ fn main() {
 fn receive(_input: &ReceiveInput, callee: Actor) -> Response {
     let greeting: Vec<u8> = b"Hello from tail call".to_vec();
 
-    Response::keep().send(Envelope::new(callee, &greeting))
+    Response::keep().send(Call::new(callee, &greeting))
 }

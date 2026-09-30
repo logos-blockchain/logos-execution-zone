@@ -4,7 +4,7 @@ use lee_core::{
     BlockId,
     account::{AccountId, Actor},
     native_token::{self, custody_transfer},
-    program::{BlockValidityWindow, Envelope, Origin, ReceiveInput, Response, run_actor},
+    program::{BlockValidityWindow, Call, Origin, ReceiveInput, Response, run_actor},
 };
 use sequencer_stake_core::{
     ChannelParams, Message, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig,
@@ -138,7 +138,7 @@ fn stake(
             has_record,
         },
     ))
-    .send(Envelope::new(
+    .send(Call::new(
         Actor::native_balance(funding),
         &native_token::Message::Transfer {
             to: stake_funds_account_id(program, &ownership),
@@ -468,8 +468,8 @@ fn assert_bookkeeping(input: &ReceiveInput) {
     );
 }
 
-fn to_config(program: AccountId, message: &Message) -> Envelope {
-    Envelope::new(
+fn to_config(program: AccountId, message: &Message) -> Call {
+    Call::new(
         Actor::new(sequencer_stake_config_account_id(program), program),
         message,
     )
@@ -803,8 +803,14 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                to_config(PROGRAM, &settle(OWNER, 500, EXIT_DELAY)),
-                custody_transfer(funds_of(OWNER), stake_funds_seed(&OWNER), DESTINATION, 500,),
+                to_config(PROGRAM, &settle(OWNER, 500, EXIT_DELAY)).into(),
+                custody_transfer(
+                    funds_of(OWNER),
+                    stake_funds_seed(&OWNER),
+                    DESTINATION,
+                    500,
+                )
+                .into(),
             ]
         );
     }
@@ -924,7 +930,7 @@ mod tests {
         );
         assert_eq!(
             transition.sends,
-            vec![to_config(PROGRAM, &track(OWNER, 500))]
+            vec![to_config(PROGRAM, &track(OWNER, 500)).into()]
         );
     }
 
@@ -982,15 +988,16 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)),
-                Envelope::new(
+                to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)).into(),
+                Call::new(
                     Actor::native_balance(FUNDING),
                     &native_token::Message::Transfer {
                         to: funds_of(OWNER),
                         amount: MINIMUM,
                         expect_balance: None,
                     },
-                ),
+                )
+                .into(),
             ]
         );
     }
@@ -1087,13 +1094,14 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                to_config(PROGRAM, &apply_slash(OWNER, approvals, 3_000)),
+                to_config(PROGRAM, &apply_slash(OWNER, approvals, 3_000)).into(),
                 custody_transfer(
                     funds_of(OWNER),
                     stake_funds_seed(&OWNER),
                     slash_sink_account_id(PROGRAM),
                     3_000,
-                ),
+                )
+                .into(),
             ]
         );
     }

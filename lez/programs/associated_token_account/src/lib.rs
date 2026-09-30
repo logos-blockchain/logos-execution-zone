@@ -4,7 +4,7 @@ pub use associated_token_account_core as core;
 use associated_token_account_core::{Message, PdaSeed, ata_of};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{Envelope, ReceiveInput, Response},
+    program::{Call, ReceiveInput, Response},
 };
 use token_core::TokenDescriptor;
 
@@ -30,7 +30,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
             kind,
         } => {
             let (ata, seed) = holding(token_program_id, definition_id);
-            let ensure = Envelope::new(
+            let ensure = Call::new(
                 ata,
                 &token_core::Message::EnsureHolding {
                     descriptor: TokenDescriptor {
@@ -40,7 +40,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                 },
             );
             Response::keep()
-                .send(Envelope::new(
+                .send(Call::new(
                     Actor::new(definition_id, token_program_id),
                     &token_core::Message::AssertKind { kind },
                 ))
@@ -59,7 +59,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
             Response::keep().send(
-                Envelope::new(
+                Call::new(
                     ata,
                     &token_core::Message::Transfer {
                         to,
@@ -79,7 +79,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
             assert!(input.is_authorized, "Owner authorization is missing");
             let (ata, seed) = holding(token_program_id, descriptor.definition_id);
             Response::keep().send(
-                Envelope::new(
+                Call::new(
                     ata,
                     &token_core::Message::Burn {
                         descriptor,

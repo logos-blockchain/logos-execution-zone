@@ -102,12 +102,15 @@ mod tests {
         );
         assert_eq!(
             transition.sends,
-            vec![custody_transfer(
-                bridge_core::compute_bridge_account_id(BRIDGE),
-                bridge_core::compute_bridge_seed(),
-                RECIPIENT,
-                5,
-            )]
+            vec![
+                custody_transfer(
+                    bridge_core::compute_bridge_account_id(BRIDGE),
+                    bridge_core::compute_bridge_seed(),
+                    RECIPIENT,
+                    5,
+                )
+                .into()
+            ]
         );
         assert_eq!(transition.events.len(), 1);
     }
