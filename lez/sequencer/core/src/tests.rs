@@ -4965,6 +4965,309 @@ fn a_slash_claws_back_a_pending_unstake() {
     );
 }
 
+fn balance_of(state: &V03State, account_id: AccountId) -> u128 {
+    state
+        .get_account_by_id(account_id)
+        .data
+        .native_balance()
+        .unwrap()
+}
+
+fn restake(
+    state: &mut V03State,
+    ownership: (AccountId, &PrivateKey),
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    amount: u128,
+    block_id: u64,
+) {
+    let funding_key = PrivateKey::try_new([43; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    state.force_insert_account(funding_id, Account::funded(amount));
+    let stake = stake_transaction(
+        state,
+        (funding_id, &funding_key),
+        ownership,
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, block_id, 0)
+        .expect("the same ownership account should stake again");
+}
+
+#[test]
+fn an_old_unstake_request_never_releases_a_restake_after_a_slash() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([79; 32]);
+    let request = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+        destination,
+        4,
+    );
+    state
+        .transition_from_public_transaction(&request, 4, 0)
+        .expect("UnstakeRequest should succeed");
+    let LeeTransaction::Public(finalize) =
+        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+    else {
+        unreachable!("build_finalize_unstake_tx builds a public transaction")
+    };
+
+    let slash = slash_transaction(
+        ownership_id,
+        sequencer_key,
+        vec![
+            test_approval(0x45, sequencer_key),
+            test_approval(0x46, sequencer_key),
+        ],
+    );
+    state
+        .transition_from_public_transaction(&slash, 5, 0)
+        .expect("Slash should succeed");
+    restake(
+        &mut state,
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+        6,
+    );
+
+    let err = state
+        .transition_from_public_transaction(&finalize, exit_delay(&state).saturating_add(4), 0)
+        .expect_err("the request died with the slashed entry");
+    assert!(
+        format!("{err:?}").contains("no unstake request pending for this key"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        balance_of(
+            &state,
+            system_accounts::stake_funds_account_id(&ownership_id)
+        ),
+        amount
+    );
+    assert_eq!(
+        stake_entry(&state, sequencer_key),
+        Some(sequencer_stake_core::SequencerEntry {
+            account_id: ownership_id,
+            total_staked: amount,
+            pending_unstake: None,
+        })
+    );
+    assert_eq!(balance_of(&state, destination), 0);
+}
+
+#[test]
+fn a_released_unstake_request_never_releases_a_restake() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let (mut state, sequencer_key, ownership_id, ownership_key) = slashable_state(amount);
+    let destination = AccountId::new([80; 32]);
+    let request = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+        destination,
+        4,
+    );
+    state
+        .transition_from_public_transaction(&request, 4, 0)
+        .expect("UnstakeRequest should succeed");
+    let LeeTransaction::Public(finalize) =
+        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+    else {
+        unreachable!("build_finalize_unstake_tx builds a public transaction")
+    };
+    let due = exit_delay(&state).saturating_add(4);
+    state
+        .transition_from_public_transaction(&finalize, due, 0)
+        .expect("the release is due once the exit delay has passed");
+    assert_eq!(balance_of(&state, destination), amount);
+    assert_eq!(stake_entry(&state, sequencer_key), None);
+
+    restake(
+        &mut state,
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+        due.saturating_add(1),
+    );
+
+    let err = state
+        .transition_from_public_transaction(&finalize, due.saturating_add(2), 0)
+        .expect_err("a replayed release has no request behind it");
+    assert!(
+        format!("{err:?}").contains("no unstake request pending for this key"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        balance_of(
+            &state,
+            system_accounts::stake_funds_account_id(&ownership_id)
+        ),
+        amount
+    );
+    assert_eq!(
+        stake_entry(&state, sequencer_key),
+        Some(sequencer_stake_core::SequencerEntry {
+            account_id: ownership_id,
+            total_staked: amount,
+            pending_unstake: None,
+        })
+    );
+    assert_eq!(balance_of(&state, destination), amount);
+}
+
+#[test]
+fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
+    use lee::privacy_preserving_transaction::{
+        Message as PrivateMessage, PrivacyPreservingTransaction, WitnessSet as PrivateWitnessSet,
+        circuit::ProgramCatalog,
+    };
+    use lee_core::{
+        AuthorizationSecretKey, Commitment, DUMMY_COMMITMENT_HASH, Identifier, Nullifier,
+        NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
+        encryption::ViewingPublicKey,
+    };
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let offender = test_sequencer_key(0x44);
+    let program_id = programs::sequencer_stake_account_id();
+    // Keys and id as lee's `TestPrivateKeys` derives them.
+    let private_keys = |seed: u8| {
+        let ask = AuthorizationSecretKey([seed; 32]);
+        let vpk =
+            ViewingPublicKey::from_seed(&[seed.wrapping_add(1); 32], &[seed.wrapping_add(2); 32]);
+        let npk = NullifierPublicKey::from(&NullifierSecretKey::from(&ask));
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
+        (ask, vpk, account_id)
+    };
+    let (ownership_ask, ownership_vpk, ownership_id) = private_keys(0x61);
+    let (funding_ask, funding_vpk, funding_id) = private_keys(0x64);
+    let funding = Account::funded(amount);
+    let funding_commitment = Commitment::new(&funding_id, &funding);
+    let mut state = committee_state(&[0x45, 0x46], amount).with_private_accounts([(
+        funding_commitment,
+        Nullifier::for_account_initialization(&funding_id),
+    )]);
+
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
+    let public_actors = vec![
+        Actor::native_balance(funds_id),
+        Actor::new(
+            system_accounts::sequencer_stake_config_account_id(),
+            program_id,
+        ),
+    ];
+    let public_shards = public_actors
+        .iter()
+        .map(|actor| {
+            (
+                *actor,
+                state
+                    .get_account_by_id(actor.account_id)
+                    .data
+                    .shard(actor.program_account_id)
+                    .clone(),
+            )
+        })
+        .collect();
+    let (output, proof) = lee::execute_and_prove(
+        lee::ProvingInput {
+            root: CallInput::Inline {
+                to: Actor::new(ownership_id, program_id),
+                message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
+                    sequencer_key: offender,
+                    amount,
+                    has_record: false,
+                    funding: funding_id,
+                })
+                .unwrap(),
+            },
+            public_actors,
+            signers: HashSet::new(),
+            identities: HashSet::new(),
+            private_witnesses: vec![
+                PrivateWitness {
+                    vpk: ownership_vpk,
+                    random_seed: [0; 32],
+                    identifier: Identifier::ZERO,
+                    kind: WitnessKind::Regular {
+                        ask: Some(ownership_ask),
+                    },
+                    nullifier: NullifierWitness::Init {
+                        npk: NullifierPublicKey::from(&NullifierSecretKey::from(&ownership_ask)),
+                        commitment_root: DUMMY_COMMITMENT_HASH,
+                    },
+                },
+                PrivateWitness {
+                    vpk: funding_vpk,
+                    random_seed: [0; 32],
+                    identifier: Identifier::ZERO,
+                    kind: WitnessKind::Regular {
+                        ask: Some(funding_ask),
+                    },
+                    nullifier: NullifierWitness::Update {
+                        account: funding,
+                        view_tag: 0,
+                        nsk: NullifierSecretKey::from(&funding_ask),
+                        membership_proof: state
+                            .get_proof_for_commitment(&funding_commitment)
+                            .expect("the funding commitment should be in state"),
+                    },
+                },
+            ],
+            public_shards,
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+            messages: Vec::new(),
+        },
+        &ProgramCatalog::from([(program_id, programs::sequencer_stake())]),
+    )
+    .expect("the private Stake should prove");
+    state
+        .transition_from_privacy_preserving_transaction(
+            &PrivacyPreservingTransaction::new(
+                PrivateMessage::from_circuit_output(vec![], output),
+                PrivateWitnessSet::from_raw_parts(vec![], proof),
+            ),
+            3,
+            0,
+        )
+        .expect("the private Stake should settle");
+
+    assert_eq!(
+        stake_entry(&state, offender),
+        Some(sequencer_stake_core::SequencerEntry {
+            account_id: ownership_id,
+            total_staked: amount,
+            pending_unstake: None,
+        })
+    );
+    assert_eq!(balance_of(&state, funds_id), amount);
+    assert!(state.get_account_by_id_ref(ownership_id).is_none());
+
+    let slash = slash_transaction(
+        ownership_id,
+        offender,
+        vec![test_approval(0x45, offender), test_approval(0x46, offender)],
+    );
+    // Nothing the owner holds is read or signed.
+    assert!(!slash.affected_public_account_ids().contains(&ownership_id));
+    assert!(slash.witness_set().signatures_and_public_keys().is_empty());
+    state
+        .transition_from_public_transaction(&slash, 4, 0)
+        .expect("the peers' approvals alone should slash a private stake");
+
+    assert_eq!(balance_of(&state, funds_id), 0);
+    assert_eq!(balance_of(&state, slash_sink_id()), amount);
+    assert_eq!(stake_entry(&state, offender), None);
+}
+
 #[tokio::test]
 async fn a_slash_lands_over_a_pending_partial_unstake() {
     // The release falls due in the block the slash is proposed for; it must not pre-empt it.

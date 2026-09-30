@@ -687,6 +687,12 @@ mod tests {
         );
     }
 
+    #[test]
+    #[should_panic(expected = "not the sequencer_stake config account")]
+    fn a_finalize_away_from_the_config_account_is_refused() {
+        let _transition = at_owner(false, &record(key(1)), finalize(key(1)));
+    }
+
     // --- UnstakeRequest ---
 
     #[test]
@@ -903,6 +909,16 @@ mod tests {
             Origin::Root,
             &committee_of_three(),
             slash(vec![approval(2, key(1)), approval(2, key(1))]),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not the sequencer_stake config account")]
+    fn a_slash_away_from_the_config_account_is_refused() {
+        let _transition = at_owner(
+            false,
+            &record(key(1)),
+            slash(vec![approval(2, key(1)), approval(3, key(1))]),
         );
     }
 
