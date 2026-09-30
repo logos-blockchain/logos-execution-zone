@@ -15,7 +15,6 @@ use sharding_pool_actor::ShardingPoolActor;
 use crate::{Result, error::Error, protocol::AccreditedKeys};
 
 pub mod bootstrapping;
-mod genesis;
 pub mod online;
 
 #[expect(
@@ -133,7 +132,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (genesis::build_initial_state(config), None),
+            None => (
+                sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
+                None,
+            ),
         };
         let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);
 

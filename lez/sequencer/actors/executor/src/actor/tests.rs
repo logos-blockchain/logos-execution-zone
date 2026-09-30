@@ -25,7 +25,7 @@ use sequencer_core::{
     config::{BedrockConfig, SequencerConfig},
 };
 use sequencer_slasher_actor::SlasherActor;
-use sequencer_storage_actor::mock::MockStorageActor;
+use sequencer_storage_actor::{StorageActorTrait, mock::MockStorageActor};
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
@@ -37,6 +37,7 @@ use crate::{
 };
 
 mod reconstruction;
+mod startup;
 
 fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
@@ -251,11 +252,11 @@ fn spawn_bedrock_pool(
     ))
 }
 
-async fn new_executor(
+async fn new_executor<S: StorageActorTrait>(
     config: SequencerConfig,
-    storage_ref: ActorRef<MockStorageActor>,
+    storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
-) -> crate::Result<ExecutorActor<MockStorageActor, MockBedrockActor>> {
+) -> crate::Result<ExecutorActor<S, MockBedrockActor>> {
     let bedrock_signing_key =
         sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
             .expect("Failed to load or create bedrock signing key");

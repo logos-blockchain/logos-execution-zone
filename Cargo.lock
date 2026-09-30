@@ -2700,6 +2700,7 @@ dependencies = [
  "lee",
  "logos-blockchain-key-management-system-service",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_stake_core",
  "serde_json",
 ]
@@ -11155,6 +11156,7 @@ dependencies = [
  "rand 0.8.6",
  "sequencer_bedrock_actor",
  "sequencer_core_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -11195,7 +11197,6 @@ dependencies = [
  "env_logger",
  "fee_core",
  "futures",
- "hex",
  "kameo",
  "kameo_actors",
  "lee",
@@ -11214,6 +11215,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_core_metrics",
  "sequencer_executor_actor_metrics",
+ "sequencer_genesis",
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
@@ -11231,6 +11233,27 @@ name = "sequencer_executor_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+]
+
+[[package]]
+name = "sequencer_genesis"
+version = "0.1.0"
+dependencies = [
+ "authenticated_transfer_core",
+ "bridge_core",
+ "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
+ "fee_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "log",
+ "programs",
+ "sequencer_stake_core",
+ "serde",
+ "system_accounts",
+ "testnet_initial_state",
 ]
 
 [[package]]
@@ -12423,6 +12446,7 @@ dependencies = [
  "programs",
  "sequencer_bedrock_actor",
  "sequencer_core",
+ "sequencer_genesis",
  "sequencer_service",
  "sequencer_service_rpc",
  "sequencer_stake_core",

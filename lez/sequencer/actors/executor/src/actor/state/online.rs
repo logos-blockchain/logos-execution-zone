@@ -8,7 +8,7 @@ use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, Ed25519Key, SerializeOp as _},
+    protocol::{ChannelId, Ed25519Key, Ed25519PublicKey, SerializeOp as _},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -16,7 +16,7 @@ use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
     Result,
-    actor::state::{ActorsBundle, bootstrapping, genesis, zone_checkpoint},
+    actor::state::{ActorsBundle, bootstrapping, zone_checkpoint},
     error::Error,
 };
 
@@ -194,29 +194,59 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
     ) -> Result<()> {
+        let channel_id = config.bedrock_config.channel_id;
         let signing_key = config
             .block_signing_key()
             .map_err(Error::InvalidSigningKey)?;
+        let genesis_config = config
+            .genesis_config(Some(own_sequencer_key))
+            .map_err(Error::InvalidGenesisConfig)?;
 
         let (block, state) =
-            genesis::genesis_block_and_state(&signing_key, Some(own_sequencer_key), config);
+            sequencer_genesis::genesis_block_and_state(&signing_key, &genesis_config);
+        chain.restore_head_block(block.clone()).map_err(|err| {
+            Error::BlockReconstructionFailed {
+                block_id: block.header.block_id,
+                source: err,
+            }
+        })?;
 
-        let founding_committee_keys = genesis::founding_committee(config, own_sequencer_key)
-            .ok_or(Error::FoundingCommitteeContainsNoKeys)?;
-
-        let channel_params =
-            sequencer_core::committee_discovery::channel_params(chain.head_state())
-                .ok_or(Error::SequencerStakeConfigNotFound)?;
-
-        let outcome = bedrock_pool_ref
-            .ask(sequencer_bedrock_actor::protocol::CreateChannel {
-                channel_id: config.bedrock_config.channel_id,
-                genesis: block.clone(),
-                keys: founding_committee_keys,
-                channel_params,
-            })
-            .await
-            .map_err(SendErrorExt::flatten)?;
+        // The channel is born holding only its creator's key, so a configured
+        // founding set is applied by the same tx that writes genesis; the
+        // committee is never observable without it.
+        let outcome =
+            match sequencer_genesis::founding_committee(&config.genesis, own_sequencer_key) {
+                Some(keys) => {
+                    let channel_params =
+                        sequencer_core::committee_discovery::channel_params(chain.head_state())
+                            .ok_or(Error::SequencerStakeConfigNotFound)?;
+                    let keys = keys
+                        .into_iter()
+                        .map(|key| {
+                            Ed25519PublicKey::from_bytes(&key.to_bytes())
+                                .expect("sequencer key was decoded from a valid Ed25519 public key")
+                        })
+                        .collect();
+                    bedrock_pool_ref
+                        .ask(sequencer_bedrock_actor::protocol::CreateChannel {
+                            channel_id,
+                            genesis: block.clone(),
+                            keys,
+                            channel_params,
+                        })
+                        .await
+                        .map_err(SendErrorExt::flatten)?
+                }
+                None => bedrock_pool_ref
+                    .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                        channel_id,
+                        block: block.clone(),
+                        withdrawals: Vec::new(),
+                        parent: None,
+                    })
+                    .await
+                    .map_err(SendErrorExt::flatten)?,
+            };
 
         chain.record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
         storage_ref

@@ -81,17 +81,6 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
-/// Fixed, public key behind a genesis-only funding account.
-///
-/// The bridge can only be called top-level, not as `Stake`'s mover, so this
-/// account is a pass-through that receives the genesis deposit and then moves
-/// it into the real stake account. Not a secret: every node derives the same
-/// account, and it holds nothing once genesis has run.
-// TODO: replace the pass-through with a real Bedrock deposit, once that path
-// exists. The genesis deposit funding it is synthetic, so this stays a fixed
-// genesis-only key rather than a founding sequencer staking bridged funds.
-pub const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
-
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
 
@@ -1722,67 +1711,6 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
             warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
         }
     }
-}
-
-#[must_use]
-pub fn genesis_stake_funding_account() -> AccountId {
-    let key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY)
-        .expect("GENESIS_STAKE_FUNDING_KEY is a valid private key");
-    AccountId::from(&lee::PublicKey::new_from_private_key(&key))
-}
-
-/// The exact `Stake` message the founding sequencer at `index` must sign. Shared
-/// offchain by the genesis sequencer.
-#[must_use]
-pub fn genesis_stake_message(
-    index: usize,
-    sequencer_key: sequencer_stake_core::SequencerKey,
-    ownership_id: AccountId,
-    minimum_stake: u128,
-) -> Message {
-    let amount = minimum_stake;
-    let mover_instruction_data = lee::program::Program::serialize_instruction(
-        authenticated_transfer_core::Instruction::Transfer { amount },
-    )
-    .expect("Failed to serialize genesis mover instruction");
-    // A nonce counts how many times an account has signed. The deposit that
-    // funds this account needs no signature from it, so its count starts at 0.
-    let funding_nonce = u128::try_from(index).expect("founding sequencer count fits in u128");
-
-    Message::try_new(
-        programs::sequencer_stake().id().into(),
-        vec![
-            genesis_stake_funding_account(),
-            ownership_id,
-            system_accounts::stake_funds_account_id(&ownership_id),
-            system_accounts::sequencer_stake_config_account_id(),
-        ],
-        vec![
-            lee_core::account::Nonce(funding_nonce),
-            lee_core::account::Nonce(0),
-        ],
-        sequencer_stake_core::Instruction::Stake {
-            sequencer_key,
-            amount,
-            mover_account_id: programs::authenticated_transfer().id().into(),
-            mover_instruction_data,
-        },
-    )
-    .expect("Failed to build genesis Stake message")
-}
-
-/// Signs the founding sequencer at `index`'s genesis `Stake`, for an operator
-/// producing their `GenesisAction::StakeSequencer` entry.
-#[must_use]
-pub fn sign_genesis_stake(
-    index: usize,
-    sequencer_key: sequencer_stake_core::SequencerKey,
-    ownership_key: &lee::PrivateKey,
-    minimum_stake: u128,
-) -> lee::Signature {
-    let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(ownership_key));
-    let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
-    lee::Signature::new(ownership_key, &message.hash())
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.

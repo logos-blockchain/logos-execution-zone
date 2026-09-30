@@ -349,7 +349,7 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::InvalidSequencerKey
             | sequencer_executor_actor::error::Error::InvalidSigningKey(_)
             | sequencer_executor_actor::error::Error::CheckpointEncodingFailed(_)
-            | sequencer_executor_actor::error::Error::FoundingCommitteeContainsNoKeys
+            | sequencer_executor_actor::error::Error::InvalidGenesisConfig(_)
             | sequencer_executor_actor::error::Error::BlockReconstructionFailed { .. }
             | sequencer_executor_actor::error::Error::SequencerStakeConfigNotFound) => {
                 internal_error(handle_err)

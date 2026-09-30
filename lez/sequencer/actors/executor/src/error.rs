@@ -20,8 +20,8 @@ pub enum Error {
     #[error("Failed to (de-)encode checkpoint")]
     CheckpointEncodingFailed(#[source] anyhow::Error),
 
-    #[error("Founding committee contains no keys")]
-    FoundingCommitteeContainsNoKeys,
+    #[error("Invalid genesis configuration")]
+    InvalidGenesisConfig(#[source] anyhow::Error),
 
     #[error("Failed to reconstruct block {block_id} while bootstrapping")]
     BlockReconstructionFailed {

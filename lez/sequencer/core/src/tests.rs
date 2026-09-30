@@ -2,14 +2,15 @@
 
 use std::{collections::HashSet, pin::pin, sync::Arc, time::Duration};
 
-use canned_channel::CannedChannel;
+use chain_state::ChainState;
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
-use kameo::actor::Spawn as _;
+use kameo::{actor::Spawn as _, supervision::RestartPolicy};
+use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
     Account, AccountId, PrivateKey, ProgramId, PublicKey, PublicTransaction, V03State,
     program::Program,
@@ -17,7 +18,6 @@ use lee::{
 use lee_core::account::Nonce;
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
-    header::HeaderId,
     mantle::{
         TxHash,
         ledger::Inputs,
@@ -26,29 +26,30 @@ use logos_blockchain_core::{
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
-use mempool::MemPoolHandle;
+use mempool::{MemPool, MemPoolHandle};
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
-    mock::{MockBedrockActor, Replace},
+    mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
     protocol::{ChannelUpdate, Checkpoint},
 };
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DispatchOrigin, GetBlock,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetPublishedHighWater, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetPublishedHighWater, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RaisePublishedHighWater,
     },
 };
-use sharding_pool_actor::ShardingPoolActor;
+use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
     LiveCommittee, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore,
     TransactionOrigin, build_bridge_deposit_tx_from_event, build_finalize_unstake_tx,
-    build_genesis_state, classify_settled_deliveries,
+    classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
@@ -56,8 +57,6 @@ use crate::{
     extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
     resubmittable_txs, zone_checkpoint,
 };
-
-mod canned_channel;
 
 /// The peer zone a cross-zone test receives from. Distinct from the test
 /// channel id (`[0; 32]`), which the inbox guest rejects as a source.
@@ -73,31 +72,14 @@ struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
 }
 
-fn mock_msg_of(block: &Block) -> MsgId {
-    MsgId::from(block.header.hash.0)
-}
-
-fn checkpoint_at(tip: MsgId) -> Checkpoint {
-    Checkpoint {
-        last_msg_id: tip,
-        pending_txs: Vec::new(),
-        lib: HeaderId::from([0; 32]),
-        lib_slot: Slot::from(0),
-        channel_notes: Vec::new(),
-        finalized_config: MsgId::root(),
-    }
-}
-
 fn mock_checkpoint() -> Checkpoint {
     checkpoint_at(MsgId::from([0; 32]))
 }
 
-/// The bootstrap sequencer's key for `config`, exactly as `start_from_config`
-/// would derive it: read from `config.home`'s key file if present, else
-/// generated and persisted there. Callers building genesis state by hand (or
-/// reopening a store `start_from_config` already created) must use this
-/// rather than a fixed constant, so it always matches what's actually on
-/// disk.
+/// The bootstrap sequencer's key for `config`: read from `config.home`'s key
+/// file if present, else generated and persisted there. Callers building
+/// genesis state by hand must use this rather than a fixed constant, so it
+/// always matches what's actually on disk.
 fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
     let bytes = crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
         .expect("Failed to load or create bedrock signing key")
@@ -119,40 +101,68 @@ async fn start_sequencer(
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
-    start_sequencer_on(config, CannedChannel::empty()).await
+    start_sequencer_on(config, CannedChannel::empty().share()).await
 }
 
-/// [`start_sequencer`] against a Bedrock serving `channel`.
+/// [`start_sequencer`] against a Bedrock serving `channel`, over a fresh store
+/// holding the genesis this node stakes itself in.
 async fn start_sequencer_on(
     config: SequencerConfig,
-    channel: CannedChannel,
+    channel: SharedChannel,
 ) -> (
     SequencerCore<StorageActor, MockBedrockActor>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
     let storage_ref = StorageActor::spawn(storage);
-    let bedrock_pool = ShardingPoolActor::new(move |_channel_id| channel.clone().into_mock());
-    let bedrock_pool_ref = ShardingPoolActor::spawn(bedrock_pool);
-    SequencerCore::start_from_config(config, storage_ref, bedrock_pool_ref)
-        .await
-        .expect("Failed to start the sequencer")
-}
 
-/// Makes the sequencer's Bedrock serve `channel` from now on, as a channel
-/// moving under a running node does.
-async fn serve_channel(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
-    channel: CannedChannel,
-) {
-    let replaced = sequencer
-        .bedrock_pool_ref
-        .ask(Replace {
-            channel_id: sequencer.channel_id(),
-            mock: channel.into_mock(),
+    let signing_key = config.block_signing_key().unwrap();
+    let genesis_config = config
+        .genesis_config(Some(test_bootstrap_sequencer_key(&config)))
+        .unwrap();
+    let (genesis, genesis_state) =
+        sequencer_genesis::genesis_block_and_state(&signing_key, &genesis_config);
+    let mut chain = ChainState::new(sequencer_genesis::build_initial_state(
+        config.cross_zone.is_some(),
+    ));
+    chain.restore_head_block(genesis.clone()).unwrap();
+    storage_ref
+        .ask(RaisePublishedHighWater {
+            block_id: genesis.header.block_id,
         })
-        .await;
-    assert!(replaced.is_ok(), "the Bedrock mock must still be running");
+        .await
+        .unwrap();
+    storage_ref
+        .ask(AtomicUpdate::from_block(genesis, Arc::new(genesis_state)))
+        .await
+        .unwrap();
+
+    let bedrock_pool_ref = ShardingPoolActor::spawn(ShardingPoolActor::new(
+        RestartConfig {
+            policy: RestartPolicy::Never,
+            limit: 0,
+            within: Duration::ZERO,
+        },
+        move |_channel_id| channel.mock(),
+    ));
+    let bedrock_signing_key =
+        crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key")).unwrap();
+    let mempool = MemPool::new(config.mempool_max_size);
+    let mempool_handle = mempool.handle().clone();
+
+    let sequencer = SequencerCore::new(
+        config,
+        mempool,
+        chain,
+        bedrock_signing_key,
+        storage_ref,
+        bedrock_pool_ref,
+        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        SlasherActor::prepare(),
+    )
+    .await
+    .expect("Failed to start the sequencer");
+    (sequencer, mempool_handle)
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
@@ -572,80 +582,6 @@ async fn pending_dispatches(
         .ask(GetPendingCrossZoneDispatches)
         .await
         .expect("pending dispatches readable")
-}
-
-#[tokio::test]
-async fn start_from_config() {
-    let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-
-    assert_eq!(sequencer.chain_height().await, 1);
-    assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
-
-    let acc1_account_id = initial_public_user_accounts()[0].account_id;
-    let acc2_account_id = initial_public_user_accounts()[1].account_id;
-
-    let balance_acc_1 = sequencer
-        .with_state(|s| s.get_account_by_id(acc1_account_id).balance)
-        .await;
-    let balance_acc_2 = sequencer
-        .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
-        .await;
-
-    assert_eq!(initial_public_user_accounts()[0].balance, balance_acc_1);
-    assert_eq!(initial_public_user_accounts()[1].balance, balance_acc_2);
-}
-
-#[tokio::test]
-async fn start_from_config_opens_existing_db_if_it_exists() {
-    let config = setup_sequencer_config();
-    let temp_dir = tempdir().unwrap();
-    let mut config = config;
-    config.home = temp_dir.path().to_path_buf();
-
-    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let signing_key = config.block_signing_key().unwrap();
-    let (genesis_state, genesis_txs) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
-    let genesis_hashable_data = HashableBlockData {
-        block_id: 1,
-        transactions: genesis_txs,
-        prev_block_hash: HashType([0; 32]),
-        timestamp: 0,
-    };
-    let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
-
-    let storage = StorageActor::new(&config.db_path()).unwrap();
-    let storage_ref = StorageActor::spawn(storage);
-    storage_ref
-        .ask(AtomicUpdate::from_block(
-            genesis_block,
-            Arc::new(genesis_state),
-        ))
-        .await
-        .unwrap();
-    storage_ref.stop_gracefully().await.unwrap();
-    storage_ref.wait_for_shutdown().await;
-
-    let (sequencer, _mempool_handle) = start_sequencer(config).await;
-    assert_eq!(sequencer.chain_height().await, 1);
-    assert!(sequencer.storage_ref.ask(GetLastBlockId).await.is_ok());
-}
-
-#[should_panic(expected = "Failed to open database")]
-#[tokio::test]
-async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
-    let mut config = setup_sequencer_config();
-    let temp_dir = tempdir().unwrap();
-    config.home = temp_dir.path().to_path_buf();
-
-    let db_path = config.db_path();
-
-    std::fs::create_dir_all(&config.home).unwrap();
-    // Force RocksDB open to fail with an IO error by placing a file at DB path.
-    std::fs::write(&db_path, b"not-a-directory").unwrap();
-
-    let _ = start_sequencer(config).await;
 }
 
 // TODO: Reimplement these tests
@@ -1824,65 +1760,6 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
 }
 
 #[tokio::test]
-async fn restart_from_storage() {
-    let config = setup_sequencer_config();
-    let acc1_account_id = initial_public_user_accounts()[0].account_id;
-    let acc2_account_id = initial_public_user_accounts()[1].account_id;
-    let balance_to_move = 13;
-
-    // In the following code block a transaction will be processed that moves `balance_to_move`
-    // from `acc_1` to `acc_2`. The block created with that transaction will be kept stored in
-    // the temporary directory for the block storage of this test.
-    let storage_weak = {
-        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
-        let signing_key = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1_account_id,
-            0,
-            acc2_account_id,
-            balance_to_move,
-            &signing_key,
-        );
-
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-        sequencer.run_production_turn().await.unwrap();
-        let block = sequencer
-            .storage_ref
-            .ask(GetBlock {
-                block_id: sequencer.chain_height().await,
-            })
-            .await
-            .unwrap()
-            .unwrap();
-        assert_block_tail(&block, std::slice::from_ref(&tx));
-        sequencer.storage_ref.downgrade()
-    };
-    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-    // Instantiating a new sequencer from the same config. This should load the existing block
-    // with the above transaction and update the state to reflect that.
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-    let balance_acc_1 = sequencer
-        .with_state(|s| s.get_account_by_id(acc1_account_id).balance)
-        .await;
-    let balance_acc_2 = sequencer
-        .with_state(|s| s.get_account_by_id(acc2_account_id).balance)
-        .await;
-
-    // Balances should be consistent with the stored block: the recipient
-    // gained exactly the transfer; the sender also paid a real fee.
-    assert!(balance_acc_1 < initial_public_user_accounts()[0].balance - balance_to_move);
-    assert_eq!(
-        balance_acc_2,
-        initial_public_user_accounts()[1].balance + balance_to_move
-    );
-}
-
-#[tokio::test]
 async fn get_pending_blocks() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
@@ -1890,82 +1767,6 @@ async fn get_pending_blocks() {
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
     assert_eq!(sequencer.get_pending_blocks().await.unwrap().len(), 4);
-}
-
-#[tokio::test]
-async fn produce_block_with_correct_prev_meta_after_restart() {
-    let config = setup_sequencer_config();
-    let acc1_account_id = initial_public_user_accounts()[0].account_id;
-    let acc2_account_id = initial_public_user_accounts()[1].account_id;
-
-    // Step 1: Create initial database with some block metadata
-    let (storage_weak, expected_prev_meta) = {
-        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
-
-        let signing_key = create_signing_key_for_account1();
-
-        // Add a transaction and produce a block to set up block metadata
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1_account_id,
-            0,
-            acc2_account_id,
-            100,
-            &signing_key,
-        );
-
-        mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
-            .unwrap();
-        sequencer.run_production_turn().await.unwrap();
-
-        // Get the metadata of the last block produced
-        let meta = sequencer
-            .storage_ref
-            .ask(GetLatestBlockMeta)
-            .await
-            .unwrap()
-            .unwrap();
-        (sequencer.storage_ref.downgrade(), meta)
-    };
-    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-    // Step 2: Restart sequencer from the same storage
-    let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
-
-    // Step 3: Submit a new transaction
-    let signing_key = create_signing_key_for_account1();
-    let tx = common::test_utils::create_transaction_native_token_transfer(
-        acc1_account_id,
-        1, // Next nonce
-        acc2_account_id,
-        50,
-        &signing_key,
-    );
-
-    mempool_handle
-        .push((TransactionOrigin::User, tx.clone()))
-        .await
-        .unwrap();
-
-    // Step 4: Produce new block
-    sequencer.run_production_turn().await.unwrap();
-
-    // Step 5: Verify the new block has correct previous block metadata
-    let new_block = sequencer
-        .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        new_block.header.prev_block_hash, expected_prev_meta.hash,
-        "New block's prev_block_hash should match the stored metadata hash"
-    );
-    assert_block_tail(&new_block, std::slice::from_ref(&tx));
 }
 
 #[tokio::test]
@@ -2526,7 +2327,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
 #[tokio::test]
 async fn follow_update_persists_the_checkpoint_with_its_effects() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .storage_ref
         .ask(GetLatestBlockMeta)
@@ -2566,7 +2367,8 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 #[tokio::test]
 async fn a_failed_publish_leaves_its_height_free() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let mark = sequencer
@@ -2576,14 +2378,10 @@ async fn a_failed_publish_leaves_its_height_free() {
         .unwrap();
     assert_eq!(mark, Some(first));
 
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            publish_fails: true,
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        publish_fails: true,
+        ..CannedChannel::empty()
+    });
     let failed = sequencer.run_production_turn().await;
     assert!(failed.is_err(), "the canned publish failure must surface");
     assert_eq!(
@@ -2681,7 +2479,8 @@ async fn a_rewind_after_the_turn_gate_does_not_republish_a_taken_height() {
 #[tokio::test]
 async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let mark = sequencer
@@ -2692,14 +2491,10 @@ async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
     assert_eq!(mark, Some(first));
 
     // Someone else's inscription took the tip since our head was built.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(MsgId::from([42_u8; 32])),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(MsgId::from([42_u8; 32])),
+        ..CannedChannel::empty()
+    });
 
     let refused = sequencer.run_production_turn().await;
     assert!(
@@ -2723,21 +2518,18 @@ async fn a_block_is_refused_when_the_channel_tip_moved_under_it() {
 #[tokio::test]
 async fn production_chains_on_an_ignorable_inscription_at_the_tip() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
 
     // A peer's garbage inscription takes the tip; the sdk reports it only as
     // the checkpoint's tip, with an empty delta.
     let junk = MsgId::from([42_u8; 32]);
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(junk),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(junk),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(junk),
@@ -2757,7 +2549,8 @@ async fn production_chains_on_an_ignorable_inscription_at_the_tip() {
 #[tokio::test]
 async fn an_orphan_of_the_pinned_block_rewinds_to_the_surviving_entry() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     sequencer.run_production_turn().await.unwrap();
     sequencer.run_production_turn().await.unwrap();
@@ -2783,14 +2576,10 @@ async fn an_orphan_of_the_pinned_block_rewinds_to_the_surviving_entry() {
 
     // The reorg drops our newest inscription; the one below it still stands,
     // and the checkpoint names it.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(block2_msg),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(block2_msg),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(block2_msg),
@@ -2815,7 +2604,8 @@ async fn an_orphan_of_the_pinned_block_rewinds_to_the_surviving_entry() {
 #[tokio::test]
 async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     sequencer.run_production_turn().await.unwrap();
     let block2 = sequencer
@@ -2828,14 +2618,10 @@ async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
 
     // A peer's garbage inscription takes the tip without moving the head.
     let junk = MsgId::from([42_u8; 32]);
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(junk),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(junk),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(junk),
@@ -2845,14 +2631,10 @@ async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
     assert_eq!(sequencer.chain().lock().await.pin_parent(), Some(junk));
 
     // The reorg drops only the garbage, so the head sees nothing at all.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(block2_msg),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(block2_msg),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(block2_msg),
@@ -2877,19 +2659,16 @@ async fn an_orphan_of_an_ignorable_entry_rewinds_the_pin() {
 #[tokio::test]
 async fn an_orphan_of_the_newest_ignorable_entry_falls_back_to_the_one_below() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     sequencer.run_production_turn().await.unwrap();
     let first_junk = MsgId::from([41_u8; 32]);
     let second_junk = MsgId::from([42_u8; 32]);
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(second_junk),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(second_junk),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(second_junk),
@@ -2902,14 +2681,10 @@ async fn an_orphan_of_the_newest_ignorable_entry_falls_back_to_the_one_below() {
     );
 
     // The reorg drops only the newer garbage.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: Some(first_junk),
-            ..CannedChannel::empty()
-        },
-    )
-    .await;
+    channel.serve(CannedChannel {
+        tip: Some(first_junk),
+        ..CannedChannel::empty()
+    });
     sequencer
         .on_channel_update(ChannelUpdate {
             checkpoint: checkpoint_at(first_junk),
@@ -2979,76 +2754,13 @@ async fn the_pin_stays_on_a_finalized_entry_through_its_pruning_report() {
         .expect("the next block must pin on the finalized tip");
 }
 
-/// A pin on an entry we published ourselves at startup must still produce,
-/// even while the channel read is too old to show it.
-#[tokio::test]
-async fn the_pin_the_bootstrap_publishes_leave_survives_a_lagging_channel_read() {
-    let config = setup_sequencer_config();
-    // No channel yet, so startup creates it and publishes our stored blocks.
-    let (mut sequencer, _mempool_handle) =
-        start_sequencer_on(config, CannedChannel::absent()).await;
-
-    let pin = sequencer.chain().lock().await.pin_parent();
-    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
-
-    // The read does not show our genesis yet.
-    serve_channel(
-        &sequencer,
-        CannedChannel {
-            tip: pin,
-            stale_tip_read: Some(MsgId::from([42_u8; 32])),
-            ..CannedChannel::absent()
-        },
-    )
-    .await;
-
-    assert!(
-        sequencer.pin_behind_channel_tip().await.is_none(),
-        "a pin on our own bootstrap inscription must not be read as behind"
-    );
-    sequencer
-        .run_production_turn()
-        .await
-        .expect("the first turn must produce, pinned on what the bootstrap published");
-}
-
-/// The sdk can deliver a checkpoint it built before our publishes, whose tip is
-/// root on a channel that did not exist yet. Believing it would rewind the pin
-/// onto a channel we have since filled.
-#[tokio::test]
-async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() {
-    let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) =
-        start_sequencer_on(config, CannedChannel::absent()).await;
-
-    let pin = sequencer.chain().lock().await.pin_parent();
-    assert!(pin.is_some(), "the bootstrap publishes leave a pin");
-
-    // Built before our publishes, so it names none of them and its tip is root.
-    sequencer
-        .on_channel_update(ChannelUpdate {
-            checkpoint: checkpoint_at(MsgId::root()),
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert_eq!(
-        sequencer.chain().lock().await.pin_parent(),
-        pin,
-        "a stale startup tip must not rewind the pin off what the bootstrap published"
-    );
-    sequencer
-        .run_production_turn()
-        .await
-        .expect("the turn after a stale startup checkpoint must still produce");
-}
-
 /// zone-sdk does not resubmit an orphan, so an orphan report that re-adopts
 /// nothing frees the height for the next turn. A re-adopted block keeps it.
 #[tokio::test]
 async fn a_dropped_orphan_frees_the_published_height() {
     let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, _mempool_handle) = start_sequencer_on(config, channel.clone()).await;
 
     let first = sequencer.run_production_turn().await.unwrap();
     let published_tip = sequencer.run_production_turn().await.unwrap();
@@ -3101,7 +2813,7 @@ async fn a_dropped_orphan_frees_the_published_height() {
         })
         .await;
     // Dropping them takes the channel tip back with them.
-    serve_channel(&sequencer, CannedChannel::empty()).await;
+    channel.serve(CannedChannel::empty());
 
     assert_eq!(sequencer.next_block_height().await, first);
     assert_eq!(
@@ -3188,7 +2900,7 @@ async fn a_readopted_block_above_the_head_keeps_the_published_height() {
 #[tokio::test]
 async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
     let recipient_id = initial_public_user_accounts()[0].account_id;
     let metadata = borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap();
@@ -3221,7 +2933,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
 #[tokio::test]
 async fn follow_adopted_peer_block_applies_and_persists() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
         .ask(GetLatestBlockMeta)
@@ -3571,7 +3283,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
 #[tokio::test]
 async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .storage_ref
         .ask(GetLatestBlockMeta)
@@ -3679,92 +3391,6 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
 //     );
 // }
 
-#[tokio::test]
-async fn restart_restores_head_tier_and_recovers_from_orphan() {
-    let config = setup_sequencer_config();
-    let acc1 = initial_public_user_accounts()[0].account_id;
-    let acc2 = initial_public_user_accounts()[1].account_id;
-
-    // Produce block 2 (a user transfer), then "crash" before it finalizes.
-    let (storage_weak, tx, block2) = {
-        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1,
-            0,
-            acc2,
-            10,
-            &create_signing_key_for_account1(),
-        );
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-        sequencer.run_production_turn().await.unwrap();
-        let block2 = sequencer
-            .storage_ref
-            .ask(GetBlock { block_id: 2 })
-            .await
-            .unwrap()
-            .unwrap();
-        (sequencer.storage_ref.downgrade(), tx, block2)
-    };
-    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-    // Restart: nothing is finalized, so block 2 must come back as *head*, not
-    // final — the L1 can still orphan it.
-    let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-    assert_eq!(sequencer.chain_height().await, 2);
-
-    // The L1 orphans block 2 under its real MsgId (which we never persisted)
-    // and adopts a competing empty block 2'.
-    let genesis = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id: 1 })
-        .await
-        .unwrap()
-        .unwrap();
-    let block2_prime =
-        common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    sequencer
-        .on_channel_update(ChannelUpdate {
-            adopted: vec![block2_prime.clone()],
-            orphaned: vec![block2],
-            ..empty_channel_update()
-        })
-        .await;
-
-    // The head reorged onto 2': transfer reverted, store overwritten, and the
-    // orphaned user tx returned to the mempool.
-    assert_eq!(sequencer.chain_height().await, 2);
-    let head_tip = sequencer
-        .chain()
-        .lock()
-        .await
-        .head_tip()
-        .expect("head tip set");
-    assert_eq!(head_tip.hash, block2_prime.header.hash);
-    assert_eq!(
-        sequencer
-            .with_state(|s| s.get_account_by_id(acc1).balance)
-            .await,
-        initial_public_user_accounts()[0].balance,
-        "the orphaned transfer must be reverted"
-    );
-    let stored = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id: 2 })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(stored.header.hash, block2_prime.header.hash);
-    let (origin, requeued) = sequencer
-        .mempool
-        .pop()
-        .expect("orphaned user tx should be requeued");
-    assert!(matches!(origin, TransactionOrigin::User));
-    assert_eq!(requeued, tx);
-}
-
 /// An orphan the same update puts back is on the head with its transactions
 /// applied, so requeueing them would duplicate work the block already carries.
 #[tokio::test]
@@ -3820,47 +3446,6 @@ async fn a_readopted_orphan_does_not_requeue_its_transactions() {
         sequencer.mempool.pop().is_none(),
         "a re-adopted block must not requeue its transactions"
     );
-}
-
-#[tokio::test]
-async fn restart_reanchors_on_the_persisted_final_snapshot() {
-    let config = setup_sequencer_config();
-
-    // Produce block 2 and follow its finalization, which persists the final
-    // snapshot; then "crash".
-    let storage_weak = {
-        let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
-            .unwrap();
-        sequencer.run_production_turn().await.unwrap();
-        let block2 = sequencer
-            .storage_ref
-            .ask(GetBlock { block_id: 2 })
-            .await
-            .unwrap()
-            .unwrap();
-        sequencer
-            .on_channel_update(ChannelUpdate {
-                adopted: vec![],
-                orphaned: vec![],
-                finalized: vec![(block2, Slot::from(0))],
-                ..empty_channel_update()
-            })
-            .await;
-        sequencer.storage_ref.downgrade()
-    };
-    storage_weak.wait_for_shutdown_with_result(|_| ()).await;
-
-    // Restart: the final tier re-anchors on the snapshot instead of treating
-    // the whole stored chain as final.
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
-    let chain = sequencer.chain();
-    let chain = chain.lock().await;
-    assert_eq!(chain.final_tip().expect("final tip set").block_id, 2);
-    assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
 
 #[tokio::test]
@@ -3943,7 +3528,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
 #[tokio::test]
 async fn follow_update_persists_blocks_meta_and_state_atomically() {
     let config = setup_sequencer_config();
-    let (sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
+    let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
         .ask(GetLatestBlockMeta)
@@ -4531,8 +4116,12 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, _genesis_txs) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (state, _genesis_txs) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config
+            .genesis_config(Some(bootstrap_sequencer_key))
+            .unwrap(),
+    );
 
     let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
@@ -4568,8 +4157,12 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (mut state, _genesis_txs) =
-        build_genesis_state(&signing_key, &config, Some(bootstrap_sequencer_key));
+    let (mut state, _genesis_txs) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config
+            .genesis_config(Some(bootstrap_sequencer_key))
+            .unwrap(),
+    );
 
     let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
@@ -4750,7 +4343,7 @@ fn slash_transaction(
 ) -> PublicTransaction {
     let LeeTransaction::Public(tx) = sequencer_slasher_actor::build_slash_tx(
         ownership_id,
-        &sequencer_slasher_actor::Offence {
+        &sequencer_slasher_actor::protocol::Offence {
             offender: sequencer_key,
             inscription: TEST_INSCRIPTION,
         },
@@ -5176,7 +4769,10 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     config.home = temp_dir.path().to_path_buf();
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config.genesis_config(Some(key)).unwrap(),
+    );
     assert!(
         !txs.iter()
             .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
@@ -5196,7 +4792,10 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     });
     let key = test_bootstrap_sequencer_key(&config);
     let signing_key = config.block_signing_key().unwrap();
-    let (state, txs) = build_genesis_state(&signing_key, &config, Some(key));
+    let (state, txs) = sequencer_genesis::build_genesis_state(
+        &signing_key,
+        &config.genesis_config(Some(key)).unwrap(),
+    );
     let cross_zone_txs: Vec<_> = txs
         .iter()
         .map(tx_program)

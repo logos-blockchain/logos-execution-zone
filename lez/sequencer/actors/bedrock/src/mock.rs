@@ -11,6 +11,7 @@ use kameo::{
 pub use sequencer_actors_common::mock::ReplaceReply;
 use sharding_pool_actor::ShardingKey;
 
+pub use self::canned_channel::{CannedChannel, SharedChannel, checkpoint_at, mock_msg_of};
 use crate::{
     BedrockActorTrait, Result,
     error::Error,
@@ -21,6 +22,8 @@ use crate::{
         ReadChannel, Slot, ZoneMessage,
     },
 };
+
+mod canned_channel;
 
 /// Special message to trigger mockall's checkpoint mechanism.
 ///

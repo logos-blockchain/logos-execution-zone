@@ -33,10 +33,6 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Bootstrapping carries everything the online state is started with"
-    )]
     pub(super) const fn new(
         config: SequencerConfig,
         chain: ChainState,

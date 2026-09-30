@@ -10,6 +10,7 @@ workspace = true
 [features]
 # Adds actor implementation.
 actor = [
+  "dep:sequencer_genesis",
   "dep:sequencer_executor_actor_metrics",
   "dep:sharding_pool_actor",
   "dep:sequencer_core_metrics",
@@ -26,7 +27,6 @@ actor = [
   "dep:futures",
   "dep:kameo_actors",
   "dep:log",
-  "dep:hex",
 ]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
@@ -49,6 +49,7 @@ lee.workspace = true
 # TODO: We import that just because of AccreditedKeys type.
 # Need refactor that and not expose this dependency without `actor` feature.
 sequencer_core.workspace = true
+sequencer_genesis = { workspace = true, optional = true }
 # TODO: Don't import that
 sequencer_core_metrics = { workspace = true, features = [
   "record",
@@ -70,7 +71,6 @@ tokio = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-hex = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
