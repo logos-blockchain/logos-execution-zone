@@ -1,9 +1,8 @@
 //! A set of background tasks that can be stopped and waited on.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use log::warn;
-use storage::sequencer::RocksDBIO;
 use tokio::task::JoinHandle;
 
 /// Background tasks owned by one component, stoppable on demand and stopped
@@ -24,27 +23,6 @@ pub struct TaskGroup(Arc<TaskGroupInner>);
 
 #[derive(Default)]
 struct TaskGroupInner(Mutex<Vec<JoinHandle<()>>>);
-
-/// A weak handle to the store, for observing when it is finally closed.
-///
-/// Every strong reference lives inside a task or a server that shutdown stops,
-/// but the last drop runs on whichever thread owned it, not on the one awaiting
-/// shutdown. Watching the count is the difference between knowing the database
-/// file is closed and assuming it from another crate's drop order.
-pub struct StoreRelease(Weak<RocksDBIO>);
-
-impl StoreRelease {
-    #[must_use]
-    pub fn new(store: &Arc<RocksDBIO>) -> Self {
-        Self(Arc::downgrade(store))
-    }
-
-    /// How many holders are left. Zero means the store is closed.
-    #[must_use]
-    pub fn holders(&self) -> usize {
-        self.0.strong_count()
-    }
-}
 
 impl Drop for TaskGroupInner {
     fn drop(&mut self) {

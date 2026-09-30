@@ -34,8 +34,8 @@ build-artifact methods_path features="":
     else \
         RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
-    @mkdir -p {{ARTIFACTS}}/{{methods_path}}
-    @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}
+    @mkdir -p "{{ARTIFACTS}}/{{methods_path}}"
+    @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin "{{ARTIFACTS}}/{{methods_path}}"
 
 # Format codebase.
 fmt:
@@ -51,7 +51,14 @@ test:
 # Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
 regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
-    RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
+    @just resolve-bedrock-node
+    RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
+
+# Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
+# stakes the whole committee, so the signatures are resigned; commit the result).
+regenerate-devnet-configs:
+    @echo "🕸️  Regenerating devnet sequencer config and keys"
+    @cargo run -q -p devnet_configs
 
 # Regenerate the committed Grafana dashboards from the Rust generator
 # (tools/dashboard_gen) and commit the result. CI checks these are up to date.
@@ -66,11 +73,37 @@ bench:
     cargo bench -p crypto_primitives_bench --bench primitives
     cargo bench -p cycle_bench --features ppe --bench verify
 
-# Run Bedrock node in docker.
+# Run Bedrock node in docker. `--log-file <path>` also appends the output there; `docker logs` keeps its own copy either way.
 [working-directory: 'bedrock']
-run-bedrock:
-    @echo "⛓️ Running bedrock"
-    docker compose up
+run-bedrock *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "⛓️ Running bedrock"
+    log=""
+    set -- {{args}}
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --log-file) log="${2:?--log-file needs a path}"; shift 2 ;;
+            *) echo "unknown argument: $1" >&2; exit 2 ;;
+        esac
+    done
+    (cd .. && just resolve-bedrock-node)
+    if [ -z "$log" ]; then
+        docker compose up --build
+    else
+        mkdir -p "$(dirname "$log")"
+        printf '\n=== %s  bedrock ===\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" >>"$log"
+        docker compose up --build 2>&1 | tee -a "$log"
+    fi
+
+resolve-bedrock-node:
+    @bash bedrock/tools/resolve_bedrock_node_in_docker.sh
+
+resolve-host-bedrock-node:
+    @python3 bedrock/tools/resolve_bedrock_node.py \
+        --target-platform host \
+        --output-directory bedrock/.resolved-host \
+        --target-directory target/bedrock-node-host
 
 # Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
 # admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
@@ -79,17 +112,50 @@ run-monitoring:
     @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
     docker compose up
 
-# Run Sequencer. Extra args are forwarded to the binary. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
-[working-directory: 'lez/sequencer/service']
-run-sequencer *args:
-    @echo "🧠 Running sequencer"
-    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+# ---- Decentralized sequencing tools ----
+
+# Prepare a sequencer home: its own wallet, the Bedrock identity, and the account the stake is paid from, registered so it can move funds. Prints that account to be funded; `just run-sequencer <home>` then stakes from it.
+[group('decentralized sequencing')]
+setup-sequencer home *args:
+    @echo "🌱 Setting up {{home}}"
+    tools/setup_sequencer.py {{home}} {{args}}
+
+# Run a Sequencer out of the given home (default lez/sequencer/service/sequencer_home, the one `just clean` wipes), which holds its db, keys, ports and logs. A home on a channel that does not exist yet creates it; a home that has not staked stakes itself in while the node catches up; one that has just runs. Takes the funding account for the stake. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
+[group('decentralized sequencing')]
+run-sequencer home="lez/sequencer/service/sequencer_home" funding="" *args:
+    @echo "🧠 Running sequencer {{home}}"
+    tools/run_sequencer.sh {{home}} "{{funding}}" {{args}}
+
+# Unstake the sequencer in the given home and release its stake to a destination account. Reads the key and wallet from the home; the seat goes a finality later. Pass --dry-run to see the request without submitting.
+[group('decentralized sequencing')]
+sequencer-leave home *args:
+    @echo "👋 Unstaking {{home}}"
+    tools/sequencer_leave.py {{home}} {{args}}
+
+# Inscribe a non-block payload signed by the key in the given home, to provoke a slash. That node must be stopped first, and the stake behind its key is burned once the offence finalizes, leaving the key unusable.
+[group('decentralized sequencing')]
+inscribe-garbage home *args:
+    @test -d {{home}} || { echo "no such home: {{home}}" >&2; exit 2; }
+    @echo "💣 Inscribing garbage as {{home}}"
+    cargo run --release -q -p sequencer_service --features inscribe_garbage --bin inscribe_garbage -- \
+        "${LEZ_CONFIG:-lez/sequencer/service/configs/debug/sequencer_config.json}" \
+        --home {{home}} {{args}}
+
+# Show the LEZ stake config and the live Bedrock committee side by side, with whose turn it is and the last block each key built. Pass --watch SECONDS to redraw.
+[group('decentralized sequencing')]
+committee-watch *args:
+    tools/committee_watch.py {{args}}
+
+# Check the channel carries every LEZ block, once, in order: a gapless run of heights from genesis. Reads finalized L1 blocks, so it sees what the channel holds rather than what a sequencer reports. Exits non-zero if the run is broken.
+[group('decentralized sequencing')]
+channel-health *args:
+    tools/channel_health.py {{args}}
 
 # Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
 [working-directory: 'lez/sequencer/service']
 run-sequencer-standalone *args:
     @echo "🧪 Running sequencer in standalone mode"
-    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+    RUST_LOG=info,kameo=warn cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
@@ -124,10 +190,7 @@ get-sequencer-metrics:
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
     just run-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
-    just run-wallet vault claim --account-id Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r --amount 10000
-
     just run-wallet account import public --private-key f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c
-    just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 20000
 
     just run-wallet account list
 
@@ -154,11 +217,15 @@ cross-zone-chat:
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"
+    rm -rf lez/sequencer/service/sequencer_home
+    # Pre-`sequencer_home` layout: still present in existing checkouts, and
+    # wiping the store is what the divergence error tells you to do.
     rm -rf lez/sequencer/service/bedrock_signing_key
-    rm -rf lez/sequencer/service/rocksdb
+    rm -rf lez/sequencer/service/rocksdb*
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
+    docker compose down -v
     cd bedrock && docker compose down -v && cd ..
     cd monitoring && docker compose down -v && cd ..

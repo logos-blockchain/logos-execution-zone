@@ -10,14 +10,12 @@ use crate::{
 /// A commitment to all zero data.
 /// ```python
 /// from hashlib import sha256
-/// prefix = b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-/// hasher = sha256()
-/// hasher.update(prefix + bytes([0] * 32 + [0] * 32 + [0] * 16 + [0] * 16 + list(sha256().digest())))
-/// DUMMY_COMMITMENT = hasher.digest()
+/// prefix = b"/LEE/v0.3/Commitment/" + bytes(11)
+/// DUMMY_COMMITMENT = sha256(prefix + bytes(32) + sha256(bytes(20)).digest()).digest()
 /// ```
 pub const DUMMY_COMMITMENT: Commitment = Commitment([
-    55, 228, 215, 207, 112, 221, 239, 49, 238, 79, 71, 135, 155, 15, 184, 45, 104, 74, 51, 211,
-    238, 42, 160, 243, 15, 124, 253, 62, 3, 229, 90, 27,
+    59, 125, 5, 88, 44, 25, 75, 87, 238, 148, 130, 173, 76, 217, 13, 136, 125, 198, 106, 114, 48,
+    245, 101, 6, 37, 70, 51, 208, 20, 5, 51, 18,
 ]);
 
 /// The hash of the dummy commitment.
@@ -28,8 +26,8 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
 /// DUMMY_COMMITMENT_HASH = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
-    250, 237, 192, 113, 155, 101, 119, 30, 235, 183, 20, 84, 26, 32, 196, 229, 154, 74, 254, 249,
-    129, 241, 118, 39, 41, 253, 141, 171, 184, 71, 8, 41,
+    107, 9, 131, 34, 17, 0, 16, 21, 11, 42, 160, 50, 189, 133, 209, 183, 60, 242, 84, 238, 254, 37,
+    123, 26, 90, 172, 192, 13, 95, 233, 84, 41,
 ];
 
 #[derive(Copy, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -53,32 +51,23 @@ impl std::fmt::Debug for Commitment {
 }
 
 impl Commitment {
-    /// Generates the commitment to a private account owned by user for `account_id`:
-    /// SHA256( `Comm_DS` || `account_id` || `program_owner` || balance || nonce || SHA256(data)).
+    /// Commits to the account ID and account state.
+    /// SHA256(`Comm_DS` || `account_id` || SHA256(borsh(account))).
     // TODO: Accept account_id by value as it's Copy
     #[must_use]
     pub fn new(account_id: &AccountId, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
+        let hashed_account: [u8; 32] = Impl::hash_bytes(&account.to_bytes())
+            .as_bytes()
+            .try_into()
+            .unwrap();
+
         let mut bytes = Vec::new();
         bytes.extend_from_slice(COMMITMENT_PREFIX);
         bytes.extend_from_slice(account_id.value());
-        let account_bytes_with_hashed_data = {
-            let mut this = Vec::new();
-            for word in &account.program_owner {
-                this.extend_from_slice(&word.to_le_bytes());
-            }
-            this.extend_from_slice(&account.balance.to_le_bytes());
-            this.extend_from_slice(&account.nonce.0.to_le_bytes());
-            let hashed_data: [u8; 32] = Impl::hash_bytes(&account.data)
-                .as_bytes()
-                .try_into()
-                .unwrap();
-            this.extend_from_slice(&hashed_data);
-            this
-        };
-        bytes.extend_from_slice(&account_bytes_with_hashed_data);
+        bytes.extend_from_slice(&hashed_account);
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 

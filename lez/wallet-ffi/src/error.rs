@@ -45,6 +45,8 @@ pub enum WalletFfiError {
     InvalidKeyValue = 16,
     /// Invalid program bytecode.
     InvalidBytecode = 17,
+    /// Fee payer cannot fund the fee reserve.
+    PayerCannotFund = 18,
     /// Internal error (catch-all).
     InternalError = 99,
 }

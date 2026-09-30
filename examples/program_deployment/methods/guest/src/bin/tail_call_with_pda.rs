@@ -1,81 +1,47 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountId, ProgramShardSelector},
+    program::{ChainedCall, PdaSeed, Plan, ProgramCall, read_program_call},
 };
 
 // Tail Call with PDA example program.
 //
-// Demonstrates how to chain execution to another program using `ChainedCall`
-// while authorizing program-derived accounts.
+// Expects a single input account whose Account ID is derived from this program's deployed
+// address and the fixed PDA seed below (`AccountId::for_public_pda`). Emits it unchanged, then
+// tail-calls the callee program named in its own instruction data, delegating the PDA seed so
+// the protocol authorizes the account for the callee.
 //
-// Expects a single input account whose Account ID is derived from this
-// program’s ID and the fixed PDA seed below (as defined by the
-// `<AccountId as From<(&ProgramId, &PdaSeed)>>` implementation).
-//
-// Emits this account unchanged, then performs a tail call to the
-// Hello-World-with-Authorization program with a fixed greeting. The same
-// account is passed along but marked with `is_authorized = true`.
+// The callee's `AccountId` is caller-supplied: a deployed program's address isn't known until
+// deploy time, so it can't be a compile-time constant.
 
-const HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX: &str =
-    "1d95c761168a7fa62eb15a3cc74d3f075e6ec98e6c1ac25bd5bcc7e0a9426398";
 const PDA_SEED: PdaSeed = PdaSeed::new([37; 32]);
 
-fn hello_world_program_id() -> ProgramId {
-    let hello_world_program_id_bytes: [u8; 32] =
-        hex::decode(HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX)
-            .unwrap()
-            .try_into()
-            .unwrap();
-    bytemuck::cast(hello_world_program_id_bytes)
-}
+type Instruction = AccountId;
 
 fn main() {
-    // Read inputs
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = read_lee_inputs::<()>();
-
-    // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
-
-    // Create the (unchanged) post state
-    let post_state = AccountPostState::new(pre_state.account.clone());
-
-    // Create the chained call
-    let chained_call_greeting: Vec<u8> =
-        b"Hello from tail call with Program Derived Account ID".to_vec();
-    let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
-
-    // Flip the `is_authorized` flag to true
-    let pre_state_for_chained_call = {
-        let mut this = pre_state.clone();
-        this.is_authorized = true;
-        this
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("tail_call_with_pda emits no effect to apply")
     };
-    let chained_call = ChainedCall {
-        program_id: hello_world_program_id(),
-        instruction_data: chained_call_instruction_data,
-        pre_states: vec![pre_state_for_chained_call],
-        pda_seeds: vec![PDA_SEED],
-    };
+    let callee_account_id = instruction;
 
-    // Write the outputs.
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre_state],
-        vec![post_state],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    // Unpack the single input account handle.
+    let [account] = <[_; 1]>::try_from(input.accounts.clone())
+        .unwrap_or_else(|_| panic!("Input accounts should consist of a single account"));
+
+    let greeting: Vec<u8> = b"Hello from tail call with Program Derived Account ID".to_vec();
+
+    // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to commit
+    // it.
+    let mut plan = Plan::new(&input);
+    plan.call(
+        ChainedCall::new(
+            callee_account_id,
+            vec![ProgramShardSelector::new(
+                account.account_id,
+                callee_account_id,
+            )],
+            &greeting,
+        )
+        .with_pda_seeds(vec![PDA_SEED]),
+    );
+    plan.write()
 }

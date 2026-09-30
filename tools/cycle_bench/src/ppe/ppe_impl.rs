@@ -1,39 +1,46 @@
 //! Feature-gated implementation of PPE composition benches.
 //!
-//! `prove_auth_transfer_in_ppe` is reused by the `verify` criterion bench under
-//! `benches/verify.rs` (re-exported via `super::prove_auth_transfer_in_ppe`).
+//! `prove_native_transfer_in_ppe` is reused by the `verify` criterion bench under
+//! `benches/verify.rs` (re-exported via `super::prove_native_transfer_in_ppe`).
 
 use std::{collections::HashMap, time::Instant};
 
+use borsh::to_vec;
 use lee::{
     execute_and_prove,
-    privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
+    privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof, ProvingInput},
 };
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitOutput,
-    account::{Account, AccountId, AccountWithMetadata},
+    PrivacyPreservingCircuitOutput,
+    account::{AccountId, ProgramShardSelector},
 };
-use risc0_zkvm::serde::to_vec;
+use test_guest_core::ChainCall;
+use token_core::{TokenDescriptor, TokenKind};
 
 use super::PpeBenchResult;
 
-pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
-    let label = "auth_transfer Transfer in PPE".to_owned();
+const TOKEN_DEFINITION_ID: AccountId = AccountId::new([15; 32]);
+const SENDER_ID: AccountId = AccountId::new([17; 32]);
+const RECIPIENT_ID: AccountId = AccountId::new([42; 32]);
+const AMOUNT_TO_TRANSFER: u128 = 5_000;
+
+fn timed(
+    label: String,
+    chain_depth: usize,
+    proof: impl Fn() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)>,
+) -> PpeBenchResult {
     let started = Instant::now();
-    match prove_auth_transfer_in_ppe() {
-        Ok((_out, proof)) => {
-            let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
-            PpeBenchResult {
-                label,
-                chain_depth: 0,
-                prove_wall_ms: Some(prove_ms),
-                proof_bytes: Some(proof.into_inner().len()),
-                error: None,
-            }
-        }
+    match proof() {
+        Ok((_out, proof)) => PpeBenchResult {
+            label,
+            chain_depth,
+            prove_wall_ms: Some(started.elapsed().as_secs_f64() * 1_000.0),
+            proof_bytes: Some(proof.into_inner().len()),
+            error: None,
+        },
         Err(err) => PpeBenchResult {
             label,
-            chain_depth: 0,
+            chain_depth,
             prove_wall_ms: None,
             proof_bytes: None,
             error: Some(err.to_string()),
@@ -41,111 +48,115 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
     }
 }
 
-pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
-    let pwd = ProgramWithDependencies::from(auth_transfer);
+pub fn run_native_transfer_in_ppe() -> PpeBenchResult {
+    timed(
+        "native Transfer in PPE".to_owned(),
+        0,
+        prove_native_transfer_in_ppe,
+    )
+}
 
-    // For PPE to allow the sender's balance to be decremented by this
-    // program, the sender must already be claimed by auth_transfer.
-    // Recipient stays default-owned so the first call can claim it.
-    let sender = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id,
-            balance: 1_000_000,
-            ..Account::default()
-        },
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    let recipient = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let pre_states = vec![sender, recipient];
+pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+    let pwd = ProgramWithDependencies::native();
 
-    let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
+    let sender_id = AccountId::new([1; 32]);
+    let recipient_id = AccountId::new([2; 32]);
+
+    let instruction = lee_core::native_token::Instruction::Transfer { amount: 5_000 };
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
+    Ok(execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::native_balance(sender_id),
+                ProgramShardSelector::native_balance(recipient_id),
+            ],
+            signers: [sender_id, recipient_id].into(),
+            instruction_data,
+            ..Default::default()
+        },
+        &pwd,
+    )?)
+}
+
+pub fn run_token_transfer_in_ppe() -> PpeBenchResult {
+    timed(
+        "token Transfer in PPE".to_owned(),
+        0,
+        prove_token_transfer_in_ppe,
+    )
+}
+
+fn token_program_id() -> AccountId {
+    programs::token_account_id()
+}
+
+fn token_transfer_instruction() -> anyhow::Result<Vec<u8>> {
+    Ok(to_vec(&token_core::Instruction::Transfer {
+        amount_to_transfer: AMOUNT_TO_TRANSFER,
+        descriptor: TokenDescriptor {
+            definition_id: TOKEN_DEFINITION_ID,
+            kind: TokenKind::Fungible,
+        },
+    })?)
+}
+
+fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+    let token = programs::token();
+    let token_id = token_program_id();
+    let pwd = ProgramWithDependencies::new(token, token_id, HashMap::new());
 
     Ok(execute_and_prove(
-        pre_states,
-        instruction_data,
-        account_identities,
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::new(SENDER_ID, token_id),
+                ProgramShardSelector::new(RECIPIENT_ID, token_id),
+            ],
+            signers: [SENDER_ID, RECIPIENT_ID].into(),
+            instruction_data: token_transfer_instruction()?,
+            ..Default::default()
+        },
         &pwd,
     )?)
 }
 
 pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
-    let label = format!("chain_caller depth={depth}");
-    let started = Instant::now();
-    match prove_chain_caller(depth) {
-        Ok((_out, proof)) => {
-            let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
-            PpeBenchResult {
-                label,
-                chain_depth: depth as usize,
-                prove_wall_ms: Some(prove_ms),
-                proof_bytes: Some(proof.into_inner().len()),
-                error: None,
-            }
-        }
-        Err(err) => PpeBenchResult {
-            label,
-            chain_depth: depth as usize,
-            prove_wall_ms: None,
-            proof_bytes: None,
-            error: Some(err.to_string()),
-        },
-    }
+    timed(
+        format!("chain_caller to token Transfer depth={depth}"),
+        depth as usize,
+        || prove_chain_caller(depth),
+    )
 }
 
 fn prove_chain_caller(
     num_chain_calls: u32,
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
     let chain_caller = test_programs::chain_caller();
-    let auth_transfer = programs::authenticated_transfer();
-    let auth_transfer_id = auth_transfer.id();
-    let mut deps = HashMap::new();
-    deps.insert(auth_transfer.id(), auth_transfer);
-    let pwd = ProgramWithDependencies::new(chain_caller, deps);
+    let chain_caller_id = chain_caller.id();
+    let token_id = token_program_id();
+    let pwd = ProgramWithDependencies::new(
+        chain_caller,
+        AccountId::from_builtin_program(chain_caller_id),
+        [(token_id, programs::token())].into(),
+    );
 
-    // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
-    // track recipient's post-claim program_owner, so a default recipient
-    // would cause a state mismatch on subsequent chained calls.
-    let recipient_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id,
-            ..Account::default()
-        },
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
-    };
-    let sender_pre = AccountWithMetadata {
-        account: Account {
-            program_owner: auth_transfer_id,
-            balance: 1_000_000,
-            ..Account::default()
-        },
-        is_authorized: true,
-        account_id: AccountId::new([1; 32]),
-    };
-    // chain_caller expects pre_states = [recipient, sender].
-    let pre_states = vec![recipient_pre, sender_pre];
+    // chain_caller expects shard selectors = [recipient, sender].
+    let shard_selectors = vec![
+        ProgramShardSelector::new(RECIPIENT_ID, token_id),
+        ProgramShardSelector::new(SENDER_ID, token_id),
+    ];
 
-    let balance: u128 = 1;
-    let pda_seed: Option<lee_core::program::PdaSeed> = None;
-    let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
+    let instruction =
+        ChainCall::new(token_id, token_transfer_instruction()?).repeated(num_chain_calls);
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
     Ok(execute_and_prove(
-        pre_states,
-        instruction_data,
-        account_identities,
+        ProvingInput {
+            shard_selectors,
+            signers: [RECIPIENT_ID, SENDER_ID].into(),
+            instruction_data,
+            ..Default::default()
+        },
         &pwd,
     )?)
 }

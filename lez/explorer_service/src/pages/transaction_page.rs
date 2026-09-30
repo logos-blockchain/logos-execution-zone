@@ -6,7 +6,7 @@ use leptos_router::hooks::use_params_map;
 
 use crate::{
     api,
-    components::{PrivacyPreservingTxDetails, ProgramDeploymentTxDetails, PublicTxDetails},
+    components::{PrivacyPreservingTxDetails, PublicTxDetails},
 };
 
 /// Transaction page component
@@ -41,7 +41,6 @@ pub fn TransactionPage() -> impl IntoView {
                                 let tx_type = match &tx {
                                     Transaction::Public(_) => "Public Transaction",
                                     Transaction::PrivacyPreserving(_) => "Privacy-Preserving Transaction",
-                                    Transaction::ProgramDeployment(_) => "Program Deployment Transaction",
                                 };
                                 view! {
                                     <div class="transaction-detail">
@@ -70,9 +69,6 @@ pub fn TransactionPage() -> impl IntoView {
                                                 }
                                                 Transaction::PrivacyPreserving(pptx) => {
                                                     view! { <PrivacyPreservingTxDetails tx=pptx /> }.into_any()
-                                                }
-                                                Transaction::ProgramDeployment(pdtx) => {
-                                                    view! { <ProgramDeploymentTxDetails tx=pdtx /> }.into_any()
                                                 }
                                             }
                                         }

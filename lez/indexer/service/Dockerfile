@@ -3,6 +3,11 @@ FROM risc0_base AS chef
 
 WORKDIR /indexer_service
 
+# Comma-separated extra cargo features. Defaults to `prove`, which selects the
+# in-process guest executor with a memoized memory image instead of spawning an
+# r0vm subprocess per execution.
+ARG FEATURES="prove"
+
 # Planner stage - generates dependency recipe
 FROM chef AS planner
 COPY . .
@@ -10,13 +15,15 @@ RUN cargo chef prepare --bin indexer_service --recipe-path recipe.json
 
 # Builder stage - builds dependencies and application
 FROM chef AS builder
+ARG FEATURES
 COPY --from=planner /indexer_service/recipe.json recipe.json
 # Build dependencies only (this layer will be cached)
 RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
     --mount=type=cache,target=/usr/local/cargo/registry/cache \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/indexer_service/target \
-    cargo chef cook --bin indexer_service --release --recipe-path recipe.json
+    cargo chef cook --bin indexer_service ${FEATURES:+--features "$FEATURES"} \
+      --release --recipe-path recipe.json
 
 # Copy source code
 COPY . .
@@ -26,7 +33,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
     --mount=type=cache,target=/usr/local/cargo/registry/cache \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/indexer_service/target \
-    cargo build --release --bin indexer_service \
+    cargo build --release ${FEATURES:+--features "$FEATURES"} --bin indexer_service \
     && strip /indexer_service/target/release/indexer_service \
     && cp /indexer_service/target/release/indexer_service /usr/local/bin/indexer_service
 

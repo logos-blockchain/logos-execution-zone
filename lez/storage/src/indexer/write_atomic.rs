@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use common::transaction::TxEvents;
 use rocksdb::WriteBatch;
 
 use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO, V03State};
@@ -7,8 +8,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, LastObservedL1LibHeaderCell,
-        TipSlotCell, TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockEventsCellRef, BlockHashToBlockIdMapCell, BreakpointCellRef,
+        LastObservedL1LibHeaderCell, TipSlotCell, TxHashToBlockIdMapCell,
     },
 };
 
@@ -152,6 +153,7 @@ impl RocksDBIO {
         l1_lib_header: [u8; 32],
         l1_slot: u64,
         post_state: &V03State,
+        events: &[TxEvents],
     ) -> DbResult<()> {
         let cf_block = self.block_column();
         let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
@@ -227,6 +229,15 @@ impl RocksDBIO {
                 .checked_div(BREAKPOINT_INTERVAL.into())
                 .expect("Breakpoint interval is not zero");
             self.put_batch(&BreakpointCellRef(post_state), br_id, &mut write_batch)?;
+        }
+
+        // No row at all for a block whose transactions emitted nothing.
+        if !events.is_empty() {
+            self.put_batch(
+                &BlockEventsCellRef(events),
+                block.header.block_id,
+                &mut write_batch,
+            )?;
         }
 
         self.db.write(write_batch).map_err(|rerr| {

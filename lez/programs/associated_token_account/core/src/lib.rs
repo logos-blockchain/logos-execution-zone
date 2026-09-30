@@ -1,34 +1,40 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::PdaSeed;
 use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::ProgramId,
+    account::{AccountId, ShardData},
+    program::AccountMeta,
 };
-use serde::{Deserialize, Serialize};
+use token_core::{TokenDescriptor, TokenHolding, TokenKind};
 
-#[derive(Serialize, Deserialize)]
+pub const ASSOCIATED_TOKEN_ACCOUNT_NAME: [u8; 24] = *b"associated_token_account";
+
+/// Associated token account instructions.
+///
+/// `token_program_id` selects the token definition and holding shards.
+#[derive(BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
     /// Create the Associated Token Account for (owner, definition).
-    /// Idempotent: no-op if the account already exists.
     ///
     /// Required accounts (3):
-    /// - Owner account
-    /// - Token definition account
-    /// - Associated token account (default/uninitialized, or already initialized)
-    ///
-    /// `token_program_id` is derived from `token_definition.account.program_owner`.
-    Create { ata_program_id: ProgramId },
+    /// - Owner account (address only)
+    /// - Token definition account (under `token_program_id`)
+    /// - Associated token account (under `token_program_id`)
+    Create {
+        token_program_id: AccountId,
+        kind: TokenKind,
+        contents: AtaContents,
+    },
 
     /// Transfer tokens FROM owner's ATA to a recipient holding account.
     /// Uses PDA seeds to authorize the ATA in the chained Token::Transfer call.
     ///
     /// Required accounts (3):
-    /// - Owner account (authorized)
-    /// - Sender ATA (owner's token holding)
-    /// - Recipient token holding (any account; auto-created if default)
-    ///
-    /// `token_program_id` is derived from `sender_ata.account.program_owner`.
+    /// - Owner account (address only, authorized)
+    /// - Sender ATA (owner's token holding, under `token_program_id`)
+    /// - Recipient token holding (any account, under `token_program_id`; auto-created if empty)
     Transfer {
-        ata_program_id: ProgramId,
+        token_program_id: AccountId,
+        descriptor: TokenDescriptor,
         amount: u128,
     },
 
@@ -36,22 +42,64 @@ pub enum Instruction {
     /// Uses PDA seeds to authorize the ATA in the chained Token::Burn call.
     ///
     /// Required accounts (3):
-    /// - Owner account (authorized)
-    /// - Owner's ATA (the holding to burn from)
-    /// - Token definition account
-    ///
-    /// `token_program_id` is derived from `holder_ata.account.program_owner`.
+    /// - Owner account (address only, authorized)
+    /// - Owner's ATA (the holding to burn from, under `token_program_id`)
+    /// - Token definition account (under `token_program_id`)
     Burn {
-        ata_program_id: ProgramId,
+        token_program_id: AccountId,
+        kind: TokenKind,
         amount: u128,
     },
 }
 
-pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {
+#[must_use]
+pub fn ata_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&ASSOCIATED_TOKEN_ACCOUNT_NAME)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AtaContents {
+    Empty,
+    Intended,
+    Squatted,
+}
+
+#[must_use]
+pub fn classify(pre_data: &ShardData, descriptor: &TokenDescriptor) -> AtaContents {
+    if pre_data.is_empty() {
+        return AtaContents::Empty;
+    }
+    let Ok(holding) = TokenHolding::try_from(pre_data) else {
+        return AtaContents::Squatted;
+    };
+    if holding.definition_id() == descriptor.definition_id
+        && holds_definition_kind(holding.kind(), descriptor.kind)
+    {
+        AtaContents::Intended
+    } else {
+        AtaContents::Squatted
+    }
+}
+
+const fn holds_definition_kind(holding: TokenKind, definition: TokenKind) -> bool {
+    match definition {
+        TokenKind::Fungible => matches!(holding, TokenKind::Fungible),
+        TokenKind::NftMaster | TokenKind::NftPrintedCopy => {
+            matches!(holding, TokenKind::NftMaster | TokenKind::NftPrintedCopy)
+        }
+    }
+}
+
+pub fn compute_ata_seed(
+    owner_id: AccountId,
+    definition_id: AccountId,
+    token_program_id: AccountId,
+) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256};
-    let mut bytes = [0_u8; 64];
+    let mut bytes = [0_u8; 96];
     bytes[0..32].copy_from_slice(&owner_id.to_bytes());
     bytes[32..64].copy_from_slice(&definition_id.to_bytes());
+    bytes[64..96].copy_from_slice(&token_program_id.to_bytes());
     PdaSeed::new(
         Impl::hash_bytes(&bytes)
             .as_bytes()
@@ -60,20 +108,20 @@ pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSee
     )
 }
 
-pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
+pub fn get_associated_token_account_id(ata_program_id: &AccountId, seed: &PdaSeed) -> AccountId {
     AccountId::for_public_pda(ata_program_id, seed)
 }
 
-/// Verify the ATA's address matches `(ata_program_id, owner, definition)` and return
-/// the [`PdaSeed`] for use in chained calls.
+/// Verifies the ATA address and returns its seed for chained calls.
 pub fn verify_ata_and_get_seed(
-    ata_account: &AccountWithMetadata,
-    owner: &AccountWithMetadata,
+    ata_account: &AccountMeta,
+    owner: &AccountMeta,
     definition_id: AccountId,
-    ata_program_id: ProgramId,
+    self_account_id: AccountId,
+    token_program_id: AccountId,
 ) -> PdaSeed {
-    let seed = compute_ata_seed(owner.account_id, definition_id);
-    let expected_id = get_associated_token_account_id(&ata_program_id, &seed);
+    let seed = compute_ata_seed(owner.account_id, definition_id, token_program_id);
+    let expected_id = get_associated_token_account_id(&self_account_id, &seed);
     assert_eq!(
         ata_account.account_id, expected_id,
         "ATA account ID does not match expected derivation"

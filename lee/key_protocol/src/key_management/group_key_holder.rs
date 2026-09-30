@@ -158,7 +158,7 @@ impl GroupKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
-        hasher.update(identifier.to_le_bytes());
+        hasher.update(identifier.value());
         let derivation_seed: [u8; 32] = hasher.finalize().into();
         self.derive_keys_for_shared_account(&derivation_seed)
     }
@@ -339,31 +339,42 @@ mod tests {
     }
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
-    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
+    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` ask/nsk/npk chain, or the
     /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
-        use lee_core::{account::AccountId, program::ProgramId};
+        use lee_core::account::AccountId;
 
         let gms = [42_u8; 32];
         let seed = PdaSeed::new([1; 32]);
-        let program_id: ProgramId = [9; 8];
+        let program_id = AccountId::new([9; 32]);
 
         let holder = GroupKeyHolder::from_gms(gms);
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
+        let account_id = AccountId::for_private_pda(
+            &program_id,
+            &seed,
+            &npk,
+            &vpk,
+            Identifier::new([u8::MAX; 32]),
+        );
 
         let expected_npk = NullifierPublicKey([
-            136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
-            215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
+            59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
+            239, 255, 145, 142, 122, 166, 219, 75, 200, 9, 168, 7,
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id =
-            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk, u128::MAX);
+        let expected_account_id = AccountId::for_private_pda(
+            &program_id,
+            &seed,
+            &expected_npk,
+            &vpk,
+            Identifier::new([u8::MAX; 32]),
+        );
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
@@ -545,7 +556,7 @@ mod tests {
 
         let alice_holder = GroupKeyHolder::new();
         let pda_seed = PdaSeed::new([42_u8; 32]);
-        let program_id: lee_core::program::ProgramId = [1; 8];
+        let program_id = AccountId::new([1; 32]);
 
         let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
         let alice_npk = alice_keys.generate_nullifier_public_key();
@@ -566,10 +577,20 @@ mod tests {
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk, 0);
-        let bob_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk, 0);
+        let alice_account_id = AccountId::for_private_pda(
+            &program_id,
+            &pda_seed,
+            &alice_npk,
+            &alice_vpk,
+            Identifier::ZERO,
+        );
+        let bob_account_id = AccountId::for_private_pda(
+            &program_id,
+            &pda_seed,
+            &bob_npk,
+            &bob_group_vpk,
+            Identifier::ZERO,
+        );
         assert_eq!(alice_account_id, bob_account_id);
     }
 

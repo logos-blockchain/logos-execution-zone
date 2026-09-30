@@ -1,0 +1,14 @@
+[package]
+name = "sequencer_actors_common"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+mock = []
+
+[dependencies]
+kameo.workspace = true

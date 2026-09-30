@@ -1,264 +1,107 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
-    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction,
-    PublicAction, SharedSecretKey,
+    EphemeralSecretKey, MembershipProof, Nullifier, NullifierSecretKey, NullifierWitness,
+    PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PrivateWitness,
+    ProgramImageClaim, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
+    execution_state::{DeferPublicEffects, ExecutionOutcome},
 };
 
-use crate::execution_state::ExecutionState;
-
 pub fn compute_circuit_output(
-    execution_state: ExecutionState,
-    account_identities: &[InputAccountIdentity],
+    outcome: ExecutionOutcome<DeferPublicEffects>,
+    private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
+    ciphertext_padding: Option<u32>,
+    program_image_claims: Vec<ProgramImageClaim>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
-        execution_state.into_parts();
+    let ExecutionOutcome {
+        block_validity_window,
+        timestamp_validity_window,
+        public: public_actions,
+        mut private_accounts,
+    } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
-        public_actions: Vec::new(),
+        public_actions,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        program_image_claims,
     };
 
-    assert_eq!(
-        account_identities.len(),
-        states_iter.len(),
-        "Invalid account_identities length"
-    );
+    // Emit one action per private account, covering all its shards.
+    for witness in private_witnesses {
+        let PrivateWitness {
+            vpk,
+            random_seed,
+            identifier,
+            kind,
+            nullifier,
+        } = witness;
+        let account_id = witness.account_id();
+        let post_data = private_accounts.remove(&account_id).expect(
+            "initialize admits only root witnesses and finish emits every root private account",
+        );
 
-    for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(states_iter).enumerate()
-    {
-        match account_identity {
-            InputAccountIdentity::Public => {
-                output.public_actions.push(PublicAction {
-                    pre: pre_state,
-                    post: post_state,
-                });
-            }
-            InputAccountIdentity::PrivateAuthorizedInit {
-                vpk,
-                random_seed,
-                nsk,
-                identifier,
+        let (new_nullifier, new_nonce, view_tag) = match nullifier {
+            NullifierWitness::Init {
+                npk,
                 commitment_root,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
-                );
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values"
-                );
-
-                let new_nullifier = (
+            } => (
+                (
                     Nullifier::for_account_initialization(&account_id),
                     *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
-                let view_tag = EncryptedAccountData::compute_view_tag(&npk, vpk);
-
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivateAuthorizedUpdate {
-                vpk,
-                random_seed,
+                ),
+                Nonce::private_account_nonce_init(&account_id),
+                EncryptedAccountData::compute_view_tag(npk, vpk),
+            ),
+            NullifierWitness::Update {
+                account,
                 view_tag,
                 nsk,
                 membership_proof,
-                identifier,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
+            } => (
+                compute_update_nullifier_and_set_digest(
                     membership_proof,
-                    &pre_state.account,
+                    account,
                     &account_id,
                     nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+                ),
+                account.nonce.private_account_nonce_increment(nsk),
+                *view_tag,
+            ),
+        };
 
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    *view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivateForeignInit {
-                vpk,
-                random_seed,
-                npk,
-                identifier,
-                commitment_root,
-            } => {
-                let account_id = AccountId::for_regular_private_account(npk, vpk, *identifier);
+        let account_kind = match kind {
+            WitnessKind::Regular { .. } => PrivateAccountKind::Regular(*identifier),
+            WitnessKind::Pda {
+                binding: (program, seed),
+            } => PrivateAccountKind::Pda {
+                account_id: *program,
+                seed: *seed,
+                identifier: *identifier,
+            },
+        };
 
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values",
-                );
-                assert!(
-                    pre_state.is_authorized,
-                    "Found new private account marked as unauthorized."
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
-                    *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
-                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
-
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaInit {
-                vpk,
-                random_seed,
-                npk,
-                identifier,
-                commitment_root,
-                seed: _,
-            } => {
-                // The npk-to-account_id binding is established upstream in
-                // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                // match. Here we only enforce the init pre-conditions. The supplied npk on
-                // the variant has been recorded into `private_pda_by_position` and used
-                // for the binding check; we use `pre_state.account_id` directly for nullifier
-                // and commitment derivation.
-                assert!(
-                    !pre_state.is_authorized,
-                    "PrivatePdaInit requires unauthorized pre_state"
-                );
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "New private PDA must be default"
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&pre_state.account_id),
-                    *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
-
-                let account_id = pre_state.account_id;
-                let (authority_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaInit position must be in pda_seed_by_position");
-                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *authority_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaUpdate {
-                vpk,
-                random_seed,
-                view_tag,
-                nsk,
-                membership_proof,
-                identifier,
-                seed: external_seed,
-            } => {
-                // With an external seed the binding comes from the circuit input and the
-                // pre_state is intentionally unauthorized; without one the binding comes from
-                // a Claim or caller pda_seeds, so the pre_state must already be authorized.
-                // When `external_seed` is `Some`, execution_state already asserted
-                // `!pre_state.is_authorized`.
-                assert!(
-                    pre_state.is_authorized ^ external_seed.is_some(),
-                    "PrivatePdaUpdate requires authorized pre_state or external seed"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    &pre_state.account,
-                    &pre_state.account_id,
-                    nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
-
-                let account_id = pre_state.account_id;
-                let (authority_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *authority_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    *view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-        }
+        emit_private_output(
+            &mut output,
+            &Account {
+                nonce: new_nonce,
+                data: post_data,
+            },
+            &account_id,
+            &account_kind,
+            view_tag,
+            vpk,
+            random_seed,
+            new_nullifier,
+            ciphertext_padding,
+        );
     }
 
     for dummy in dummy_inputs {
-        emit_dummy_output(&mut output, dummy);
+        emit_dummy_output(&mut output, dummy, ciphertext_padding);
     }
 
     obfuscate_output_ordering(&mut output);
@@ -283,7 +126,18 @@ fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
     }
 }
 
-fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
+fn emit_dummy_output(
+    output: &mut PrivacyPreservingCircuitOutput,
+    dummy: DummyInput,
+    ciphertext_padding: Option<u32>,
+) {
+    if let Some(padding) = ciphertext_padding {
+        assert!(
+            dummy.note.ciphertext.as_bytes().len()
+                >= usize::try_from(padding).expect("pad length fits in usize"),
+            "Dummy note shorter than the requested ciphertext padding"
+        );
+    }
     // Note: the nullifiers and commitments are generated from seeds.
     // The prover is responsible for their randomness.
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
@@ -308,28 +162,26 @@ fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyIn
 )]
 fn emit_private_output(
     output: &mut PrivacyPreservingCircuitOutput,
-    post_state: Account,
+    post_state: &Account,
     account_id: &AccountId,
     kind: &PrivateAccountKind,
     view_tag: ViewTag,
     vpk: &ViewingPublicKey,
     random_seed: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
-    new_nonce: Nonce,
+    ciphertext_padding: Option<u32>,
 ) {
-    let mut post_with_updated_nonce = post_state;
-    post_with_updated_nonce.nonce = new_nonce;
+    let commitment_post = Commitment::new(account_id, post_state);
 
-    let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
-
-    let esk = EphemeralSecretKey::new(account_id, random_seed, &new_nonce);
+    let esk = EphemeralSecretKey::new(account_id, random_seed, &post_state.nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
     let encrypted_account = EncryptionScheme::encrypt(
-        &post_with_updated_nonce,
+        post_state,
         kind,
         &shared_secret,
         &new_nullifier.0,
+        ciphertext_padding,
     );
 
     output.private_actions.push(PrivateAction {
@@ -360,18 +212,150 @@ fn compute_update_nullifier_and_set_digest(
 mod tests {
     use std::collections::HashMap;
 
-    use lee_core::{DUMMY_COMMITMENT_HASH, EphemeralPublicKey};
+    use lee_core::{
+        AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier,
+        NullifierPublicKey, PublicAction,
+        account::{AccountData, ShardData},
+        program::{BlockValidityWindow, TimestampValidityWindow},
+    };
 
     use super::*;
+
+    const SHARD_A: AccountId = AccountId::new([10; 32]);
+    const SHARD_B: AccountId = AccountId::new([11; 32]);
+
+    struct Owner {
+        ask: AuthorizationSecretKey,
+        d: [u8; 32],
+        z: [u8; 32],
+    }
+
+    impl Owner {
+        fn new(tag: u8) -> Self {
+            Self {
+                ask: AuthorizationSecretKey([tag; 32]),
+                d: [tag; 32],
+                z: [tag.wrapping_add(1); 32],
+            }
+        }
+
+        fn nsk(&self) -> NullifierSecretKey {
+            NullifierSecretKey::from(&self.ask)
+        }
+
+        fn vpk(&self) -> ViewingPublicKey {
+            ViewingPublicKey::from_seed(&self.d, &self.z)
+        }
+
+        fn account_id(&self) -> AccountId {
+            AccountId::for_regular_private_account(
+                &NullifierPublicKey::from(&self.nsk()),
+                &self.vpk(),
+                Identifier::ZERO,
+            )
+        }
+
+        fn update_witness(&self, account: Account) -> PrivateWitness {
+            PrivateWitness {
+                vpk: self.vpk(),
+                random_seed: [0; 32],
+                identifier: Identifier::ZERO,
+                kind: WitnessKind::Regular {
+                    ask: Some(self.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    account,
+                    view_tag: 0,
+                    nsk: self.nsk(),
+                    membership_proof: (0, Vec::new()),
+                },
+            }
+        }
+
+        fn decrypt(&self, action: &PrivateAction) -> (PrivateAccountKind, Account) {
+            let shared =
+                SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &self.d, &self.z)
+                    .expect("the note's ephemeral key decapsulates");
+            EncryptionScheme::decrypt(
+                &action.encrypted_post_state.ciphertext,
+                &shared,
+                &action.nullifier,
+            )
+            .expect("the note decrypts")
+        }
+    }
+
+    fn emit(
+        public_actions: Vec<PublicAction>,
+        private: Vec<(AccountId, AccountData)>,
+        witnesses: &[PrivateWitness],
+    ) -> PrivacyPreservingCircuitOutput {
+        compute_circuit_output(
+            ExecutionOutcome {
+                block_validity_window: BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+                public: public_actions,
+                private_accounts: private.into_iter().collect(),
+            },
+            witnesses,
+            Vec::new(),
+            None,
+            Vec::new(),
+        )
+    }
+
+    fn data(bytes: &[u8]) -> ShardData {
+        bytes.to_vec().try_into().expect("test data is small")
+    }
+
+    #[test]
+    fn one_note_per_private_account_carries_its_touched_shards() {
+        let owner = Owner::new(3);
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(100)
+                .with_shard(SHARD_A, data(b"a"))
+                .with_shard(SHARD_B, data(b"b"))
+        };
+        let rewritten = Account::funded(60)
+            .data
+            .with_shard(SHARD_A, data(b"a"))
+            .with_shard(SHARD_B, data(b"b-rewritten"));
+
+        let output = emit(
+            Vec::new(),
+            vec![(owner.account_id(), rewritten.clone())],
+            &[owner.update_witness(account.clone())],
+        );
+
+        assert_eq!(output.private_actions.len(), 1, "one account, one note");
+        let expected = Account {
+            nonce: account.nonce.private_account_nonce_increment(&owner.nsk()),
+            data: rewritten,
+        };
+        let action = &output.private_actions[0];
+        assert_eq!(
+            owner.decrypt(action),
+            (
+                PrivateAccountKind::Regular(Identifier::ZERO),
+                expected.clone()
+            )
+        );
+        assert_eq!(
+            action.commitment,
+            Commitment::new(&owner.account_id(), &expected)
+        );
+    }
 
     fn note(tag: u8) -> PrivateAction {
         let nullifier = Nullifier::for_dummy(&[tag; 32]);
         let commitment = Commitment::for_dummy(&nullifier, &[tag; 32]);
         let ciphertext = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(0),
+            &PrivateAccountKind::Regular(Identifier::ZERO),
             &SharedSecretKey([0; 32]),
             &nullifier,
+            None,
         );
         PrivateAction {
             nullifier,

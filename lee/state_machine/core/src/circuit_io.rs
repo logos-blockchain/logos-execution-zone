@@ -1,103 +1,175 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
+    Nullifier, NullifierPublicKey, NullifierSecretKey,
+    account::{Account, AccountId},
+    compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    execution_state::{DeferredPublicEffect, RootCall},
+    program::{
+        ApplyOutput, BlockValidityWindow, PdaSeed, PlanOutput, ProgramHeader, ProgramId,
+        TimestampValidityWindow, immutable_mirror_commitment,
+    },
 };
 
-#[derive(Serialize, Deserialize)]
-pub struct PrivacyPreservingCircuitInput {
-    /// Outputs of the program execution.
-    pub program_outputs: Vec<ProgramOutput>,
-    /// One entry per `pre_state`, in the same order as the program's `pre_states`.
-    /// Length must equal the number of `pre_states` derived from `program_outputs`.
-    /// The guest's `private_pda_by_position` and `private_pda_bound_positions`
-    /// rely on this position alignment.
-    pub account_identities: Vec<InputAccountIdentity>,
-    /// Program ID.
-    pub program_id: ProgramId,
-    pub dummy_inputs: Vec<DummyInput>,
+/// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
+#[derive(Debug, thiserror::Error)]
+#[error("an undisclosed program claim requires an immutable header")]
+pub struct UndisclosedHeaderNotImmutable;
+
+/// Untrusted circuit input claiming a program's real `image_id`, used for `env::verify` in place
+/// of a header's address.
+///
+/// Both variants are publicly deployed; `Undisclosed` just doesn't reveal which one, proving
+/// membership in-circuit instead.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum ProgramImageWitness {
+    /// `image_id` is disclosed on the resulting claim.
+    Disclosed {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Deployed at an immutable header, not disclosed on the resulting claim.
+    Undisclosed {
+        account_id: AccountId,
+        program_header: ProgramHeader,
+        membership_proof: MembershipProof,
+    },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub enum InputAccountIdentity {
-    /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier.
-    Public,
-    /// Init of an authorized standalone private account: no membership proof. The `pre_state`
-    /// must be `Account::default()`. The `account_id` is derived as
-    /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk), vpk, identifier)`
-    /// and matched against `pre_state.account_id`.
-    PrivateAuthorizedInit {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        nsk: NullifierSecretKey,
-        identifier: Identifier,
+impl ProgramImageWitness {
+    #[must_use]
+    pub const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Disclosed { account_id, .. } | Self::Undisclosed { account_id, .. } => {
+                *account_id
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn image_id(&self) -> ProgramId {
+        match self {
+            Self::Disclosed { image_id, .. } => *image_id,
+            Self::Undisclosed { program_header, .. } => program_header.image_id,
+        }
+    }
+
+    /// # Errors
+    /// Returns an error if `Self::Undisclosed`'s header isn't immutable.
+    pub fn to_claim(&self) -> Result<ProgramImageClaim, UndisclosedHeaderNotImmutable> {
+        Ok(match self {
+            Self::Disclosed {
+                account_id,
+                image_id,
+            } => ProgramImageClaim::Disclosed {
+                account_id: *account_id,
+                image_id: *image_id,
+            },
+            Self::Undisclosed {
+                account_id,
+                program_header,
+                membership_proof,
+            } => {
+                if !program_header.immutable {
+                    return Err(UndisclosedHeaderNotImmutable);
+                }
+                let commitment = immutable_mirror_commitment(*account_id, program_header);
+                ProgramImageClaim::Undisclosed {
+                    root: compute_digest_for_path(&commitment, membership_proof),
+                }
+            }
+        })
+    }
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub enum ProgramImageClaim {
+    Disclosed {
+        account_id: AccountId,
+        image_id: ProgramId,
+    },
+    /// Some immutable header's mirrored commitment is a member of `root`.
+    Undisclosed { root: CommitmentSetDigest },
+}
+
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+pub struct ShadowProgramWitness {
+    pub image_id: ProgramId,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PrivacyPreservingCircuitInput {
+    pub root: RootCall,
+    /// One witness for each private account used by the transaction.
+    pub private_witnesses: Vec<PrivateWitness>,
+    pub dummy_inputs: Vec<DummyInput>,
+    /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
+    /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
+    pub ciphertext_padding: Option<u32>,
+    /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
+    /// account id.
+    pub program_image_witnesses: Vec<ProgramImageWitness>,
+    /// Identities of every shadow program invoked in the call graph.
+    pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
+    /// One entry per scheduled guest call, in traversal order.
+    pub calls: Vec<ProvenCall>,
+}
+
+/// One scheduled guest call's transcript: its plan output, and the apply outputs of the private
+/// effects that planner emitted, in effect order.
+///
+/// Native-token calls are recomputed from the protocol's own implementation, so they carry no
+/// receipt and have no transcript.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProvenCall {
+    pub plan: PlanOutput,
+    pub private_apply_outputs: Vec<ApplyOutput>,
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub struct PrivateWitness {
+    pub vpk: ViewingPublicKey,
+    pub random_seed: [u8; 32],
+    pub identifier: Identifier,
+    pub kind: WitnessKind,
+    pub nullifier: NullifierWitness,
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum WitnessKind {
+    /// Standalone private account. The `account_id` is derived as
+    /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
+    /// the handle's `account_id`. An honest authorized account's `npk` for Id computation gets
+    /// derived from the supplied `ask`.
+    Regular { ask: Option<AuthorizationSecretKey> },
+    /// A private PDA with its authority's account ID and seed.
+    Pda { binding: (AccountId, PdaSeed) },
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub enum NullifierWitness {
+    /// Initializes a private account without a membership proof.
+    Init {
+        npk: NullifierPublicKey,
         commitment_root: CommitmentSetDigest,
     },
-    /// Update of an authorized standalone private account: existing on-chain commitment, with
-    /// membership proof.
-    PrivateAuthorizedUpdate {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
+    /// Update of a private account: existing on-chain commitment, with membership proof. `npk`
+    /// is derived from `nsk`.
+    Update {
+        account: Account,
         view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
-        identifier: Identifier,
-    },
-    /// Init of a standalone private account the caller does not own (e.g. a recipient who
-    /// doesn't yet exist on chain). No `nsk`, no membership proof.
-    PrivateForeignInit {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        npk: NullifierPublicKey,
-        identifier: Identifier,
-        commitment_root: CommitmentSetDigest,
-    },
-    /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
-    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. The identifier diversifies the
-    /// PDA within the `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it
-    /// as the 4th input.
-    PrivatePdaInit {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        npk: NullifierPublicKey,
-        identifier: Identifier,
-        commitment_root: CommitmentSetDigest,
-        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
-        /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
-        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
-        /// == false`.
-        seed: Option<(PdaSeed, ProgramId)>,
-    },
-    /// Update of an existing private PDA, with membership proof. `npk` is derived
-    /// from `nsk`. Authorization may be established upstream by a caller `pda_seeds` match or a
-    /// previously-seen authorization in a chained call.
-    PrivatePdaUpdate {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        view_tag: ViewTag,
-        nsk: NullifierSecretKey,
-        membership_proof: MembershipProof,
-        identifier: Identifier,
-        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
-        /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a caller `pda_seeds` to establish
-        /// the binding. The `pre_state` must have `is_authorized == false`.
-        seed: Option<(PdaSeed, ProgramId)>,
     },
 }
 
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
@@ -109,46 +181,46 @@ pub struct DummyInput {
     pub commitment_root: CommitmentSetDigest,
 }
 
-impl InputAccountIdentity {
+impl PrivateWitness {
     #[must_use]
-    pub const fn is_public(&self) -> bool {
-        matches!(self, Self::Public)
+    pub const fn is_pda(&self) -> bool {
+        matches!(self.kind, WitnessKind::Pda { .. })
     }
 
     #[must_use]
-    pub const fn is_private_pda(&self) -> bool {
-        matches!(
-            self,
-            Self::PrivatePdaInit { .. } | Self::PrivatePdaUpdate { .. }
-        )
+    pub const fn pda_binding(&self) -> Option<(AccountId, PdaSeed)> {
+        match self.kind {
+            WitnessKind::Pda { binding } => Some(binding),
+            WitnessKind::Regular { .. } => None,
+        }
     }
 
+    /// Derives the account ID from this witness.
     #[must_use]
-    pub fn npk_vpk_if_private_pda(
-        &self,
-    ) -> Option<(NullifierPublicKey, ViewingPublicKey, Identifier)> {
-        match self {
-            Self::PrivatePdaInit {
-                npk,
-                vpk,
-                identifier,
-                ..
-            } => Some((*npk, vpk.clone(), *identifier)),
-            Self::PrivatePdaUpdate {
-                nsk,
-                vpk,
-                identifier,
-                ..
-            } => Some((NullifierPublicKey::from(nsk), vpk.clone(), *identifier)),
-            Self::Public
-            | Self::PrivateAuthorizedInit { .. }
-            | Self::PrivateAuthorizedUpdate { .. }
-            | Self::PrivateForeignInit { .. } => None,
+    pub fn account_id(&self) -> AccountId {
+        let npk = self.nullifier.npk();
+        match self.kind {
+            WitnessKind::Regular { .. } => {
+                AccountId::for_regular_private_account(&npk, &self.vpk, self.identifier)
+            }
+            WitnessKind::Pda {
+                binding: (program, seed),
+            } => AccountId::for_private_pda(&program, &seed, &npk, &self.vpk, self.identifier),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+impl NullifierWitness {
+    #[must_use]
+    pub fn npk(&self) -> NullifierPublicKey {
+        match self {
+            Self::Init { npk, .. } => *npk,
+            Self::Update { nsk, .. } => NullifierPublicKey::from(nsk),
+        }
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, Default, PartialEq, Eq)
@@ -163,20 +235,26 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedAccountData,
 }
 
-#[derive(Serialize, Deserialize)]
+/// A public account's root-authorization bit and the effects the execution deferred to
+/// settlement, in the order its traversal emitted them.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicAction {
-    pub pre: AccountWithMetadata,
-    pub post: Account,
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub effects: Vec<DeferredPublicEffect>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_actions: Vec<PublicAction>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Unchanged echo of [`PrivacyPreservingCircuitInput::program_image_claims`] — what the
+    /// receipt actually commits to, so the sequencer can check it against real chain state.
+    pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -200,64 +278,49 @@ impl PrivacyPreservingCircuitOutput {
 
 #[cfg(feature = "host")]
 impl PrivacyPreservingCircuitOutput {
-    /// Serializes the circuit output to a byte vector.
+    /// Serializes the circuit output to the exact journal byte sequence the circuit guest commits.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        bytemuck::cast_slice(&risc0_zkvm::serde::to_vec(&self).unwrap()).to_vec()
+        crate::to_borsh_frame(self)
     }
 }
 
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
-    use risc0_zkvm::serde::from_slice;
-
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountId},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
     #[test]
-    fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
+    fn privacy_preserving_circuit_output_to_bytes_round_trips_via_borsh_frame() {
+        let touched = AccountId::new([8; 32]);
+        let also_touched = AccountId::new([9; 32]);
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                            balance: 12_345_678_901_234_567_890,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
+                    account_id: AccountId::new([0; 32]),
+                    is_authorized: true,
+                    effects: vec![
+                        DeferredPublicEffect {
+                            program_account_id: touched,
+                            shard_program_account_id: touched,
+                            data: b"post state data".to_vec(),
                         },
-                        true,
-                        AccountId::new([0; 32]),
-                    ),
-                    post: Account {
-                        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                        balance: 100,
-                        data: b"post state data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
-                    },
+                        DeferredPublicEffect {
+                            program_account_id: touched,
+                            shard_program_account_id: also_touched,
+                            data: b"fresh record".to_vec(),
+                        },
+                    ],
                 },
                 PublicAction {
-                    pre: AccountWithMetadata::new(
-                        Account {
-                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
-                            balance: 123_123_123_456_456_567_112,
-                            data: b"test data".to_vec().try_into().unwrap(),
-                            nonce: Nonce(9_999_999_999_999_999_999_999),
-                        },
-                        false,
-                        AccountId::new([1; 32]),
-                    ),
-                    post: Account {
-                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9],
-                        balance: 200,
-                        data: b"post state data 2".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),
-                    },
+                    account_id: AccountId::new([1; 32]),
+                    is_authorized: false,
+                    effects: Vec::new(),
                 },
             ],
             private_actions: vec![PrivateAction {
@@ -275,9 +338,51 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![ProgramImageClaim::Disclosed {
+                account_id: AccountId::new([3; 32]),
+                image_id: [4; 8],
+            }],
         };
         let bytes = output.to_bytes();
-        let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();
-        assert_eq!(output, output_from_slice);
+        let decoded: PrivacyPreservingCircuitOutput = borsh::from_slice(
+            crate::from_frame(&bytes).expect("self-produced frame is well-formed"),
+        )
+        .unwrap();
+        assert_eq!(output, decoded);
+    }
+
+    #[test]
+    fn private_witness_account_id_matches_its_derivation() {
+        let npk = NullifierPublicKey([3; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[1; 32], &[2; 32]);
+        let identifier = Identifier::new([77; 32]);
+        let witness = |kind| PrivateWitness {
+            vpk: vpk.clone(),
+            random_seed: [4; 32],
+            identifier,
+            kind,
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: [5; 32],
+            },
+        };
+        let program = AccountId::new([6; 32]);
+        let seed = PdaSeed::new([7; 32]);
+
+        let regular = witness(WitnessKind::Regular { ask: None });
+        assert!(!regular.is_pda());
+        assert_eq!(
+            regular.account_id(),
+            AccountId::for_regular_private_account(&npk, &vpk, identifier)
+        );
+
+        let pda = witness(WitnessKind::Pda {
+            binding: (program, seed),
+        });
+        assert!(pda.is_pda());
+        assert_eq!(
+            pda.account_id(),
+            AccountId::for_private_pda(&program, &seed, &npk, &vpk, identifier)
+        );
     }
 }

@@ -1,7 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
-    account::{Account, Nonce},
+    ProgramImageClaim,
+    account::Nonce,
+    execution_state::DeferredPublicEffect,
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
@@ -14,7 +16,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicActionWithID {
     pub account_id: AccountId,
-    pub post_state: Account,
+    pub effects: Vec<DeferredPublicEffect>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -24,6 +26,9 @@ pub struct Message {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// See [`ProgramImageClaim`]: the sequencer checks each one against real chain state before
+    /// accepting the proof.
+    pub program_image_claims: Vec<ProgramImageClaim>,
 }
 
 impl std::fmt::Debug for Message {
@@ -52,6 +57,7 @@ impl std::fmt::Debug for Message {
             .field("private_actions", &private_actions)
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
+            .field("program_image_claims", &self.program_image_claims)
             .finish()
     }
 }
@@ -63,8 +69,8 @@ impl Message {
             .public_actions
             .into_iter()
             .map(|action| PublicActionWithID {
-                account_id: action.pre.account_id,
-                post_state: action.post,
+                account_id: action.account_id,
+                effects: action.effects,
             })
             .collect();
         Self {
@@ -73,6 +79,7 @@ impl Message {
             private_actions: output.private_actions,
             block_validity_window: output.block_validity_window,
             timestamp_validity_window: output.timestamp_validity_window,
+            program_image_claims: output.program_image_claims,
         }
     }
 
@@ -119,8 +126,8 @@ impl Message {
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
-        NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
+        Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Identifier,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
         account::{Account, AccountId, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -143,17 +150,25 @@ pub mod tests {
 
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
-        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, 0);
+        let account_id2 = lee_core::account::AccountId::for_regular_private_account(
+            &npk2,
+            &vpk,
+            Identifier::ZERO,
+        );
         let commitment = Commitment::new(&account_id2, &account2);
 
-        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, 0);
+        let account_id1 = lee_core::account::AccountId::for_regular_private_account(
+            &npk1,
+            &vpk,
+            Identifier::ZERO,
+        );
         let old_commitment = Commitment::new(&account_id1, &account1);
         let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
         Message {
             public_actions: vec![PublicActionWithID {
                 account_id: AccountId::new([1; 32]),
-                post_state: Account::default(),
+                effects: Vec::new(),
             }],
             nonces,
             private_actions: vec![PrivateAction {
@@ -168,6 +183,7 @@ pub mod tests {
             }],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         }
     }
 
@@ -179,6 +195,7 @@ pub mod tests {
             private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         };
 
         // empty vec fields: u32 len=0
@@ -187,6 +204,7 @@ pub mod tests {
         let private_actions_bytes: &[u8] = &[0, 0, 0, 0];
         // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0, 0];
+        let program_image_claims_bytes: &[u8] = &[0, 0, 0, 0];
 
         let expected_borsh_vec: Vec<u8> = [
             public_actions_bytes,
@@ -194,6 +212,7 @@ pub mod tests {
             private_actions_bytes,
             unbounded_window_bytes, // block_validity_window
             unbounded_window_bytes, // timestamp_validity_window
+            program_image_claims_bytes,
         ]
         .concat();
         let expected_borsh: &[u8] = &expected_borsh_vec;
@@ -221,15 +240,17 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
-        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id =
+            lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));
         let ciphertext = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular(0),
+            &PrivateAccountKind::Regular(Identifier::ZERO),
             &shared_secret,
             &nullifier,
+            None,
         );
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());

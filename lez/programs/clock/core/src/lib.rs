@@ -19,8 +19,17 @@ pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
     CLOCK_50_PROGRAM_ACCOUNT_ID,
 ];
 
-/// The instruction type for the Clock Program. The sequencer passes the current block timestamp.
-pub type Instruction = Timestamp;
+pub const CLOCK_NAME: [u8; 5] = *b"clock";
+
+/// The instruction type for the Clock Program.
+///
+/// The instruction type for the Clock Program. The sequencer passes the current block timestamp and
+/// block ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Instruction {
+    pub timestamp: Timestamp,
+    pub block_id: u64,
+}
 
 /// The data stored in a clock account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -39,4 +48,9 @@ impl ClockAccountData {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         borsh::from_slice(bytes).expect("ClockAccountData deserialization should not fail")
     }
+}
+
+#[must_use]
+pub fn clock_account_id() -> AccountId {
+    AccountId::from_builtin_program_name(&CLOCK_NAME)
 }

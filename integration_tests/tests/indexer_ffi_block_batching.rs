@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use indexer_ffi::api::types::FfiOption;
-use log::info;
 
 #[path = "indexer_ffi_helpers/mod.rs"]
 mod indexer_ffi_helpers;
@@ -20,10 +19,10 @@ fn indexer_ffi_block_batching() -> Result<()> {
     // WAIT: poll until the indexer has finalized at least two blocks (so the
     // chain-consistency check below verifies at least one block link), returning
     // early instead of sleeping for the full timeout.
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     let last_block_indexer = indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 2)?;
 
-    info!("Last block on indexer FFI now is {last_block_indexer}");
+    log::info!("Last block on indexer FFI now is {last_block_indexer}");
 
     assert!(last_block_indexer > 0);
 
@@ -44,7 +43,7 @@ fn indexer_ffi_block_batching() -> Result<()> {
 
         assert_eq!(last_block_prev_hash, block.header.hash.data);
 
-        info!("Block {} chain-consistent", block.header.block_id);
+        log::info!("Block {} chain-consistent", block.header.block_id);
 
         last_block_prev_hash = block.header.prev_block_hash.data;
     }

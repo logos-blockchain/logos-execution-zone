@@ -1,25 +1,149 @@
-use std::collections::HashSet;
+use std::{borrow::Borrow, collections::HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
+use risc0_zkvm::guest::env;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
+    account::{Account, AccountId, ProgramShardSelector, ShardData},
     encryption::ViewingPublicKey,
 };
 
-pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
+/// The well-known dispatch address of the program loader: a native (non-guest) pseudo-program
+/// that runs its `Instruction` variants as Rust rather than interpreting a guest ELF.
+pub const PROGRAM_LOADER_ACCOUNT_ID: AccountId = AccountId::new([0xFE; 32]);
+
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
+/// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
+pub const MAX_PROGRAM_SEGMENTS: usize = 20;
+
 pub type ProgramId = [u32; 8];
-pub type InstructionData = Vec<u32>;
-pub struct ProgramInput<T> {
-    pub self_program_id: ProgramId,
-    pub caller_program_id: Option<ProgramId>,
-    pub pre_states: Vec<AccountWithMetadata>,
-    pub instruction: T,
+
+impl AccountId {
+    /// Derives a synthetic `AccountId` for seeding a test program in state. A byte
+    /// reinterpretation, not a hash, since `ProgramId` is already content-derived.
+    #[must_use]
+    pub fn from_builtin_program(program_id: ProgramId) -> Self {
+        let bytes: Vec<u8> = program_id
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
+    }
+
+    #[must_use]
+    pub fn from_builtin_program_name(name: &[u8]) -> Self {
+        use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+        const BUILTIN_PROGRAM_NAME_PREFIX: &[u8; 32] = b"/LEE-BuiltinProgram/v1/AccountId";
+
+        let mut hasher = Sha256::new();
+        hasher.update(BUILTIN_PROGRAM_NAME_PREFIX);
+        hasher.update(name);
+        Self::new(
+            hasher
+                .finalize()
+                .as_slice()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+}
+
+/// Borsh-encoded program instruction bytes.
+pub type InstructionData = Vec<u8>;
+pub type EffectData = Vec<u8>;
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct AccountMeta {
+    pub account_id: AccountId,
+    pub is_authorized: bool,
+    pub program_account_id: AccountId,
+}
+
+impl AccountMeta {
+    #[must_use]
+    pub const fn new(
+        account_id: AccountId,
+        is_authorized: bool,
+        program_account_id: AccountId,
+    ) -> Self {
+        Self {
+            account_id,
+            is_authorized,
+            program_account_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn native_balance(account_id: AccountId, is_authorized: bool) -> Self {
+        Self::new(
+            account_id,
+            is_authorized,
+            crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        )
+    }
+}
+
+impl From<&AccountMeta> for ProgramShardSelector {
+    fn from(account: &AccountMeta) -> Self {
+        Self {
+            account_id: account.account_id,
+            program_account_id: account.program_account_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ShardEffect {
+    pub selector: ProgramShardSelector,
+    pub data: EffectData,
+}
+
+impl ShardEffect {
+    #[must_use]
+    pub fn new<E: BorshSerialize>(account: &AccountMeta, effect: &E) -> Self {
+        Self {
+            selector: account.into(),
+            data: borsh::to_vec(effect).expect("borsh serialization is infallible"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ApplyInput {
+    pub self_account_id: AccountId,
+    pub selector: ProgramShardSelector,
+    pub pre_data: ShardData,
+    pub effect_data: EffectData,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ApplyOutput {
+    pub input: ApplyInput,
+    pub post_data: Option<ShardData>,
+    pub chained_calls: Vec<ChainedCall>,
+}
+
+impl ApplyOutput {
+    #[must_use]
+    pub const fn new(input: ApplyInput, post_data: Option<ShardData>) -> Self {
+        Self {
+            input,
+            post_data,
+            chained_calls: Vec::new(),
+        }
+    }
+}
+
+/// Struct encoding the input to an LEE program.
+#[derive(Debug, Clone, Eq, PartialEq, BorshSerialize, BorshDeserialize)]
+pub struct PlanInput {
+    pub self_account_id: AccountId,
+    pub caller_account_id: Option<AccountId>,
+    pub accounts: Vec<AccountMeta>,
+    pub instruction_data: InstructionData,
 }
 
 /// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
@@ -65,39 +189,30 @@ impl AsRef<[u8]> for PdaSeed {
 /// to reconstruct the account's [`AccountId`] on the receiver side.
 ///
 /// [`AccountId`]: crate::account::AccountId
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    BorshSerialize,
-    BorshDeserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub enum PrivateAccountKind {
     Regular(Identifier),
     Pda {
-        program_id: ProgramId,
+        account_id: AccountId,
         seed: PdaSeed,
         identifier: Identifier,
     },
 }
 
 impl PrivateAccountKind {
-    /// Borsh layout (all integers little-endian, variant index is u8):
+    /// Borsh layout (integers little-endian, variant index is u8; `ident` is `Identifier`'s
+    /// opaque 32-byte encoding):
     ///
     /// ```text
-    /// Regular(ident):                  0x00 || ident (16 LE) || [0u8; 64]
-    /// Pda { program_id, seed, ident }: 0x01 || program_id (32) || seed (32) || ident (16 LE)
+    /// Regular(ident):                 0x00 || ident (32) || [0u8; 64]
+    /// Pda { account_id, seed, ident }: 0x01 || account_id (32) || seed (32) || ident (32)
     /// ```
     ///
     /// Both variants are zero-padded to the same length so all ciphertexts are the same size,
     /// preventing observers from distinguishing `Regular` from `Pda` via ciphertext length.
-    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 + 16 = 81.
-    pub const HEADER_LEN: usize = 81;
+    /// `HEADER_LEN` equals the borsh size of the largest variant (`Pda`): 1 + 32 + 32 + 32 = 97.
+    pub const HEADER_LEN: usize = 97;
 
     #[must_use]
     pub const fn identifier(&self) -> Identifier {
@@ -122,18 +237,16 @@ impl PrivateAccountKind {
 }
 
 impl AccountId {
-    /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
+    /// Derives an [`AccountId`] for a public PDA from the owning program's account ID and seed.
     #[must_use]
-    pub fn for_public_pda(program_id: &ProgramId, seed: &PdaSeed) -> Self {
+    pub fn for_public_pda(account_id: &Self, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let mut bytes = [0; 96];
         bytes[0..32].copy_from_slice(PROGRAM_DERIVED_ACCOUNT_ID_PREFIX);
-        let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
-        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[32..64].copy_from_slice(account_id.as_ref());
         bytes[64..].copy_from_slice(&seed.0);
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -143,16 +256,51 @@ impl AccountId {
         )
     }
 
-    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, nullifier public
-    /// key, and identifier.
+    /// Derives the [`AccountId`] for a shadow program from its `image_id` alone.
+    #[must_use]
+    pub fn for_shadow_program(image_id: &ProgramId) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const SHADOW_PROGRAM_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Shadow/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(SHADOW_PROGRAM_PREFIX);
+        bytes[32..64].copy_from_slice(Self::from_builtin_program(*image_id).value());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives the `AccountId` of the private commitment mirroring an immutable header's
+    /// `ProgramHeader`.
+    #[must_use]
+    pub fn for_immutable_mirror(header_account_id: Self) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const IMMUTABLE_MIRROR_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/ImmutMirror/";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(IMMUTABLE_MIRROR_PREFIX);
+        bytes[32..64].copy_from_slice(header_account_id.as_ref());
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives an [`AccountId`] for a private PDA from the owning program's account ID, seed,
+    /// nullifier public key, and identifier.
     ///
     /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
     /// derivation, making the address unique per group of controllers sharing viewing keys.
-    /// The `identifier` further diversifies the address, so a single `(program_id, seed, npk)`
-    /// tuple controls a family of 2^128 addresses.
+    /// The `identifier` further diversifies the address, so a single `(account_id, seed, npk)`
+    /// tuple controls a family of 2^256 addresses.
     #[must_use]
     pub fn for_private_pda(
-        program_id: &ProgramId,
+        account_id: &Self,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
         vpk: &ViewingPublicKey,
@@ -161,15 +309,13 @@ impl AccountId {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 32];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
-        let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
-        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[32..64].copy_from_slice(account_id.as_ref());
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
         bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -190,39 +336,40 @@ impl AccountId {
                 Self::for_regular_private_account(npk, vpk, *identifier)
             }
             PrivateAccountKind::Pda {
-                program_id,
+                account_id,
                 seed,
                 identifier,
-            } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
+            } => Self::for_private_pda(account_id, seed, npk, vpk, *identifier),
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ChainedCall {
-    /// The program ID of the program to execute.
-    pub program_id: ProgramId,
-    pub pre_states: Vec<AccountWithMetadata>,
+    /// The account ID of the program to execute.
+    pub program_account_id: AccountId,
+    /// Selects the callee's inputs from the current execution state.
+    pub shard_selectors: Vec<ProgramShardSelector>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
     /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
-    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// mutate the `AccountId` derived from `(caller_account_id, seed)`, regardless of
     /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
 }
 
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
-    pub fn new<I: Serialize>(
-        program_id: ProgramId,
-        pre_states: Vec<AccountWithMetadata>,
+    pub fn new<I: BorshSerialize>(
+        program_account_id: AccountId,
+        shard_selectors: Vec<ProgramShardSelector>,
         instruction: &I,
     ) -> Self {
         Self {
-            program_id,
-            pre_states,
-            instruction_data: risc0_zkvm::serde::to_vec(instruction)
-                .expect("Serialization to Vec<u32> should not fail"),
+            program_account_id,
+            shard_selectors,
+            instruction_data: borsh::to_vec(instruction)
+                .expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
         }
     }
@@ -234,101 +381,61 @@ impl ChainedCall {
     }
 }
 
-/// Represents the final state of an `Account` after a program execution.
+/// One deployed program's identity and entry point into its bytecode's segment chain.
 ///
-/// A post state may optionally request that the executing program
-/// becomes the owner of the account (a "claim"). This is used to signal
-/// that the program intends to take ownership of the account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
-pub struct AccountPostState {
-    account: Account,
-    claim: Option<Claim>,
+/// Lives at whatever account address the deployer chose — never a fixed bijection of the
+/// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
+/// distinct instance for dispatch, PDA-derivation, and ownership purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProgramHeader {
+    /// The bytecode's real `image_id`, always recomputed from the segment chain at
+    /// deploy/update time — never trusted from a caller-supplied value.
+    pub image_id: ProgramId,
+    /// The account holding this program's first bytecode segment.
+    pub program_first_segment: AccountId,
+    /// Once `true`, this header can never be updated again.
+    pub immutable: bool,
 }
 
-/// A claim request for an account, indicating that the executing program intends to take ownership
-/// of the account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Claim {
-    /// The program requests ownership of the account which was authorized by the signer.
-    ///
-    /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
-    /// if program decides to give up authorization for a chained call.
-    Authorized,
-    /// The program requests ownership of the account through a PDA. The program emits the
-    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
-    /// account is public or private.
-    Pda(PdaSeed),
+impl ProgramHeader {
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("program header serializes")
+    }
+
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        borsh::from_slice(bytes).ok()
+    }
 }
 
-impl AccountPostState {
-    /// Creates a post state without a claim request.
-    /// The executing program is not requesting ownership of the account.
+/// One link in a program's bytecode chain: a chunk of the ELF plus where the next chunk lives,
+/// tail-to-head — the account itself carries no notion of "first" or "last".
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProgramSegment {
+    pub bytecode: Vec<u8>,
+    /// The next segment toward the head of the chain, or `None` if this is the head (the first
+    /// segment executed, chronologically the last one written).
+    pub next_segment: Option<AccountId>,
+}
+
+impl ProgramSegment {
     #[must_use]
-    pub const fn new(account: Account) -> Self {
-        Self {
-            account,
-            claim: None,
-        }
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("program segment serializes")
     }
 
-    /// Creates a post state that requests ownership of the account.
-    /// This indicates that the executing program intends to claim the
-    /// account as its own and is allowed to mutate it.
     #[must_use]
-    pub const fn new_claimed(account: Account, claim: Claim) -> Self {
-        Self {
-            account,
-            claim: Some(claim),
-        }
-    }
-
-    /// Creates a post state that requests ownership of the account
-    /// if the account's program owner is the default program ID.
-    #[must_use]
-    pub fn new_claimed_if_default(account: Account, claim: Claim) -> Self {
-        let is_default_owner = account.program_owner == DEFAULT_PROGRAM_ID;
-        Self {
-            account,
-            claim: is_default_owner.then_some(claim),
-        }
-    }
-
-    /// Returns whether this post state requires a claim.
-    #[must_use]
-    pub const fn required_claim(&self) -> Option<Claim> {
-        self.claim
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account(&self) -> &Account {
-        &self.account
-    }
-
-    /// Returns the underlying account.
-    #[must_use]
-    pub const fn account_mut(&mut self) -> &mut Account {
-        &mut self.account
-    }
-
-    /// Consumes the post state and returns the underlying account.
-    #[must_use]
-    pub fn into_account(self) -> Account {
-        self.account
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        borsh::from_slice(bytes).ok()
     }
 }
 
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
-#[derive(Clone, Copy, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)
-)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct ValidityWindow<T> {
     from: Option<T>,
     to: Option<T>,
@@ -372,6 +479,18 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
     #[must_use]
     pub const fn end(&self) -> Option<T> {
         self.to
+    }
+
+    pub fn intersect(self, other: Self) -> Result<Self, InvalidWindow> {
+        let later = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b > a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        let earlier = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b < a { b } else { a }),
+            (a, None) | (None, a) => a,
+        };
+        (later(self.from, other.from), earlier(self.to, other.to)).try_into()
     }
 }
 
@@ -424,55 +543,58 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
-#[derive(Serialize, Deserialize, Clone)]
+/// The event struct emitted by a program.
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-#[must_use = "ProgramOutput does nothing unless written"]
-pub struct ProgramOutput {
-    /// The program ID of the program that produced this output.
-    pub self_program_id: ProgramId,
-    /// The program ID of the caller that invoked this program via a chained call,
-    /// or `None` if this is a top-level call.
-    pub caller_program_id: Option<ProgramId>,
-    /// The instruction data the program received to produce this output.
-    pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output.
-    pub pre_states: Vec<AccountWithMetadata>,
-    /// The account post states the program execution produced.
-    pub post_states: Vec<AccountPostState>,
+pub struct ProgramEvent {
+    /// Selector bytes allowing to distinguish event type. By convention, the
+    /// first 8 bytes of `sha256("<program>::<EventName>")`.
+    pub selector: [u8; 8],
+    /// The arbitrary event-data emitted in the program output.
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "PlanOutput does nothing unless written"]
+pub struct PlanOutput {
+    pub input: PlanInput,
+    pub effects: Vec<ShardEffect>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// A vector of event data. Dropped for private transaction for function
+    /// privacy.
+    pub events: Vec<ProgramEvent>,
 }
 
-impl ProgramOutput {
-    pub const fn new(
-        self_program_id: ProgramId,
-        caller_program_id: Option<ProgramId>,
-        instruction_data: InstructionData,
-        pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
-    ) -> Self {
+impl PlanOutput {
+    pub const fn new(input: PlanInput) -> Self {
         Self {
-            self_program_id,
-            caller_program_id,
-            instruction_data,
-            pre_states,
-            post_states,
+            input,
+            effects: Vec::new(),
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
+            events: Vec::new(),
         }
     }
 
-    pub fn write(self) {
-        env::commit(&self);
+    pub fn with_effects(mut self, effects: Vec<ShardEffect>) -> Self {
+        self.effects = effects;
+        self
     }
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
         self.chained_calls = chained_calls;
+        self
+    }
+
+    pub fn with_events(mut self, events: Vec<ProgramEvent>) -> Self {
+        self.events = events;
         self
     }
 
@@ -503,7 +625,7 @@ impl ProgramOutput {
         self
     }
 
-    /// Sets the timestamp validity window from a fallible range conversion.
+    /// Sets the timestamp validity window from a fallible range conversion (`4..7`).
     /// Returns `Err` if the range is empty.
     pub fn try_with_timestamp_validity_window<
         W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
@@ -514,262 +636,322 @@ impl ProgramOutput {
         self.timestamp_validity_window = window.try_into()?;
         Ok(self)
     }
+}
 
-    pub fn valid_from_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (ts, self.timestamp_validity_window.end()).try_into()?;
-        Ok(self)
-    }
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "a GuestOutput does nothing unless written"]
+pub enum GuestOutput {
+    Plan(PlanOutput),
+    Apply(ApplyOutput),
+}
 
-    pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
-        self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
-        Ok(self)
+impl GuestOutput {
+    pub fn write(&self) {
+        env::commit_slice(&crate::to_borsh_frame(self));
     }
 }
 
-/// Representation of a number as `lo + hi * 2^128`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct WrappedBalanceSum {
-    lo: u128,
-    hi: u128,
-}
-
-impl WrappedBalanceSum {
-    /// Constructs a [`WrappedBalanceSum`] from an iterator of balances.
-    ///
-    /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
-    /// expected in practical scenarios.
-    pub fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
-        let mut wrapped = Self { lo: 0, hi: 0 };
-
-        for balance in balances {
-            let (new_sum, did_overflow) = wrapped.lo.overflowing_add(balance);
-            if did_overflow {
-                wrapped.hi = wrapped.hi.checked_add(1)?;
-            }
-            wrapped.lo = new_sum;
-        }
-
-        Some(wrapped)
-    }
-}
-
-impl std::fmt::Display for WrappedBalanceSum {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.hi == 0 {
-            write!(f, "{}", self.lo)
-        } else {
-            write!(f, "{} * 2^128 + {}", self.hi, self.lo)
-        }
-    }
-}
-
-impl From<u128> for WrappedBalanceSum {
-    fn from(value: u128) -> Self {
-        Self { lo: value, hi: 0 }
-    }
+/// A struct holding an event-output of a program.
+#[cfg(feature = "host")]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TransactionEvent {
+    /// Which program emitted the event.
+    pub account_id: AccountId,
+    /// Program event-data with selector.
+    pub event: ProgramEvent,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExecutionValidationError {
-    #[error("Pre-state account IDs are not unique")]
-    PreStateAccountIdsNotUnique,
+    #[error("Account shard selectors are not unique")]
+    AccountShardSelectorsNotUnique,
+
+    #[error("An effect selects {selector:?}, which is not an input of the call")]
+    EffectOutsideInputs { selector: ProgramShardSelector },
 
     #[error(
-        "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
+        "A program's apply echoed an input it was not given: expected {expected:?}, actual {actual:?}"
     )]
-    MismatchedPreStatePostStateLength {
-        pre_state_length: usize,
-        post_state_length: usize,
+    ApplyInputMismatch {
+        expected: Box<ApplyInput>,
+        actual: Box<ApplyInput>,
     },
 
-    #[error("Unallowed modification of nonce for account {account_id}")]
-    ModifiedNonce { account_id: AccountId },
-
-    #[error("Unallowed modification of program owner for account {account_id}")]
-    ModifiedProgramOwner { account_id: AccountId },
+    #[error(
+        "A program's plan echoed an input it was not given: expected {expected:?}, actual {actual:?}"
+    )]
+    PlanInputMismatch {
+        expected: Box<PlanInput>,
+        actual: Box<PlanInput>,
+    },
 
     #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_program_id:?} in a program {executing_program_id:?} which is not the owner"
+        "Program {executing_account_id} wrote data on a shard selector of {account_id} that does not name it"
     )]
-    UnauthorizedBalanceDecrease {
+    ForeignShardWrite {
         account_id: AccountId,
-        owner_program_id: ProgramId,
-        executing_program_id: ProgramId,
+        executing_account_id: AccountId,
     },
 
-    #[error(
-        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
-    )]
-    UnauthorizedDataModification {
-        account_id: AccountId,
-        executing_program_id: ProgramId,
-    },
-
-    #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
-
-    #[error("Total balance across accounts overflowed 2^256 - 1")]
-    BalanceSumOverflow,
-
-    #[error(
-        "Total balance across accounts is not preserved: total balance in pre-states {total_balance_pre_states}, total balance in post-states {total_balance_post_states}"
-    )]
-    MismatchedTotalBalance {
-        total_balance_pre_states: WrappedBalanceSum,
-        total_balance_post_states: WrappedBalanceSum,
-    },
+    #[error("A program's apply returned chained calls, which are not supported")]
+    ChainedCallsFromApply,
 }
 
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
+/// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
+/// orchestrator only.
 ///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
-#[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_program_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
+/// `Plan` is index 0 and must stay index 0; future variants are appended only, never
+/// inserted or reordered. An unrecognized discriminant is a decode error: no capability probe
+/// exists in this model, so an unknown required operation must not count as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum CallKind {
+    Plan,
+    Apply,
 }
 
-/// Reads the LEE inputs from the guest environment.
-#[must_use]
-pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
-    let self_program_id: ProgramId = env::read();
-    let caller_program_id: Option<ProgramId> = env::read();
-    let pre_states: Vec<AccountWithMetadata> = env::read();
-    let instruction_words: InstructionData = env::read();
-    let instruction = T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
-    (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction,
-        },
-        instruction_words,
-    )
+pub enum ProgramCall<T> {
+    Plan(PlanInput, T),
+    Apply(ApplyInput),
 }
 
-/// Validates well-behaved program execution.
-///
-/// # Parameters
-/// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
-/// - `post_states`: The list of resulting accounts after executing the program logic.
-/// - `executing_program_id`: The identifier of the program that was executed.
-pub fn validate_execution(
-    pre_states: &[AccountWithMetadata],
-    post_states: &[AccountPostState],
-    executing_program_id: ProgramId,
-) -> Result<(), ExecutionValidationError> {
-    // 1. Check account ids are all different
-    if !validate_uniqueness_of_account_ids(pre_states) {
-        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
+#[must_use = "a Plan does nothing unless written"]
+pub struct Plan {
+    output: PlanOutput,
+}
+
+impl Plan {
+    pub fn new(input: &PlanInput) -> Self {
+        Self {
+            output: PlanOutput::new(input.clone()),
+        }
     }
 
-    // 2. Lengths must match
-    if pre_states.len() != post_states.len() {
-        return Err(
-            ExecutionValidationError::MismatchedPreStatePostStateLength {
-                pre_state_length: pre_states.len(),
-                post_state_length: post_states.len(),
-            },
+    /// The plan as built so far, so a program can assert what it emitted without a zkVM.
+    pub const fn output(&self) -> &PlanOutput {
+        &self.output
+    }
+
+    pub fn effect<E: BorshSerialize>(&mut self, account: &AccountMeta, effect: &E) {
+        self.inspect(account, self.output.input.self_account_id, effect);
+    }
+
+    pub fn inspect<E: BorshSerialize>(
+        &mut self,
+        account: &AccountMeta,
+        owner: AccountId,
+        guard: &E,
+    ) {
+        assert_eq!(
+            account.program_account_id, owner,
+            "An effect on {} names the shard of {}, not of {owner}",
+            account.account_id, account.program_account_id
         );
+        self.output.effects.push(ShardEffect::new(account, guard));
     }
 
-    for (pre, post) in pre_states.iter().zip(post_states) {
-        // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.account.nonce {
-            return Err(ExecutionValidationError::ModifiedNonce {
-                account_id: pre.account_id,
-            });
-        }
-
-        // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.account.program_owner {
-            return Err(ExecutionValidationError::ModifiedProgramOwner {
-                account_id: pre.account_id,
-            });
-        }
-
-        let account_program_owner = pre.account.program_owner;
-
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
-            && account_program_owner != executing_program_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
-                account_id: pre.account_id,
-                owner_program_id: account_program_owner,
-                executing_program_id,
-            });
-        }
-
-        // 6. Data changes only allowed if owned by executing program or if account pre state has
-        //    default values
-        if pre.account.data != post.account.data
-            && pre.account != Account::default()
-            && account_program_owner != executing_program_id
-        {
-            return Err(ExecutionValidationError::UnauthorizedDataModification {
-                account_id: pre.account_id,
-                executing_program_id,
-            });
-        }
-
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
-            return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                    account_id: pre.account_id,
-                },
-            );
-        }
+    pub fn call(&mut self, call: ChainedCall) {
+        self.output.chained_calls.push(call);
     }
 
-    // 8. Total balance is preserved
-    let Some(total_balance_pre_states) =
-        WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
-    else {
-        return Err(ExecutionValidationError::BalanceSumOverflow);
-    };
+    pub fn event(&mut self, event: ProgramEvent) {
+        self.output.events.push(event);
+    }
 
-    let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
-    else {
-        return Err(ExecutionValidationError::BalanceSumOverflow);
-    };
+    pub fn block_window<W: Into<BlockValidityWindow>>(&mut self, window: W) {
+        self.output.block_validity_window = window.into();
+    }
 
-    if total_balance_pre_states != total_balance_post_states {
-        return Err(ExecutionValidationError::MismatchedTotalBalance {
-            total_balance_pre_states,
-            total_balance_post_states,
+    pub fn timestamp_window<W: Into<TimestampValidityWindow>>(&mut self, window: W) {
+        self.output.timestamp_validity_window = window.into();
+    }
+
+    pub fn write(self) -> ! {
+        GuestOutput::Plan(self.output).write();
+        env::exit(0)
+    }
+}
+
+/// Reads first 4 bytes indicating the length in bytes of the program input bytes.
+/// Afterwards, reads exactly that many payload bytes.
+#[must_use]
+pub fn read_input_frame() -> Vec<u8> {
+    let mut len_bytes = [0; 4];
+    env::read_slice(&mut len_bytes);
+    let len = usize::try_from(u32::from_le_bytes(len_bytes)).expect("frame length fits in usize");
+    let mut payload: Vec<u8> = vec![0; len];
+    env::read_slice(&mut payload);
+    payload
+}
+
+/// Reads a single LEE guest invocation, dispatching on `CallKind`.
+#[must_use]
+pub fn read_program_call<T: BorshDeserialize>() -> ProgramCall<T> {
+    let call_kind: CallKind =
+        borsh::from_slice(&read_input_frame()).expect("call kind must decode from borsh");
+    let payload = read_input_frame();
+
+    match call_kind {
+        CallKind::Plan => {
+            let input: PlanInput =
+                borsh::from_slice(&payload).expect("guest input must be valid borsh");
+            let instruction = borsh::from_slice(&input.instruction_data)
+                .expect("instruction must decode from borsh");
+            ProgramCall::Plan(input, instruction)
+        }
+        CallKind::Apply => ProgramCall::Apply(
+            borsh::from_slice(&payload).expect("apply input must be valid borsh"),
+        ),
+    }
+}
+
+/// Handles one plan or apply call, then exits.
+///
+/// `plan` uses instruction data and account metadata to produce effects and chained calls.
+/// `apply` receives one effect and its shard's current data (`&[u8]` or `&ShardData`).
+/// Missing shards are empty. Return `None` to keep data, or `Some(data)` to replace it.
+/// Only the program's own shards may be replaced; empty data clears them.
+/// A panic fails the transaction.
+pub fn run_program<I, E, P, D>(
+    plan: impl FnOnce(&PlanInput, I) -> Plan,
+    apply: impl FnOnce(E, &P) -> Option<D>,
+) -> !
+where
+    I: BorshDeserialize,
+    E: BorshDeserialize,
+    P: ?Sized,
+    ShardData: Borrow<P>,
+    D: TryInto<ShardData, Error: std::fmt::Debug>,
+{
+    match read_program_call::<I>() {
+        ProgramCall::Plan(input, instruction) => plan(&input, instruction).write(),
+        ProgramCall::Apply(input) => {
+            let effect = borsh::from_slice(&input.effect_data)
+                .expect("a program only applies effects it planned");
+            match apply(effect, input.pre_data.borrow()) {
+                Some(data) => apply_write(
+                    input,
+                    data.try_into()
+                        .expect("an applied shard fits within the data limit"),
+                ),
+                None => apply_keep(input),
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
+    assert!(
+        pre_data.is_empty() || *pre_data == *data,
+        "shard already holds different data"
+    );
+    data
+}
+
+pub fn apply_keep(input: ApplyInput) -> ! {
+    GuestOutput::Apply(ApplyOutput::new(input, None)).write();
+    env::exit(0)
+}
+
+pub fn apply_write(input: ApplyInput, data: ShardData) -> ! {
+    GuestOutput::Apply(ApplyOutput::new(input, Some(data))).write();
+    env::exit(0)
+}
+
+#[must_use]
+pub fn get_program_via<'state>(
+    account_id: AccountId,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+) -> Option<(ProgramId, Vec<u8>)> {
+    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
+
+    let mut elf = Vec::new();
+    let mut next = Some(header.program_first_segment);
+    let mut segment_count = 0_usize;
+    while let Some(segment_id) = next {
+        segment_count = segment_count.checked_add(1)?;
+        if segment_count > MAX_PROGRAM_SEGMENTS {
+            return None;
+        }
+        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
+        elf.extend_from_slice(&segment.bytecode);
+        next = segment.next_segment;
+    }
+
+    Some((header.image_id, elf))
+}
+
+pub fn validate_plan(
+    expected: &PlanInput,
+    output: &PlanOutput,
+) -> Result<(), ExecutionValidationError> {
+    if output.input != *expected {
+        return Err(ExecutionValidationError::PlanInputMismatch {
+            expected: Box::new(expected.clone()),
+            actual: Box::new(output.input.clone()),
         });
+    }
+
+    let mut named = HashSet::new();
+    for account in &expected.accounts {
+        if !named.insert(ProgramShardSelector::from(account)) {
+            return Err(ExecutionValidationError::AccountShardSelectorsNotUnique);
+        }
+    }
+
+    for effect in &output.effects {
+        if !named.contains(&effect.selector) {
+            return Err(ExecutionValidationError::EffectOutsideInputs {
+                selector: effect.selector,
+            });
+        }
     }
 
     Ok(())
 }
 
-fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
-    let number_of_accounts = pre_states.len();
-    let number_of_account_ids = pre_states
-        .iter()
-        .map(|account| &account.account_id)
-        .collect::<HashSet<_>>()
-        .len();
+/// Builds the `Commitment` mirroring an immutable header's finalized `ProgramHeader` into private
+/// state.
+#[must_use]
+pub fn immutable_mirror_commitment(
+    header_account_id: AccountId,
+    program_header: &ProgramHeader,
+) -> Commitment {
+    let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
+    let mirrored_account = Account::default().with_shard(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        ShardData::try_from(program_header.to_bytes())
+            .expect("program header must fit under DATA_MAX_LENGTH"),
+    );
+    Commitment::new(&mirror_account_id, &mirrored_account)
+}
 
-    number_of_accounts == number_of_account_ids
+/// Checks that the output repeats the scheduled input exactly, then verifies
+/// that any write targets the executing program's shard and that no chained calls are returned.
+pub fn validate_apply_output(
+    expected: &ApplyInput,
+    output: &ApplyOutput,
+) -> Result<(), ExecutionValidationError> {
+    if output.input != *expected {
+        return Err(ExecutionValidationError::ApplyInputMismatch {
+            expected: Box::new(expected.clone()),
+            actual: Box::new(output.input.clone()),
+        });
+    }
+    if output.post_data.is_some()
+        && output.input.selector.program_account_id != output.input.self_account_id
+    {
+        return Err(ExecutionValidationError::ForeignShardWrite {
+            account_id: output.input.selector.account_id,
+            executing_account_id: output.input.self_account_id,
+        });
+    }
+    if !output.chained_calls.is_empty() {
+        return Err(ExecutionValidationError::ChainedCallsFromApply);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -21,6 +21,9 @@ base58.workspace = true
 hex.workspace = true
 anyhow.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [features]
 # Enable conversion to/from LEE core types
 convert = ["dep:lee_core", "dep:lee", "dep:common", "dep:indexer_core"]

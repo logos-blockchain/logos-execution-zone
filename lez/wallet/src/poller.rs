@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use lee_core::BlockId;
-use log::{info, warn};
+use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use tokio::task::JoinSet;
 
@@ -35,9 +35,9 @@ impl TxPoller {
     pub async fn poll_tx(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
         let max_blocks_to_query = self.polling_max_blocks_to_query;
 
-        info!("Starting poll for transaction {tx_hash}");
+        log::info!("Starting poll for transaction {tx_hash}");
         for poll_id in 1..max_blocks_to_query {
-            info!("Poll {poll_id}");
+            log::info!("Poll {poll_id}");
 
             let mut try_error_counter = 0_u64;
 

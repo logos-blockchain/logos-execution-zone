@@ -1,72 +1,62 @@
 //! Time-locked transfer program.
 //!
-//! Demonstrates how a program can include a clock account among its inputs and use the on-chain
-//! timestamp in its logic. The transfer only executes when the clock timestamp is at or past a
-//! caller-supplied deadline; otherwise the program panics.
+//! Demonstrates how a program gates on the on-chain timestamp without reading it: the deadline
+//! travels in the instruction and a guard effect on the clock account is what compares it
+//! against the clock's own timestamp. The transfer only settles when the clock is at or past
+//! the deadline; otherwise the guard panics and the whole transaction rolls back.
 //!
-//! Expected pre-states (in order):
+//! Expected accounts (in order):
 //!   0 - sender account (authorized)
 //!   1 - receiver account
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    Timestamp,
+    account::ProgramShardSelector,
+    native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+    program::{ChainedCall, Plan, ProgramCall, apply_keep, read_program_call},
+};
 
 /// (`amount`, `deadline_timestamp`).
-type Instruction = (u128, u64);
+type Instruction = (u128, Timestamp);
+
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct DeadlineReached(Timestamp);
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (amount, deadline),
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    match read_program_call::<Instruction>() {
+        ProgramCall::Plan(input, instruction) => {
+            let Ok([sender, receiver, clock]) = <[_; 3]>::try_from(input.accounts.clone()) else {
+                panic!("Expected exactly 3 input accounts: sender, receiver, clock");
+            };
+            assert_eq!(clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
 
-    let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
-        panic!("Expected exactly 3 input accounts: sender, receiver, clock");
-    };
-
-    // Check the clock account is the system clock account
-    assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
-
-    // Read the current timestamp from the clock account.
-    let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data.clone().into_inner());
-
-    assert!(
-        clock_data.timestamp >= deadline,
-        "Transfer is time-locked until timestamp {deadline}, current is {}",
-        clock_data.timestamp,
-    );
-
-    let mut sender_post = sender_pre.account.clone();
-    let mut receiver_post = receiver_pre.account.clone();
-
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(amount)
-        .expect("Insufficient balance");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(amount)
-        .expect("Balance overflow");
-
-    // Clock account is read-only: post state equals pre state.
-    let clock_post = clock_pre.account.clone();
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![sender_pre, receiver_pre, clock_pre],
-        vec![
-            AccountPostState::new(sender_post),
-            AccountPostState::new(receiver_post),
-            AccountPostState::new(clock_post),
-        ],
-    )
-    .write();
+            let (amount, deadline) = instruction;
+            let mut plan = Plan::new(&input);
+            // Only the clock's own invocation may modify a clock account, so whichever shard the
+            // handle names holds the clock's data or nothing.
+            plan.inspect(&clock, clock.program_account_id, &DeadlineReached(deadline));
+            plan.call(ChainedCall::new(
+                NATIVE_TOKEN_PROGRAM_ID,
+                vec![
+                    ProgramShardSelector::from(&sender),
+                    ProgramShardSelector::from(&receiver),
+                ],
+                &NativeInstruction::Transfer { amount },
+            ));
+            plan.write()
+        }
+        ProgramCall::Apply(input) => {
+            let DeadlineReached(deadline) = borsh::from_slice(&input.effect_data)
+                .expect("time_locked_transfer wrote its own effect");
+            let clock = ClockAccountData::from_bytes(&input.pre_data);
+            assert!(
+                clock.timestamp >= deadline,
+                "Transfer is time-locked until timestamp {deadline}, current is {}",
+                clock.timestamp,
+            );
+            apply_keep(input)
+        }
+    }
 }

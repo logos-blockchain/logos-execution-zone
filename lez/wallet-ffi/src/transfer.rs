@@ -15,7 +15,7 @@ use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiTransferResult, FfiU128, WalletHandle},
+    types::{FfiBytes32, FfiIdentifier, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
 };
@@ -31,6 +31,8 @@ fn optional_c_str(ptr: *const c_char) -> Option<String> {
 /// Send a public token transfer.
 ///
 /// Transfers tokens from one public account to another on the network.
+///
+/// Program shards are unchanged. If the wallet holds `to`'s key, it also signs for that account.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
@@ -144,7 +146,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiU128,
+    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
@@ -181,7 +183,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             return e;
         }
     };
-    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let from_mention = optional_c_str(key_path).map_or_else(
         || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
@@ -329,7 +331,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
-    to_identifier: *const FfiU128,
+    to_identifier: *const FfiIdentifier,
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -365,7 +367,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             return e;
         }
     };
-    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
+    let to_identifier = lee_core::Identifier::new(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let transfer = NativeTokenTransfer(&wallet);
 
@@ -571,149 +573,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     }
 }
 
-/// Register a public account on the network.
-///
-/// This initializes a public account on the blockchain. The account must be
-/// owned by this wallet.
-///
-/// # Parameters
-/// - `handle`: Valid wallet handle
-/// - `account_id`: Account ID to register
-/// - `out_result`: Output pointer for registration result
-///
-/// # Returns
-/// - `Success` if the registration was submitted successfully
-/// - Error code on failure
-///
-/// # Memory
-/// The result must be freed with `wallet_ffi_free_transfer_result()`.
-///
-/// # Safety
-/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `account_id` must be a valid pointer to a `FfiBytes32` struct
-/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_register_public_account(
-    handle: *mut WalletHandle,
-    account_id: *const FfiBytes32,
-    out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
-    let wrapper = match get_wallet(handle) {
-        Ok(w) => w,
-        Err(e) => return e,
-    };
-
-    if account_id.is_null() || out_result.is_null() {
-        print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
-    }
-
-    let wallet = match wrapper.core.lock() {
-        Ok(w) => w,
-        Err(e) => {
-            print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
-        }
-    };
-
-    let account_id = AccountId::new(unsafe { (*account_id).data });
-
-    let transfer = NativeTokenTransfer(&wallet);
-
-    match block_on(transfer.register_account(AccountIdentity::Public(account_id))) {
-        Ok(tx_hash) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
-
-            unsafe {
-                (*out_result).tx_hash = tx_hash;
-                (*out_result).success = true;
-            }
-            WalletFfiError::Success
-        }
-        Err(e) => {
-            print_error(format!("Registration failed: {e:?}"));
-            unsafe {
-                (*out_result).tx_hash = ptr::null_mut();
-                (*out_result).success = false;
-            }
-            map_execution_error(e)
-        }
-    }
-}
-
-/// Register a private account on the network.
-///
-/// This initializes a private account. The account must be
-/// owned by this wallet.
-///
-/// # Parameters
-/// - `handle`: Valid wallet handle
-/// - `account_id`: Account ID to register
-/// - `out_result`: Output pointer for registration result
-///
-/// # Returns
-/// - `Success` if the registration was submitted successfully
-/// - Error code on failure
-///
-/// # Memory
-/// The result must be freed with `wallet_ffi_free_transfer_result()`.
-///
-/// # Safety
-/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `account_id` must be a valid pointer to a `FfiBytes32` struct
-/// - `out_result` must be a valid pointer to a `FfiTransferResult` struct
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_register_private_account(
-    handle: *mut WalletHandle,
-    account_id: *const FfiBytes32,
-    out_result: *mut FfiTransferResult,
-) -> WalletFfiError {
-    let wrapper = match get_wallet(handle) {
-        Ok(w) => w,
-        Err(e) => return e,
-    };
-
-    if account_id.is_null() || out_result.is_null() {
-        print_error("Null pointer argument");
-        return WalletFfiError::NullPointer;
-    }
-
-    let wallet = match wrapper.core.lock() {
-        Ok(w) => w,
-        Err(e) => {
-            print_error(format!("Failed to lock wallet: {e}"));
-            return WalletFfiError::InternalError;
-        }
-    };
-
-    let account_id = AccountId::new(unsafe { (*account_id).data });
-    let transfer = NativeTokenTransfer(&wallet);
-
-    match block_on(transfer.register_account_private(account_id)) {
-        Ok((tx_hash, _secret)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
-
-            unsafe {
-                (*out_result).tx_hash = tx_hash;
-                (*out_result).success = true;
-            }
-            WalletFfiError::Success
-        }
-        Err(e) => {
-            print_error(format!("Registration failed: {e:?}"));
-            unsafe {
-                (*out_result).tx_hash = ptr::null_mut();
-                (*out_result).success = false;
-            }
-            map_execution_error(e)
-        }
-    }
-}
-
-/// Free a transfer result returned by `wallet_ffi_transfer_public` or
-/// `wallet_ffi_register_public_account`.
+/// Free a transfer result returned by `wallet_ffi_transfer_public`.
 ///
 /// # Safety
 /// The result must be either null or a valid result from a transfer function.

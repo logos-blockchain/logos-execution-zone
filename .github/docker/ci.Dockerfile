@@ -6,7 +6,7 @@
 # either rebuilds the image on the PR that changes it. See ci-image.yml.
 #
 # Keep the base tag in sync with rust-toolchain.toml.
-FROM rust:1.94.0-trixie
+FROM rust:1.98.1-trixie
 
 # GitHub sets HOME=/github/home inside container jobs, which hides anything we
 # bake into the image's ~. rzup defaults to $HOME/.risc0, so pin it to a fixed

@@ -21,19 +21,25 @@ use std::{
 };
 
 use anyhow::Result;
-use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
-use lee::{
-    Account, AccountId, PrivateKey, PublicKey,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+use common::HashType;
+use integration_tests::{
+    BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    config::{INITIAL_PRIVATE_BALANCES_FOR_WALLET, INITIAL_PUBLIC_BALANCES_FOR_WALLET},
 };
-use lee_core::program::DEFAULT_PROGRAM_ID;
-use log::info;
-use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
+use lee::{Account, AccountId, PrivateKey, PublicKey, program::Program};
+use lee_core::{
+    Identifier, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
+};
+use token_core::{TokenDefinition, TokenHolding};
+use wallet::{DEFAULT_MAX_FEE, account::HumanReadableAccount};
 use wallet_ffi::{
-    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
+    FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult,
     WalletHandle, error,
-    generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
+    generic_transaction::{
+        FfiDependency, FfiMembershipProof, FfiProgramHeader, FfiProgramKind,
+        FfiProgramWithDependencies, FfiTransactionResult,
+    },
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
 };
@@ -59,11 +65,6 @@ unsafe extern "C" {
         out_account_id: *mut FfiBytes32,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_create_account_private(
-        handle: *mut WalletHandle,
-        out_account_id: *mut FfiBytes32,
-    ) -> error::WalletFfiError;
-
     fn wallet_ffi_import_public_account(
         handle: *mut WalletHandle,
         private_key_hex: *const c_char,
@@ -78,7 +79,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         key_chain_json: *const c_char,
         chain_index: *const c_char,
-        identifier: *const FfiU128,
+        identifier: *const FfiIdentifier,
         account_state_json: *const c_char,
     ) -> error::WalletFfiError;
 
@@ -105,6 +106,13 @@ unsafe extern "C" {
     fn wallet_ffi_get_account_private(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
+        out_account: *mut FfiAccount,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_get_account_view(
+        handle: *mut WalletHandle,
+        account_id: *const FfiBytes32,
+        program_account_id: *const FfiBytes32,
         out_account: *mut FfiAccount,
     ) -> error::WalletFfiError;
 
@@ -145,7 +153,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiU128,
+        to_identifier: *const FfiIdentifier,
         amount: *const [u8; 16],
         key_path: *const c_char,
         out_result: *mut FfiTransferResult,
@@ -163,7 +171,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
-        to_identifier: *const FfiU128,
+        to_identifier: *const FfiIdentifier,
         amount: *const [u8; 16],
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
@@ -177,38 +185,6 @@ unsafe extern "C" {
     //     bedrock_account_pk: *const FfiBytes32,
     //     out_result: *mut FfiTransferResult,
     // ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_vault_balance(
-        handle: *mut WalletHandle,
-        owner: *const FfiBytes32,
-        out_balance: *mut [u8; 16],
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_vault_claim(
-        handle: *mut WalletHandle,
-        owner: *const FfiBytes32,
-        amount: *const [u8; 16],
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_vault_claim_private(
-        handle: *mut WalletHandle,
-        owner: *const FfiBytes32,
-        amount: *const [u8; 16],
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_register_public_account(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_register_private_account(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
 
     fn wallet_ffi_save(handle: *mut WalletHandle) -> error::WalletFfiError;
 
@@ -234,11 +210,12 @@ unsafe extern "C" {
 
     fn wallet_ffi_send_generic_public_transaction(
         handle: *mut WalletHandle,
-        account_identities: *const FfiAccountIdentity,
-        account_identities_size: usize,
-        instruction_words: *const u32,
-        instruction_words_size: usize,
-        program_id: FfiProgramId,
+        account_mentions: *const FfiAccountMention,
+        account_mentions_size: usize,
+        instruction_data: *const u8,
+        instruction_data_size: usize,
+        program_account_id: FfiBytes32,
+        payer: *const FfiBytes32,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -250,10 +227,10 @@ unsafe extern "C" {
 
     fn wallet_ffi_send_generic_private_transaction(
         handle: *mut WalletHandle,
-        account_identities: *const FfiAccountIdentity,
-        account_identities_size: usize,
-        instruction_words: *const u32,
-        instruction_words_size: usize,
+        account_mentions: *const FfiAccountMention,
+        account_mentions_size: usize,
+        instruction_data: *const u8,
+        instruction_data_size: usize,
         program_with_dependencies: *const FfiProgramWithDependencies,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
@@ -284,6 +261,46 @@ unsafe extern "C" {
     ) -> LabelList;
 
     fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> error::WalletFfiError;
+
+    fn wallet_ffi_poll_transaction_status(
+        handle: *mut WalletHandle,
+        tx_hash: FfiBytes32,
+        transaction_status: *mut bool,
+    ) -> error::WalletFfiError;
+}
+
+/// Blocks until the transfer is in a block, panicking if it never lands.
+fn wait_for_inclusion(handle: *mut WalletHandle, result: &FfiTransferResult) {
+    let tx_hash: HashType = unsafe { CStr::from_ptr(result.tx_hash) }
+        .to_str()
+        .expect("a transaction hash is UTF-8")
+        .parse()
+        .expect("a transaction hash parses");
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the transfer must land");
+}
+
+/// Reads an account's balance through the FFI, panicking on error.
+fn ffi_balance(handle: *mut WalletHandle, account_id: &FfiBytes32, is_public: bool) -> u128 {
+    let mut out_balance: [u8; 16] = [0; 16];
+    unsafe {
+        wallet_ffi_get_balance(
+            handle,
+            std::ptr::from_ref(account_id),
+            is_public,
+            &raw mut out_balance,
+        )
+        .unwrap();
+    }
+    u128::from_le_bytes(out_balance)
 }
 
 fn new_wallet_ffi_with_test_context_config(
@@ -351,8 +368,8 @@ fn new_wallet_ffi_with_test_context_config(
         let chain_index_ptr = chain_index
             .as_ref()
             .map_or(std::ptr::null(), |value| value.as_ptr());
-        let identifier = FfiU128 {
-            data: account.kind.identifier().to_le_bytes(),
+        let identifier = FfiIdentifier {
+            data: account.kind.identifier().into_value(),
         };
 
         unsafe {
@@ -389,7 +406,7 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
 
 #[test]
 fn wallet_ffi_create_public_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let n_accounts = 10;
 
     // Create `n_accounts` public accounts with wallet FFI
@@ -430,7 +447,7 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
 
 #[test]
 fn wallet_ffi_create_private_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let n_accounts = 10;
     // Create `n_accounts` receiving keys with wallet FFI
     let new_npks_ffi = unsafe {
@@ -465,7 +482,7 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
 
 #[test]
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     // Create a receiving key and save
     let first_npk = unsafe {
@@ -505,7 +522,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_list_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     // Create the wallet FFI and track which account IDs were created as public/private
     let (wallet_ffi_handle, created_public_ids) = unsafe {
         let home = tempfile::tempdir()?;
@@ -574,7 +591,7 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_balance_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -594,9 +611,9 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
         .unwrap();
         u128::from_le_bytes(out_balance)
     };
-    assert_eq!(balance, 10000);
+    assert_eq!(balance, INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]);
 
-    info!("Successfully retrieved account balance");
+    log::info!("Successfully retrieved account balance");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -607,7 +624,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_account_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -628,26 +645,101 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     };
 
     assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
+        account.data,
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
     );
-    assert_eq!(account.balance, 10000);
-    assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    assert_eq!(account.nonce.0, 2);
+
+    let mut out_balance_only = FfiAccount::default();
+    let balance_only: Account = unsafe {
+        let ffi_account_id = FfiBytes32::from(account_id);
+        let ffi_native_program = FfiBytes32::from_account_id(NATIVE_TOKEN_PROGRAM_ID);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_account_id,
+            &raw const ffi_native_program,
+            &raw mut out_balance_only,
+        )
+        .unwrap();
+        (&out_balance_only).try_into().unwrap()
+    };
+
+    assert_eq!(
+        balance_only.data,
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
+    );
+    assert_eq!(balance_only.nonce.0, 2);
+
+    let program_id = programs::token_account_id();
+    let mut out_program_full = FfiAccount::default();
+    let program_full: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        wallet_ffi_get_account_public(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            &raw mut out_program_full,
+        )
+        .unwrap();
+        (&out_program_full).try_into().unwrap()
+    };
+    let expected_shard = program_full.data.shards[&PROGRAM_LOADER_ACCOUNT_ID].clone();
+    assert!(!expected_shard.is_empty());
+
+    let mut out_program_view = FfiAccount::default();
+    let program_view: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        let ffi_native_program = FfiBytes32::from_account_id(NATIVE_TOKEN_PROGRAM_ID);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            &raw const ffi_native_program,
+            &raw mut out_program_view,
+        )
+        .unwrap();
+        (&out_program_view).try_into().unwrap()
+    };
+
+    assert_eq!(
+        program_view.data,
+        Account::funded(program_full.data.native_balance().unwrap()).data
+    );
+
+    let mut out_named_shard = FfiAccount::default();
+    let named_shard: Account = unsafe {
+        let ffi_program_account = FfiBytes32::from(program_id);
+        let ffi_program_id = FfiBytes32::from(PROGRAM_LOADER_ACCOUNT_ID);
+        wallet_ffi_get_account_view(
+            wallet_ffi_handle,
+            &raw const ffi_program_account,
+            &raw const ffi_program_id,
+            &raw mut out_named_shard,
+        )
+        .unwrap();
+        (&out_named_shard).try_into().unwrap()
+    };
+
+    assert_eq!(
+        named_shard.data,
+        program_full.data.project([PROGRAM_LOADER_ACCOUNT_ID])
+    );
 
     unsafe {
+        wallet_ffi_free_account_data(&raw mut out_balance_only);
+        wallet_ffi_free_account_data(&raw mut out_program_full);
+        wallet_ffi_free_account_data(&raw mut out_program_view);
+        wallet_ffi_free_account_data(&raw mut out_named_shard);
         wallet_ffi_free_account_data(&raw mut out_account);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
 
 #[test]
 fn test_wallet_ffi_get_account_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -667,26 +759,27 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
+    // A private account: private balances stay small (fee-exempt under the
+    // interim policy), so this asserts against the private constant, not the
+    // LGO-scaled public one.
     assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
+        account.data,
+        Account::funded(INITIAL_PRIVATE_BALANCES_FOR_WALLET[0]).data
     );
-    assert_eq!(account.balance, 10000);
-    assert!(account.data.is_empty());
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
 
 #[test]
 fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -717,7 +810,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
 
     assert_eq!(key, expected_key);
 
-    info!("Successfully retrieved account key");
+    log::info!("Successfully retrieved account key");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -728,7 +821,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -767,7 +860,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account keys");
+    log::info!("Successfully retrieved account keys");
 
     Ok(())
 }
@@ -813,8 +906,8 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+fn wallet_ffi_public_credit_creates_only_the_native_shard() -> Result<()> {
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -827,7 +920,6 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id).unwrap();
     }
 
-    // Check its program owner is the default program id
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
         wallet_ffi_get_account_public(
@@ -838,23 +930,24 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
+    assert!(account.data.shards.is_empty());
 
-    // Call the init funciton
-    let mut transfer_result = FfiTransferResult::default();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
+    let mut credit_result = FfiTransferResult::default();
     unsafe {
-        wallet_ffi_register_public_account(
+        wallet_ffi_transfer_public(
             wallet_ffi_handle,
+            &raw const from,
             &raw const out_account_id,
-            &raw mut transfer_result,
+            &raw const amount,
+            &raw mut credit_result,
         )
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &credit_result);
 
-    // Check that the program owner is now the authenticated transfer program
     let account: Account = unsafe {
         let mut out_account = FfiAccount::default();
         wallet_ffi_get_account_public(
@@ -865,73 +958,10 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
+    assert_eq!(account.data, Account::funded(100).data);
 
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    // Create a new private account
-    let mut out_account_id = FfiBytes32::default();
-    unsafe {
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id).unwrap();
-    }
-
-    // Call the init function
-    let mut transfer_result = FfiTransferResult::default();
-    unsafe {
-        wallet_ffi_register_private_account(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    // Sync private account local storage with onchain encrypted state
-    unsafe {
-        let mut current_height = 0;
-        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut current_height).unwrap();
-        wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
-    };
-
-    // Check that the program owner is now the authenticated transfer program
-    let account: Account = unsafe {
-        let mut out_account = FfiAccount::default();
-        wallet_ffi_get_account_private(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_account,
-        )
-        .unwrap();
-        (&out_account).try_into().unwrap()
-    };
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
-
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_free_transfer_result(&raw mut credit_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
@@ -940,7 +970,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -949,6 +979,9 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
+
+    let from_before = ffi_balance(wallet_ffi_handle, &from, true);
+    let to_before = ffi_balance(wallet_ffi_handle, &to, true);
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -962,33 +995,43 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    let from_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const from,
-            true,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-
-    let to_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
-            .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
+    let mut is_included = false;
 
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
+            .unwrap();
+    }
+
+    assert!(is_included);
+
+    let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
+
+    let to_balance = ffi_balance(wallet_ffi_handle, &to, true);
+
+    // Charged public transfer: the recipient gains exactly the amount; the
+    // sender pays the amount plus a fee bounded by the protocol ceiling.
+    assert_eq!(
+        to_balance,
+        to_before + 100,
+        "recipient gains exactly the transferred amount"
+    );
+    let fee = from_before
+        .checked_sub(100)
+        .and_then(|rest| rest.checked_sub(from_balance))
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= DEFAULT_MAX_FEE,
+        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+    );
+
+    unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
@@ -997,7 +1040,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_shielded() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1010,18 +1053,18 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
     };
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
+    let from_before = ffi_balance(wallet_ffi_handle, &from, true);
+
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_shielded(
             wallet_ffi_handle,
             &raw const from,
@@ -1034,8 +1077,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1044,17 +1086,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
 
-    let from_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const from,
-            true,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
+    let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
     let to_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -1067,7 +1099,9 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    // A shield moves public funds into a private account and is fee-exempt, so
+    // the public sender is debited exactly the amount, with no fee.
+    assert_eq!(from_balance, from_before - 100);
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1080,7 +1114,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1089,6 +1123,8 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
+
+    let to_before = ffi_balance(wallet_ffi_handle, &to, true);
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -1102,8 +1138,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1130,8 +1165,11 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
+    // A deshield moves private funds into a public account and is fee-exempt, so
+    // the private sender is debited exactly the amount and the public recipient
+    // is credited exactly the amount, with no fee on either side.
     assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 10100);
+    assert_eq!(to_balance, to_before + 100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
@@ -1143,7 +1181,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1157,7 +1195,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1167,9 +1205,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from,
@@ -1181,8 +1217,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1226,7 +1261,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
 #[test]
 fn restore_keys_from_seed_ffi() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1242,7 +1277,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1254,7 +1289,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
             &out_keys.vpk().unwrap(),
-            0_u128,
+            Identifier::ZERO,
         );
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1271,9 +1306,9 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut public_account_id_2).unwrap();
     }
 
-    info!("Accounts created");
+    log::info!("Accounts created");
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1291,9 +1326,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 
     let mut transfer_result_1 = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from_private,
@@ -1305,8 +1338,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_1);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1319,9 +1352,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 
     let mut transfer_result_2 = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 {
-            data: 0_u128.to_le_bytes(),
-        };
+        let to_identifier = FfiIdentifier::default();
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from_private,
@@ -1333,8 +1364,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_2);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1357,8 +1388,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_3);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1381,8 +1412,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    // A later transfer from the same sender must see this one's spend.
+    wait_for_inclusion(wallet_ffi_handle, &transfer_result_4);
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1398,11 +1429,11 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_free_transfer_result(&raw mut transfer_result_4);
     }
 
-    info!("Preparation complete, performing keys restoration");
+    log::info!("Preparation complete, performing keys restoration");
 
     let password = CString::new(ctx.ctx().wallet_password())?;
 
-    info!("Checking balance correctness before restoration");
+    log::info!("Checking balance correctness before restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -1465,7 +1496,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
 
-    info!("Checking balance correctness after restoration");
+    log::info!("Checking balance correctness after restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -1516,7 +1547,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_1_balance, 102);
     assert_eq!(public_account_id_2_balance, 103);
 
-    info!("Accounts restored");
+    log::info!("Accounts restored");
 
     Ok(())
 }
@@ -1546,7 +1577,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 //         .unwrap();
 //     }
 
-//     info!("Waiting for next block creation");
+//     log::info!("Waiting for next block creation");
 //     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
 //     let from_balance = unsafe {
@@ -1584,9 +1615,16 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
 //     Ok(())
 // }
 
+const fn mention(identity: FfiAccountIdentity, program: AccountId) -> FfiAccountMention {
+    FfiAccountMention {
+        identity,
+        program_account_id: FfiBytes32::from_account_id(program),
+    }
+}
+
 #[test]
 fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1595,6 +1633,9 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount = 100_u128;
+
+    let from_before = ffi_balance(wallet_ffi_handle, &from, true);
+    let to_before = ffi_balance(wallet_ffi_handle, &to, true);
 
     let mut transaction_result = FfiTransactionResult::default();
 
@@ -1609,66 +1650,88 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         wallet_ffi_resolve_public_account(to, true, &raw mut to_account_identity).unwrap();
     }
 
-    let ffi_accs = vec![from_account_identity, to_account_identity];
-    let account_identities_size = ffi_accs.len();
-    let account_identities =
-        Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+    let ffi_accs = vec![
+        mention(
+            from_account_identity,
+            lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        ),
+        mention(
+            to_account_identity,
+            lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        ),
+    ];
+    let account_mentions_size = ffi_accs.len();
+    let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     let instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount,
-        })
-        .unwrap();
-    let instruction_words_size = instruction_data.len();
-    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
+        Program::serialize_instruction(lee_core::native_token::Instruction::Transfer { amount })
+            .unwrap();
+    let instruction_data_size = instruction_data.len();
+    let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program_id = programs::authenticated_transfer().id();
+    let program_account_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
             wallet_ffi_handle,
-            account_identities,
-            account_identities_size,
-            instruction_words,
-            instruction_words_size,
-            program_id.into(),
+            account_mentions,
+            account_mentions_size,
+            instruction_data_ptr,
+            instruction_data_size,
+            program_account_id.into(),
+            std::ptr::null(),
             &raw mut transaction_result,
         )
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    let from_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
+    // The sleep is barely longer than one block period, so on a loaded machine the
+    // transfer may still be unconfirmed. Balances only move once the transaction is
+    // in a block, so wait for it rather than reading a pre-transfer state.
+    let tx_hash: HashType = unsafe { CStr::from_ptr(transaction_result.tx_hash) }
+        .to_str()?
+        .parse()?;
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
             wallet_ffi_handle,
-            &raw const from,
-            true,
-            &raw mut out_balance,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
         )
         .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
+    }
+    assert!(is_included, "the transfer transaction must land");
 
-    let to_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
-            .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
+    let from_balance = ffi_balance(wallet_ffi_handle, &from, true);
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    let to_balance = ffi_balance(wallet_ffi_handle, &to, true);
+
+    // Charged public transfer: the recipient gains exactly the amount; the
+    // sender pays the amount plus a fee bounded by the protocol ceiling.
+    assert_eq!(
+        to_balance,
+        to_before + 100,
+        "recipient gains exactly the transferred amount"
+    );
+    let fee = from_before
+        .checked_sub(100)
+        .and_then(|rest| rest.checked_sub(from_balance))
+        .expect("sender must be debited at least the transferred amount");
+    assert!(
+        fee > 0 && fee <= DEFAULT_MAX_FEE,
+        "a charged transfer pays a positive fee within the ceiling, got {fee}"
+    );
 
     unsafe {
-        let account_identities_mut = account_identities.cast_mut();
-        wallet_ffi_free_account_identity(account_identities_mut);
-        wallet_ffi_free_account_identity(account_identities_mut.add(1));
+        let mentions = account_mentions.cast_mut();
+        wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
+        wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
         let instruction_data =
-            std::slice::from_raw_parts_mut(instruction_words.cast_mut(), instruction_words_size);
+            std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
         drop(Box::from_raw(std::ptr::from_mut(instruction_data)));
 
         wallet_ffi_free_transaction_result(&raw mut transaction_result);
@@ -1679,55 +1742,80 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-    let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
-    let to: FfiBytes32 = ctx.ctx().existing_private_accounts()[1].into();
-    let amount = 100_u128;
+    let definition_id = ctx.ctx().existing_private_accounts()[0];
+    let definition: FfiBytes32 = definition_id.into();
+    let holding: FfiBytes32 = ctx.ctx().existing_private_accounts()[1].into();
+    let token_program = programs::token_account_id();
+    let total_supply = 100_u128;
 
     let mut transaction_result = FfiTransactionResult::default();
 
-    let mut from_account_identity = FfiAccountIdentity::default();
-    let mut to_account_identity = FfiAccountIdentity::default();
+    let mut definition_account_identity = FfiAccountIdentity::default();
+    let mut holding_account_identity = FfiAccountIdentity::default();
 
     unsafe {
-        wallet_ffi_resolve_private_account(wallet_ffi_handle, from, &raw mut from_account_identity)
-            .unwrap();
+        wallet_ffi_resolve_private_account(
+            wallet_ffi_handle,
+            definition,
+            &raw mut definition_account_identity,
+        )
+        .unwrap();
     }
 
     unsafe {
-        wallet_ffi_resolve_private_account(wallet_ffi_handle, to, &raw mut to_account_identity)
-            .unwrap();
+        wallet_ffi_resolve_private_account(
+            wallet_ffi_handle,
+            holding,
+            &raw mut holding_account_identity,
+        )
+        .unwrap();
     }
 
-    let ffi_accs = vec![from_account_identity, to_account_identity];
-    let account_identities_size = ffi_accs.len();
-    let account_identities =
-        Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+    let ffi_accs = vec![
+        mention(definition_account_identity, token_program),
+        mention(holding_account_identity, token_program),
+    ];
+    let account_mentions_size = ffi_accs.len();
+    let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     let instruction_data =
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount,
+        Program::serialize_instruction(token_core::Instruction::NewFungibleDefinition {
+            name: "FFI".to_owned(),
+            total_supply,
         })
         .unwrap();
-    let instruction_words_size = instruction_data.len();
-    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
+    let instruction_data_size = instruction_data.len();
+    let instruction_data_ptr = Box::into_raw(instruction_data.into_boxed_slice()) as *const u8;
 
-    let program: ProgramWithDependencies = programs::authenticated_transfer().into();
-    let program_with_dependencies: FfiProgramWithDependencies = program.into();
+    let ffi_programs = vec![FfiDependency {
+        program: programs::token().into(),
+        account_id: FfiBytes32::from_account_id(token_program),
+        kind: FfiProgramKind::ProgramDisclosed,
+        program_header: FfiProgramHeader::default(),
+        membership_proof: FfiMembershipProof::default(),
+    }];
+    let programs_size = ffi_programs.len();
+    let programs_ptr = Box::into_raw(ffi_programs.into_boxed_slice()) as *const FfiDependency;
+    let program_with_dependencies = FfiProgramWithDependencies {
+        self_account_id: FfiBytes32::from_account_id(token_program),
+        programs: programs_ptr,
+        programs_size,
+    };
 
     unsafe {
         wallet_ffi_send_generic_private_transaction(
             wallet_ffi_handle,
-            account_identities,
-            account_identities_size,
-            instruction_words,
-            instruction_words_size,
+            account_mentions,
+            account_mentions_size,
+            instruction_data_ptr,
+            instruction_data_size,
             &raw const program_with_dependencies,
             &raw mut transaction_result,
         )
@@ -1736,8 +1824,19 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
 
     assert_eq!(transaction_result.secrets_size, 2);
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+    let tx_hash: HashType = unsafe { CStr::from_ptr(transaction_result.tx_hash) }
+        .to_str()?
+        .parse()?;
+    let mut is_included = false;
+    unsafe {
+        wallet_ffi_poll_transaction_status(
+            wallet_ffi_handle,
+            FfiBytes32::from_bytes(tx_hash.0),
+            &raw mut is_included,
+        )
+        .unwrap();
+    }
+    assert!(is_included, "the token definition transaction must land");
 
     // Sync private account local storage with onchain encrypted state
     unsafe {
@@ -1746,40 +1845,50 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
 
-    let from_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        let _result = wallet_ffi_get_balance(
+    let mut out_definition = FfiAccount::default();
+    let mut out_holding = FfiAccount::default();
+    let (definition_account, holding_account): (Account, Account) = unsafe {
+        wallet_ffi_get_account_private(
             wallet_ffi_handle,
-            &raw const from,
-            false,
-            &raw mut out_balance,
-        );
-        u128::from_le_bytes(out_balance)
+            &raw const definition,
+            &raw mut out_definition,
+        )
+        .unwrap();
+        wallet_ffi_get_account_private(wallet_ffi_handle, &raw const holding, &raw mut out_holding)
+            .unwrap();
+        (
+            (&out_definition).try_into().unwrap(),
+            (&out_holding).try_into().unwrap(),
+        )
     };
 
-    let to_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        let _result = wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const to,
-            false,
-            &raw mut out_balance,
-        );
-        u128::from_le_bytes(out_balance)
-    };
-
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    assert_eq!(
+        TokenDefinition::try_from(definition_account.data.shard(token_program))?,
+        TokenDefinition::Fungible {
+            name: "FFI".to_owned(),
+            total_supply,
+            metadata_id: None,
+        }
+    );
+    assert_eq!(
+        TokenHolding::try_from(holding_account.data.shard(token_program))?,
+        TokenHolding::Fungible {
+            definition_id,
+            balance: total_supply,
+        }
+    );
 
     unsafe {
-        let account_identities_mut = account_identities.cast_mut();
-        wallet_ffi_free_account_identity(account_identities_mut);
-        wallet_ffi_free_account_identity(account_identities_mut.add(1));
+        let mentions = account_mentions.cast_mut();
+        wallet_ffi_free_account_identity(&raw mut (*mentions).identity);
+        wallet_ffi_free_account_identity(&raw mut (*mentions.add(1)).identity);
 
         let instruction_data =
-            std::slice::from_raw_parts_mut(instruction_words.cast_mut(), instruction_words_size);
+            std::slice::from_raw_parts_mut(instruction_data_ptr.cast_mut(), instruction_data_size);
         drop(Box::from_raw(std::ptr::from_mut(instruction_data)));
 
+        wallet_ffi_free_account_data(&raw mut out_definition);
+        wallet_ffi_free_account_data(&raw mut out_holding);
         wallet_ffi_free_transaction_result(&raw mut transaction_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
@@ -1788,185 +1897,8 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    let sender = ctx.ctx().existing_public_accounts()[0];
-    let owner = ctx.ctx().existing_public_accounts()[1];
-    let owner_ffi: FfiBytes32 = owner.into();
-    let amount: u128 = 100;
-
-    // Fund the owner's vault, simulating an L1 bridge deposit.
-    ctx.block_on(|ctx| async move {
-        Vault(ctx.wallet())
-            .send_transfer(sender, owner, amount)
-            .await
-    })
-    .unwrap();
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    let vault_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_vault_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(vault_balance, amount);
-
-    let mut transfer_result = FfiTransferResult::default();
-    let claim_amount: [u8; 16] = amount.to_le_bytes();
-    unsafe {
-        wallet_ffi_vault_claim(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw const claim_amount,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    let vault_balance_after_claim = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_vault_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(vault_balance_after_claim, 0);
-
-    let owner_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            true,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(owner_balance, 20_000 + amount);
-
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    let sender = ctx.ctx().existing_public_accounts()[0];
-    let owner = ctx.ctx().existing_private_accounts()[0];
-    let owner_ffi: FfiBytes32 = owner.into();
-    let amount: u128 = 100;
-
-    // Fund the owner's vault. Real deposits always land via a public transfer (the bridge
-    // program crediting the vault PDA), regardless of whether the owner is private.
-    ctx.block_on(|ctx| async move {
-        Vault(ctx.wallet())
-            .send_transfer(sender, owner, amount)
-            .await
-    })
-    .unwrap();
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    let vault_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_vault_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(vault_balance, amount);
-
-    let mut transfer_result = FfiTransferResult::default();
-    let claim_amount: [u8; 16] = amount.to_le_bytes();
-    unsafe {
-        wallet_ffi_vault_claim_private(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw const claim_amount,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    // Sync private account local storage with onchain encrypted state
-    unsafe {
-        let mut current_height = 0;
-        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut current_height).unwrap();
-        wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
-    };
-
-    let vault_balance_after_claim = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_vault_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(vault_balance_after_claim, 0);
-
-    let owner_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        let _result = wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const owner_ffi,
-            false,
-            &raw mut out_balance,
-        );
-        u128::from_le_bytes(out_balance)
-    };
-    assert_eq!(owner_balance, 10_000 + amount);
-
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
-
-    Ok(())
-}
-
-#[test]
 fn test_wallet_ffi_single_label() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1978,7 +1910,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();
@@ -2015,7 +1947,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_more_labels() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -2027,7 +1959,7 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();

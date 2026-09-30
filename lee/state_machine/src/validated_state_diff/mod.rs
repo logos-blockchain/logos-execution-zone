@@ -1,36 +1,44 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    borrow::Cow,
+    collections::{HashMap, HashSet, hash_map::Entry},
     hash::Hash,
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim,
+    PublicAction, Timestamp,
+    account::{Account, AccountId, Cycles, Nonce, ProgramShardSelector, ShardData},
+    execution_state::{DeferredPublicEffect, ExecutionError, ExecutionState, RootCall},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
-        validate_execution,
+        ApplyInput, ApplyOutput, PROGRAM_LOADER_ACCOUNT_ID, PlanInput, PlanOutput,
+        TransactionEvent, validate_apply_output,
     },
 };
-use log::debug;
+use program_loader_core::Instruction as ProgramLoaderInstruction;
+use public_backend::PublicBackend;
 
 use crate::{
     V03State, ensure,
     error::{InvalidProgramBehaviorError, LeeError},
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof, message::Message,
+        PrivacyPreservingTransaction,
+        circuit::Proof,
+        message::{Message, PublicActionWithID},
     },
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
+
+mod public_backend;
 
 pub struct StateDiff {
     pub signer_account_ids: Vec<AccountId>,
     pub public_diff: HashMap<AccountId, Account>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
-    pub program: Option<Program>,
+    pub events: Vec<TransactionEvent>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -53,277 +61,245 @@ impl ValidatedStateDiff {
     }
 }
 
+/// The metered result of a public execution: the cycle count accumulated
+/// across every call in the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionCharge {
+    pub cycles: Cycles,
+}
+
+impl ExecutionCharge {
+    /// The charge of transaction kinds that meter nothing.
+    pub const FREE: Self = Self { cycles: 0 };
+}
+
 impl ValidatedStateDiff {
+    /// [`Self::from_public_transaction_with_cycle_budget`] at the default budget,
+    /// discarding the metered outcome.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_public_transaction_with_cycle_budget(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )
+        .map(|(diff, _)| diff)
+    }
+
+    /// Validates and executes `tx` under `cycle_budget`, shared by every call
+    /// in the chain: each nested session is limited to the remaining budget, so
+    /// the chain cannot exceed the budget in aggregate.
+    pub fn from_public_transaction_with_cycle_budget(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: Cycles,
+    ) -> Result<(Self, ExecutionCharge), LeeError> {
+        let mut cycles_used: u64 = 0;
+        let diff = Self::execute_public_core(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            &mut cycles_used,
+        )?;
+        Ok((
+            diff,
+            ExecutionCharge {
+                cycles: cycles_used,
+            },
+        ))
+    }
+
+    /// The settlement-shaped variant: authenticate, execute under `cycle_budget`,
+    /// and return a diff that is always safe to apply.
+    ///
+    /// - `Ok` on success: carries the transaction's full effects plus the signers' nonce advances.
+    /// - `Ok` on a *reverted* action: the failure is charged w.r.t `LeeError::is_chargeable`, nonce
+    ///   advances if charged.
+    /// - `Err` covers a transaction a correct proposer would never include
+    pub fn from_public_transaction_metered(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+    ) -> (ExecutionCharge, Result<Self, LeeError>) {
+        // Authentication failure is a malformed transaction, not a revert: bail
+        // before executing so the caller can reject the block.
+        let signers = match authenticate_public_transaction_signers(tx, state) {
+            Ok(signers) => signers,
+            Err(err) => return (ExecutionCharge::FREE, Err(err)),
+        };
+        let message = tx.message();
+        // Signers both authorize the execution and advance their replay nonces.
+        let authorized: HashSet<AccountId> = signers.iter().copied().collect();
+        let mut cycles_used: u64 = 0;
+        let result = Self::execute_authorized(
+            message.program_account_id,
+            &message.shard_selectors,
+            &message.instruction_data,
+            &authorized,
+            signers.clone(),
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            &mut cycles_used,
+        );
+        // A non-zero exit keeps its count: the failing call's cycles ride on the error since
+        // `execute_authorized` bailed before adding them. A panic or session-limit bail loses
+        // the count and pays the full budget.
+        let cycles = match &result {
+            Ok(_) => cycles_used,
+            Err(LeeError::ProgramExitedWithCode { cycles, .. }) => {
+                cycles_used.saturating_add(*cycles)
+            }
+            Err(_) => cycle_budget,
+        };
+        let diff = match result {
+            Ok(diff) => diff,
+            // A chargeable action failure keeps no effects but still advances the
+            // signers' nonces, so what `apply_state_diff` receives is the nonce
+            // bumps alone: the fee stays committed and the tx cannot be replayed.
+            Err(err) if err.is_chargeable() => Self(StateDiff {
+                signer_account_ids: signers,
+                public_diff: HashMap::new(),
+                new_commitments: Vec::new(),
+                new_nullifiers: Vec::new(),
+                events: Vec::new(),
+            }),
+            // A non-chargeable failure is a structural defect a correct proposer
+            // would never include; reject the whole block.
+            Err(err) => return (ExecutionCharge { cycles }, Err(err)),
+        };
+        (ExecutionCharge { cycles }, Ok(diff))
+    }
+
+    /// Executes a fee-settlement invocation (reserve or refund), authorized by
+    /// the fee declaration rather than a signature and advancing no nonces (the
+    /// action phase owns the payer's replay nonce).
+    ///
+    /// Fee-scoped by name on purpose: it skips the signature check, so it must
+    /// not read as a general escape hatch. `authorized` is the guest's
+    /// `is_authorized` set — the payer for the reserve, empty for the refund.
+    pub fn from_fee_settlement_invocation(
+        program_account_id: AccountId,
+        shard_selectors: &[ProgramShardSelector],
+        instruction_data: &[u8],
+        authorized: &HashSet<AccountId>,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<Self, LeeError> {
+        let mut cycles_used = 0; // dont care
+        Self::execute_authorized(
+            program_account_id,
+            shard_selectors,
+            instruction_data,
+            authorized,
+            Vec::new(), // no nonces to advance!
+            state,
+            block_id,
+            timestamp,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+            &mut cycles_used,
+        )
+    }
+
+    fn execute_public_core(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+        cycles_used: &mut u64,
+    ) -> Result<Self, LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
+        // Signers both authorize the execution and advance their replay nonces.
+        let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
+        Self::execute_authorized(
+            message.program_account_id,
+            &message.shard_selectors,
+            &message.instruction_data,
+            &authorized,
+            signer_account_ids,
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            cycles_used,
+        )
+    }
 
+    /// Shared execution core: validates and executes one program invocation
+    /// (with its chained calls), producing a diff. `authorized` is the guest's
+    /// `is_authorized` set; `nonce_bearers` become the diff's `signer_account_ids`
+    /// (their nonces advance on apply).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the execution core threads the full invocation context"
+    )]
+    fn execute_authorized(
+        program_account_id: AccountId,
+        shard_selectors: &[ProgramShardSelector],
+        instruction_data: &[u8],
+        authorized: &HashSet<AccountId>,
+        nonce_bearers: Vec<AccountId>,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+        cycles_used: &mut u64,
+    ) -> Result<Self, LeeError> {
         ensure!(
-            !message.account_ids.is_empty(),
+            !shard_selectors.is_empty(),
             LeeError::InvalidInput("Public transaction must have at least one account".into())
         );
 
-        // All account_ids must be different
+        // An account may select several shards, but never the same one twice.
         ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
+            shard_selectors.iter().collect::<HashSet<_>>().len() == shard_selectors.len(),
+            LeeError::InvalidInput("Duplicate shard selectors found in message".into(),)
         );
 
-        // Build pre_states for execution
-        let input_pre_states: Vec<_> = message
-            .account_ids
-            .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+        let execution = ExecutionState::initialize(
+            RootCall {
+                program_account_id,
+                shard_selectors: shard_selectors.to_vec(),
+                instruction_data: instruction_data.to_vec(),
+                authorized_accounts: authorized.iter().copied().collect(),
+            },
+            &[],
+        )?;
+        let mut backend = PublicBackend::new(state, block_id, timestamp, cycle_budget, cycles_used);
+        let public_diff = execution
+            .run(&mut backend)?
+            .public
+            .into_iter()
+            .map(|(account_id, data)| {
+                let mut account = state.get_account_by_id(account_id);
+                account.data.update(&data);
+                (account_id, account)
             })
             .collect();
-
-        let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
-
-        let initial_call = ChainedCall {
-            program_id: message.program_id,
-            instruction_data: message.instruction_data.clone(),
-            pre_states: input_pre_states,
-            pda_seeds: vec![],
-        };
-
-        let initial_caller_data = CallerData {
-            program_id: None,
-            authorized_accounts: signer_account_ids.iter().copied().collect(),
-        };
-
-        let mut chained_calls =
-            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
-        let mut chain_calls_counter = 0;
-
-        while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
-            ensure!(
-                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
-                LeeError::MaxChainedCallsDepthExceeded
-            );
-
-            // Check that the `program_id` corresponds to a deployed program
-            let Some(program) = state.programs().get(&chained_call.program_id) else {
-                return Err(LeeError::InvalidInput("Unknown program".into()));
-            };
-
-            debug!(
-                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
-            );
-            let mut program_output = program.execute(
-                caller_data.program_id,
-                &chained_call.pre_states,
-                &chained_call.instruction_data,
-            )?;
-            debug!(
-                "Program {:?} output: {:?}",
-                chained_call.program_id, program_output
-            );
-
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
-
-            for pre in &program_output.pre_states {
-                let account_id = pre.account_id;
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
-                ensure!(
-                    pre.account == expected_pre,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(expected_pre),
-                        actual: Box::new(pre.account.clone())
-                    }
-                );
-
-                // Check that the program output pre_states marked as authorized are indeed
-                // authorized, and vice-versa.
-                let is_indeed_authorized = is_authorized(&account_id);
-                ensure!(
-                    !pre.is_authorized || is_indeed_authorized,
-                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
-                );
-                ensure!(
-                    pre.is_authorized || !is_indeed_authorized,
-                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
-                        account_id
-                    }
-                );
-            }
-
-            // Verify that the program output's self_program_id matches the expected program ID.
-            ensure!(
-                program_output.self_program_id == chained_call.program_id,
-                InvalidProgramBehaviorError::MismatchedProgramId {
-                    expected: chained_call.program_id,
-                    actual: program_output.self_program_id
-                }
-            );
-
-            // Verify that the program output's caller_program_id matches the actual caller.
-            ensure!(
-                program_output.caller_program_id == caller_data.program_id,
-                InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.program_id,
-                    actual: program_output.caller_program_id,
-                }
-            );
-
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            )
-            .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
-
-            // Verify validity window
-            ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
-                    && program_output
-                        .timestamp_validity_window
-                        .is_valid_for(timestamp),
-                LeeError::OutOfValidityWindow
-            );
-
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let pre = &program_output.pre_states[i];
-                let account_id = pre.account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = chained_call.program_id;
-            }
-
-            // Update the state diff
-            for (pre, post) in program_output
-                .pre_states
-                .iter()
-                .zip(program_output.post_states.iter())
-            {
-                state_diff.insert(pre.account_id, post.account().clone());
-            }
-
-            // Source from `program_output.pre_states`, not `chained_call.pre_states`:
-            // the loop above already gates program_output's `is_authorized` via the
-            // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
-            // pre_states` is caller-controlled and can be forged (audit-issue 91).
-            //
-            // Union with the caller's authorized set so that authorization is monotonically
-            // growing: once an account is authorized at any point in the chain it remains
-            // authorized for all subsequent calls.
-            let authorized_accounts: HashSet<_> = caller_data
-                .authorized_accounts
-                .into_iter()
-                .chain(
-                    program_output
-                        .pre_states
-                        .iter()
-                        .filter(|pre| pre.is_authorized)
-                        .map(|pre| pre.account_id),
-                )
-                .collect();
-            for new_call in program_output.chained_calls.into_iter().rev() {
-                chained_calls.push_front((
-                    new_call,
-                    CallerData {
-                        program_id: Some(chained_call.program_id),
-                        authorized_accounts: authorized_accounts.clone(),
-                    },
-                ));
-            }
-
-            chain_calls_counter = chain_calls_counter
-                .checked_add(1)
-                .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
-            );
-        }
-
-        // Every account the caller declared as part of the transaction must appear in the final
-        // diff.
-        for account_id in &message.account_ids {
-            ensure!(
-                state_diff.contains_key(account_id),
-                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
-                    account_id: *account_id
-                }
-            );
-        }
+        let (events, new_commitments) = backend.into_outputs();
 
         Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff: state_diff,
-            new_commitments: vec![],
+            signer_account_ids: nonce_bearers,
+            public_diff,
+            new_commitments,
             new_nullifiers: vec![],
-            program: None,
+            events,
         }))
     }
 
@@ -374,16 +350,24 @@ impl ValidatedStateDiff {
             )
         );
 
+        // Check that there are no duplicate signers
+        let signer_account_ids = tx.signer_account_ids();
+        ensure!(
+            n_unique(&signer_account_ids) == signer_account_ids.len(),
+            LeeError::InvalidInput("Duplicate signers found in witness set".into())
+        );
+
         // Check the signatures are valid
         ensure!(
             witness_set.signatures_are_valid_for(message),
             LeeError::InvalidInput("Invalid signature for given message and public key".into())
         );
 
-        let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-            let current_nonce = state.get_account_by_id(*account_id).nonce;
+            let current_nonce = state
+                .get_account_by_id_ref(*account_id)
+                .map_or_else(Nonce::default, |account| account.nonce);
             ensure!(
                 current_nonce == *nonce,
                 LeeError::InvalidInput("Nonce mismatch".into())
@@ -397,22 +381,24 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = public_account_ids
+        // The journal carries no public state, only the effects settlement must fold. Its
+        // authorization bits are reconstructed here from the verified signatures, never taken
+        // from the prover's claim.
+        let public_actions: Vec<PublicAction> = message
+            .public_actions
             .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
+            .map(|action| PublicAction {
+                account_id: action.account_id,
+                is_authorized: signer_account_ids.contains(&action.account_id),
+                effects: action.effects.clone(),
             })
             .collect();
 
         // 4. Proof verification
         check_privacy_preserving_circuit_proof_is_valid(
+            state,
             &witness_set.proof,
-            &public_pre_states,
+            public_actions,
             message,
         )?;
 
@@ -422,11 +408,11 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = message
-            .public_actions
-            .iter()
-            .map(|action| (action.account_id, action.post_state.clone()))
-            .collect();
+        let public_diff = apply_public_effects(
+            state,
+            &message.public_actions,
+            crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+        )?;
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -434,25 +420,7 @@ impl ValidatedStateDiff {
             public_diff,
             new_commitments: commitments,
             new_nullifiers,
-            program: None,
-        }))
-    }
-
-    pub fn from_program_deployment_transaction(
-        tx: &ProgramDeploymentTransaction,
-        state: &V03State,
-    ) -> Result<Self, LeeError> {
-        // TODO: remove clone
-        let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state.programs().contains_key(&program.id()) {
-            return Err(LeeError::ProgramAlreadyExists);
-        }
-        Ok(Self(StateDiff {
-            signer_account_ids: vec![],
-            public_diff: HashMap::new(),
-            new_commitments: vec![],
-            new_nullifiers: vec![],
-            program: Some(program),
+            events: vec![],
         }))
     }
 
@@ -461,8 +429,8 @@ impl ValidatedStateDiff {
     /// Used by callers (e.g. the sequencer) to inspect the diff before committing it, for example
     /// to enforce that system accounts are not modified by user transactions.
     #[must_use]
-    pub fn public_diff(&self) -> HashMap<AccountId, Account> {
-        self.0.public_diff.clone()
+    pub const fn public_diff(&self) -> &HashMap<AccountId, Account> {
+        &self.0.public_diff
     }
 
     pub(crate) fn into_state_diff(self) -> StateDiff {
@@ -470,12 +438,175 @@ impl ValidatedStateDiff {
     }
 }
 
-#[derive(Debug)]
-struct CallerData {
-    program_id: Option<ProgramId>,
-    authorized_accounts: HashSet<AccountId>,
+enum Applier {
+    Loader,
+    Native,
+    Guest(Program),
 }
 
+impl Applier {
+    fn apply(
+        &self,
+        input: &ApplyInput,
+        cycle_budget: Cycles,
+        cycles_used: &mut Cycles,
+    ) -> Result<ApplyOutput, LeeError> {
+        match self {
+            Self::Loader => Ok(ApplyOutput::new(
+                input.clone(),
+                Some(catch_program_loader_panic(|| {
+                    program_loader_core::apply(input)
+                })?),
+            )),
+            Self::Native => Ok(native_token::apply_output(input)
+                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?),
+            Self::Guest(program) => {
+                let (output, call_cycles) =
+                    program.apply(input, remaining(cycle_budget, *cycles_used))?;
+                charge(cycles_used, call_cycles);
+                Ok(output)
+            }
+        }
+    }
+}
+
+fn load_program<'state>(
+    account_id: AccountId,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+) -> Option<Program> {
+    let (program_id, elf) = crate::program::resolve_program(account_id, loader_shard)?;
+    Some(Program::new_unchecked(program_id, Cow::Owned(elf)))
+}
+
+const fn remaining(cycle_budget: Cycles, used: Cycles) -> Cycles {
+    cycle_budget.saturating_sub(used)
+}
+
+const fn charge(used: &mut Cycles, call_cycles: Cycles) {
+    *used = used
+        .checked_add(call_cycles)
+        .expect("cycle sums fit u64: overflow would need ~2^64 executed cycles");
+}
+
+/// The same lookup `get_program_via` uses, which is what keeps deploy-then-call working within
+/// one transaction.
+fn loader_shard<'state>(
+    execution: &'state ExecutionState<'_>,
+    state: &'state V03State,
+    account_id: AccountId,
+) -> Option<&'state ShardData> {
+    execution
+        .pending_shard(account_id, PROGRAM_LOADER_ACCOUNT_ID)
+        .or_else(|| state.loader_shard(account_id))
+}
+
+/// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
+/// every other `*_core` crate uses under its guest's sandbox. There is no zkVM sandbox here, so
+/// `catch_unwind` stands in for it: a panic becomes a chargeable
+/// [`LeeError::ProgramExecutionFailed`] instead of taking down the caller.
+fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError> {
+    catch_unwind(AssertUnwindSafe(run)).map_err(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "program_loader panicked".to_owned());
+        LeeError::ProgramExecutionFailed(message)
+    })
+}
+
+/// Produces the same [`PlanOutput`] shape a guest call would, so the rest of the dispatch loop
+/// treats it identically either way. Its plan reads live loader shards through `shard` because it
+/// is trusted, public-only protocol code, not a guest planning from state-free metadata.
+fn plan_program_loader<'state>(
+    input: &PlanInput,
+    shard: impl Fn(AccountId) -> &'state ShardData,
+) -> Result<(PlanOutput, Option<Commitment>), LeeError> {
+    let accounts = &input.accounts;
+    let instruction: ProgramLoaderInstruction = borsh::from_slice(&input.instruction_data)
+        .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+    let (effects, new_commitment) = catch_program_loader_panic(|| match instruction {
+        ProgramLoaderInstruction::WriteSegment {
+            bytecode,
+            next_segment,
+        } => (
+            program_loader_core::write_segment(accounts, shard, bytecode, next_segment),
+            None,
+        ),
+        ProgramLoaderInstruction::CreateHeader {
+            first_segment,
+            immutable,
+        } => program_loader_core::create_header(accounts, shard, first_segment, immutable),
+        ProgramLoaderInstruction::UpdateHeader {
+            first_segment,
+            immutable,
+        } => program_loader_core::update_header(accounts, shard, first_segment, immutable),
+    })?;
+
+    Ok((
+        PlanOutput::new(input.clone()).with_effects(effects),
+        new_commitment,
+    ))
+}
+
+/// Applies public effects to live state under one shared cycle budget.
+/// Private transactions are currently fee-exempt, so failed settlement attempts
+/// can be repeated without paying a fee.
+fn apply_public_effects(
+    state: &V03State,
+    actions: &[PublicActionWithID],
+    cycle_budget: Cycles,
+) -> Result<HashMap<AccountId, Account>, LeeError> {
+    let mut pending: HashMap<AccountId, Account> = HashMap::new();
+    let mut cycles_used: Cycles = 0;
+    let mut appliers: HashMap<AccountId, Applier> = HashMap::new();
+    for action in actions {
+        let account = pending
+            .entry(action.account_id)
+            .or_insert_with(|| state.get_account_by_id(action.account_id));
+        for effect in &action.effects {
+            let DeferredPublicEffect {
+                program_account_id,
+                shard_program_account_id,
+                data,
+            } = effect;
+            let input = ApplyInput {
+                self_account_id: *program_account_id,
+                selector: ProgramShardSelector::new(action.account_id, *shard_program_account_id),
+                pre_data: account.data.shard(*shard_program_account_id).clone(),
+                effect_data: data.clone(),
+            };
+            // Native balance is protocol-recomputed; every other evaluator is the guest the
+            // proof's image claims already bound to this account.
+            let applier = match appliers.entry(*program_account_id) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    entry.insert(if *program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+                        Applier::Native
+                    } else {
+                        Applier::Guest(
+                            load_program(*program_account_id, |id| state.loader_shard(id))
+                                .ok_or(LeeError::UnknownProgram { chained: false })?,
+                        )
+                    })
+                }
+            };
+            let output = applier.apply(&input, cycle_budget, &mut cycles_used)?;
+            validate_apply_output(&input, &output).map_err(|source| {
+                InvalidProgramBehaviorError::Execution(ExecutionError::ExecutionValidation {
+                    program_account_id: *program_account_id,
+                    source,
+                })
+            })?;
+            account.data.apply_output(&output);
+        }
+    }
+    Ok(pending)
+}
+
+/// Validates the witness set and replay nonces of a public transaction against
+/// `state`, returning the signer account ids.
 fn authenticate_public_transaction_signers(
     tx: &PublicTransaction,
     state: &V03State,
@@ -490,14 +621,22 @@ fn authenticate_public_transaction_signers(
         )
     );
 
+    // A repeated signer would advance its nonce once per entry.
+    let signer_account_ids = tx.signer_account_ids();
+    ensure!(
+        n_unique(&signer_account_ids) == signer_account_ids.len(),
+        LeeError::InvalidInput("Duplicate signers found in witness set".into())
+    );
+
     ensure!(
         witness_set.is_valid_for(message),
         LeeError::InvalidInput("Invalid signature for given message and public key".into())
     );
 
-    let signer_account_ids = tx.signer_account_ids();
     for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-        let current_nonce = state.get_account_by_id(*account_id).nonce;
+        let current_nonce = state
+            .get_account_by_id_ref(*account_id)
+            .map_or_else(Nonce::default, |account| account.nonce);
         ensure!(
             current_nonce == *nonce,
             LeeError::InvalidInput("Nonce mismatch".into())
@@ -508,23 +647,45 @@ fn authenticate_public_transaction_signers(
 }
 
 fn check_privacy_preserving_circuit_proof_is_valid(
+    state: &V03State,
     proof: &Proof,
-    public_pre_states: &[AccountWithMetadata],
+    public_actions: Vec<PublicAction>,
     message: &Message,
 ) -> Result<(), LeeError> {
+    // Anchor each `Disclosed` claim to real chain state, reconstructing it independently rather
+    // than trusting the message's own claim — a wrong claim means the reconstructed journal won't
+    // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
+    // `Undisclosed`'s membership check already happened in-circuit; the one thing left to check
+    // here is that its `root` is one the commitment tree has actually had.
+    let program_image_claims = message
+        .program_image_claims
+        .iter()
+        .map(|claim| match claim {
+            ProgramImageClaim::Disclosed { account_id, .. } => {
+                let image_id = state.get_program_image_id(*account_id).ok_or_else(|| {
+                    LeeError::InvalidInput(format!("Unknown program {account_id}"))
+                })?;
+                Ok(ProgramImageClaim::Disclosed {
+                    account_id: *account_id,
+                    image_id,
+                })
+            }
+            ProgramImageClaim::Undisclosed { root } => {
+                ensure!(
+                    state.is_known_commitment_root(root),
+                    LeeError::InvalidInput("Unrecognized commitment set digest".to_owned())
+                );
+                Ok(*claim)
+            }
+        })
+        .collect::<Result<Vec<_>, LeeError>>()?;
+
     let output = PrivacyPreservingCircuitOutput {
-        public_actions: public_pre_states
-            .iter()
-            .cloned()
-            .zip(&message.public_actions)
-            .map(|(pre, action)| PublicAction {
-                pre,
-                post: action.post_state.clone(),
-            })
-            .collect(),
+        public_actions,
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
+        program_image_claims,
     };
     proof
         .is_valid_for(&output)

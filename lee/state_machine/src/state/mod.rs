@@ -4,8 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId},
-    program::ProgramId,
+    account::{Account, AccountId, ShardData},
+    program::{
+        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
+        get_program_via, immutable_mirror_commitment,
+    },
 };
 
 use crate::{
@@ -13,12 +16,9 @@ use crate::{
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
-    program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
-
-pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
@@ -114,7 +114,6 @@ impl BorshDeserialize for NullifierSet {
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
-    programs: HashMap<ProgramId, Program>,
 }
 
 impl Default for V03State {
@@ -127,7 +126,6 @@ impl Default for V03State {
         Self {
             public_state: HashMap::default(),
             private_state,
-            programs: HashMap::default(),
         }
     }
 }
@@ -150,15 +148,9 @@ impl V03State {
         mut self,
         balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
-        let public_accounts = balances.into_iter().map(|(account_id, balance)| {
-            (
-                account_id,
-                Account {
-                    balance,
-                    ..Account::default()
-                },
-            )
-        });
+        let public_accounts = balances
+            .into_iter()
+            .map(|(account_id, balance)| (account_id, Account::funded(balance)));
         self.public_state.extend(public_accounts);
         self
     }
@@ -186,26 +178,102 @@ impl V03State {
         self
     }
 
-    /// Initializes state with given builtin programs.
     #[must_use]
-    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
-        for program in programs {
-            self.insert_program(program);
+    pub fn with_named_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (AccountId, Program)>,
+    ) -> Self {
+        for (account_id, program) in programs {
+            self.insert_program_at(account_id, &program, true);
         }
         self
     }
 
-    pub(crate) fn insert_program(&mut self, program: Program) {
-        self.programs.insert(program.id(), program);
+    #[must_use]
+    pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
+        self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
     }
 
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+    #[must_use]
+    pub fn with_genesis_programs(
+        mut self,
+        programs: impl IntoIterator<Item = (Program, bool)>,
+    ) -> Self {
+        for (program, immutable) in programs {
+            self.insert_program(&program, immutable);
+        }
+        self
+    }
+
+    /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
+    /// `user_elf`, chunked the same way a live `program_loader` deploy would.
+    pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
+        self.insert_program_at(
+            AccountId::from_builtin_program(program.id()),
+            program,
+            immutable,
+        );
+    }
+
+    fn insert_program_at(
+        &mut self,
+        header_account_id: AccountId,
+        program: &Program,
+        immutable: bool,
+    ) {
+        let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
+            .expect("builtin program must be a valid ProgramBinary")
+            .user_elf
+            .to_vec();
+
+        let chunks: Vec<&[u8]> = user_elf
+            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
+            .collect();
+        let segment_account_ids: Vec<AccountId> = (0..chunks.len())
+            .map(|i| genesis_segment_account_id(header_account_id, i))
+            .collect();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let segment = Account::default().with_shard(
+                PROGRAM_LOADER_ACCOUNT_ID,
+                ShardData::try_from(
+                    ProgramSegment {
+                        bytecode: chunk.to_vec(),
+                        next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
+                    }
+                    .to_bytes(),
+                )
+                .expect("segment fits under DATA_MAX_LENGTH"),
+            );
+            self.public_state.insert(segment_account_ids[i], segment);
+        }
+
+        let program_header = ProgramHeader {
+            image_id: program.id(),
+            program_first_segment: segment_account_ids[0],
+            immutable,
+        };
+        let header = Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::try_from(program_header.to_bytes())
+                .expect("program header fits under DATA_MAX_LENGTH"),
+        );
+        self.public_state.insert(header_account_id, header);
+
+        if immutable {
+            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
+            self.private_state.0.extend(&[commitment]);
+        }
+    }
+
+    #[must_use]
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
         let StateDiff {
             signer_account_ids,
             public_diff,
             new_commitments,
             new_nullifiers,
-            program,
+            events,
         } = diff.into_state_diff();
         #[expect(
             clippy::iter_over_hash_type,
@@ -221,9 +289,7 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        if let Some(program) = program {
-            self.insert_program(program);
-        }
+        events
     }
 
     pub fn transition_from_public_transaction(
@@ -231,10 +297,9 @@ impl V03State {
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<(), LeeError> {
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
+        Ok(self.apply_state_diff(diff))
     }
 
     pub fn transition_from_privacy_preserving_transaction(
@@ -245,16 +310,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        self.apply_state_diff(diff);
-        Ok(())
-    }
-
-    pub fn transition_from_program_deployment_transaction(
-        &mut self,
-        tx: &ProgramDeploymentTransaction,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
-        self.apply_state_diff(diff);
+        drop(self.apply_state_diff(diff));
         Ok(())
     }
 
@@ -276,13 +332,31 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
+    /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at
+    /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
+    #[must_use]
+    pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
+        crate::program::resolve_program(account_id, |id| self.loader_shard(id))
+    }
+
+    /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
+    /// isn't one — used to anchor a private transaction's [`ProgramImageClaim`]s to real chain
+    /// state rather than trusting the prover's own claim.
+    ///
+    /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
+    #[must_use]
+    pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
+        get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
+    }
+
+    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ShardData> {
+        self.get_account_by_id_ref(account_id)
+            .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
+    }
+
     #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
-    }
-
-    pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
-        &self.programs
     }
 
     #[must_use]
@@ -290,8 +364,8 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Order-independent fingerprint of the genesis-relevant state: the public
-    /// account set, the deployed program set, and the commitment-set digest.
+    /// Order-independent fingerprint of the genesis-relevant state: the public account set
+    /// (which includes deployed programs' storage accounts) and the commitment-set digest.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -308,17 +382,11 @@ impl V03State {
         let Self {
             public_state,
             private_state,
-            programs,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
-
-        let mut program_ids: Vec<ProgramId> = programs.keys().copied().collect();
-        program_ids.sort_unstable();
-
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
-        let program_count = u64::try_from(program_ids.len()).expect("program count fits in u64");
 
         let mut hasher = Sha256::new();
         hasher.update(account_count.to_le_bytes());
@@ -328,12 +396,6 @@ impl V03State {
             let len = u64::try_from(bytes.len()).expect("account encoding fits in u64");
             hasher.update(len.to_le_bytes());
             hasher.update(&bytes);
-        }
-        hasher.update(program_count.to_le_bytes());
-        for id in program_ids {
-            for word in id {
-                hasher.update(word.to_le_bytes());
-            }
         }
         hasher.update(private_state.0.digest());
 
@@ -362,13 +424,18 @@ impl V03State {
             if self.private_state.1.contains(nullifier) {
                 return Err(LeeError::InvalidInput("Nullifier already seen".to_owned()));
             }
-            if !self.private_state.0.root_history.contains(digest) {
+            if !self.is_known_commitment_root(digest) {
                 return Err(LeeError::InvalidInput(
                     "Unrecognized commitment set digest".to_owned(),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Whether `digest` is a root the commitment tree has actually had at some point.
+    pub(crate) fn is_known_commitment_root(&self, digest: &CommitmentSetDigest) -> bool {
+        self.private_state.0.root_history.contains(digest)
     }
 }
 
@@ -377,6 +444,23 @@ impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+}
+
+/// The deterministic `AccountId` a genesis-seeded builtin's `index`-th segment lives at.
+/// Only `insert_program` needs this — a live deploy has a real signer to pick addresses instead.
+fn genesis_segment_account_id(header_account_id: AccountId, index: usize) -> AccountId {
+    use sha2::{Digest as _, Sha256};
+    const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
+
+    let mut hasher = Sha256::new();
+    hasher.update(GENESIS_SEGMENT_ID_PREFIX);
+    hasher.update(header_account_id.as_ref());
+    hasher.update(
+        u32::try_from(index)
+            .expect("segment count fits in u32")
+            .to_le_bytes(),
+    );
+    AccountId::new(hasher.finalize().into())
 }
 
 #[cfg(test)]

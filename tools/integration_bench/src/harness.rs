@@ -27,7 +27,6 @@ pub struct BlockSize {
     pub block_bytes: usize,
     pub public_tx_bytes: Vec<usize>,
     pub ppe_tx_bytes: Vec<usize>,
-    pub deploy_tx_bytes: Vec<usize>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -156,14 +155,12 @@ async fn finalize_step(
                     block_bytes,
                     public_tx_bytes: Vec::new(),
                     ppe_tx_bytes: Vec::new(),
-                    deploy_tx_bytes: Vec::new(),
                 };
                 for tx in &block.body.transactions {
                     let n = borsh::to_vec(tx).map_or(0, |v| v.len());
                     match tx {
                         LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
                         LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
-                        LeeTransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
                     }
                 }
                 blocks.push(sz);
@@ -280,10 +277,6 @@ fn print_size_summary(output: &ScenarioOutput) {
         .iter()
         .flat_map(|b| b.ppe_tx_bytes.iter().copied())
         .collect();
-    let deploy: Vec<usize> = blocks
-        .iter()
-        .flat_map(|b| b.deploy_tx_bytes.iter().copied())
-        .collect();
 
     println!(
         "\nBlock + tx size summary ({} blocks captured):",
@@ -294,7 +287,6 @@ fn print_size_summary(output: &ScenarioOutput) {
     );
     print_tx_line("public_tx_bytes      ", &public);
     print_tx_line("ppe_tx_bytes         ", &ppe);
-    print_tx_line("deploy_tx_bytes      ", &deploy);
 }
 
 fn print_tx_line(label: &str, samples: &[usize]) {

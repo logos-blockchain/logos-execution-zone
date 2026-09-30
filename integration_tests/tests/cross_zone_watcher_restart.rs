@@ -7,7 +7,7 @@
 //! per-peer delivery floor instead of re-reading the peer channel from genesis.
 //!
 //! Re-reading is safe (the dispatch key is content-addressed and the inbox
-//! no-ops a replay) so on-chain state cannot tell the two apart. What does tell
+//! refuses a replay) so on-chain state cannot tell the two apart. What does tell
 //! them apart is the transactions: a watcher that lost its cursor re-injects
 //! every already-delivered dispatch, which shows up as inbox transactions in
 //! blocks produced after the restart. This is the only test that covers the
@@ -23,11 +23,14 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
-use lee_core::program::ProgramId;
-use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
+use lee::{AccountId, ProgramShardSelector, PublicTransaction, public_transaction::Message};
+use ping_core::{
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
+};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::config::source_only_cross_zone;
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
@@ -50,22 +53,26 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     let channel_b = config::bedrock_channel_id_b();
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
-    let receiver_id = programs::ping_receiver().id();
+    let receiver_id = programs::ping_receiver_account_id();
 
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_routes: vec![CrossZoneRoute {
-                src_program_id: programs::ping_sender().id(),
-                target_program_id: receiver_id,
+                src_account_id: programs::ping_sender_account_id(),
+                target_account_id: receiver_id,
+                mint_cap: None,
             }],
-            expected_block_signing_pubkey: None,
+            min_committee_size: 0,
         }],
+        source_authority: None,
+        source_governance: None,
     };
 
     let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_a)
         .with_genesis(vec![])
+        .with_cross_zone(source_only_cross_zone())
         .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
@@ -86,7 +93,8 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         .await
         .context("Failed to submit ping on zone A")?;
     let record_id = ping_record_pda(receiver_id);
-    let delivered = wait_for_delivery(sequencer_client(seq_b.addr())?, record_id).await?;
+    let delivered =
+        wait_for_delivery(sequencer_client(seq_b.addr())?, record_id, receiver_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B must record the payload before the restart"
@@ -130,7 +138,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     // The delivery itself must survive the restart untouched.
     let account = client_b.get_account(record_id).await?;
     assert_eq!(
-        account.data.into_inner(),
+        account.data.shard(receiver_id).to_vec(),
         PING_PAYLOAD,
         "the delivered payload must survive the restart"
     );
@@ -140,7 +148,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
 /// Counts inbox transactions across `from..=to`, the signature of a re-injected
 /// dispatch.
 async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) -> Result<usize> {
-    let inbox_id = programs::cross_zone_inbox().id();
+    let inbox_id = programs::cross_zone_inbox_account_id();
     let mut count = 0_usize;
     for block_id in from..=to {
         let Some(block) = client.get_block(block_id).await? else {
@@ -148,7 +156,7 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && public_tx.message().program_id == inbox_id
+                && public_tx.message().program_account_id == inbox_id
             {
                 count = count.saturating_add(1);
             }
@@ -179,29 +187,34 @@ async fn wait_for_block_id(
 
 /// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
 /// a message carrying a `ping_receiver::Record` instruction for the target zone.
-fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox().id();
+fn build_ping_tx(target_zone: [u8; 32], receiver_id: AccountId) -> LeeTransaction {
+    let outbox_id = programs::cross_zone_outbox_account_id();
     let ordinal = 0;
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+    let payload = borsh::to_vec(&ReceiverInstruction::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping instruction");
-    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
-        outbox_program_id: outbox_id,
         target_zone,
-        target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_account_id: receiver_id,
+        target_accounts: vec![
+            ProgramShardSelector::new(receiver_config_account_id(receiver_id), receiver_id),
+            ProgramShardSelector::new(ping_record_pda(receiver_id), receiver_id),
+        ],
         payload,
         ordinal,
     };
 
-    let outbox_account = outbox_pda(outbox_id, &target_zone, ordinal);
+    let sender_id = programs::ping_sender_account_id();
+    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
-        programs::ping_sender().id(),
-        vec![outbox_account],
+        sender_id,
+        vec![
+            ProgramShardSelector::new(sender_config_account_id(sender_id), sender_id),
+            ProgramShardSelector::new(outbox_account, outbox_id),
+        ],
         vec![],
         send,
     )
@@ -213,11 +226,15 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
 }
 
 /// Polls zone B's sequencer until the ping record PDA holds a payload.
-async fn wait_for_delivery(client: SequencerClient, record_id: AccountId) -> Result<Vec<u8>> {
+async fn wait_for_delivery(
+    client: SequencerClient,
+    record_id: AccountId,
+    receiver_id: AccountId,
+) -> Result<Vec<u8>> {
     let wait = async {
         loop {
             let account = client.get_account(record_id).await?;
-            let data = account.data.into_inner();
+            let data = account.data.shard(receiver_id).to_vec();
             if !data.is_empty() {
                 return Ok::<Vec<u8>, anyhow::Error>(data);
             }

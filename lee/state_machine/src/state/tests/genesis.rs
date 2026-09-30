@@ -8,29 +8,14 @@ fn new_works() {
     let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
     let expected_public_state = {
         let mut this = HashMap::new();
-        this.insert(
-            addr1,
-            Account {
-                balance: 100,
-                ..Account::default()
-            },
-        );
-        this.insert(
-            addr2,
-            Account {
-                balance: 151,
-                ..Account::default()
-            },
-        );
+        this.insert(addr1, Account::funded(100));
+        this.insert(addr2, Account::funded(151));
         this
     };
-    let expected_builtin_programs = HashMap::new();
-
     let state =
         V03State::new().with_public_account_balances([(addr1, 100_u128), (addr2, 151_u128)]);
 
     assert_eq!(state.public_state, expected_public_state);
-    assert_eq!(state.programs, expected_builtin_programs);
 }
 
 #[test]
@@ -38,13 +23,12 @@ fn new_includes_nullifiers_for_private_accounts() {
     let keys1 = test_private_account_keys_1();
     let keys2 = test_private_account_keys_2();
 
-    let account = Account {
-        balance: 100,
-        ..Account::default()
-    };
+    let account = Account::funded(100);
 
-    let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), 0);
-    let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), 0);
+    let account_id1 =
+        AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), Identifier::ZERO);
+    let account_id2 =
+        AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), Identifier::ZERO);
 
     let init_commitment1 = Commitment::new(&account_id1, &account);
     let init_commitment2 = Commitment::new(&account_id2, &account);
@@ -65,27 +49,69 @@ fn new_includes_nullifiers_for_private_accounts() {
 #[test]
 fn insert_program() {
     let mut state = V03State::new();
-    let program_to_insert = crate::test_methods::simple_balance_transfer();
-    let program_id = program_to_insert.id();
-    assert!(!state.programs.contains_key(&program_id));
+    let program_to_insert = crate::test_methods::data_changer();
+    let account_id = AccountId::from_builtin_program(program_to_insert.id());
+    assert!(!state.public_state.contains_key(&account_id));
 
-    state.insert_program(program_to_insert);
+    state.insert_program(&program_to_insert, true);
 
-    assert!(state.programs.contains_key(&program_id));
+    // Walks the full segment chain regardless of how many chunks the elf split into,
+    // exercising the same reconstruction a real caller uses.
+    let (image_id, elf) = state
+        .get_builtin_program(account_id)
+        .expect("the header and its segment chain must reconstruct the inserted program");
+    assert_eq!(image_id, program_to_insert.id());
+    assert_eq!(elf, program_to_insert.elf().to_vec());
+}
+
+#[test]
+fn genesis_immutable_program_lands_immutable_mirror_commitment() {
+    let state = V03State::new().with_programs([crate::test_methods::noop()]);
+    let header_account_id =
+        lee_core::account::AccountId::from_builtin_program(crate::test_methods::noop().id());
+    let program_header = lee_core::program::ProgramHeader::from_bytes(
+        state.public_state[&header_account_id]
+            .data
+            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+    )
+    .unwrap();
+    assert!(program_header.immutable);
+
+    let expected_commitment =
+        lee_core::program::immutable_mirror_commitment(header_account_id, &program_header);
+    assert!(state.private_state.0.contains(&expected_commitment));
+}
+
+#[test]
+fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
+    let state =
+        V03State::new().with_genesis_programs([(crate::test_methods::shard_forwarder(), false)]);
+    let header_account_id = lee_core::account::AccountId::from_builtin_program(
+        crate::test_methods::shard_forwarder().id(),
+    );
+    let program_header = lee_core::program::ProgramHeader::from_bytes(
+        state.public_state[&header_account_id]
+            .data
+            .shard(PROGRAM_LOADER_ACCOUNT_ID),
+    )
+    .unwrap();
+    assert!(!program_header.immutable);
+
+    let commitment_if_it_were_immutable =
+        lee_core::program::immutable_mirror_commitment(header_account_id, &program_header);
+    assert!(
+        !state
+            .private_state
+            .0
+            .contains(&commitment_if_it_were_immutable)
+    );
 }
 
 #[test]
 fn get_account_by_account_id_non_default_account() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let initial_data = [(
-        account_id,
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
-            balance: 100,
-            ..Account::default()
-        },
-    )];
+    let initial_data = [(account_id, Account::funded(100))];
     let state = V03State::new().with_public_accounts(initial_data);
     let expected_account = &state.public_state[&account_id];
 
@@ -106,22 +132,16 @@ fn get_account_by_account_id_default_account() {
 }
 
 #[test]
-fn builtin_programs_getter() {
-    let state = V03State::new();
-
-    let builtin_programs = state.programs();
-
-    assert_eq!(builtin_programs, &state.programs);
-}
-
-#[test]
 fn state_serialization_roundtrip() {
     let account_id_1 = AccountId::new([1; 32]);
     let account_id_2 = AccountId::new([2; 32]);
     let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
     let state = V03State::new()
-        .with_public_accounts(public_state_from_balances(&initial_data))
-        .with_test_programs();
+        .with_public_account_balances(initial_data)
+        .with_programs([
+            crate::test_methods::data_changer(),
+            crate::test_methods::noop(),
+        ]);
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);

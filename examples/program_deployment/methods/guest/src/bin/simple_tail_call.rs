@@ -1,69 +1,40 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountId, ProgramShardSelector},
+    program::{ChainedCall, Plan, ProgramCall, read_program_call},
 };
 
 // Tail Call example program.
 //
-// This program shows how to chain execution to another program using `ChainedCall`.
-// It reads a single account, emits it unchanged, and then triggers a tail call
-// to the Hello World program with a fixed greeting.
+// Reads a single account, emits it unchanged, and performs a tail call to the callee program
+// named in its own instruction data, with a fixed greeting.
+//
+// The callee's `AccountId` is caller-supplied: a deployed program's address isn't known until
+// deploy time, so it can't be a compile-time constant.
 
-/// This needs to be set to the ID of the Hello world program.
-/// To get the ID run **from the root directoy of the repository**:
-/// `cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml`
-/// This compiles the programs and outputs the IDs in hex that can be used to copy here.
-const HELLO_WORLD_PROGRAM_ID_HEX: &str =
-    "e9dfc5a5d03c9afa732adae6e0edfce4bbb44c7a2afb9f148f4309917eb2de6f";
-
-fn hello_world_program_id() -> ProgramId {
-    let hello_world_program_id_bytes: [u8; 32] = hex::decode(HELLO_WORLD_PROGRAM_ID_HEX)
-        .unwrap()
-        .try_into()
-        .unwrap();
-    bytemuck::cast(hello_world_program_id_bytes)
-}
+type Instruction = AccountId;
 
 fn main() {
-    // Read inputs
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_data,
-    ) = read_lee_inputs::<()>();
-
-    // Unpack the input account pre state
-    let [pre_state] = pre_states
-        .clone()
-        .try_into()
-        .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
-
-    // Create the (unchanged) post state
-    let post_state = AccountPostState::new(pre_state.account.clone());
-
-    // Create the chained call
-    let chained_call_greeting: Vec<u8> = b"Hello from tail call".to_vec();
-    let chained_call_instruction_data = risc0_zkvm::serde::to_vec(&chained_call_greeting).unwrap();
-    let chained_call = ChainedCall {
-        program_id: hello_world_program_id(),
-        instruction_data: chained_call_instruction_data,
-        pre_states,
-        pda_seeds: vec![],
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("simple_tail_call emits no effect to apply")
     };
+    let callee_account_id = instruction;
 
-    // Write the outputs.
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_data,
-        vec![pre_state],
-        vec![post_state],
-    )
-    .with_chained_calls(vec![chained_call])
-    .write();
+    // Unpack the single input account handle.
+    let [account] = <[_; 1]>::try_from(input.accounts.clone())
+        .unwrap_or_else(|_| panic!("Input accounts should consist of a single account"));
+
+    let greeting: Vec<u8> = b"Hello from tail call".to_vec();
+
+    // WARNING: building a `Plan` has no effect on its own. `.write()` must be called to commit
+    // it.
+    let mut plan = Plan::new(&input);
+    plan.call(ChainedCall::new(
+        callee_account_id,
+        vec![ProgramShardSelector::new(
+            account.account_id,
+            callee_account_id,
+        )],
+        &greeting,
+    ));
+    plan.write()
 }

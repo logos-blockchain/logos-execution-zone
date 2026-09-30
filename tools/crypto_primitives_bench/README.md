@@ -12,7 +12,7 @@ cargo bench -p crypto_primitives_bench --bench primitives
 
 Criterion's per-operation report (point estimate, 95% CI, outlier counts) for:
 
-- `keychain/new_os_random`: full mnemonic → SSK → NSK/VSK + public-key derivation (HMAC-SHA512 PBKDF dominates).
+- `keychain/new_os_random`: full mnemonic → SSK → ASK → NSK, plus SSK → VSK, and public-key derivation (HMAC-SHA512 PBKDF dominates).
 - `keychain/new_mnemonic`: same pipeline, mnemonic exposed.
 - `shared_secret_key/sender_dh`: secp256k1 ECDH per recipient (includes ephemeral key gen).
 - `encryption/encrypt` / `decrypt`: ChaCha20 over an Account note.

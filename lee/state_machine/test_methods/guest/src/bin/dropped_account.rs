@@ -1,35 +1,22 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{GuestOutput, PlanInput, PlanOutput, ProgramCall, read_program_call};
 
 type Instruction = ();
 
-/// Silently drops the second account entirely from its own output: given two `pre_states`, it
-/// returns only one `(pre, post)` pair, echoing the first account back unchanged.
-///
-/// Differs from `missing_output` because the `pre_state` and `post_states` lengths match. We
-/// simply drop the account from both before returning them as part of the program's output.
+/// Silently drops the second handle from its own output: given two, it echoes only the first.
+/// Hand-rolls its output because `Plan` copies the complete handle echo out of the input and so
+/// cannot under-report by accident.
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            ..
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    let ProgramCall::Plan(input, ()) = read_program_call::<Instruction>() else {
+        panic!("dropped_account emits no effect to apply")
+    };
 
-    let Ok([pre1, _pre2]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([first, _second]) = <[_; 2]>::try_from(input.accounts) else {
         return;
     };
 
-    let account_pre1 = pre1.account.clone();
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![pre1],
-        vec![AccountPostState::new(account_pre1)],
-    )
+    GuestOutput::Plan(PlanOutput::new(PlanInput {
+        accounts: vec![first],
+        ..input
+    }))
     .write();
 }

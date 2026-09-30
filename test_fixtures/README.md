@@ -9,14 +9,14 @@ Shared test/bench fixtures that spin up bedrock + sequencer + indexer + wallet e
 ```rust
 let ctx = TestContext::new().await?;              // fast: restores the prebuilt db dump
 let ctx = TestContext::builder()
-    .from_scratch()                                // apply genesis + claim supply live
+    .from_scratch()                                // apply genesis + fund private accounts live
     .with_genesis(actions)                         // custom genesis (implies from_scratch)
     .disable_indexer()
     .build().await?;
 ```
 
-`TestContext::new()` restores `fixtures/prebuilt_sequencer_db.dump` (genesis + initial-supply claim
-blocks) instead of re-applying genesis and re-proving the private claims, then syncs the wallet. Use
+`TestContext::new()` restores `fixtures/prebuilt_sequencer_db.dump` (genesis + private-funding
+blocks) instead of re-applying genesis and re-proving the private transfers, then syncs the wallet. Use
 `from_scratch()` to build genesis live.
 
 ## Binary

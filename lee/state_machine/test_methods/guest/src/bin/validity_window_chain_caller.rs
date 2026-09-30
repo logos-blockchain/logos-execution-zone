@@ -1,8 +1,11 @@
-use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
-    TimestampValidityWindow, read_lee_inputs,
+use borsh::to_vec;
+use lee_core::{
+    account::{AccountId, ProgramShardSelector},
+    program::{
+        BlockValidityWindow, ChainedCall, Plan, ProgramCall, ProgramId, TimestampValidityWindow,
+        read_program_call,
+    },
 };
-use risc0_zkvm::serde::to_vec;
 
 /// A program that sets a block validity window on its output and chains to another program with a
 /// potentially different block validity window.
@@ -14,39 +17,29 @@ use risc0_zkvm::serde::to_vec;
 type Instruction = (BlockValidityWindow, ProgramId, BlockValidityWindow);
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
-
-    let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
-    let post = pre.account.clone();
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("validity_window_chain_caller emits no effect to apply")
+    };
+    let (block_validity_window, chained_program_id, chained_block_validity_window) = instruction;
 
     let chained_instruction = to_vec(&(
         chained_block_validity_window,
         TimestampValidityWindow::new_unbounded(),
     ))
     .unwrap();
-    let chained_call = ChainedCall {
-        program_id: chained_program_id,
-        instruction_data: chained_instruction,
-        pre_states,
-        pda_seeds: vec![],
-    };
+    let shard_selectors = input
+        .accounts
+        .iter()
+        .map(ProgramShardSelector::from)
+        .collect();
 
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![pre],
-        vec![AccountPostState::new(post)],
-    )
-    .with_block_validity_window(block_validity_window)
-    .with_chained_calls(vec![chained_call])
-    .write();
+    let mut plan = Plan::new(&input);
+    plan.block_window(block_validity_window);
+    plan.call(ChainedCall {
+        program_account_id: AccountId::from_builtin_program(chained_program_id),
+        instruction_data: chained_instruction,
+        shard_selectors,
+        pda_seeds: vec![],
+    });
+    plan.write()
 }

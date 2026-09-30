@@ -4,6 +4,19 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+fn artifacts_dir(artifacts_sub_dir: &str) -> Result<PathBuf> {
+    // Resolved at build-script runtime from the invoking crate, not at compile
+    // time: `env!` would bake in the path of whichever checkout compiled this
+    // rlib first, and with a shared cargo target dir every other worktree then
+    // embeds that checkout's artifacts instead of its own.
+    let invoking_manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let workspace_root = invoking_manifest_dir
+        .ancestors()
+        .find(|dir| dir.join("artifacts").is_dir())
+        .context("no artifacts/ directory above the invoking crate")?;
+    Ok(workspace_root.join(format!("artifacts/{artifacts_sub_dir}/")))
+}
+
 /// Include artifact binaries as byte arrays and their corresponding image IDs as u32 arrays in a
 /// generated Rust module.
 ///
@@ -17,11 +30,10 @@ use anyhow::{Context as _, Result, bail};
 /// }
 /// ```
 pub fn include_artifacts(artifacts_sub_dir: &str) -> Result<()> {
-    let manifest_dir = PathBuf::from(std::env!("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let mod_dir = out_dir.join(artifacts_sub_dir);
     let mod_file = mod_dir.join("mod.rs");
-    let artifacts_dir = manifest_dir.join(format!("../artifacts/{artifacts_sub_dir}/"));
+    let artifacts_dir = artifacts_dir(artifacts_sub_dir)?;
 
     println!("cargo:rerun-if-changed={}", artifacts_dir.display());
 

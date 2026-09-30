@@ -13,12 +13,12 @@ use std::{path::Path, time::Duration};
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
 use lee::{AccountId, PrivateKey, PublicKey};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     config::{SequencerPartialConfig, UrlProtocol, addr_to_url},
     indexer_client::IndexerClient,
+    init_logger,
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use tokio::test;
@@ -94,26 +94,14 @@ async fn wait_for_block_id(
         .with_context(|| format!("Timed out waiting for block id {target}"))?
 }
 
-/// Best-effort extraction of a panic payload's message (panics carry a `String`
-/// or `&str`), for asserting a startup aborted for the *expected* reason.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-        .unwrap_or_else(|| "<non-string panic payload>".to_owned())
-}
-
-/// A `SupplyAccount` genesis action for a fresh account, returning the vault
-/// account id the funds land in (genesis supply goes into a claimable vault, not
-/// the account directly), so tests can assert genesis state is present.
-fn supplied_account(balance: u128) -> (AccountId, GenesisAction) {
+/// A `SupplyAccount` genesis action for a fresh account, returning the account
+/// id the funds land in, so tests can assert genesis state is present.
+fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::new_os_random(),
     ));
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), account_id);
     (
-        vault_id,
+        account_id,
         GenesisAction::SupplyAccount {
             account_id,
             balance,
@@ -151,16 +139,15 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// its own genesis to open the channel, and starts producing.
 #[test]
 async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
 
-    let (vault_id, supply) = supplied_account(12_345);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let (supplied_id, supply) = supplied_account(12_345);
+    let genesis = vec![supply];
 
     let handle = SequencerSetup::new(fast_blocks(), bedrock_addr)
         .with_genesis(genesis)
@@ -171,9 +158,12 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
 
     // Fresh store + empty channel: startup bootstrapped genesis state directly.
     assert_eq!(
-        client.get_account_balance(vault_id).await?,
+        client
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         12_345,
-        "genesis-supplied vault balance must be present after bootstrap"
+        "genesis-supplied balance must be present after bootstrap"
     );
 
     // The sequencer is live and producing on the freshly opened channel.
@@ -196,6 +186,8 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
 async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     const PRODUCED_TARGET: u64 = 3;
 
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
@@ -212,11 +204,8 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(7_777);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let (supplied_id, supply) = supplied_account(7_777);
+    let genesis = vec![supply];
 
     // Sequencer A opens the channel and produces a few blocks.
     let home_a = tempfile::tempdir().context("Failed to create sequencer A home")?;
@@ -237,8 +226,11 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     // lost its local DB.
     drop(handle_a);
     tokio::time::sleep(Duration::from_secs(2)).await;
-    std::fs::remove_dir_all(home_a.path().join("rocksdb"))
-        .context("Failed to wipe sequencer L2 store")?;
+    std::fs::remove_dir_all(home_a.path().join(format!(
+        "rocksdb-{}",
+        test_fixtures::config::bedrock_channel_id()
+    )))
+    .context("Failed to wipe sequencer L2 store")?;
 
     // Sequencer B restarts on the same home from that empty store and reconstructs.
     let handle_b = SequencerSetup::new(slow_blocks(), bedrock_addr)
@@ -250,7 +242,10 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Reconstruction ran synchronously during B's startup: even though its local
     // store was empty, its tip is past genesis, matching the finalized channel.
-    let tip_b = client_b.get_last_block_id().await?;
+    let tip_b = client_b
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip_b >= finalized,
         "B should reconstruct at least the finalized blocks; tip_b={tip_b}, finalized={finalized}"
@@ -262,9 +257,12 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Genesis state was rebuilt as part of the reconstruction.
     assert_eq!(
-        client_b.get_account_balance(vault_id).await?,
+        client_b
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         7_777,
-        "reconstructed genesis vault balance must be present"
+        "reconstructed genesis balance must be present"
     );
     assert!(handle_b.is_healthy(), "sequencer B must stay healthy");
 
@@ -274,24 +272,25 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 /// Case 3: local store is not empty, but the Bedrock channel is empty.
 ///
 /// A sequencer produces blocks (committing to a channel), is stopped, and is
-/// restarted against a fresh/empty channel — i.e. the channel it committed to
-/// was wiped or the node points at a different chain. Startup must fail rather
-/// than silently resume onto a foreign channel. Crucially this must hold even
-/// though the sequencer only ever *produced* (so it never recorded a per-block
-/// anchor): the committed-but-missing-channel invariant catches it.
+/// restarted with the same channel id against a Bedrock node where that channel
+/// is empty — i.e. the channel it committed to was wiped. Startup must fail
+/// rather than silently resume onto a foreign channel. Crucially this must hold
+/// even though the sequencer only ever *produced* (so it never recorded a
+/// per-block anchor): the committed-but-missing-channel invariant catches it.
+/// A *different* channel id no longer exercises this, because the db path is
+/// per-channel and a new id simply fresh-starts beside the old store.
 #[test]
 async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
     const PRODUCED_TARGET: u64 = 3;
+
+    init_logger();
 
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
 
-    let (_vault_id, supply) = supplied_account(1);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let (_supplied_id, supply) = supplied_account(1);
+    let genesis = vec![supply];
 
     // A opens the channel and produces blocks. They land in its local store
     // immediately, so no need to wait for finalization.
@@ -310,49 +309,34 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
     drop(handle_a);
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Restart on the SAME home (A's committed store: blocks + checkpoint) but
-    // pointed at a fresh, never-used channel — the channel it committed to is gone.
-    let empty_channel = ChannelId::from([0x5a_u8; 32]);
+    // Restart on the SAME home (A's committed store: blocks + checkpoint) and the
+    // SAME channel id, but against a fresh Bedrock node where that channel does
+    // not exist — the channel it committed to is gone.
+    let (_bedrock_b, bedrock_addr_b) = setup_bedrock_node()
+        .await
+        .context("Failed to setup second Bedrock")?;
 
-    // Startup aborts on the missing-channel invariant (a panic in
-    // `start_from_config`). Run it on a dedicated OS thread with its own runtime
-    // so the panic is isolated to `join()` instead of failing the test thread.
-    // The `timeout` future must be created *inside* `block_on` (it needs a running
-    // reactor), so build it in an `async` block rather than as an eager argument.
-    let home_a_path = home_a.path().to_owned();
-    let outcome = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().expect("Failed to build runtime");
-        runtime.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(90),
-                SequencerSetup::new(slow_blocks(), bedrock_addr)
-                    .with_channel_id(empty_channel)
-                    .with_genesis(genesis)
-                    .setup_at(&home_a_path),
-            )
-            .await
-        })
-    })
-    .join();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(90),
+        SequencerSetup::new(slow_blocks(), bedrock_addr_b)
+            .with_genesis(genesis)
+            .setup_at(home_a.path()),
+    )
+    .await;
 
     match outcome {
-        // Expected: `start_from_config` panicked on the missing-channel invariant.
-        // Assert the *reason*, so an unrelated panic fails the test rather than
-        // masquerading as success.
-        Err(panic) => {
-            let message = panic_message(&*panic);
+        // Assert the *reason*, so an unrelated failure doesn't pass the test.
+        Ok(Err(err)) => {
+            let message = format!("{err:#}");
             assert!(
                 message.contains("Refusing to resume onto a foreign channel"),
-                "startup panicked for an unexpected reason: {message}"
+                "startup failed for an unexpected reason: {message}"
             );
         }
-        Ok(Err(_elapsed)) => {
+        Err(_elapsed) => {
             bail!("Sequencer startup hung instead of failing against an empty channel")
         }
-        Ok(Ok(Err(err))) => {
-            bail!("Sequencer expected to panic, but it failed with error: {err:#?}")
-        }
-        Ok(Ok(Ok(_handle))) => {
+        Ok(Ok(_handle)) => {
             bail!("Sequencer startup unexpectedly succeeded against an empty channel")
         }
     }
@@ -370,6 +354,8 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
 async fn local_ahead_of_channel_resumes() -> Result<()> {
     const FINALIZED_TARGET: u64 = 2;
 
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
@@ -386,11 +372,8 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(4_242);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let (supplied_id, supply) = supplied_account(4_242);
+    let genesis = vec![supply];
 
     // A produces continuously (fast cadence) while Bedrock finalizes slowly, so
     // its local tip runs well ahead of the channel's finalized tip.
@@ -402,7 +385,10 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .context("Failed to start sequencer A")?;
     let client_a = sequencer_client(handle_a.addr())?;
     let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, FINALIZE_TIMEOUT).await?;
-    let tip_before = client_a.get_last_block_id().await?;
+    let tip_before = client_a
+        .get_last_block_id()
+        .await
+        .context("Failed to read sequencer A's last block id")?;
     assert!(
         tip_before > finalized,
         "local tip {tip_before} should lead the finalized tip {finalized}"
@@ -419,13 +405,19 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
     let client_b = sequencer_client(handle_b.addr())?;
 
     // Reconstruction verified the finalized prefix and preserved the extra blocks.
-    let tip_b = client_b.get_last_block_id().await?;
+    let tip_b = client_b
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip_b >= tip_before,
         "restart must not lose locally-produced blocks; tip_b={tip_b}, before={tip_before}"
     );
     assert_eq!(
-        client_b.get_account_balance(vault_id).await?,
+        client_b
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         4_242,
         "genesis state must survive the restart"
     );
@@ -450,6 +442,8 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
     const SNAPSHOT_TIP: u64 = 2;
     const FINALIZED_TARGET: u64 = 4;
 
+    init_logger();
+
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
@@ -466,14 +460,14 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(5_005);
-    let genesis = vec![
-        supply,
-        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
-    ];
+    let (supplied_id, supply) = supplied_account(5_005);
+    let genesis = vec![supply];
 
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
-    let rocksdb = home.path().join("rocksdb");
+    let rocksdb = home.path().join(format!(
+        "rocksdb-{}",
+        test_fixtures::config::bedrock_channel_id()
+    ));
 
     // Bring the sequencer up to an early tip, then stop it so its store is at rest.
     {
@@ -521,7 +515,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .await
         .context("Failed to restart sequencer from a lagging store")?;
     let client = sequencer_client(handle.addr())?;
-    let tip = client.get_last_block_id().await?;
+    let tip = client
+        .get_last_block_id()
+        .await
+        .context("Failed to read the restarted sequencer's last block id")?;
     assert!(
         tip >= finalized,
         "lagging store must reconstruct forward to the finalized tip; tip={tip}, finalized={finalized}"
@@ -531,7 +528,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         "reconstruction must advance beyond the snapshot tip; tip={tip}"
     );
     assert_eq!(
-        client.get_account_balance(vault_id).await?,
+        client
+            .get_account_balance(supplied_id)
+            .await
+            .context("Failed to read the supplied account's balance")?,
         5_005,
         "genesis state must be intact after reconstruction"
     );

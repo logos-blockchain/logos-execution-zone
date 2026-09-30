@@ -1,6 +1,6 @@
-This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create and initialize accounts, fund them with the Pinata program, and run transfers across different privacy combinations. By the end, you will have practiced:
-1. Public account creation and initialization.
-2. Account funding through the Pinata program.
+This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create accounts, fund them from an account that already holds tokens, and run transfers across different privacy combinations. By the end, you will have practiced:
+1. Public account creation.
+2. Account funding.
 3. Native token transfers between public accounts.
 4. Private account creation.
 5. Native token transfer from a public account to a private account.
@@ -18,13 +18,12 @@ Commands:
   help  Print this message or the help of the given subcommand(s)
 ```
 
-## 1. Public account creation and initialization
+## 1. Public account creation
 > [!Important]
 > Public accounts live on-chain and are identified by a 32-byte Account ID. Running `wallet account new public` generates a fresh keypair for the signature scheme used in LEZ.
 > The account ID is derived from the public key, and the private key signs transactions and authorizes program executions.
 > The CLI can create both public and private accounts.
 
-### a. New public account creation
 ```bash
 wallet account new public
 
@@ -34,57 +33,21 @@ Generated new account with account_id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkm
 > [!Tip]
 > Save this account ID. You will use it in later commands.
 
-### b. Account initialization
-
-To query the account’s current status, run:
-
-```bash
-# Replace the id with yours
-wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-
-# Output:
-Account is Uninitialized
-```
-
-In this example, we initialize the account for the authenticated-transfer program, which manages native token transfers and enforces authenticated debits.
-
-1. Initialize the account:
-```bash
-# This command submits a public transaction executing the `init` function of the
-# authenticated-transfer program. The wallet polls the sequencer until the
-# transaction is included in a block, which may take several seconds.
-wallet auth-transfer init --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-```
-
-2. Check the updated account status:
-```bash
-wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-
-# Output:
-Account owned by authenticated-transfer program
-{"balance":0}
-```
-
-> [!NOTE]
-> New accounts start uninitialized, meaning no program owns them yet. Any program may claim an uninitialized account; once claimed, that program owns it.
-> Owned accounts can only be modified through executions of the owning program. The only exception is native-token credits: any program may credit native tokens to any account.
-> Debiting native tokens must always be performed by the owning program.
-
-## 2. Account funding through the Piñata program
-Now that the account is initialized under the authenticated-tansfer program, fund it using the testnet Piñata program.
+## 2. Account funding
+Fund the account you just created from an account of yours that already holds tokens (for example a genesis-funded devnet account):
 
 ```bash
-# Replace with your id
-wallet pinata claim --to Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
+# Replace with your funded account and your new id
+wallet auth-transfer send --amount 150 --from my-account --to Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
 ```
 
-After the claim succeeds, the account is funded:
+After the transfer succeeds, the account is funded:
 
 ```bash
 wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":150}
 ```
 
@@ -92,12 +55,11 @@ Account owned by authenticated-transfer program
 LEZ includes a program for managing native tokens. Run `wallet auth-transfer` to see the available commands:
 ```bash
 Commands:
-  init  Initialize account under the authenticated-transfer program
   send  Send native tokens from one account to another with variable privacy
   help  Print this message or the help of the given subcommand(s)
 ```
 
-We already used `init`. Now use `send` to execute a transfer.
+Now use `send` to execute a transfer.
 
 ### a. Create a recipient account
 ```bash
@@ -108,7 +70,7 @@ Generated new account with account_id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPT
 ```
 
 > [!NOTE]
-> The new account is uninitialized. The authenticated-transfer program will claim any uninitialized account used in a transfer, so manual initialization isn’t required.
+> The new account is uninitialized, and stays that way. The authenticated-transfer program only credits the recipient: a balance change writes no data, so the account acquires no owner and no manual initialization is required.
 
 ### b. Send 37 tokens to the new account
 ```bash
@@ -124,7 +86,7 @@ wallet auth-transfer send \
 wallet account get --account-id Public/HrA8TVjBS8UVf9akV7LRhyh6k4c7F6PS7PvqgtPmKAT8
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":113}
 ```
 
@@ -133,7 +95,7 @@ Account owned by authenticated-transfer program
 wallet account get --account-id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":37}
 ```
 
@@ -143,7 +105,7 @@ Account owned by authenticated-transfer program
 > Private accounts are structurally identical to public accounts, but their values are stored off-chain. On-chain, only a 32-byte commitment is recorded.
 > Transactions include encrypted private values so the owner can recover them, and the decryption keys are never shared.
 > Private accounts use two keypairs: nullifier keys for privacy-preserving executions and viewing keys for encrypting and decrypting values.
-> The private account ID is derived from the nullifier public key and a numeric identifier: `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
+> The private account ID is derived from the nullifier public key and a 32-byte identifier (base58-encoded on the CLI): `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
 > Private accounts can be initialized by anyone, but once initialized they can only be modified by the owner’s keys.
 > Updates include a new commitment and a nullifier for the old state, which prevents linkage between versions.
 
@@ -178,7 +140,7 @@ Account is Uninitialized
 ## 5. Native token transfer from a public account to a private account
 
 > [!Important]
-> Sending tokens to an uninitialized private account causes the authenticated-transfer program to claim it, just like with public accounts. Program logic is the same regardless of account type.
+> Sending tokens to an uninitialized private account credits it without claiming it, just like with public accounts: the program writes no data, so the account stays unowned. Program logic is the same regardless of account type.
 
 ### a. Send 17 tokens to the private account
 
@@ -199,7 +161,7 @@ wallet auth-transfer send \
 wallet account get --account-id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":20}
 ```
 
@@ -208,7 +170,7 @@ Account owned by authenticated-transfer program
 wallet account get --account-id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":17}
 ```
 
@@ -285,7 +247,7 @@ With vpk <1184-byte ML-KEM-768 encapsulation key, hex-encoded>
 
 Alice shares the `npk` and `vpk` values with Bob and Charlie out of band.
 
-### b. Bob sends 10 tokens to Alice using identifier 1
+### b. Bob sends 10 tokens to Alice using an explicit identifier
 
 Bob uses the received `alice.keys` file:
 
@@ -293,17 +255,17 @@ Bob uses the received `alice.keys` file:
 wallet auth-transfer send \
     --from Public/BobXqJprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPA \
     --to-keys alice.keys \
-    --to-identifier 1 \
+    --to-identifier 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi \
     --amount 10
 ```
 
-### c. Charlie sends 5 tokens to Alice using identifier 2
+### c. Charlie sends 5 tokens to Alice using an explicit identifier
 
 ```bash
 wallet auth-transfer send \
     --from Public/CharlieYrP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPB \
     --to-keys alice.keys \
-    --to-identifier 2 \
+    --to-identifier 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR \
     --amount 5
 ```
 

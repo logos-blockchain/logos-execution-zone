@@ -1,40 +1,23 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{Plan, ProgramCall, read_program_call};
 
-/// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
-/// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
-/// circuit proof. Used as a callee in private-PDA delegation tests to actually exercise the
-/// authorization propagated through `ChainedCall.pda_seeds`.
+/// A variant of `noop` that asserts every handle it is given is authorized. Any unauthorized
+/// handle panics the guest, failing the whole circuit proof. Used as a callee in private-PDA
+/// delegation tests to actually exercise the authorization propagated through
+/// `ChainedCall.pda_seeds`.
 type Instruction = ();
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            ..
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    let ProgramCall::Plan(input, ()) = read_program_call::<Instruction>() else {
+        panic!("auth_asserting_noop emits no effect to apply")
+    };
 
-    for pre in &pre_states {
+    for account in &input.accounts {
         assert!(
-            pre.is_authorized,
-            "auth_asserting_noop: pre_state {} is not authorized",
-            pre.account_id
+            account.is_authorized,
+            "auth_asserting_noop: {} is not authorized",
+            account.account_id
         );
     }
 
-    let post_states = pre_states
-        .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
-        .collect();
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
-    )
-    .write();
+    Plan::new(&input).write();
 }

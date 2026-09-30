@@ -3,7 +3,7 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
-use lee::AccountId;
+use lee::{AccountId, ProgramShardSelector};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
@@ -11,10 +11,10 @@ use crate::{
     error::{print_error, WalletFfiError},
     types::{
         FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        WalletHandle,
+        FfiShard, WalletHandle,
     },
     wallet::get_wallet,
-    FfiU128,
+    FfiIdentifier,
 };
 
 /// Create a new public account.
@@ -69,8 +69,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 ///
 /// This is the private-account equivalent of `wallet_ffi_create_account_public`.
 /// It generates a key node, assigns a random identifier, and inserts a default
-/// account record so the account can immediately be used with
-/// `wallet_ffi_register_private_account`.
+/// account record so the account can immediately be used.
 ///
 /// The identifier is chosen at random and is not encoded in the mnemonic seed.
 /// Once the account is initialized, the identifier is embedded in the encrypted
@@ -342,7 +341,13 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
             }
         }
     } else if let Some(account) = wallet.get_account_private(account_id) {
-        account.balance
+        match account.data.native_balance() {
+            Ok(balance) => balance,
+            Err(error) => {
+                print_error(format!("Private account balance is malformed: {error}"));
+                return WalletFfiError::SerializationError;
+            }
+        }
     } else {
         print_error("Private account not found");
         return WalletFfiError::AccountNotFound;
@@ -469,11 +474,71 @@ pub unsafe extern "C" fn wallet_ffi_get_account_private(
     WalletFfiError::Success
 }
 
-/// Free account data returned by `wallet_ffi_get_account_public`.
+#[no_mangle]
+#[expect(
+    clippy::missing_safety_doc,
+    reason = "mirrors the safety contract of wallet_ffi_get_account_public/private above"
+)]
+pub unsafe extern "C" fn wallet_ffi_get_account_view(
+    handle: *mut WalletHandle,
+    account_id: *const FfiBytes32,
+    program_account_id: *const FfiBytes32,
+    out_account: *mut FfiAccount,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if account_id.is_null() || out_account.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let account_id = AccountId::new(unsafe { (*account_id).data });
+
+    if program_account_id.is_null() {
+        print_error(
+            "A shard selector must name a program account id; pass the native token program's \
+             id for the balance shard"
+                .to_owned(),
+        );
+        return WalletFfiError::NullPointer;
+    }
+    let shard_selector = ProgramShardSelector::new(
+        account_id,
+        AccountId::new(unsafe { (*program_account_id).data }),
+    );
+
+    let account = match block_on(wallet.get_account_view(shard_selector)) {
+        Ok(a) => a,
+        Err(e) => {
+            print_error(format!("Failed to get account: {e}"));
+            return WalletFfiError::NetworkError;
+        }
+    };
+
+    unsafe {
+        *out_account = account.into();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Free account data returned by any account query (`wallet_ffi_get_account_public`,
+/// `wallet_ffi_get_account_private`, or `wallet_ffi_get_account_view`).
 ///
 /// # Safety
-/// The account must be either null or a valid account returned by
-/// `wallet_ffi_get_account_public`.
+/// The account must be either null or a valid account returned by one of those
+/// functions.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) {
     if account.is_null() {
@@ -482,10 +547,17 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
 
     unsafe {
         let account = &*account;
-        if !account.data.is_null() && account.data_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
-            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        if account.shards.is_null() || account.shards_len == 0 {
+            return;
         }
+        let shards = std::slice::from_raw_parts_mut(account.shards.cast_mut(), account.shards_len);
+        for shard in shards.iter() {
+            if !shard.data.is_null() && shard.data_len > 0 {
+                let slice = std::slice::from_raw_parts_mut(shard.data.cast_mut(), shard.data_len);
+                drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+            }
+        }
+        drop(Box::from_raw(std::ptr::from_mut::<[FfiShard]>(shards)));
     }
 }
 
@@ -553,7 +625,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// - `handle`: Valid wallet handle
 /// - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
 /// - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
-/// - `identifier`: Identifier for this private account as little-endian u128 bytes
+/// - `identifier`: Identifier for this private account as 32 opaque bytes
 /// - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
 ///
 /// # Returns
@@ -563,14 +635,14 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `key_chain_json` must be a valid pointer to a null-terminated C string
-/// - `identifier` must be a valid pointer to a `FfiU128` struct
+/// - `identifier` must be a valid pointer to a `FfiIdentifier` struct
 /// - `account_state_json` must be a valid pointer to a null-terminated C string
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_import_private_account(
     handle: *mut WalletHandle,
     key_chain_json: *const c_char,
     chain_index: *const c_char,
-    identifier: *const FfiU128,
+    identifier: *const FfiIdentifier,
     account_state_json: *const c_char,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -638,7 +710,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Some(parsed_chain_index)
     };
 
-    let identifier = u128::from_le_bytes(unsafe { (*identifier).data });
+    let identifier = lee_core::Identifier::new(unsafe { (*identifier).data });
 
     wallet
         .storage_mut()

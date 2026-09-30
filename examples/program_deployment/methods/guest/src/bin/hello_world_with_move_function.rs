@@ -1,98 +1,66 @@
-use lee_core::{
-    account::{AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
-};
+use lee_core::program::{Plan, PlanInput, run_program};
 
 // Hello-world with write + move_data example program.
 //
 // This program reads an instruction of the form `(function_id, data)` and
 // dispatches to either:
 //
-// - `write`: appends `data` to the `data` field of a single input account.
-// - `move_data`: moves all bytes from one account to another. The source account is cleared and the
-//   destination account receives the appended bytes.
+// - `write`: appends `data` to this program's own shard on a single input account.
+// - `move_data`: moves bytes out of one account's shard into another's. The source shard is cleared
+//   and the destination shard receives the appended bytes.
 //
-// Execution succeeds only if:
-// - the accounts involved are either uninitialized, or
-// - already owned by this program.
-//
-// In case an input account is uninitialized, the program will claim it when
-// producing the post-state.
+// `plan` never sees account contents, so `move_data` cannot read what it is about to move.
+// The caller states the source's contents in `data`; the source's own effect applies first and
+// refuses unless the shard really holds exactly those bytes, which is what makes the value the
+// destination appends a pinned one rather than a caller's claim.
 
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
-    // Construct the post state account values
-    let post_account = {
-        let mut this = pre_state.account;
-        let mut bytes = this.data.into_inner();
-        bytes.extend_from_slice(greeting);
-        this.data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        this
-    };
-
-    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+enum Effect {
+    Append(Vec<u8>),
+    MoveOut(Vec<u8>),
 }
 
-fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
-    // Construct the post state account values
-    let from_data: Vec<u8> = from_pre.account.data.clone().into();
-
-    let from_post = {
-        let mut this = from_pre.account;
-        this.data = Data::default();
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
-    };
-
-    let to_post = {
-        let mut this = to_pre.account;
-        let mut bytes = this.data.into_inner();
-        bytes.extend_from_slice(&from_data);
-        this.data = bytes
-            .try_into()
-            .expect("Data should fit within the allowed limits");
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
-    };
-
-    vec![from_post, to_post]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "run_program's apply returns None to keep a shard"
+)]
+fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
+    Some(match effect {
+        Effect::Append(data) => {
+            let mut bytes = pre_data.to_vec();
+            bytes.extend_from_slice(&data);
+            bytes
+        }
+        Effect::MoveOut(data) => {
+            assert_eq!(
+                pre_data, data,
+                "the source account does not hold the bytes the instruction moves out of it"
+            );
+            Vec::new()
+        }
+    })
 }
 
 fn main() {
-    // Read input accounts.
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (function_id, data),
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    run_program(plan, apply)
+}
 
-    let post_states = match (pre_states.as_slice(), function_id, data.len()) {
-        ([account_pre], WRITE_FUNCTION_ID, _) => {
-            let post = write(account_pre.clone(), &data);
-            vec![post]
-        }
-        ([account_from_pre, account_to_pre], MOVE_DATA_FUNCTION_ID, 0) => {
-            move_data(account_from_pre.clone(), account_to_pre.clone())
+fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
+    let mut plan = Plan::new(input);
+    let (function_id, data) = instruction;
+
+    match (input.accounts.as_slice(), function_id) {
+        ([account], WRITE_FUNCTION_ID) => plan.effect(account, &Effect::Append(data)),
+        ([from, to], MOVE_DATA_FUNCTION_ID) => {
+            plan.effect(from, &Effect::MoveOut(data.clone()));
+            plan.effect(to, &Effect::Append(data));
         }
         _ => panic!("invalid params"),
-    };
-
-    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
-    // called to commit the output.
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
-    )
-    .write();
+    }
+    plan
 }

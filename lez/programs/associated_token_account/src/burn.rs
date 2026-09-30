@@ -1,43 +1,45 @@
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, ProgramId},
+    account::{AccountId, ProgramShardSelector},
+    program::{AccountMeta, ChainedCall, Plan, PlanInput},
 };
-use token_core::TokenHolding;
+use token_core::TokenKind;
 
 pub fn burn_from_associated_token_account(
-    owner: AccountWithMetadata,
-    holder_ata: AccountWithMetadata,
-    token_definition: AccountWithMetadata,
-    ata_program_id: ProgramId,
+    input: &PlanInput,
+    token_program_id: AccountId,
+    kind: TokenKind,
     amount: u128,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let token_program_id = holder_ata.account.program_owner;
+) -> Plan {
+    let [owner, holder_ata, token_definition] =
+        <&[AccountMeta; 3]>::try_from(input.accounts.as_slice())
+            .expect("Burn instruction requires exactly three accounts");
     assert!(owner.is_authorized, "Owner authorization is missing");
-    let definition_id = TokenHolding::try_from(&holder_ata.account.data)
-        .expect("Holder ATA must hold a valid token")
-        .definition_id();
+
+    // No proposal exists to guard: the seed's definition id is the account this burn already
+    // names, and token's `BurnHolding` effect requires the holder's real definition id to be
+    // exactly that account, which is what the discarded read asserted. `BurnSupply` pins `kind`.
     let seed = associated_token_account_core::verify_ata_and_get_seed(
-        &holder_ata,
-        &owner,
-        definition_id,
-        ata_program_id,
+        holder_ata,
+        owner,
+        token_definition.account_id,
+        input.self_account_id,
+        token_program_id,
     );
 
-    let post_states = vec![
-        AccountPostState::new(owner.account.clone()),
-        AccountPostState::new(holder_ata.account.clone()),
-        AccountPostState::new(token_definition.account.clone()),
-    ];
-    let mut holder_ata_auth = holder_ata.clone();
-    holder_ata_auth.is_authorized = true;
-
-    let chained_call = ChainedCall::new(
-        token_program_id,
-        vec![token_definition.clone(), holder_ata_auth],
-        &token_core::Instruction::Burn {
-            amount_to_burn: amount,
-        },
-    )
-    .with_pda_seeds(vec![seed]);
-    (post_states, vec![chained_call])
+    let mut plan = Plan::new(input);
+    plan.call(
+        ChainedCall::new(
+            token_program_id,
+            vec![
+                ProgramShardSelector::from(token_definition),
+                ProgramShardSelector::from(holder_ata),
+            ],
+            &token_core::Instruction::Burn {
+                amount_to_burn: amount,
+                kind,
+            },
+        )
+        .with_pda_seeds(vec![seed]),
+    );
+    plan
 }

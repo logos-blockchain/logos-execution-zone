@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 indexer_service_rpc = { workspace = true, features = ["server"] }
-indexer_core = { workspace = true, features = ["testnet"] }
+indexer_core.workspace = true
 
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
@@ -23,6 +23,11 @@ serde_json.workspace = true
 futures.workspace = true
 arc-swap = "1.8.1"
 
+[dev-dependencies]
+lee_core.workspace = true
+
 [features]
 # Return mock responses with generated data for testing purposes
 mock-responses = []
+# In-process guest execution with a memoized memory image, via `lee`.
+prove = ["indexer_core/prove"]

@@ -3,9 +3,9 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use clap::Parser;
-use log::{error, info};
+use log::error;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +29,12 @@ struct Args {
     /// one config file without fighting over the exporter port.
     #[clap(long)]
     metrics_address: Option<SocketAddr>,
+    /// File holding the 32-byte key to sign blocks with, overriding the
+    /// config's `signing_key`. It is the only thing that has to differ between
+    /// the sequencers of one committee, so passing it separately lets them all
+    /// run off one config file.
+    #[clap(long)]
+    signing_key: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -44,17 +50,20 @@ async fn main() -> Result<()> {
     let cancellation_token = listen_for_shutdown_signal();
 
     let mut config = sequencer_service::SequencerConfig::from_path(&args.config_path)?;
-    apply_config_overrides(&args, &mut config);
+    apply_config_overrides(&args, &mut config)?;
+    // Resolved here so a node without a usable one says so now, rather than
+    // after the store is open and Bedrock has been probed.
+    config.block_signing_key()?;
 
     if let Some(metrics_address) = config.metrics_address {
         install_prometheus_recorder(metrics_address)?;
     }
-    let mut sequencer_handle =
+    let sequencer_handle =
         sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
-            info!("Shutting down sequencer...");
+            log::info!("Shutting down sequencer...");
         }
         Err(err) = sequencer_handle.failed() => {
             error!("Sequencer failed unexpectedly: {err}");
@@ -68,15 +77,19 @@ async fn main() -> Result<()> {
     // delivery and handing it over.
     sequencer_handle.shutdown().await;
 
-    info!("Sequencer shutdown complete");
+    log::info!("Sequencer shutdown complete");
 
     Ok(())
 }
 
-fn apply_config_overrides(args: &Args, config: &mut sequencer_service::SequencerConfig) {
+fn apply_config_overrides(
+    args: &Args,
+    config: &mut sequencer_service::SequencerConfig,
+) -> Result<()> {
     let Args {
         home,
         metrics_address,
+        signing_key,
         config_path: _,
         port: _,
         listen_address: _,
@@ -88,6 +101,19 @@ fn apply_config_overrides(args: &Args, config: &mut sequencer_service::Sequencer
     if let Some(metrics_address) = metrics_address {
         config.metrics_address = Some(*metrics_address);
     }
+    if let Some(path) = signing_key {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("Failed to read the signing key at {}", path.display()))?;
+        config.signing_key = Some(bytes.try_into().map_err(|bytes: Vec<u8>| {
+            anyhow!(
+                "Signing key at {} is {} bytes, not 32",
+                path.display(),
+                bytes.len()
+            )
+        })?);
+    }
+
+    Ok(())
 }
 
 /// Installs the recorder on `metrics_address`.
@@ -135,13 +161,13 @@ fn listen_for_shutdown_signal() -> CancellationToken {
 
         tokio::select! {
             result = tokio::signal::ctrl_c() => match result {
-                Ok(()) => info!("Received Ctrl-C signal"),
+                Ok(()) => log::info!("Received Ctrl-C signal"),
                 Err(err) => {
                     error!("Failed to listen for Ctrl-C signal: {err}");
                     return;
                 }
             },
-            _ = terminate.recv() => info!("Received SIGTERM"),
+            _ = terminate.recv() => log::info!("Received SIGTERM"),
         }
 
         cancellation_token_clone.cancel();

@@ -365,7 +365,7 @@ impl UserKeyChain {
                 &found.key_chain.viewing_public_key,
                 found.kind,
             );
-            let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
+            let nsk = found.key_chain.private_key_holder.nullifier_secret_key();
             index.track(account_id, found.account, &nsk);
         }
 
@@ -374,7 +374,7 @@ impl UserKeyChain {
             let Some(keys) = self.derive_shared_account_keys(entry) else {
                 continue;
             };
-            let nsk = keys.nullifier_secret_key;
+            let nsk = keys.nullifier_secret_key();
             index.track(account_id, &entry.account, &nsk);
         }
 
@@ -426,14 +426,14 @@ impl UserKeyChain {
                 &keys.viewing_secret_key.d,
                 &keys.viewing_secret_key.z,
             )?;
-            (keys.nullifier_secret_key, secret, true)
+            (keys.nullifier_secret_key(), secret, true)
         } else {
             let found = self.private_account(account_id)?;
             let secret = found
                 .key_chain
                 .calculate_shared_secret_receiver(&encrypted.epk)?;
             (
-                found.key_chain.private_key_holder.nullifier_secret_key,
+                found.key_chain.private_key_holder.nullifier_secret_key(),
                 secret,
                 false,
             )
@@ -459,14 +459,14 @@ impl UserKeyChain {
             return Some(NullifierIndex::next_update_nullifier(
                 account_id,
                 &entry.account,
-                &keys.nullifier_secret_key,
+                &keys.nullifier_secret_key(),
             ));
         }
         let acc = self.private_account(account_id)?;
         Some(NullifierIndex::next_update_nullifier(
             account_id,
             acc.account,
-            &acc.key_chain.private_key_holder.nullifier_secret_key,
+            &acc.key_chain.private_key_holder.nullifier_secret_key(),
         ))
     }
 
@@ -889,6 +889,7 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
+
     use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
 
     use super::*;
@@ -898,8 +899,8 @@ mod tests {
         let mut kc = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let nsk = key_chain.private_key_holder.nullifier_secret_key;
-        let identifier = 0;
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
+        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
@@ -914,10 +915,7 @@ mod tests {
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
-        let new_account = Account {
-            balance: 150,
-            ..Account::default()
-        };
+        let new_account = Account::funded(150);
         let new_commitment = Commitment::new(&account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&key_chain.viewing_public_key);
         let ciphertext = EncryptionScheme::encrypt(
@@ -925,6 +923,7 @@ mod tests {
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
             &old_nullifier,
+            None,
         );
         let note = EncryptedAccountData::new(
             ciphertext,
@@ -962,11 +961,11 @@ mod tests {
 
         let label = Label::new("group");
         let holder = GroupKeyHolder::new();
-        let identifier = 0;
+        let identifier = Identifier::ZERO;
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let nsk = keys.nullifier_secret_key;
+        let nsk = keys.nullifier_secret_key();
         let account_id = AccountId::from((&npk, &vpk, identifier));
 
         kc.insert_group_key_holder(label.clone(), holder);
@@ -987,10 +986,7 @@ mod tests {
         let mut index = kc.build_latest_nullifier_index();
         assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
-        let new_account = Account {
-            balance: 250,
-            ..Account::default()
-        };
+        let new_account = Account::funded(250);
         let new_commitment = Commitment::new(&account_id, &new_account);
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let ciphertext = EncryptionScheme::encrypt(
@@ -998,6 +994,7 @@ mod tests {
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
             &old_nullifier,
+            None,
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
@@ -1032,11 +1029,11 @@ mod tests {
 
         let label = Label::new("group");
         let holder = GroupKeyHolder::new();
-        let identifier = 0;
+        let identifier = Identifier::ZERO;
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let nsk = keys.nullifier_secret_key;
+        let nsk = keys.nullifier_secret_key();
         let account_id = AccountId::from((&npk, &vpk, identifier));
 
         kc.insert_group_key_holder(label.clone(), holder);
@@ -1063,6 +1060,7 @@ mod tests {
                 &PrivateAccountKind::Regular(identifier),
                 &sender_ss,
                 &spent,
+                None,
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {
@@ -1077,10 +1075,7 @@ mod tests {
         };
 
         // Init: default -> initialized, discovered via the seeded init nullifier.
-        let initialized = Account {
-            balance: 250,
-            ..Account::default()
-        };
+        let initialized = Account::funded(250);
         let init_msg = make_message(
             Nullifier::for_account_initialization(&account_id),
             &initialized,
@@ -1095,10 +1090,7 @@ mod tests {
         );
 
         // Update: initialized -> updated, discovered via the now-tracked update nullifier.
-        let updated = Account {
-            balance: 500,
-            ..Account::default()
-        };
+        let updated = Account::funded(500);
         let update_spent =
             Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk);
         let update_msg = make_message(update_spent, &updated);
@@ -1117,7 +1109,7 @@ mod tests {
         let mut kc = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let identifier = 0;
+        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
@@ -1184,11 +1176,11 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            0,
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, 0, account);
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
 
         let is_account_added = user_data.private_account(account_id).is_some();
 
@@ -1203,24 +1195,31 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            0,
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, 0, account.clone());
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account.clone());
 
         let new_account = lee_core::account::Account {
-            balance: 100,
-            ..account
+            nonce: account.nonce,
+            ..lee_core::account::Account::funded(100)
         };
 
         user_data
-            .insert_private_account(account_id, PrivateAccountKind::Regular(0), new_account)
+            .insert_private_account(
+                account_id,
+                PrivateAccountKind::Regular(Identifier::ZERO),
+                new_account,
+            )
             .unwrap();
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.balance, 100);
+        assert_eq!(
+            retrieved_account.account.data.native_balance().unwrap(),
+            100
+        );
     }
 
     #[test]
@@ -1230,18 +1229,22 @@ mod tests {
         let (account_id, _chain_index) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
 
-        let new_account = lee_core::account::Account {
-            balance: 100,
-            ..lee_core::account::Account::default()
-        };
+        let new_account = lee_core::account::Account::funded(100);
 
         user_data
-            .insert_private_account(account_id, PrivateAccountKind::Regular(0), new_account)
+            .insert_private_account(
+                account_id,
+                PrivateAccountKind::Regular(Identifier::ZERO),
+                new_account,
+            )
             .unwrap();
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
 
-        assert_eq!(retrieved_account.account.balance, 100);
+        assert_eq!(
+            retrieved_account.account.data.native_balance().unwrap(),
+            100
+        );
     }
 
     #[test]
@@ -1252,17 +1255,14 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            0,
+            Identifier::ZERO,
         ));
 
-        let new_account = lee_core::account::Account {
-            balance: 100,
-            ..lee_core::account::Account::default()
-        };
+        let new_account = lee_core::account::Account::funded(100);
 
         let result = user_data.insert_private_account(
             account_id,
-            PrivateAccountKind::Regular(0),
+            PrivateAccountKind::Regular(Identifier::ZERO),
             new_account,
         );
 
@@ -1277,10 +1277,10 @@ mod tests {
         let account_id1 = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            0,
+            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
-        user_data.add_imported_private_account(key_chain, None, 0, account);
+        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
 
         let (account_id2, chain_index2) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
@@ -1333,7 +1333,7 @@ mod tests {
 
         let entry = SharedAccountEntry {
             group_label: Label::new("test-group"),
-            identifier: 42,
+            identifier: Identifier::new([42; 32]),
             pda_seed: None,
             authority_program_id: None,
             account: lee_core::account::Account::default(),
@@ -1341,12 +1341,12 @@ mod tests {
         let encoded = bincode::serialize(&entry).expect("serialize");
         let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
         assert_eq!(decoded.group_label, Label::new("test-group"));
-        assert_eq!(decoded.identifier, 42);
+        assert_eq!(decoded.identifier, Identifier::new([42; 32]));
         assert!(decoded.pda_seed.is_none());
 
         let pda_entry = SharedAccountEntry {
             group_label: Label::new("pda-group"),
-            identifier: u128::MAX,
+            identifier: Identifier::new([u8::MAX; 32]),
             pda_seed: Some(PdaSeed::new([7_u8; 32])),
             authority_program_id: Some([9; 8]),
             account: lee_core::account::Account::default(),
@@ -1355,7 +1355,7 @@ mod tests {
         let pda_decoded: SharedAccountEntry =
             bincode::deserialize(&pda_encoded).expect("deserialize pda");
         assert_eq!(pda_decoded.group_label, Label::new("pda-group"));
-        assert_eq!(pda_decoded.identifier, u128::MAX);
+        assert_eq!(pda_decoded.identifier, Identifier::new([u8::MAX; 32]));
         assert_eq!(pda_decoded.pda_seed.unwrap(), PdaSeed::new([7_u8; 32]));
     }
 
@@ -1365,7 +1365,7 @@ mod tests {
         // confirming the #[serde(default)] attribute works for backward compatibility.
         let entry = SharedAccountEntry {
             group_label: Label::new("old"),
-            identifier: 1,
+            identifier: Identifier::new([1; 32]),
             pda_seed: None,
             authority_program_id: None,
             account: lee_core::account::Account::default(),
@@ -1373,7 +1373,7 @@ mod tests {
         let encoded = bincode::serialize(&entry).expect("serialize");
         let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
         assert_eq!(decoded.group_label, Label::new("old"));
-        assert_eq!(decoded.identifier, 1);
+        assert_eq!(decoded.identifier, Identifier::new([1; 32]));
         assert!(decoded.pda_seed.is_none());
     }
 

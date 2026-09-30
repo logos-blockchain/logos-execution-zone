@@ -70,7 +70,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_npk: None,
                         to_vpk: None,
                         to_keys: None,
-                        to_identifier: Some(0),
+                        to_identifier: Some(lee_core::Identifier::ZERO),
                         amount: AMOUNT_PER_TRANSFER * 5,
                     }),
                 )
@@ -99,7 +99,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_identifier: Some(0),
+                to_identifier: Some(lee_core::Identifier::ZERO),
                 amount: AMOUNT_PER_TRANSFER,
             }),
         )
@@ -136,14 +136,12 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 block_bytes,
                 public_tx_bytes: Vec::new(),
                 ppe_tx_bytes: Vec::new(),
-                deploy_tx_bytes: Vec::new(),
             };
             for tx in &block.body.transactions {
                 let n = borsh::to_vec(tx).map_or(0, |v| v.len());
                 match tx {
                     LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
                     LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
-                    LeeTransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
                 }
             }
             blocks.push(sz);

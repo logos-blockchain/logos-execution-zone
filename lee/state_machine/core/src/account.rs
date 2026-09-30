@@ -1,16 +1,17 @@
-use std::{
-    fmt::{Display, Write as _},
-    str::FromStr,
-};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use data::Data;
+pub use data::ShardData;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierSecretKey, program::ProgramId};
+use crate::{
+    NullifierSecretKey,
+    native_token::{InvalidBalanceEncoding, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
+    program::ApplyOutput,
+};
 
 pub mod data;
 
@@ -90,52 +91,138 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+/// A base-fee price or tip, in atomic units; fits `u64` by the per-block gas caps
+/// (balances and totals are [`Balance`], `u128`).
+pub type Fee = u64;
+/// A gas amount (execution or storage work), bounded per block.
+pub type Gas = u64;
+/// A raw zkVM execution cycle count or budget, before it is priced into [`Gas`].
+pub type Cycles = u64;
 
 /// Account to be used both in public and private contexts.
 #[derive(
-    Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
-    pub program_owner: ProgramId,
-    pub balance: Balance,
-    pub data: Data,
     pub nonce: Nonce,
+    pub data: AccountData,
 }
 
-impl std::fmt::Debug for Account {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let program_owner_hex = self
-            .program_owner
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .fold(String::new(), |mut acc, bytes| {
-                write!(acc, "{bytes:02x}").expect("writing to string should not fail");
-                acc
-            });
-        f.debug_struct("Account")
-            .field("program_owner", &program_owner_hex)
-            .field("balance", &self.balance)
-            .field("data", &self.data)
-            .field("nonce", &self.nonce)
-            .finish()
+impl Account {
+    #[must_use]
+    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
+        self.data.set_shard(program, data);
+        self
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AccountWithMetadata {
-    pub account: Account,
-    pub is_authorized: bool,
-    pub account_id: AccountId,
+impl Account {
+    #[must_use]
+    pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
+        Self {
+            nonce: self.nonce,
+            data: self.data.project(program_account_ids),
+        }
+    }
+
+    #[must_use]
+    pub fn funded(balance: Balance) -> Self {
+        Self::default().with_shard(
+            NATIVE_TOKEN_PROGRAM_ID,
+            crate::native_token::encode_balance(balance),
+        )
+    }
 }
 
-#[cfg(feature = "host")]
-impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: impl Into<AccountId>) -> Self {
-        Self {
-            account,
-            is_authorized,
-            account_id: account_id.into(),
+/// An account's program shards, including its native balance at [`NATIVE_TOKEN_PROGRAM_ID`].
+#[derive(
+    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+#[serde(deny_unknown_fields)]
+pub struct AccountData {
+    pub shards: BTreeMap<AccountId, ShardData>,
+}
+
+impl AccountData {
+    #[must_use]
+    pub fn shard(&self, program: AccountId) -> &ShardData {
+        const EMPTY: &ShardData = &ShardData::empty();
+        self.shards.get(&program).unwrap_or(EMPTY)
+    }
+
+    pub fn set_shard(&mut self, program: AccountId, data: ShardData) {
+        if data.is_empty() {
+            self.shards.remove(&program);
+        } else {
+            self.shards.insert(program, data);
         }
+    }
+
+    #[must_use]
+    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
+        self.set_shard(program, data);
+        self
+    }
+
+    pub fn native_balance(&self) -> Result<Balance, InvalidBalanceEncoding> {
+        decode_balance(self.shard(NATIVE_TOKEN_PROGRAM_ID))
+    }
+
+    pub fn apply_output(&mut self, output: &ApplyOutput) {
+        if let Some(data) = &output.post_data {
+            self.set_shard(output.input.selector.program_account_id, data.clone());
+        }
+    }
+
+    /// Returns the requested shards, with empty data for missing shards.
+    #[must_use]
+    pub fn project(&self, program_account_ids: impl IntoIterator<Item = AccountId>) -> Self {
+        Self {
+            shards: program_account_ids
+                .into_iter()
+                .map(|program| (program, self.shard(program).clone()))
+                .collect(),
+        }
+    }
+
+    /// Updates the supplied shards. Empty data removes a shard.
+    pub fn update(&mut self, projection: &Self) {
+        for (program, data) in &projection.shards {
+            self.set_shard(*program, data.clone());
+        }
+    }
+}
+
+/// Selects one of an account's program shards.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct ProgramShardSelector {
+    pub account_id: AccountId,
+    pub program_account_id: AccountId,
+}
+
+impl ProgramShardSelector {
+    #[must_use]
+    pub const fn new(account_id: AccountId, program_account_id: AccountId) -> Self {
+        Self {
+            account_id,
+            program_account_id,
+        }
+    }
+
+    #[must_use]
+    pub const fn native_balance(account_id: AccountId) -> Self {
+        Self::new(account_id, NATIVE_TOKEN_PROGRAM_ID)
     }
 }
 
@@ -148,10 +235,11 @@ impl AccountWithMetadata {
     PartialEq,
     Eq,
     Hash,
+    PartialOrd,
+    Ord,
     BorshSerialize,
     BorshDeserialize,
 )]
-#[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub struct AccountId {
     value: [u8; 32],
 }
@@ -216,13 +304,26 @@ impl Display for AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::DEFAULT_PROGRAM_ID;
+    use crate::program::ApplyInput;
+
+    #[test]
+    fn a_persisted_account_with_a_legacy_balance_field_is_refused() {
+        let current = serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"shards":{}}}"#)
+            .expect("the stored shape loads");
+        assert_eq!(current.nonce, Nonce(7));
+        assert_eq!(current.data.native_balance(), Ok(0));
+
+        let legacy =
+            serde_json::from_str::<Account>(r#"{"nonce":7,"data":{"balance":123,"shards":{}}}"#);
+
+        assert!(legacy.is_err(), "a legacy balance field was accepted");
+    }
 
     #[test]
     fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
-        assert_eq!(new_acc.balance, 0);
+        assert_eq!(new_acc.data.native_balance(), Ok(0));
     }
 
     #[test]
@@ -233,36 +334,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_data_account_data_creation() {
+    fn default_account_has_no_shards() {
         let new_acc = Account::default();
 
-        assert!(new_acc.data.is_empty());
-    }
-
-    #[test]
-    fn default_program_owner_account_data_creation() {
-        let new_acc = Account::default();
-
-        assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID);
-    }
-
-    #[cfg(feature = "host")]
-    #[test]
-    fn account_with_metadata_constructor() {
-        let account = Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-            balance: 1337,
-            data: b"testing_account_with_metadata_constructor"
-                .to_vec()
-                .try_into()
-                .unwrap(),
-            nonce: Nonce(0xdead_beef),
-        };
-        let fingerprint = AccountId::new([8; 32]);
-        let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
-        assert_eq!(new_acc_with_metadata.account, account);
-        assert!(new_acc_with_metadata.is_authorized);
-        assert_eq!(new_acc_with_metadata.account_id, fingerprint);
+        assert!(new_acc.data.shards.is_empty());
     }
 
     #[cfg(feature = "host")]
@@ -301,7 +376,7 @@ mod tests {
     fn default_account_id() {
         let default_account_id = AccountId::default();
         let expected_account_id = AccountId::new([0; 32]);
-        assert!(default_account_id == expected_account_id);
+        assert_eq!(default_account_id, expected_account_id);
     }
 
     #[test]
@@ -350,5 +425,103 @@ mod tests {
         let nonce_restored = borsh::from_slice(&borsh_serialized_nonce).unwrap();
 
         assert_eq!(nonce, nonce_restored);
+    }
+
+    #[test]
+    fn apply_output_prunes_an_emptied_shard() {
+        let program = AccountId::new([3; 32]);
+        let mut account =
+            Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
+
+        account.data.apply_output(&ApplyOutput::new(
+            ApplyInput {
+                self_account_id: program,
+                selector: ProgramShardSelector::new(AccountId::new([1; 32]), program),
+                pre_data: b"record".to_vec().try_into().unwrap(),
+                effect_data: Vec::new(),
+            },
+            Some(ShardData::empty()),
+        ));
+
+        assert!(!account.data.shards.contains_key(&program));
+        assert_eq!(account, Account::funded(10));
+    }
+
+    #[test]
+    fn project_reads_absent_shards_as_empty() {
+        let held = AccountId::new([3; 32]);
+        let absent = AccountId::new([4; 32]);
+        let data = Account::funded(9)
+            .data
+            .with_shard(held, b"record".to_vec().try_into().unwrap());
+
+        let projection = data.project([held, absent]);
+
+        assert_eq!(projection.native_balance(), Ok(0));
+        assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
+        assert_eq!(projection.shards.len(), 2);
+    }
+
+    #[test]
+    fn apply_keeps_the_nonce_and_prunes_emptied_shards() {
+        let program = AccountId::new([3; 32]);
+        let mut account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(9).with_shard(program, b"record".to_vec().try_into().unwrap())
+        };
+
+        account.data.update(&AccountData {
+            shards: [(program, ShardData::empty())].into(),
+        });
+
+        assert_eq!(account.nonce, Nonce(7));
+        assert_eq!(account.data.native_balance(), Ok(9));
+        assert_eq!(account.data.shards.len(), 1);
+    }
+
+    #[test]
+    fn project_then_apply_is_identity_on_the_touched_shards() {
+        let touched = AccountId::new([3; 32]);
+        let untouched = AccountId::new([4; 32]);
+        let data = Account::funded(9)
+            .data
+            .with_shard(touched, b"record".to_vec().try_into().unwrap())
+            .with_shard(untouched, b"other".to_vec().try_into().unwrap());
+
+        let mut applied = data.clone();
+        applied.update(&data.project([touched]));
+
+        assert_eq!(applied, data);
+    }
+
+    #[test]
+    fn an_account_json_round_trip_holds_the_largest_balance_and_nonce() {
+        let account = Account {
+            nonce: Nonce(u128::MAX),
+            ..Account::funded(u128::MAX).with_shard(
+                AccountId::new([3; 32]),
+                b"record".to_vec().try_into().unwrap(),
+            )
+        };
+
+        let json = serde_json::to_string(&account).unwrap();
+        let restored: Account = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(account, restored);
+        assert_eq!(restored.nonce, Nonce(u128::MAX));
+        assert_eq!(restored.data.native_balance(), Ok(u128::MAX));
+    }
+
+    #[test]
+    fn an_account_serializes_with_its_data_nested() {
+        let account = Account {
+            nonce: Nonce(7),
+            ..Account::funded(9)
+        };
+
+        assert_eq!(
+            serde_json::to_string(&account).unwrap(),
+            r#"{"nonce":7,"data":{"shards":{"11111111111111111111111111111111":[9,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}}"#
+        );
     }
 }

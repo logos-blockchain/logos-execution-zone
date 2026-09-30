@@ -1,134 +1,174 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, path::Path};
 
-use anyhow::{Context as _, Result, anyhow};
-use bytesize::ByteSize;
-use common::transaction::LeeTransaction;
+use anyhow::{Context as _, Result};
 use futures::never::Never;
-use jsonrpsee::server::ServerHandle;
-use log::{error, info, warn};
-use mempool::MemPoolHandle;
-#[cfg(not(feature = "standalone"))]
-use sequencer_core::SequencerCore;
-#[cfg(feature = "standalone")]
-use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
-pub use sequencer_core::config::*;
-use sequencer_core::{
-    TransactionOrigin,
-    block_publisher::BlockPublisherTrait as _,
-    task_group::{StoreRelease, TaskGroup},
+use glob::Pattern;
+use kameo::actor::{ActorRef, Recipient, Spawn as _};
+use kameo_actors::{
+    DeliveryStrategy,
+    broker::Broker,
+    scheduler::{Scheduler, SetInterval},
 };
-use sequencer_service_rpc::RpcServer as _;
-use tokio::{sync::Mutex, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use log::info;
+use sequencer_channel_config_actor::{
+    ChannelConfigActor, SetPublisher, SetSubmitter, SubmitConfig,
+};
+pub use sequencer_core::config::*;
+use sequencer_core::{gossip::AccreditedKeysReceiver, load_or_create_signing_key};
+use sequencer_gossip_actor::{
+    GossipActor,
+    protocol::{PublishConfig, PublishTransaction},
+};
+#[cfg(feature = "rpc")]
+use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_slasher_actor::{SetApprovalPublisher, SlasherActor};
+use sequencer_storage_actor::StorageActor;
+use tokio::select;
 
-pub mod service;
+use crate::actor_handle::ActorHandle;
 
-const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
+mod actor_handle;
+
+/// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.
+const OUTBOUND_APPROVAL_CHANNEL_CAPACITY: usize = 256;
+/// Depth of the channel-config-actor-to-gossip channel; it only absorbs bursts.
+const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
+
+#[cfg(not(feature = "standalone"))]
+pub type BedrockActor = sequencer_bedrock_actor::BedrockActor;
+
+#[cfg(feature = "standalone")]
+pub type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
+
+pub type ExecutorActor = sequencer_executor_actor::ExecutorActor<StorageActor, BedrockActor>;
+
+/// The RPC server actor together with the address it ended up bound to.
+#[cfg(feature = "rpc")]
+struct RpcServer {
+    actor: ActorHandle<RpcServerActor>,
+    addr: SocketAddr,
+}
+
+#[cfg(feature = "rpc")]
+impl RpcServer {
+    async fn shutdown(self) {
+        self.actor.shutdown().await;
+    }
+
+    async fn failed(&self) -> Result<Never> {
+        self.actor.failed().await
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.actor.is_healthy()
+    }
+}
 
 /// Handle to manage the sequencer and its tasks.
 ///
-/// Implements `Drop` to ensure all tasks are aborted and the RPC server is stopped when dropped.
+/// Implements `Drop` to ensure all actors are killed when dropped.
 pub struct SequencerHandle {
-    addr: SocketAddr,
-    server_handle: ServerHandle,
-    main_loop_handle: JoinHandle<Result<Never>>,
-    /// Cancelled when the publisher's drive task terminates (e.g. a panicked
-    /// persist sink); no channel events are processed past that point.
-    driver_cancellation: CancellationToken,
-    /// The core's background tasks, taken before the core was shared. This
-    /// handle owns no reference to the core itself, so without these there is
-    /// nothing to wait on: aborting the main loop only starts the teardown.
-    background_tasks: Vec<TaskGroup>,
-    /// The store, weakly. Every strong reference lives inside something this
-    /// handle stops, so watching the count go to zero is how shutdown knows the
-    /// database file is actually closed rather than assuming it from drop order.
-    store: StoreRelease,
+    // NOTE: Order of fields matters as it affects drop order.
+    scheduler: ActorHandle<Scheduler>,
+    bedrock_broker: ActorHandle<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+    #[cfg(feature = "rpc")]
+    rpc_server: RpcServer,
+    /// `None` when gossip is unconfigured.
+    gossip: Option<Gossip>,
+    executor: ActorHandle<ExecutorActor>,
+    slasher: ActorHandle<SlasherActor>,
+    bedrock: ActorHandle<BedrockActor>,
+    storage: ActorHandle<StorageActor>,
+}
+
+/// The gossip actor and its companions.
+pub struct Gossip {
+    actor: ActorHandle<sequencer_gossip_actor::GossipActor>,
+    bootstrap_addrs: Vec<sequencer_gossip_actor::Multiaddr>,
+    /// Aborts the gossip outage warner when the handle is dropped.
+    _watchdog: sequencer_gossip_actor::WatchdogGuard,
 }
 
 impl SequencerHandle {
-    const fn new(
-        addr: SocketAddr,
-        server_handle: ServerHandle,
-        main_loop_handle: JoinHandle<Result<Never>>,
-        driver_cancellation: CancellationToken,
-        background_tasks: Vec<TaskGroup>,
-        store: StoreRelease,
-    ) -> Self {
-        Self {
-            addr,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks,
-            store,
-        }
-    }
-
     /// Stops the sequencer and waits for every part of it to be gone.
-    ///
-    /// `Drop` alone cannot do this: it aborts the main loop without awaiting it,
-    /// and the core lives behind `Arc`s held by that task and the RPC server, so
-    /// after a plain drop the store is still open for an unbounded stretch. That
-    /// is why restarting a sequencer on the same home directory used to need a
-    /// sleep, and why an in-process restart could fail outright with a `RocksDB`
-    /// lock error.
-    ///
-    /// Order matters: the main loop stops first so nothing new is produced while
-    /// the publisher is torn down, then the background tasks that hold the store,
-    /// then the server. Consuming `self` drops the last references, so the store
-    /// is closed by the time this returns.
-    pub async fn shutdown(mut self) {
-        self.main_loop_handle.abort();
-        if let Err(err) = (&mut self.main_loop_handle).await
-            && err.is_panic()
-        {
-            error!("Sequencer main loop panicked before shutdown: {err}");
-        }
+    /// executor itself.
+    pub async fn shutdown(self) {
+        let Self {
+            scheduler,
+            bedrock_broker,
+            #[cfg(feature = "rpc")]
+            rpc_server,
+            gossip,
+            executor,
+            slasher,
+            bedrock,
+            storage,
+        } = self;
 
-        for tasks in &self.background_tasks {
-            tasks.shutdown().await;
+        // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
+        scheduler.shutdown().await;
+        bedrock_broker.shutdown().await;
+        #[cfg(feature = "rpc")]
+        rpc_server.shutdown().await;
+        if let Some(gossip) = gossip {
+            gossip.actor.shutdown().await;
         }
-
-        if let Err(err) = self.server_handle.stop() {
-            error!("An error occurred while stopping Sequencer RPC server: {err}");
-        }
-        self.server_handle.clone().stopped().await;
-
-        // Nothing this handle owns holds the store, so waiting here rather than
-        // after the drop is the same thing, and it keeps the guarantee inside
-        // the call the caller awaits.
-        wait_for_store_release(&self.store).await;
+        executor.shutdown().await;
+        slasher.shutdown().await;
+        bedrock.shutdown().await;
+        storage.shutdown().await;
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
+    ///
+    /// Gossip is deliberately not watched here: if it goes down the node
+    /// continues to operate in L1-only mode; the gossip outage watchdog
+    /// warns operators instead.
     #[expect(
         clippy::integer_division_remainder_used,
         reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
     )]
-    pub async fn failed(&mut self) -> Result<Never> {
+    pub async fn failed(&self) -> Result<Never> {
         let Self {
-            addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks: _,
-            store: _,
+            scheduler,
+            slasher,
+            bedrock_broker,
+            #[cfg(feature = "rpc")]
+            rpc_server,
+            executor,
+            bedrock,
+            storage,
+            gossip: _,
         } = self;
 
-        // Cloned rather than taken: `stopped()` consumes a handle, and taking
-        // this one would leave `shutdown` with no way to stop the server.
-        let server_handle = server_handle.clone();
-        tokio::select! {
-            () = server_handle.stopped() => {
-                Err(anyhow!("RPC Server stopped"))
+        // A build without an RPC server has none that could fail, so its branch
+        // is a future that never resolves.
+        #[cfg(feature = "rpc")]
+        let rpc_failed = rpc_server.failed();
+        #[cfg(not(feature = "rpc"))]
+        let rpc_failed = std::future::pending::<Result<Never>>();
+
+        select! {
+            Err(err) = scheduler.failed() => {
+                Err(err)
             }
-            res = main_loop_handle => {
-                res
-                    .context("Main loop task panicked")?
-                    .context("Main loop exited unexpectedly")
+            Err(err) = bedrock_broker.failed() => {
+                Err(err)
             }
-            () = driver_cancellation.cancelled() => {
-                Err(anyhow!("Publisher drive task terminated"))
+            Err(err) = rpc_failed => {
+                Err(err)
+            }
+            Err(err) = executor.failed() => {
+                Err(err)
+            }
+            Err(err) = slasher.failed() => {
+                Err(err)
+            }
+            Err(err) = bedrock.failed() => {
+                Err(err)
+            }
+            Err(err) = storage.failed() => {
+                Err(err)
             }
         }
     }
@@ -137,178 +177,457 @@ impl SequencerHandle {
     ///
     /// Return `false` if any of the tasks has failed and `true` otherwise.
     /// Error of the failed task can be retrieved by awaiting on [`Self::failed()`].
+    ///
+    /// Gossip is not part of this: if it goes down the node continues to operate
+    /// in L1-only mode.
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         let Self {
-            addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks,
-            store: _,
+            scheduler,
+            slasher,
+            bedrock_broker,
+            #[cfg(feature = "rpc")]
+            rpc_server,
+            executor,
+            bedrock,
+            storage,
+            gossip: _,
         } = self;
 
-        let stopped = server_handle.is_stopped()
-            || main_loop_handle.is_finished()
-            || driver_cancellation.is_cancelled()
-            // A watcher only ends by panicking, and a peer whose deliveries have
-            // silently stopped is exactly what this predicate exists to catch.
-            || background_tasks.iter().any(TaskGroup::any_finished);
-        !stopped
+        #[cfg(feature = "rpc")]
+        let rpc_healthy = rpc_server.is_healthy();
+        #[cfg(not(feature = "rpc"))]
+        let rpc_healthy = true;
+
+        scheduler.is_healthy()
+            && bedrock_broker.is_healthy()
+            && rpc_healthy
+            && slasher.is_healthy()
+            && executor.is_healthy()
+            && bedrock.is_healthy()
+            && storage.is_healthy()
     }
 
+    /// The address the RPC server bound to.
+    #[cfg(feature = "rpc")]
     #[must_use]
     pub const fn addr(&self) -> SocketAddr {
-        self.addr
+        self.rpc_server.addr
+    }
+
+    /// The executor, for embedders that talk to the sequencer in-process
+    /// instead of over the RPC.
+    #[must_use]
+    pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
+        self.executor.actor_ref()
+    }
+
+    /// The storage, for embedders that talk to the sequencer in-process
+    /// instead of over the RPC.
+    #[must_use]
+    pub const fn storage_ref(&self) -> &ActorRef<StorageActor> {
+        self.storage.actor_ref()
+    }
+
+    /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
+    /// gossip `bootstrap_peers`. `None` when gossip is unconfigured.
+    #[must_use]
+    pub fn gossip_bootstrap_addrs(&self) -> Option<Vec<sequencer_gossip_actor::Multiaddr>> {
+        self.gossip
+            .as_ref()
+            .map(|gossip| gossip.bootstrap_addrs.clone())
     }
 }
 
-impl Drop for SequencerHandle {
-    fn drop(&mut self) {
-        let Self {
-            addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation: _,
-            background_tasks: _,
-            store: _,
-        } = self;
-
-        main_loop_handle.abort();
-
-        if let Err(err) = server_handle.stop() {
-            error!("An error occurred while stopping Sequencer RPC server: {err}");
-        }
-    }
-}
-
-/// Waits until nothing holds the store any more.
+/// Runs the sequencer, serving its RPC on `listen_addr`.
 ///
-/// Everything that holds one lives inside a task or a server this handle has
-/// already stopped, but the last drop happens on whichever thread ran them, not
-/// on this one. Without this the caller can reopen the database a moment too
-/// early and hit a `RocksDB` lock error, which is the kind of failure that shows
-/// up as an occasional flake rather than a bug.
-async fn wait_for_store_release(store: &StoreRelease) {
-    /// Long enough for a drop that is already in flight, short enough that a
-    /// leak is reported rather than hung on.
-    const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
-    const POLL: Duration = Duration::from_millis(10);
+/// `listen_addr` goes unused without the `rpc` feature, since there is then no
+/// RPC server to bind it.
+#[expect(
+    clippy::manual_async_fn,
+    reason = "Explicit Send future works around rust-lang/rust#100013"
+)]
+pub fn run(
+    config: SequencerConfig,
+    listen_addr: SocketAddr,
+) -> impl Future<Output = Result<SequencerHandle>> + Send + 'static {
+    async move {
+        let block_timeout = config.block_create_timeout;
+        let max_block_size = config.max_block_size;
 
-    let released = tokio::time::timeout(RELEASE_TIMEOUT, async {
-        while store.holders() > 0 {
-            tokio::time::sleep(POLL).await;
+        let gossip_config = config.gossip.clone();
+        let bedrock_config = config.bedrock_config.clone();
+        let sequencer_home = config.home.clone();
+
+        let storage =
+            StorageActor::new(&config.db_path()).context("Failed to set up Storage Actor")?;
+        let storage_ref = StorageActor::spawn(storage);
+        info!("Storage Actor spawned");
+
+        let executor_prepared = ExecutorActor::prepare_with_mailbox(kameo::mailbox::unbounded());
+
+        let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
+        let bedrock_broker_ref = Broker::spawn(bedrock_broker);
+        let topic = Pattern::new(&format!("channel/{}/*", config.bedrock_config.channel_id))
+            .expect("Valid pattern");
+        bedrock_broker_ref
+            .tell(kameo_actors::broker::Subscribe {
+                topic,
+                recipient: executor_prepared.actor_ref().clone().recipient(),
+            })
+            .await?;
+        info!("Bedrock Broker Actor spawned");
+
+        let bedrock = setup_bedrock_actor(&config, storage_ref.clone(), bedrock_broker_ref.clone())
+            .await
+            .context("Failed to set up Bedrock Actor")?;
+        let bedrock_ref = BedrockActor::spawn(bedrock);
+        info!("Bedrock Actor spawned");
+
+        let executor = ExecutorActor::new(config, storage_ref.clone(), bedrock_ref.clone())
+            .await
+            .context("Failed to set up Executor Actor")?;
+        let slasher_ref = executor.slasher_ref();
+        let config_manager_ref = executor.config_manager_ref();
+        // The core has already read a committee by the time this returns.
+        let accredited_keys_rx = executor.accredited_keys_watch();
+        let staked_keys_rx = executor.staked_keys_watch();
+        let executor_ref = executor_prepared.actor_ref().clone();
+        executor_prepared.spawn(executor);
+        info!("Executor Actor spawned");
+
+        // A config needs no turn, so the actor tells the executor to submit it
+        // the moment the signatures are in. Weak, because the executor owns
+        // the actor that holds this.
+        config_manager_ref
+            .tell(SetSubmitter(
+                executor_ref.clone().recipient::<SubmitConfig>().downgrade(),
+            ))
+            .await?;
+
+        let scheduler_ref = Scheduler::spawn(Scheduler::new());
+
+        let (gossip, gossip_publisher) = match gossip_config {
+            None => None,
+            Some(gossip_config) => Some(
+                setup_gossip(
+                    gossip_config,
+                    *bedrock_config.channel_id.as_ref(),
+                    &sequencer_home,
+                    max_block_size.as_u64(),
+                    accredited_keys_rx,
+                    staked_keys_rx,
+                    &executor_ref,
+                    &slasher_ref,
+                    &config_manager_ref,
+                    &scheduler_ref,
+                )
+                .await?,
+            ),
         }
-    })
-    .await;
+        .unzip();
 
-    if released.is_err() {
-        error!(
-            "Sequencer store still held by {} reference(s) after shutdown; something outlived the tasks it should have died with",
-            store.holders()
-        );
+        #[cfg(feature = "rpc")]
+        let rpc_server = setup_rpc_server(
+            listen_addr,
+            max_block_size,
+            executor_ref.clone(),
+            gossip_publisher,
+        )
+        .await?;
+        // Nothing binds the address in this build, and with no RPC server there
+        // is nobody left to publish the transactions it would have accepted.
+        #[cfg(not(feature = "rpc"))]
+        drop((listen_addr, gossip_publisher));
+
+        scheduler_ref
+            .tell(
+                SetInterval::new(
+                    executor_ref.downgrade(),
+                    block_timeout,
+                    sequencer_executor_actor::protocol::ProduceBlock,
+                )
+                .start_delay(block_timeout)
+                .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+            )
+            .await?;
+        info!("Block production scheduler started");
+
+        Ok(SequencerHandle {
+            scheduler: ActorHandle::new(scheduler_ref),
+            bedrock_broker: ActorHandle::new(bedrock_broker_ref),
+            #[cfg(feature = "rpc")]
+            rpc_server,
+            executor: ActorHandle::new(executor_ref),
+            bedrock: ActorHandle::new(bedrock_ref),
+            slasher: ActorHandle::new(slasher_ref),
+            storage: ActorHandle::new(storage_ref),
+            gossip,
+        })
     }
 }
 
-pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
-    sequencer_service_metrics::init();
+/// Starts the gossip actor together with its outage watchdog and its
+/// scheduled bootstrap retries, returning its service handle and the
+/// recipient the RPC server publishes admitted transactions to.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The gossip actor is wired to most of the node: its config and identity, the \
+              executor's admission door, the slasher's approval flow, the channel-config \
+              actor's signature collection, and the scheduler"
+)]
+pub async fn setup_gossip(
+    gossip_config: GossipConfig,
+    channel_id: [u8; 32],
+    sequencer_home: &Path,
+    max_block_size: u64,
+    accredited_keys_rx: AccreditedKeysReceiver,
+    staked_keys_rx: AccreditedKeysReceiver,
+    executor_ref: &ActorRef<ExecutorActor>,
+    slasher_ref: &ActorRef<SlasherActor>,
+    config_manager_ref: &ActorRef<ChannelConfigActor>,
+    scheduler_ref: &ActorRef<Scheduler>,
+) -> Result<(Gossip, Recipient<PublishTransaction>)> {
+    // The node's L1 bedrock signing key is deliberately reused as the
+    // libp2p identity; `GossipActor::new` derives the keypair.
+    let signing_key = load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
+    // Gossiped transactions enter through the executor's admission door
+    // (fee screen + mempool push), same as RPC submissions — gossip never
+    // touches the mempool directly.
+    let submit_ref = executor_ref.clone();
+    let submit: sequencer_gossip_actor::IngestSubmit = std::sync::Arc::new(move |transaction| {
+        let executor_submit_ref = submit_ref.clone();
+        Box::pin(async move {
+            use sequencer_executor_actor::protocol::{Transaction, TransactionOrigin};
+            let message = Transaction {
+                transaction,
+                origin: TransactionOrigin::Gossip,
+            };
+            executor_submit_ref.ask(message).await.map_err(Into::into)
+        })
+    });
 
-    let block_timeout = config.block_create_timeout;
-    let max_block_size = config.max_block_size;
+    // note on `Box::pin` here: the swarm construction makes this awaited future large,
+    // and it would otherwise sit inline in every future that awaits the service start.
+    //
+    // see: https://rust-lang.github.io/rust-clippy/rust-1.98.1/index.html#large_futures
+    let gossip_actor = Box::pin(GossipActor::new(
+        gossip_config,
+        channel_id,
+        signing_key,
+        // Verified inbound approvals go straight to the slasher.
+        slasher_ref.clone().recipient(),
+        max_block_size,
+        submit,
+        accredited_keys_rx,
+        staked_keys_rx,
+        // Screened inbound channel-config messages go straight to the actor.
+        config_manager_ref.clone().recipient(),
+    ))
+    .await
+    .context("Failed to start sequencer gossip network")?;
+    info!("Gossip network started as {}", gossip_actor.local_peer_id());
+    let bootstrap_addrs = gossip_actor.bootstrap_addrs();
 
-    let (sequencer_core, mempool_handle): (SequencerCore, _) =
-        SequencerCore::start_from_config(config).await;
+    let gossip_ref = GossipActor::spawn_with_mailbox(
+        gossip_actor,
+        kameo::mailbox::bounded(sequencer_gossip_actor::MAILBOX_CAPACITY),
+    );
+    info!("Gossip Actor spawned");
+    let watchdog = sequencer_gossip_actor::spawn_gossip_outage_watchdog(gossip_ref.clone());
 
-    info!("Sequencer core set up");
+    // The slasher's own approvals flow into the mesh through the gossip
+    // mailbox; the channel bridges its `SetApprovalPublisher` API.
+    let (approval_tx, mut approval_rx) =
+        tokio::sync::mpsc::channel(OUTBOUND_APPROVAL_CHANNEL_CAPACITY);
+    slasher_ref.tell(SetApprovalPublisher(approval_tx)).await?;
+    let approval_gossip_ref = gossip_ref.clone();
+    tokio::spawn(async move {
+        while let Some(approval) = approval_rx.recv().await {
+            if approval_gossip_ref.tell(approval).send().await.is_err() {
+                break;
+            }
+        }
+    });
 
-    let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
-    // Taken while the core is still owned here: once it is behind the `Arc`
-    // below, the only owners are the RPC server and the main loop task, and
-    // neither hands it back.
-    let background_tasks = sequencer_core.background_tasks();
-    let store = sequencer_core.store_release();
-    let seq_core_wrapped = Arc::new(Mutex::new(sequencer_core));
-    let mempool_handle_for_server = mempool_handle.clone();
+    // Without gossip the actor publishes nowhere, so a channel whose threshold
+    // is above one can never collect the signatures it needs.
+    let (outbound_config_tx, mut outbound_config_rx) =
+        tokio::sync::mpsc::channel(OUTBOUND_CONFIG_CHANNEL_CAPACITY);
+    config_manager_ref
+        .tell(SetPublisher(outbound_config_tx))
+        .await?;
+    let config_gossip_ref = gossip_ref.clone();
+    tokio::spawn(async move {
+        while let Some(message) = outbound_config_rx.recv().await {
+            if config_gossip_ref
+                .tell(PublishConfig(message))
+                .send()
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 
-    let (server_handle, addr) = run_server(
-        Arc::clone(&seq_core_wrapped),
-        mempool_handle_for_server,
-        listen_addr,
-        max_block_size.as_u64(),
-    )
-    .await?;
-    info!("RPC server started");
+    // Startup already dialed the bootstrap peers, so the first retry waits
+    // a full interval.
+    scheduler_ref
+        .tell(
+            SetInterval::new(
+                gossip_ref.downgrade(),
+                sequencer_gossip_actor::BOOTSTRAP_RETRY_INTERVAL,
+                sequencer_gossip_actor::protocol::RetryBootstrap,
+            )
+            .start_delay(sequencer_gossip_actor::BOOTSTRAP_RETRY_INTERVAL),
+        )
+        .await?;
 
-    info!("Starting main sequencer loop");
-    let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
-
-    let _ = mempool_handle;
-
-    Ok(SequencerHandle::new(
-        addr,
-        server_handle,
-        main_loop_handle,
-        driver_cancellation,
-        background_tasks,
-        store,
+    let publisher = gossip_ref.clone().recipient();
+    Ok((
+        Gossip {
+            actor: ActorHandle::new(gossip_ref),
+            bootstrap_addrs,
+            _watchdog: watchdog,
+        },
+        publisher,
     ))
 }
 
-async fn run_server(
-    sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+#[cfg(feature = "rpc")]
+async fn setup_rpc_server(
     listen_addr: SocketAddr,
-    max_block_size: u64,
-) -> Result<(ServerHandle, SocketAddr)> {
-    let server = jsonrpsee::server::ServerBuilder::with_config(
-        jsonrpsee::server::ServerConfigBuilder::new()
-            .max_request_body_size(
-                u32::try_from(REQUEST_BODY_MAX_SIZE.as_u64())
-                    .expect("REQUEST_BODY_MAX_SIZE should be less than u32::MAX"),
-            )
-            .build(),
-    )
-    .build(listen_addr)
-    .await
-    .context("Failed to build RPC server")?;
+    max_block_size: bytesize::ByteSize,
+    executor_ref: ActorRef<ExecutorActor>,
+    gossip_publisher: Option<Recipient<PublishTransaction>>,
+) -> Result<RpcServer> {
+    let rpc_server =
+        RpcServerActor::new(listen_addr, max_block_size, executor_ref, gossip_publisher)
+            .await
+            .context("Failed to initialize RPC Server Actor")?;
+    let addr = rpc_server.addr();
+    let rpc_server_ref = RpcServerActor::spawn(rpc_server);
+    info!("RPC Server Actor spawned");
 
-    let addr = server
-        .local_addr()
-        .context("Failed to get local address of RPC server")?;
-
-    info!("Starting Sequencer Service RPC server on {addr}");
-
-    let service = service::SequencerService::new(sequencer, mempool_handle, max_block_size);
-    let handle = server.start(service.into_rpc());
-    Ok((handle, addr))
+    Ok(RpcServer {
+        actor: ActorHandle::new(rpc_server_ref),
+        addr,
+    })
 }
 
-async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration) -> Result<Never> {
-    loop {
-        tokio::time::sleep(block_timeout).await;
+#[cfg(not(feature = "standalone"))]
+async fn setup_bedrock_actor(
+    config: &SequencerConfig,
+    storage_ref: ActorRef<StorageActor>,
+    bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    let bedrock_signing_key = load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+        .expect("Failed to load or create bedrock signing key");
+    log::info!(
+        "Bedrock signing public key: {}",
+        hex::encode(bedrock_signing_key.public_key().to_bytes())
+    );
 
-        let mut state = seq_core.lock().await;
+    let bedrock_actor_config = sequencer_bedrock_actor::config::Config {
+        node_url: config.bedrock_config.node_url.clone(),
+        basic_auth: config.bedrock_config.auth.clone().map(Into::into),
+        channel_id: config.bedrock_config.channel_id,
+        bedrock_signing_key,
+        funding_pk: config.bedrock_config.funding_key,
+        priority_fee_percent: config.bedrock_config.priority_fee_percent,
+        resubmit_interval: config.retry_pending_blocks_timeout,
+    };
 
-        // Only produce on our turn.
-        if !state.is_our_turn() {
-            continue;
+    BedrockActor::new(bedrock_actor_config, storage_ref, bedrock_broker_ref).await
+}
+
+#[cfg(feature = "standalone")]
+async fn setup_bedrock_actor(
+    config: &SequencerConfig,
+    storage_ref: ActorRef<StorageActor>,
+    _bedrock_broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
+) -> sequencer_bedrock_actor::Result<BedrockActor> {
+    use std::sync::{Arc, Mutex};
+
+    use sequencer_bedrock_actor::protocol::{
+        AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
+    };
+    use sequencer_storage_actor::protocol::GetZoneCheckpoint;
+
+    // The channel exists once a previous run stored a checkpoint, so a fresh
+    // store bootstraps it by publishing genesis.
+    let stored_seq = storage_ref
+        .ask(GetZoneCheckpoint)
+        .await
+        .expect("Failed to read the zone checkpoint")
+        .map(|record| record.seq);
+    let channel_exists = stored_seq.is_some();
+
+    let mut mock = BedrockActor::default();
+
+    mock.expect_handle_check_channel_exists()
+        .returning(move |_msg, _ctx| Ok(channel_exists));
+
+    mock.expect_handle_get_channel_tip_slot()
+        .returning(move |_msg, _ctx| Ok(channel_exists.then(|| Slot::from(0))));
+
+    mock.expect_handle_read_channel()
+        .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
+
+    mock.expect_handle_check_is_our_turn().return_const(true);
+
+    let channel_id = config.bedrock_config.channel_id;
+    mock.expect_handle_get_channel_id()
+        .returning(
+            move |_msg, _ctx| sequencer_bedrock_actor::protocol::GetChannelIdReply { channel_id },
+        );
+
+    mock.expect_handle_get_accredited_keys()
+        .returning(|_msg, _ctx| {
+            Ok(Some(AccreditedKeys {
+                keys: Vec::new(),
+                config_tip: MsgId::root(),
+                tip_sequencer: 0,
+            }))
+        });
+
+    // Continues the stored sequence so the store keeps each new checkpoint.
+    let seq = Arc::new(std::sync::atomic::AtomicU64::new(stored_seq.unwrap_or(0)));
+    let tip = Arc::new(Mutex::new(MsgId::root()));
+    let outcome = move |hash: [u8; 32], parent: Option<MsgId>| {
+        let msg_id = MsgId::from(hash);
+        let mut tip = tip.lock().expect("mock channel tip lock");
+        let parent = parent.unwrap_or(*tip);
+        *tip = msg_id;
+        PublishOutcome {
+            this_msg: msg_id,
+            parent,
+            checkpoint: Checkpoint {
+                last_msg_id: msg_id,
+                pending_txs: Vec::new(),
+                lib: HeaderId::from([0; 32]),
+                lib_slot: Slot::from(0),
+                channel_notes: Vec::new(),
+                finalized_config: MsgId::root(),
+            },
+            seq: ChannelSeq::mocked(
+                seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    .saturating_add(1),
+            ),
+            released_notes: Vec::new(),
         }
+    };
+    let create_outcome = outcome.clone();
+    mock.expect_handle_create_channel()
+        .returning(move |msg, _ctx| {
+            Ok(create_outcome(
+                msg.genesis.header.hash.0,
+                Some(MsgId::root()),
+            ))
+        });
+    mock.expect_handle_publish_block()
+        .returning(move |msg, _ctx| Ok(outcome(msg.block.header.hash.0, msg.parent)));
 
-        // Never inscribe a second block at a height we already published: the
-        // channel would carry two chains from there and nothing resolves that.
-        // The head rewinds under us when the sdk orphans our own unfinalized
-        // blocks, and recovers once they finalize, so this is a wait.
-        if let Some(high_water) = state.rewound_below_published() {
-            warn!(
-                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
-                 waiting for the channel to restore it",
-                state.next_block_height().saturating_sub(1),
-            );
-            continue;
-        }
-
-        info!("Our turn: collecting transactions from mempool, creating block");
-        let id = state.produce_new_block().await?;
-        info!("Block with id {id} created");
-    }
+    Ok(mock)
 }

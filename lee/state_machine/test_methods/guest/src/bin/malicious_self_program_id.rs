@@ -1,32 +1,18 @@
-use lee_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::AccountId,
+    program::{GuestOutput, PlanInput, PlanOutput, ProgramCall, read_program_call},
 };
 
 type Instruction = ();
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id: _, // ignore the correct ID
-            caller_program_id,
-            pre_states,
-            instruction: (),
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    let ProgramCall::Plan(input, ()) = read_program_call::<Instruction>() else {
+        panic!("malicious_self_program_id emits no effect to apply")
+    };
 
-    let post_states = pre_states
-        .iter()
-        .map(|a| AccountPostState::new(a.account.clone()))
-        .collect();
-
-    // Deliberately output wrong self_program_id
-    ProgramOutput::new(
-        DEFAULT_PROGRAM_ID, // WRONG: should be self_program_id
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
-    )
+    GuestOutput::Plan(PlanOutput::new(PlanInput {
+        self_account_id: AccountId::new([0; 32]), // WRONG: should be input.self_account_id
+        ..input
+    }))
     .write();
 }

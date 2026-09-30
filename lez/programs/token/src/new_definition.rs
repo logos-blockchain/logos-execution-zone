@@ -1,78 +1,45 @@
 use lee_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    account::ShardData,
+    program::{AccountMeta, Plan},
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
 };
 
-#[must_use]
+use crate::Effect;
+
 pub fn new_fungible_definition(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
+    plan: &mut Plan,
+    definition_target_account: &AccountMeta,
+    holding_target_account: &AccountMeta,
     name: String,
     total_supply: u128,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
+) {
+    plan.effect(
+        definition_target_account,
+        &Effect::Create(ShardData::from(&TokenDefinition::Fungible {
+            name,
+            total_supply,
+            metadata_id: None,
+        })),
     );
-
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
+    plan.effect(
+        holding_target_account,
+        &Effect::Create(ShardData::from(&TokenHolding::Fungible {
+            definition_id: definition_target_account.account_id,
+            balance: total_supply,
+        })),
     );
-
-    let token_definition = TokenDefinition::Fungible {
-        name,
-        total_supply,
-        metadata_id: None,
-    };
-    let token_holding = TokenHolding::Fungible {
-        definition_id: definition_target_account.account_id,
-        balance: total_supply,
-    };
-
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
-
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
-
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-    ]
 }
 
-#[must_use]
 pub fn new_definition_with_metadata(
-    definition_target_account: AccountWithMetadata,
-    holding_target_account: AccountWithMetadata,
-    metadata_target_account: AccountWithMetadata,
+    plan: &mut Plan,
+    definition_target_account: &AccountMeta,
+    holding_target_account: &AccountMeta,
+    metadata_target_account: &AccountMeta,
     new_definition: NewTokenDefinition,
     metadata: NewTokenMetadata,
-) -> Vec<AccountPostState> {
-    assert_eq!(
-        definition_target_account.account,
-        Account::default(),
-        "Definition target account must have default values"
-    );
-
-    assert_eq!(
-        holding_target_account.account,
-        Account::default(),
-        "Holding target account must have default values"
-    );
-
-    assert_eq!(
-        metadata_target_account.account,
-        Account::default(),
-        "Metadata target account must have default values"
-    );
-
+) {
     let (token_definition, token_holding) = match new_definition {
         NewTokenDefinition::Fungible { name, total_supply } => (
             TokenDefinition::Fungible {
@@ -109,18 +76,16 @@ pub fn new_definition_with_metadata(
         primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let mut definition_target_account_post = definition_target_account.account;
-    definition_target_account_post.data = Data::from(&token_definition);
-
-    let mut holding_target_account_post = holding_target_account.account;
-    holding_target_account_post.data = Data::from(&token_holding);
-
-    let mut metadata_target_account_post = metadata_target_account.account;
-    metadata_target_account_post.data = Data::from(&token_metadata);
-
-    vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
-    ]
+    plan.effect(
+        definition_target_account,
+        &Effect::Create(ShardData::from(&token_definition)),
+    );
+    plan.effect(
+        holding_target_account,
+        &Effect::Create(ShardData::from(&token_holding)),
+    );
+    plan.effect(
+        metadata_target_account,
+        &Effect::Create(ShardData::from(&token_metadata)),
+    );
 }

@@ -4,14 +4,14 @@
 #[cfg(test)]
 use std::collections::HashMap;
 
-use lee::AccountId;
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
+use lee::{AccountId, ProgramShardSelector};
 
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation, fee_invocation},
 };
 
 // Helpers
@@ -19,6 +19,20 @@ use crate::{
 #[must_use]
 pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
     lee::PrivateKey::try_new([37; 32]).unwrap()
+}
+
+/// The test block-producer's reward account.
+#[must_use]
+pub fn producer_account_for_testing() -> AccountId {
+    AccountId::from(&lee::PublicKey::new_from_private_key(
+        &sequencer_sign_key_for_testing(),
+    ))
+}
+
+/// The test block producer's reward account and its initial state.
+#[must_use]
+pub fn producer_seed() -> (AccountId, lee::Account) {
+    (producer_account_for_testing(), lee::Account::default())
 }
 
 /// A syntactically valid `Public` transaction. Its contents are irrelevant to the
@@ -50,20 +64,32 @@ pub fn state_and_diff(
 
 // Dummy producers
 
-/// Produce dummy block with provided transactions + clock transaction an the end.
+/// Produce dummy block from the provided transactions, appending the fee and
+/// clock tail transactions at the end (in that order).
 ///
-/// `id` - block id, provide zero for genesis.
+/// The fee tail carries `BlockFeeSummary::default()`, so this helper is only
+/// valid for blocks whose `transactions` settle to the default summary — i.e.
+/// fee-exempt txs. Passing charged transactions builds a block that fails the
+/// byte-for-byte fee-summary check in `apply_block_to_state`.
 ///
-/// `prev_hash` - hash of previous block, provide None for genesis.
-///
-/// `transactions` - vector of `EncodedTransaction` objects.
+/// - `id`: block id, provide zero for genesis.
+/// - `prev_hash`: hash of previous block, provide None for genesis.
+/// - `transactions`: vector of `EncodedTransaction` objects.
 #[must_use]
 pub fn produce_dummy_block(
     id: u64,
     prev_hash: Option<HashType>,
     mut transactions: Vec<LeeTransaction>,
 ) -> Block {
+    transactions.push(LeeTransaction::Public(fee_invocation(
+        fee_core::BlockFeeSummary::default(),
+        0,
+        lee::AccountId::from(&lee::PublicKey::new_from_private_key(
+            &sequencer_sign_key_for_testing(),
+        )),
+    )));
     transactions.push(LeeTransaction::Public(clock_invocation(
+        id,
         id.saturating_mul(100),
     )));
 
@@ -79,14 +105,14 @@ pub fn produce_dummy_block(
 
 #[must_use]
 pub fn produce_dummy_empty_transaction() -> LeeTransaction {
-    let program_id = programs::authenticated_transfer().id();
-    let account_ids = vec![];
+    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+    let shard_selectors = vec![];
     let nonces = vec![];
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        account_ids,
+        shard_selectors,
         nonces,
-        authenticated_transfer_core::Instruction::Initialize,
+        lee_core::native_token::Instruction::Transfer { amount: 0 },
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -97,6 +123,13 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     LeeTransaction::Public(lee_tx)
 }
 
+/// Generous fee fields for test transactions: the sender pays, with a default
+/// gas limit and an effectively unbounded fee cap.
+#[must_use]
+pub const fn test_fee_declaration(payer: AccountId) -> lee::FeeDeclaration {
+    lee::FeeDeclaration::new(payer, 2_000_000, 0, u128::MAX >> 1)
+}
+
 #[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,
@@ -105,16 +138,39 @@ pub fn create_transaction_native_token_transfer(
     balance_to_move: u128,
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
-    let account_ids = vec![from, to];
+    create_transaction_native_token_transfer_with_fees(
+        from,
+        nonce,
+        to,
+        balance_to_move,
+        signing_key,
+        test_fee_declaration(from),
+    )
+}
+
+#[must_use]
+pub fn create_transaction_native_token_transfer_with_fees(
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signing_key: &lee::PrivateKey,
+    fee_declaration: lee::FeeDeclaration,
+) -> LeeTransaction {
+    let shard_selectors = vec![
+        ProgramShardSelector::native_balance(from),
+        ProgramShardSelector::native_balance(to),
+    ];
     let nonces = vec![nonce.into()];
-    let program_id = programs::authenticated_transfer().id();
-    let message = lee::public_transaction::Message::try_new(
+    let program_id = lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+    let message = lee::public_transaction::Message::try_new_with_fees(
         program_id,
-        account_ids,
+        shard_selectors,
         nonces,
-        authenticated_transfer_core::Instruction::Transfer {
+        lee_core::native_token::Instruction::Transfer {
             amount: balance_to_move,
         },
+        fee_declaration,
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
@@ -122,4 +178,33 @@ pub fn create_transaction_native_token_transfer(
     let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
     LeeTransaction::Public(lee_tx)
+}
+
+/// A correctly-signed native-token transfer that omits its fee declaration.
+///
+/// Classification rejects this: a user public transaction that is not an exempt
+/// shape must declare a fee, or it would be executed and included for free.
+#[must_use]
+pub fn create_transaction_native_token_transfer_without_fee(
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signing_key: &lee::PrivateKey,
+) -> LeeTransaction {
+    let message = lee::public_transaction::Message::try_new(
+        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+        vec![
+            ProgramShardSelector::native_balance(from),
+            ProgramShardSelector::native_balance(to),
+        ],
+        vec![nonce.into()],
+        lee_core::native_token::Instruction::Transfer {
+            amount: balance_to_move,
+        },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+
+    LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }

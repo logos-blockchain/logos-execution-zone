@@ -1,14 +1,91 @@
+use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
-pub type Identifier = u128;
+/// 256-bit opaque private-account identifier.
+#[derive(
+    Copy,
+    Clone,
+    SerializeDisplay,
+    DeserializeFromStr,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    BorshSerialize,
+    BorshDeserialize,
+    derive_more::Debug,
+    derive_more::Display,
+    derive_more::AsRef,
+)]
+#[debug("{}", value.to_base58())]
+#[display("{}", value.to_base58())]
+pub struct Identifier {
+    #[as_ref([u8])]
+    value: [u8; 32],
+}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+impl Identifier {
+    pub const ZERO: Self = Self { value: [0; 32] };
+
+    #[must_use]
+    pub const fn new(value: [u8; 32]) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn value(&self) -> &[u8; 32] {
+        &self.value
+    }
+
+    #[must_use]
+    pub const fn into_value(self) -> [u8; 32] {
+        self.value
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IdentifierError {
+    #[error("invalid base58: {0:?}")]
+    InvalidBase58(base58::FromBase58Error),
+    #[error("invalid length: expected 32 bytes, got {0}")]
+    InvalidLength(usize),
+}
+
+impl std::str::FromStr for Identifier {
+    type Err = IdentifierError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = s.from_base58().map_err(IdentifierError::InvalidBase58)?;
+        if bytes.len() != 32 {
+            return Err(IdentifierError::InvalidLength(bytes.len()));
+        }
+        let mut value = [0_u8; 32];
+        value.copy_from_slice(&bytes);
+        Ok(Self { value })
+    }
+}
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
@@ -21,11 +98,11 @@ impl AccountId {
         vpk: &ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
-        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 32];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
         bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(identifier.value());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -48,16 +125,41 @@ impl AsRef<[u8]> for NullifierPublicKey {
     }
 }
 
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+#[cfg_attr(any(feature = "host", test), derive(Hash))]
+pub struct AuthorizationSecretKey(pub [u8; 32]);
+
+impl From<&AuthorizationSecretKey> for NullifierSecretKey {
+    fn from(value: &AuthorizationSecretKey) -> Self {
+        const DOMAIN: &[u8; 29] = b"/LEE-Keys/v1/Nullifier/Secret";
+        let mut bytes = [0_u8; 29 + 32];
+        bytes[..29].copy_from_slice(DOMAIN);
+        bytes[29..].copy_from_slice(&value.0);
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("hash should be exactly 32 bytes long")
+    }
+}
+
 impl From<&NullifierSecretKey> for NullifierPublicKey {
     fn from(value: &NullifierSecretKey) -> Self {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[7];
-        const SUFFIX_2: &[u8; 23] = &[0; 23];
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(value);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(SUFFIX_2);
+        const DOMAIN: &[u8; 29] = b"/LEE-Keys/v1/Nullifier/Public";
+        let mut bytes = [0_u8; 29 + 32];
+        bytes[..29].copy_from_slice(DOMAIN);
+        bytes[29..].copy_from_slice(value);
         Self(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -155,14 +257,25 @@ mod tests {
     }
 
     #[test]
+    fn from_authorization_key() {
+        let ask = AuthorizationSecretKey([0; 32]);
+        let expected_nsk: NullifierSecretKey = [
+            135, 144, 25, 255, 27, 190, 82, 191, 49, 83, 55, 248, 251, 98, 149, 55, 143, 129, 2,
+            201, 237, 77, 248, 237, 15, 11, 188, 41, 219, 213, 10, 74,
+        ];
+        let nsk = NullifierSecretKey::from(&ask);
+        assert_eq!(nsk, expected_nsk);
+    }
+
+    #[test]
     fn from_secret_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let expected_npk = NullifierPublicKey([
-            78, 20, 20, 5, 177, 198, 233, 100, 175, 134, 174, 200, 24, 205, 68, 215, 130, 74, 35,
-            54, 154, 184, 219, 42, 168, 106, 126, 147, 133, 244, 18, 218,
+            44, 121, 113, 131, 34, 101, 53, 97, 87, 111, 83, 78, 157, 34, 59, 248, 105, 103, 194,
+            137, 127, 221, 25, 17, 105, 84, 114, 129, 183, 83, 168, 193,
         ]);
         let npk = NullifierPublicKey::from(&nsk);
         assert_eq!(npk, expected_npk);
@@ -177,17 +290,17 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            242, 239, 57, 244, 89, 109, 65, 201, 223, 100, 43, 87, 205, 83, 148, 161, 176, 22, 208,
-            220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
+            211, 228, 241, 40, 66, 75, 99, 113, 149, 61, 234, 62, 12, 139, 200, 82, 83, 147, 50,
+            118, 187, 238, 65, 251, 54, 229, 89, 151, 17, 104, 62, 240,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
 
         assert_eq!(account_id, expected_account_id);
     }
 
     #[test]
-    fn account_id_from_nullifier_public_key_identifier_1() {
+    fn account_id_from_nullifier_public_key_nonzero_identifier() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -195,18 +308,24 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            149, 125, 157, 109, 119, 81, 9, 163, 231, 181, 214, 43, 57, 113, 221, 72, 180, 149,
-            189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
+            219, 234, 210, 62, 137, 169, 241, 66, 19, 208, 42, 125, 253, 19, 55, 204, 144, 57, 22,
+            196, 199, 246, 104, 134, 232, 84, 164, 19, 42, 152, 118, 210,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
+        let account_id =
+            AccountId::for_regular_private_account(&npk, &vpk, Identifier::new([1; 32]));
 
         assert_eq!(account_id, expected_account_id);
     }
 
     #[test]
     fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
-        let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
+        // Every byte position distinct, to catch a byte-order bug anywhere in the width.
+        let identifier = Identifier::new([
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
+            0x1C, 0x1D, 0x1E, 0x1F,
+        ]);
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -214,8 +333,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            30, 232, 222, 201, 233, 125, 124, 194, 58, 39, 121, 96, 185, 84, 168, 109, 80, 111,
-            159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
+            223, 65, 35, 211, 3, 244, 181, 174, 35, 212, 132, 168, 231, 60, 74, 241, 60, 71, 246,
+            117, 97, 139, 50, 168, 136, 239, 94, 200, 165, 223, 250, 92,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
@@ -231,5 +350,48 @@ mod tests {
             157, 125, 171, 137, 46, 64, 206, 191, 211, 231, 0, 11, 86,
         ]);
         assert_eq!(Nullifier::for_dummy(&nullifier_seed), expected_nullifier);
+    }
+
+    #[test]
+    fn identifier_display_from_str_round_trip() {
+        for identifier in [
+            Identifier::ZERO,
+            Identifier::new([0xff; 32]),
+            Identifier::new(core::array::from_fn(|i| u8::try_from(i).unwrap())),
+        ] {
+            let round_tripped: Identifier = identifier.to_string().parse().unwrap();
+            assert_eq!(round_tripped, identifier);
+            assert_eq!(format!("{identifier:?}"), identifier.to_string());
+        }
+    }
+
+    #[test]
+    fn identifier_display_matches_pinned_base58() {
+        assert_eq!(Identifier::ZERO.to_string(), "1".repeat(32));
+        assert_eq!(
+            Identifier::new([1; 32]).to_string(),
+            "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+        );
+    }
+
+    #[test]
+    fn identifier_serde_json_round_trip() {
+        let identifier = Identifier::new(core::array::from_fn(|i| u8::try_from(i).unwrap()));
+        let json = serde_json::to_string(&identifier).unwrap();
+        let round_tripped: Identifier = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, identifier);
+    }
+
+    #[test]
+    fn identifier_from_str_rejects_invalid_base58() {
+        let err = "0OIl".parse::<Identifier>().unwrap_err();
+        assert!(matches!(err, IdentifierError::InvalidBase58(_)));
+    }
+
+    #[test]
+    fn identifier_from_str_rejects_wrong_length() {
+        let too_short = [1_u8; 16].to_base58();
+        let err = too_short.parse::<Identifier>().unwrap_err();
+        assert!(matches!(err, IdentifierError::InvalidLength(16)));
     }
 }

@@ -1,6 +1,5 @@
-use std::str::FromStr;
+use std::{collections::BTreeMap, str::FromStr};
 
-use base58::{FromBase58 as _, ToBase58 as _};
 use derive_more::Display;
 use lee::AccountId;
 use serde::{Deserialize, Serialize};
@@ -79,10 +78,9 @@ impl FromStr for AccountIdWithPrivacy {
 
 /// Human-readable representation of an account.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HumanReadableAccount {
-    balance: u128,
-    program_owner: String,
-    data: String,
+    shards: BTreeMap<String, String>,
     nonce: u128,
 }
 
@@ -103,17 +101,13 @@ impl std::fmt::Display for HumanReadableAccount {
 
 impl From<lee::Account> for HumanReadableAccount {
     fn from(account: lee::Account) -> Self {
-        let program_owner = account
-            .program_owner
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .collect::<Vec<u8>>()
-            .to_base58();
-        let data = hex::encode(account.data);
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
+            shards: account
+                .data
+                .shards
+                .into_iter()
+                .map(|(program, data)| (program.to_string(), hex::encode(data)))
+                .collect(),
             nonce: account.nonce.0,
         }
     }
@@ -121,35 +115,24 @@ impl From<lee::Account> for HumanReadableAccount {
 
 impl From<HumanReadableAccount> for lee::Account {
     fn from(account: HumanReadableAccount) -> Self {
-        let mut program_owner_bytes = [0_u8; 32];
-        let decoded_program_owner = account
-            .program_owner
-            .from_base58()
-            .expect("Invalid base58 in HumanReadableAccount.program_owner");
-        assert!(
-            decoded_program_owner.len() == 32,
-            "HumanReadableAccount.program_owner must decode to exactly 32 bytes"
-        );
-        program_owner_bytes.copy_from_slice(&decoded_program_owner);
-
-        let mut program_owner = [0_u32; 8];
-        for (index, chunk) in program_owner_bytes.chunks_exact(4).enumerate() {
-            let chunk: [u8; 4] = chunk
-                .try_into()
-                .expect("chunk length is guaranteed to be 4");
-            program_owner[index] = u32::from_le_bytes(chunk);
-        }
-
-        let data = hex::decode(&account.data).expect("Invalid hex in HumanReadableAccount.data");
-        let data = data
-            .try_into()
-            .expect("Invalid account data: exceeds maximum allowed size");
+        let shards = account
+            .shards
+            .into_iter()
+            .map(|(program, data)| {
+                let program: AccountId = program
+                    .parse()
+                    .expect("Invalid base58 in HumanReadableAccount.shards key");
+                let data = hex::decode(&data).expect("Invalid hex in HumanReadableAccount.shards");
+                let data = data
+                    .try_into()
+                    .expect("Invalid account data: exceeds maximum allowed size");
+                (program, data)
+            })
+            .collect();
 
         Self {
-            balance: account.balance,
-            program_owner,
-            data,
             nonce: lee_core::account::Nonce(account.nonce),
+            data: lee_core::account::AccountData { shards },
         }
     }
 }

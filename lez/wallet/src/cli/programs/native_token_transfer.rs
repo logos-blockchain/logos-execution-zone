@@ -13,12 +13,6 @@ use crate::{
 /// Represents generic CLI subcommand for a wallet working with native token transfer program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AuthTransferSubcommand {
-    /// Initialize account under authenticated transfer program.
-    Init {
-        /// Either 32 byte base58 account id string with privacy prefix or a label.
-        #[arg(long)]
-        account_id: CliAccountMention,
-    },
     /// Send native tokens from one account to another with variable privacy.
     ///
     /// If receiver is private, then `to` and (`to_npk` , `to_vpk`) is a mutually exclusive
@@ -45,7 +39,7 @@ pub enum AuthTransferSubcommand {
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -53,33 +47,6 @@ pub enum AuthTransferSubcommand {
 }
 
 impl AuthTransferSubcommand {
-    async fn handle_init(
-        account_id: CliAccountMention,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        let resolved = account_id.resolve(wallet_core.storage())?;
-        match resolved {
-            AccountIdWithPrivacy::Public(pub_account_id) => {
-                let tx_hash = NativeTokenTransfer(wallet_core)
-                    .register_account(account_id.into_public_identity(pub_account_id, true))
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
-                    .await
-            }
-            AccountIdWithPrivacy::Private(account_id) => {
-                let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .register_account_private(account_id)
-                    .await?;
-
-                wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, account_id)])
-                    .await
-            }
-        }
-    }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "extracted match arm with many destructured fields"
@@ -90,7 +57,7 @@ impl AuthTransferSubcommand {
         to_npk: Option<String>,
         to_vpk: Option<String>,
         to_keys: Option<String>,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -107,6 +74,7 @@ impl AuthTransferSubcommand {
             .as_ref()
             .map(|m| m.resolve(wallet_core.storage()))
             .transpose()?;
+        ensure_not_self_transfer(from, to)?;
         let underlying_subcommand = match (to, to_npk, to_vpk) {
             (None, None, None) => {
                 anyhow::bail!("Provide either account account_id of receiver or their public keys");
@@ -186,7 +154,6 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Init { account_id } => Self::handle_init(account_id, wallet_core).await,
             Self::Send {
                 from,
                 to,
@@ -281,7 +248,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         to_vpk: String,
         /// Identifier for the recipient's private account.
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -321,7 +288,7 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         to_vpk: String,
         /// Identifier for the recipient's private account.
         #[arg(long)]
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -351,7 +318,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
         from: AccountId,
         to_npk: String,
         to_vpk: String,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -362,7 +329,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
                 from,
                 to_npk,
                 to_vpk,
-                to_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;
@@ -423,7 +390,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
         from: Option<AccountIdentity>,
         to_npk: String,
         to_vpk: String,
-        to_identifier: Option<u128>,
+        to_identifier: Option<lee_core::Identifier>,
         amount: u128,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -434,7 +401,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
                 from.expect("from set during Send dispatch"),
                 to_npk,
                 to_vpk,
-                to_identifier.unwrap_or_else(rand::random),
+                crate::cli::identifier_or_random(to_identifier),
                 amount,
             )
             .await?;
@@ -532,5 +499,76 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 Self::handle_public(from, to, amount, wallet_core).await
             }
         }
+    }
+}
+
+/// Shielding and deshielding to your own account are legitimate, so a transfer
+/// is only self-directed when the privacy-qualified identities are equal.
+fn ensure_not_self_transfer(
+    from: AccountIdWithPrivacy,
+    to: Option<AccountIdWithPrivacy>,
+) -> Result<()> {
+    if to == Some(from) {
+        anyhow::bail!("Invalid transfer: --from and --to are the same account ({from})");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID_A: [u8; 32] = [1; 32];
+    const ID_B: [u8; 32] = [2; 32];
+
+    #[test]
+    fn rejects_transfer_to_the_same_public_account() {
+        let account = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+
+        let result = ensure_not_self_transfer(account, Some(account));
+
+        assert!(result.is_err(), "public self-transfer must be rejected");
+    }
+
+    #[test]
+    fn rejects_transfer_to_the_same_private_account() {
+        let account = AccountIdWithPrivacy::Private(AccountId::new(ID_A));
+
+        let result = ensure_not_self_transfer(account, Some(account));
+
+        assert!(result.is_err(), "private self-transfer must be rejected");
+    }
+
+    #[test]
+    fn allows_shielding_and_deshielding_your_own_account() {
+        let public = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+        let private = AccountIdWithPrivacy::Private(AccountId::new(ID_A));
+
+        assert!(
+            ensure_not_self_transfer(public, Some(private)).is_ok(),
+            "shielding your own account must stay allowed"
+        );
+        assert!(
+            ensure_not_self_transfer(private, Some(public)).is_ok(),
+            "deshielding your own account must stay allowed"
+        );
+    }
+
+    #[test]
+    fn allows_transfer_between_different_accounts() {
+        let from = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+        let to = AccountIdWithPrivacy::Public(AccountId::new(ID_B));
+
+        assert!(ensure_not_self_transfer(from, Some(to)).is_ok());
+    }
+
+    #[test]
+    fn allows_recipient_given_by_public_keys() {
+        let from = AccountIdWithPrivacy::Public(AccountId::new(ID_A));
+
+        assert!(
+            ensure_not_self_transfer(from, None).is_ok(),
+            "recipient given by keys has no resolved id to compare"
+        );
     }
 }

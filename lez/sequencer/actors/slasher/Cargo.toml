@@ -1,0 +1,29 @@
+[package]
+name = "sequencer_slasher_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+lee.workspace = true
+programs.workspace = true
+system_accounts.workspace = true
+sequencer_stake_core.workspace = true
+sequencer_storage_actor = { workspace = true, features = ["actor"] }
+
+logos-blockchain-key-management-system-service.workspace = true
+kameo.workspace = true
+anyhow.workspace = true
+borsh.workspace = true
+hex.workspace = true
+log.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+sequencer_storage_actor = { workspace = true, features = ["mock"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }

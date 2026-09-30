@@ -58,6 +58,7 @@ pub fn BlockPage() -> impl IntoView {
                                         prev_block_hash,
                                         hash,
                                         timestamp,
+                                        producer,
                                         signature,
                                     },
                                     body: BlockBody {
@@ -70,6 +71,7 @@ pub fn BlockPage() -> impl IntoView {
                                 let prev_hash = prev_block_hash.to_string();
                                 let timestamp_str = format_utils::format_timestamp(timestamp);
                                 let signature_str = signature.to_string();
+                                let producer_str = producer.to_string();
                                 let status = match &bedrock_status {
                                     BedrockStatus::Pending => "Pending",
                                     BedrockStatus::Safe => "Safe",
@@ -105,6 +107,10 @@ pub fn BlockPage() -> impl IntoView {
                                     <div class="info-row">
                                         <span class="info-label">"Status: "</span>
                                         <span class="info-value">{status}</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span class="info-label">"Producer: "</span>
+                                        <span class="info-value hash">{producer_str}</span>
                                     </div>
                                     <div class="info-row">
                                         <span class="info-label">"Signature: "</span>

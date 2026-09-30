@@ -1,28 +1,11 @@
-use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{Plan, ProgramCall, read_program_call};
 
 type Instruction = ();
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            ..
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    let ProgramCall::Plan(input, ()) = read_program_call::<Instruction>() else {
+        panic!("noop emits no effect to apply")
+    };
 
-    let post_states = pre_states
-        .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
-        .collect();
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        pre_states,
-        post_states,
-    )
-    .write();
+    Plan::new(&input).write();
 }

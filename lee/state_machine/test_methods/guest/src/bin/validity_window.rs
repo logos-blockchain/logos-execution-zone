@@ -1,35 +1,21 @@
 use lee_core::program::{
-    AccountPostState, BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow,
-    read_lee_inputs,
+    BlockValidityWindow, Plan, ProgramCall, TimestampValidityWindow, read_program_call,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
 
 fn main() {
-    let (
-        ProgramInput {
-            self_program_id,
-            caller_program_id,
-            pre_states,
-            instruction: (block_validity_window, timestamp_validity_window),
-        },
-        instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    let ProgramCall::Plan(input, instruction) = read_program_call::<Instruction>() else {
+        panic!("validity_window emits no effect to apply")
+    };
+    let (block_validity_window, timestamp_validity_window) = instruction;
 
-    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+    let Ok([_account]) = <[_; 1]>::try_from(input.accounts.clone()) else {
         return;
     };
 
-    let post = pre.account.clone();
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![pre],
-        vec![AccountPostState::new(post)],
-    )
-    .with_block_validity_window(block_validity_window)
-    .with_timestamp_validity_window(timestamp_validity_window)
-    .write();
+    let mut plan = Plan::new(&input);
+    plan.block_window(block_validity_window);
+    plan.timestamp_window(timestamp_validity_window);
+    plan.write()
 }
