@@ -599,6 +599,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
     // delivery.
     fn deliver<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
         let to = delivery.to;
+        // No code upgrade may land between a proof's image claims and the turns it covers.
+        if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
+            && !matches!(self.mode, ModeState::Live)
+        {
+            return Err(ExecutionError::LoaderOutsideLiveExecution { actor: to }.into());
+        }
         if self.public_actors.contains(&to) {
             return self.deliver_public(delivery, backend);
         }
@@ -749,12 +755,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
 
     fn execute<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
         let actor = delivery.to;
-        // No code upgrade may land between a proof's image claims and the turns it covers.
-        if actor.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
-            && !matches!(self.mode, ModeState::Live)
-        {
-            return Err(ExecutionError::LoaderOutsideLiveExecution { actor }.into());
-        }
         let (is_authorized, grants) = self.authorize(&delivery, actor)?;
         let entry = self
             .accounts
