@@ -263,6 +263,7 @@ pub struct ExecutionState<'witnesses> {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     mode: ModeState,
+    at_root: bool,
     events: Vec<(Actor, ProgramEvent)>,
     consumed: Vec<MessageId>,
     claims: Vec<MessageId>,
@@ -394,6 +395,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             mode,
+            at_root: false,
             events: Vec::new(),
             consumed: Vec::new(),
             claims: Vec::new(),
@@ -782,6 +784,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             message: delivery.message,
         };
 
+        self.at_root = delivery.issuer.is_none();
         let transition = backend.receive(&input, self)?;
         validate_transition(&input, &transition).map_err(|source| {
             ExecutionError::ExecutionValidation {
@@ -882,6 +885,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
         self.accounts
             .get(&account_id)
             .is_some_and(|entry| matches!(entry.visibility, Visibility::Private(_)))
+    }
+
+    #[must_use]
+    pub const fn at_root(&self) -> bool {
+        self.at_root
     }
 
     #[must_use]

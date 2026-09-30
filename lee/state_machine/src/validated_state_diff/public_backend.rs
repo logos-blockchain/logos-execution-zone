@@ -5,9 +5,7 @@ use lee_core::{
     account::{AccountId, Actor, Cycles, ShardData},
     execution_state::{Backend, ExecutionError, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{
-        MessageId, Origin, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, StoredMessage, Transition,
-    },
+    program::{MessageId, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, StoredMessage, Transition},
 };
 use log::debug;
 
@@ -75,7 +73,7 @@ impl Backend for PublicBackend<'_> {
                 loader_shard(execution, state, account_id)
             })
             .ok_or(LeeError::UnknownProgram {
-                chained: !matches!(input.origin, Origin::Root),
+                chained: !execution.at_root(),
             })?;
             let (transition, call_cycles) =
                 program.receive(input, remaining(self.cycle_budget, *self.cycles_used))?;
