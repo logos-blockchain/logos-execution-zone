@@ -6,7 +6,7 @@
 )]
 
 use amm_core::{
-    Message, PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda,
+    ExactInput, Message, PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda,
     compute_liquidity_token_pda_seed, compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
     swap_transfer,
 };
@@ -161,7 +161,13 @@ const fn fungible_of(definition_id: AccountId) -> TokenDescriptor {
     }
 }
 
-fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Call {
+fn transfer(
+    from: AccountId,
+    to: AccountId,
+    definition_id: AccountId,
+    amount: u128,
+    delivery: Delivery,
+) -> Call {
     Call::new(
         token_actor(from),
         &token_core::Message::Transfer {
@@ -169,13 +175,19 @@ fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u1
             descriptor: fungible_of(definition_id),
             amount,
             notify: None,
-            delivery: Delivery::Call,
+            delivery,
         },
     )
 }
 
-fn withdrawal(vault: AccountId, to: AccountId, definition_id: AccountId, amount: u128) -> Call {
-    transfer(vault, to, definition_id, amount)
+fn withdrawal(
+    vault: AccountId,
+    to: AccountId,
+    definition_id: AccountId,
+    amount: u128,
+    delivery: Delivery,
+) -> Call {
+    transfer(vault, to, definition_id, amount, delivery)
         .with_pda_seeds(vec![compute_vault_pda_seed(pool_id(), definition_id)])
 }
 
@@ -239,19 +251,33 @@ fn offer(definition_id_out: AccountId, amount_out: u128, payout: AccountId) -> S
     }
 }
 
+fn request_notification(
+    credited_account: AccountId,
+    definition_id_in: AccountId,
+    amount_in: u128,
+    request: SwapRequest,
+) -> Vec<u8> {
+    borsh::to_vec(&token_core::Message::Notification(Notification {
+        credited_account,
+        descriptor: fungible_of(definition_id_in),
+        amount: amount_in,
+        payload: borsh::to_vec(&request).expect("the request serializes"),
+    }))
+    .expect("the notification serializes")
+}
+
 fn notification(
     credited_account: AccountId,
     definition_id_in: AccountId,
     amount_in: u128,
     offer: SwapOffer,
 ) -> Vec<u8> {
-    borsh::to_vec(&token_core::Message::Notification(Notification {
+    request_notification(
         credited_account,
-        descriptor: fungible_of(definition_id_in),
-        amount: amount_in,
-        payload: borsh::to_vec(&SwapRequest::Offer(offer)).expect("the offer serializes"),
-    }))
-    .expect("the notification serializes")
+        definition_id_in,
+        amount_in,
+        SwapRequest::Offer(offer),
+    )
 }
 
 // The input vault's notification to the pool after it credited `amount_in`.
@@ -282,6 +308,32 @@ fn swap_on(
     amount_out: u128,
 ) -> PoolDefinition {
     written(&swap_turn(pool, input_is_token_a, amount_in, amount_out))
+}
+
+fn exact_input_turn(
+    pool: &PoolDefinition,
+    input_is_token_a: bool,
+    amount_in: u128,
+    min_amount_out: u128,
+    delivery: Delivery,
+) -> Transition {
+    let (definition_id_in, definition_id_out) = definitions(input_is_token_a);
+    let [input_vault, _, _, user_output] = swap_route(input_is_token_a);
+    pool_turn(
+        pool_shard(pool),
+        Origin::Program(TOKEN_PROGRAM_ID),
+        request_notification(
+            input_vault,
+            definition_id_in,
+            amount_in,
+            SwapRequest::ExactInput(ExactInput {
+                definition_id_out,
+                min_amount_out,
+                payout: user_output,
+                delivery,
+            }),
+        ),
+    )
 }
 
 #[test]
@@ -439,8 +491,22 @@ fn call_add_liquidity_successful() {
                 amount: ADD_LP,
             })
             .into(),
-            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, ADD_ACTUAL_B).into(),
-            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, ADD_ACTUAL_A).into(),
+            transfer(
+                USER_B_ID,
+                vault_b_id(),
+                TOKEN_B_ID,
+                ADD_ACTUAL_B,
+                Delivery::Call
+            )
+            .into(),
+            transfer(
+                USER_A_ID,
+                vault_a_id(),
+                TOKEN_A_ID,
+                ADD_ACTUAL_A,
+                Delivery::Call
+            )
+            .into(),
         ]
     );
 }
@@ -544,8 +610,22 @@ fn call_remove_liquidity_successful() {
                 },
             )
             .into(),
-            withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, REMOVE_B).into(),
-            withdrawal(vault_a_id(), USER_A_ID, TOKEN_A_ID, REMOVE_A).into(),
+            withdrawal(
+                vault_b_id(),
+                USER_B_ID,
+                TOKEN_B_ID,
+                REMOVE_B,
+                Delivery::Call
+            )
+            .into(),
+            withdrawal(
+                vault_a_id(),
+                USER_A_ID,
+                TOKEN_A_ID,
+                REMOVE_A,
+                Delivery::Call
+            )
+            .into(),
         ]
     );
 }
@@ -654,8 +734,22 @@ fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
                 metadata: None,
             })
             .into(),
-            transfer(USER_B_ID, vault_b_id(), TOKEN_B_ID, RESERVE_B).into(),
-            transfer(USER_A_ID, vault_a_id(), TOKEN_A_ID, RESERVE_A).into(),
+            transfer(
+                USER_B_ID,
+                vault_b_id(),
+                TOKEN_B_ID,
+                RESERVE_B,
+                Delivery::Call
+            )
+            .into(),
+            transfer(
+                USER_A_ID,
+                vault_a_id(),
+                TOKEN_A_ID,
+                RESERVE_A,
+                Delivery::Call
+            )
+            .into(),
         ]
     );
 }
@@ -836,7 +930,16 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
 
         assert_eq!(
             swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out).sends,
-            vec![withdrawal(output_vault, user_output, definition_id_out, amount_out).into()]
+            vec![
+                withdrawal(
+                    output_vault,
+                    user_output,
+                    definition_id_out,
+                    amount_out,
+                    Delivery::Call
+                )
+                .into()
+            ]
         );
     }
 }
@@ -929,4 +1032,65 @@ fn a_swap_refuses_a_trader_holding_that_is_a_vault() {
             );
         }
     }
+}
+
+#[test]
+fn an_exact_input_swap_pays_its_live_quote_by_cast() {
+    for (input_is_token_a, amount_in, min_amount_out, quote, (reserve_a, reserve_b)) in [
+        (true, 500, 166, 166, (1_500, 334)),
+        (false, 200, 100, 285, (715, 700)),
+    ] {
+        let (_, definition_id_out) = definitions(input_is_token_a);
+        let [_, output_vault, _, user_output] = swap_route(input_is_token_a);
+
+        let transition = exact_input_turn(
+            &pool_base(),
+            input_is_token_a,
+            amount_in,
+            min_amount_out,
+            Delivery::Cast,
+        );
+
+        assert_eq!(
+            written(&transition),
+            PoolDefinition {
+                reserve_a,
+                reserve_b,
+                ..pool_base()
+            }
+        );
+        assert_eq!(
+            transition.sends,
+            vec![
+                withdrawal(
+                    output_vault,
+                    user_output,
+                    definition_id_out,
+                    quote,
+                    Delivery::Cast
+                )
+                .into()
+            ]
+        );
+    }
+}
+
+#[test]
+fn an_exact_input_swap_pays_its_live_quote_by_call_when_asked() {
+    assert_eq!(
+        exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call).sends,
+        vec![withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, 166, Delivery::Call).into()]
+    );
+}
+
+#[should_panic(expected = "The live quote is below the minimum output")]
+#[test]
+fn an_exact_input_swap_refuses_a_minimum_above_its_live_quote() {
+    let _transition = exact_input_turn(&pool_base(), true, 500, 167, Delivery::Cast);
+}
+
+#[should_panic(expected = "Swap amounts must be nonzero")]
+#[test]
+fn an_exact_input_swap_refuses_an_input_that_quotes_nothing() {
+    let _transition = exact_input_turn(&pool_base(), true, 1, 0, Delivery::Cast);
 }

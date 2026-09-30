@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
+    program::{Action, Call, CallInput, Cast, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification,
@@ -115,6 +115,16 @@ fn transfer(descriptor: TokenDescriptor, amount: u128) -> Message {
         amount,
         notify: None,
         delivery: Delivery::Call,
+    }
+}
+
+fn cast_transfer(descriptor: TokenDescriptor, amount: u128) -> Message {
+    Message::Transfer {
+        to: HOLDING_ID_2,
+        descriptor,
+        amount,
+        notify: None,
+        delivery: Delivery::Cast,
     }
 }
 
@@ -629,6 +639,58 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
         ),
         vec![
             Call::new(
+                token_actor(HOLDING_ID_2),
+                &credit(FUNGIBLE, TRANSFER_AMOUNT)
+            )
+            .into()
+        ]
+    );
+}
+
+#[test]
+fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
+    let sender = ShardData::from(&fungible(INIT_SUPPLY));
+    let run = |message: &Message| turn(HOLDING_ID, true, Origin::Root, &sender, message);
+
+    let cast = run(&cast_transfer(FUNGIBLE, TRANSFER_AMOUNT));
+
+    assert_eq!(
+        cast.post_data,
+        run(&transfer(FUNGIBLE, TRANSFER_AMOUNT)).post_data
+    );
+    assert_eq!(
+        cast.sends,
+        vec![
+            Cast::new(
+                token_actor(HOLDING_ID_2),
+                &credit(FUNGIBLE, TRANSFER_AMOUNT)
+            )
+            .into()
+        ]
+    );
+}
+
+#[should_panic(expected = "Sender authorization is missing")]
+#[test]
+fn a_cast_transfer_without_sender_authorization_is_rejected() {
+    let _transition = turn(
+        HOLDING_ID,
+        false,
+        Origin::Root,
+        &ShardData::from(&fungible(INIT_SUPPLY)),
+        &cast_transfer(FUNGIBLE, TRANSFER_AMOUNT),
+    );
+}
+
+#[test]
+fn expected_sends_for_a_cast_transfer_is_one_cast_credit_to_the_recipient() {
+    assert_eq!(
+        expected_sends(
+            Actor::new(HOLDING_ID, TOKEN_PROGRAM_ID),
+            &cast_transfer(FUNGIBLE, TRANSFER_AMOUNT)
+        ),
+        vec![
+            Cast::new(
                 token_actor(HOLDING_ID_2),
                 &credit(FUNGIBLE, TRANSFER_AMOUNT)
             )
