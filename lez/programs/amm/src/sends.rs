@@ -3,7 +3,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::Call,
 };
-use token_core::{NewTokenDefinition, TokenDescriptor, TokenKind};
+use token_core::{Delivery, NewTokenDefinition, TokenDescriptor, TokenKind};
 
 pub const fn token_actor(pool: &PoolDefinition, account_id: AccountId) -> Actor {
     Actor::new(account_id, pool.token_program_id)
@@ -52,6 +52,7 @@ pub fn liquidity_sends(
                 pool.vault_b_id,
                 pool.definition_token_b_id,
                 token_b_amount,
+                Delivery::Call,
             ),
             transfer(
                 pool,
@@ -59,6 +60,7 @@ pub fn liquidity_sends(
                 pool.vault_a_id,
                 pool.definition_token_a_id,
                 token_a_amount,
+                Delivery::Call,
             ),
         ],
         Message::AddLiquidity {
@@ -80,6 +82,7 @@ pub fn liquidity_sends(
                 pool.vault_b_id,
                 pool.definition_token_b_id,
                 amount_to_add_token_b,
+                Delivery::Call,
             ),
             transfer(
                 pool,
@@ -87,6 +90,7 @@ pub fn liquidity_sends(
                 pool.vault_a_id,
                 pool.definition_token_a_id,
                 amount_to_add_token_a,
+                Delivery::Call,
             ),
         ],
         Message::RemoveLiquidity {
@@ -112,6 +116,7 @@ pub fn liquidity_sends(
                 pool.definition_token_b_id,
                 user_b,
                 amount_to_remove_token_b,
+                Delivery::Call,
             ),
             withdrawal(
                 pool,
@@ -120,6 +125,7 @@ pub fn liquidity_sends(
                 pool.definition_token_a_id,
                 user_a,
                 amount_to_remove_token_a,
+                Delivery::Call,
             ),
         ],
     }
@@ -132,8 +138,9 @@ pub fn withdrawal(
     definition_id: AccountId,
     to: AccountId,
     amount: u128,
+    delivery: Delivery,
 ) -> Call {
-    transfer(pool, vault_id, to, definition_id, amount)
+    transfer(pool, vault_id, to, definition_id, amount, delivery)
         .with_pda_seeds(vec![compute_vault_pda_seed(pool_id, definition_id)])
 }
 
@@ -143,6 +150,7 @@ fn transfer(
     to: AccountId,
     definition_id: AccountId,
     amount: u128,
+    delivery: Delivery,
 ) -> Call {
     Call::new(
         token_actor(pool, from),
@@ -151,6 +159,7 @@ fn transfer(
             descriptor: fungible(definition_id),
             amount,
             notify: None,
+            delivery,
         },
     )
 }

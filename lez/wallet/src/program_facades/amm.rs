@@ -1,6 +1,6 @@
 use amm_core::{
-    PoolDefinition, SwapOffer, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda,
-    swap_transfer,
+    PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda, compute_pool_pda,
+    compute_vault_pda, swap_transfer,
 };
 use common::HashType;
 use lee::{
@@ -11,7 +11,7 @@ use lee_core::{
     SharedSecretKey,
     program::{Action, Call, CallInput},
 };
-use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
+use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
@@ -325,11 +325,11 @@ impl SwapTerms {
             self.input_vault_id,
             fungible(self.definition_id_in),
             self.amount_in,
-            SwapOffer {
+            SwapRequest::Offer(SwapOffer {
                 definition_id_out: self.definition_id_out,
                 amount_out: self.amount_out,
                 payout: accounts[1].identity.account_id(),
-            },
+            }),
         )
     }
 
@@ -344,6 +344,7 @@ impl SwapTerms {
             descriptor: fungible(self.definition_id_out),
             amount: self.amount_out,
             notify: None,
+            delivery: Delivery::Call,
         };
         vec![
             expected_sends(vault, &payout)
@@ -787,6 +788,7 @@ mod tests {
                 descriptor: super::fungible(terms.definition_id_out),
                 amount: 45,
                 notify: None,
+                delivery: Delivery::Call,
             },
         )
         .remove(0)

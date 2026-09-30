@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use amm_core::{SwapOffer, swap_transfer};
+use amm_core::{SwapOffer, SwapRequest, swap_transfer};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
@@ -27,7 +27,7 @@ use lee_core::{
     program::{Action, Call, CallInput},
 };
 use sequencer_service_rpc::RpcClient as _;
-use token_core::{TokenDescriptor, TokenHolding, TokenKind, expected_sends};
+use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 use tokio::test;
 use wallet::{AccountIdentity, program_facades::amm::Amm};
 
@@ -54,11 +54,11 @@ fn swap_message(pool: &PoolFixture, trader: &Trader) -> Result<Vec<u8>> {
         pool.vault_a,
         fungible(pool.definition_a),
         OFFER_IN,
-        SwapOffer {
+        SwapRequest::Offer(SwapOffer {
             definition_id_out: pool.definition_b,
             amount_out: OFFER_OUT,
             payout: trader.output,
-        },
+        }),
     ))?)
 }
 
@@ -71,6 +71,7 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
         descriptor: fungible(pool.definition_b),
         amount: OFFER_OUT,
         notify: None,
+        delivery: Delivery::Call,
     };
     vec![
         expected_sends(vault_b, &payout)

@@ -27,7 +27,8 @@
 use std::{collections::HashMap, path::PathBuf, time::Instant};
 
 use amm_core::{
-    PoolDefinition, SwapOffer, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda,
+    PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda, compute_pool_pda,
+    compute_vault_pda,
 };
 use anyhow::{Result, anyhow};
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
@@ -48,7 +49,7 @@ use lee_core::{
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
+use token_core::{Delivery, TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 
 /// The AMM pool fixture's reserves: lp supply is `sqrt(1000*500) = 707`.
 const AMM_RESERVE_A: u128 = 1_000;
@@ -633,6 +634,7 @@ fn cases() -> Result<[Case; 7]> {
                 descriptor: fungible(token_definition_id()),
                 amount: 5_000,
                 notify: None,
+                delivery: Delivery::Call,
             },
         )?,
         Case::new(
@@ -672,11 +674,11 @@ fn cases() -> Result<[Case; 7]> {
                 amm_vault_a_id(),
                 fungible(amm_token_a_def_id()),
                 swap_amount_in,
-                SwapOffer {
+                SwapRequest::Offer(SwapOffer {
                     definition_id_out: amm_token_b_def_id(),
                     amount_out: swap_amount_out,
                     payout: AMM_USER_B,
-                },
+                }),
             ),
         )?,
         Case::new(

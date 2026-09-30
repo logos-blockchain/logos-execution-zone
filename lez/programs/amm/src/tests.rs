@@ -6,7 +6,7 @@
 )]
 
 use amm_core::{
-    Message, PoolDefinition, SwapOffer, compute_liquidity_token_pda,
+    Message, PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda,
     compute_liquidity_token_pda_seed, compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
     swap_transfer,
 };
@@ -14,7 +14,9 @@ use lee_core::{
     account::{AccountId, Actor, ShardData},
     program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
 };
-use token_core::{NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends};
+use token_core::{
+    Delivery, NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends,
+};
 
 const AMM_PROGRAM_ID: AccountId = AccountId::new([1; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([15; 32]);
@@ -167,6 +169,7 @@ fn transfer(from: AccountId, to: AccountId, definition_id: AccountId, amount: u1
             descriptor: fungible_of(definition_id),
             amount,
             notify: None,
+            delivery: Delivery::Call,
         },
     )
 }
@@ -246,7 +249,7 @@ fn notification(
         credited_account,
         descriptor: fungible_of(definition_id_in),
         amount: amount_in,
-        payload: borsh::to_vec(&offer).expect("the offer serializes"),
+        payload: borsh::to_vec(&SwapRequest::Offer(offer)).expect("the offer serializes"),
     }))
     .expect("the notification serializes")
 }
@@ -833,9 +836,7 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
 
         assert_eq!(
             swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out).sends,
-            vec![
-                withdrawal(output_vault, user_output, definition_id_out, amount_out).into()
-            ]
+            vec![withdrawal(output_vault, user_output, definition_id_out, amount_out).into()]
         );
     }
 }
@@ -852,7 +853,7 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
         input_vault,
         fungible_of(definition_id_in),
         99,
-        offer(definition_id_out, 45, user_output),
+        SwapRequest::Offer(offer(definition_id_out, 45, user_output)),
     );
 
     let inline = |action: Action| {

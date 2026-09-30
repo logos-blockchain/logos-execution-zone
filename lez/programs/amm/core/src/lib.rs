@@ -5,7 +5,7 @@ use lee_core::{
     account::{AccountId, Actor, ShardData},
     program::PdaSeed,
 };
-use token_core::{Notify, TokenDescriptor};
+use token_core::{Delivery, Notify, TokenDescriptor};
 
 pub const AMM_NAME: [u8; 3] = *b"amm";
 
@@ -46,6 +46,20 @@ pub struct SwapOffer {
     pub definition_id_out: AccountId,
     pub amount_out: u128,
     pub payout: AccountId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ExactInput {
+    pub definition_id_out: AccountId,
+    pub min_amount_out: u128,
+    pub payout: AccountId,
+    pub delivery: Delivery,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SwapRequest {
+    Offer(SwapOffer),
+    ExactInput(ExactInput),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -269,7 +283,7 @@ pub fn swap_transfer(
     input_vault: AccountId,
     descriptor_in: TokenDescriptor,
     amount_in: u128,
-    offer: SwapOffer,
+    request: SwapRequest,
 ) -> token_core::Message {
     token_core::Message::Transfer {
         to: input_vault,
@@ -277,7 +291,8 @@ pub fn swap_transfer(
         amount: amount_in,
         notify: Some(Notify {
             to: pool,
-            payload: borsh::to_vec(&offer).expect("borsh serialization is infallible"),
+            payload: borsh::to_vec(&request).expect("borsh serialization is infallible"),
         }),
+        delivery: Delivery::Call,
     }
 }

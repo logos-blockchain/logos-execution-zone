@@ -6,7 +6,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{Call, ReceiveInput, Response},
 };
-use token_core::TokenDescriptor;
+use token_core::{Delivery, TokenDescriptor};
 
 #[cfg(test)]
 mod execution_tests;
@@ -66,6 +66,7 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                         descriptor,
                         amount,
                         notify: None,
+                        delivery: Delivery::Call,
                     },
                 )
                 .with_pda_seeds(vec![seed]),

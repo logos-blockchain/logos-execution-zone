@@ -7,7 +7,7 @@ use lee_core::{
     account::{AccountId, Actor, ShardData},
     program::{Action, Call, CallInput, Origin, PdaSeed, ReceiveInput, Transition},
 };
-use token_core::{TokenDescriptor, TokenKind};
+use token_core::{Delivery, TokenDescriptor, TokenKind};
 
 const ATA_PROGRAM_ID: AccountId = AccountId::new([1u8; 32]);
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([2u8; 32]);
@@ -194,6 +194,7 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
                     descriptor: descriptor(),
                     amount: TRANSFER_AMOUNT,
                     notify: None,
+                    delivery: Delivery::Call,
                 },
             )
             .with_pda_seeds(seeds)

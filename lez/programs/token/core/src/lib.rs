@@ -3,7 +3,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Action, Call},
+    program::{Action, Call, Cast},
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,7 @@ pub enum Message {
         descriptor: TokenDescriptor,
         amount: u128,
         notify: Option<Notify>,
+        delivery: Delivery,
     },
     Credit {
         descriptor: TokenDescriptor,
@@ -67,6 +68,12 @@ pub struct Notification {
     pub descriptor: TokenDescriptor,
     pub amount: u128,
     pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Delivery {
+    Call,
+    Cast,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -279,17 +286,18 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
             descriptor,
             amount,
             notify,
-        } => vec![
-            Call::new(
-                own(*to),
-                &Message::Credit {
-                    descriptor: *descriptor,
-                    amount: *amount,
-                    notify: notify.clone(),
-                },
-            )
-            .into(),
-        ],
+            delivery,
+        } => {
+            let credit = Message::Credit {
+                descriptor: *descriptor,
+                amount: *amount,
+                notify: notify.clone(),
+            };
+            vec![match delivery {
+                Delivery::Call => Call::new(own(*to), &credit).into(),
+                Delivery::Cast => Cast::new(own(*to), &credit).into(),
+            }]
+        }
         Message::Credit {
             descriptor,
             amount,

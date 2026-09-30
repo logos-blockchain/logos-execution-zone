@@ -23,7 +23,7 @@ use lee_core::{
     program::{Call, CallInput},
 };
 use test_guest_core::Script;
-use token_core::{TokenDescriptor, TokenHolding, TokenKind};
+use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind};
 
 use super::PpeBenchResult;
 
@@ -162,6 +162,7 @@ const fn token_transfer_message() -> token_core::Message {
         },
         amount: AMOUNT_TO_TRANSFER,
         notify: None,
+        delivery: Delivery::Call,
     }
 }
 

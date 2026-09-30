@@ -4,7 +4,7 @@ use lee_core::{
     Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
     encryption::ViewingPublicKey,
 };
-use token_core::{Message, NewTokenDefinition, TokenDescriptor, TokenHolding};
+use token_core::{Delivery, Message, NewTokenDefinition, TokenDescriptor, TokenHolding};
 
 use crate::{
     AccountIdentity, AccountMention, ExecutionFailureKind, WalletCore,
@@ -495,6 +495,7 @@ fn transfer(
         descriptor,
         amount,
         notify: None,
+        delivery: Delivery::Call,
     }
 }
 

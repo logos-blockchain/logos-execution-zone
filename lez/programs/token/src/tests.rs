@@ -7,8 +7,9 @@ use lee_core::{
     program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
 };
 use token_core::{
-    Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification, Notify,
-    TokenDefinition, TokenDescriptor, TokenHolding, TokenKind, TokenMetadata, expected_sends,
+    Delivery, Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification,
+    Notify, TokenDefinition, TokenDescriptor, TokenHolding, TokenKind, TokenMetadata,
+    expected_sends,
 };
 
 const TOKEN_PROGRAM_ID: AccountId = AccountId::new([5; 32]);
@@ -113,6 +114,7 @@ fn transfer(descriptor: TokenDescriptor, amount: u128) -> Message {
         descriptor,
         amount,
         notify: None,
+        delivery: Delivery::Call,
     }
 }
 
