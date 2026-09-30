@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Actor, Balance, ShardData},
-    program::{Call, PdaSeed, ReceiveInput, Response, Transition},
+    program::{Call, Cast, PdaSeed, ReceiveInput, Response, Transition},
 };
 
 /// Hardcoded native token shard address.
@@ -16,6 +16,10 @@ pub enum Message {
         expect_balance: Option<Balance>,
     },
     Credit(Balance),
+    CastTransfer {
+        to: AccountId,
+        amount: Balance,
+    },
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
@@ -78,31 +82,14 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
             to,
             amount,
             expect_balance,
-        } => {
-            if to == account_id {
-                return Err(TransferError::InvalidInputs);
-            }
-            if !input.is_authorized {
-                return Err(TransferError::UnauthorizedSender { account_id });
-            }
-            let balance = decode_balance(&input.pre_data)?;
-            if let Some(expected) = expect_balance
-                && balance != expected
-            {
-                return Err(TransferError::BalanceMismatch {
-                    account_id,
-                    expected,
-                    actual: balance,
-                });
-            }
-            let post = balance
-                .checked_sub(amount)
-                .ok_or(TransferError::InsufficientBalance { account_id })?;
-            Response::write(encode_balance(post)).send(Call::new(
-                Actor::native_balance(to),
-                &Message::Credit(amount),
-            ))
-        }
+        } => debit(input, to, amount, expect_balance)?.send(Call::new(
+            Actor::native_balance(to),
+            &Message::Credit(amount),
+        )),
+        Message::CastTransfer { to, amount } => debit(input, to, amount, None)?.send(Cast::new(
+            Actor::native_balance(to),
+            &Message::Credit(amount),
+        )),
         Message::Credit(amount) => {
             if !input.from_own_program() {
                 return Err(TransferError::ForeignCredit { account_id });
@@ -114,6 +101,35 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
         }
     };
     Ok(response.into_transition(input.clone()))
+}
+
+fn debit(
+    input: &ReceiveInput,
+    to: AccountId,
+    amount: Balance,
+    expect_balance: Option<Balance>,
+) -> Result<Response, TransferError> {
+    let account_id = input.receiver.account_id;
+    if to == account_id {
+        return Err(TransferError::InvalidInputs);
+    }
+    if !input.is_authorized {
+        return Err(TransferError::UnauthorizedSender { account_id });
+    }
+    let balance = decode_balance(&input.pre_data)?;
+    if let Some(expected) = expect_balance
+        && balance != expected
+    {
+        return Err(TransferError::BalanceMismatch {
+            account_id,
+            expected,
+            actual: balance,
+        });
+    }
+    let post = balance
+        .checked_sub(amount)
+        .ok_or(TransferError::InsufficientBalance { account_id })?;
+    Ok(Response::write(encode_balance(post)))
 }
 
 /// A transfer out of an account the caller holds under `seed`.
