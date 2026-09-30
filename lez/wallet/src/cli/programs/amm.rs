@@ -52,8 +52,20 @@ pub enum AmmProgramAgnosticSubcommand {
         to: CliAccountMention,
         #[arg(long)]
         amount_in: u128,
+        #[arg(
+            long,
+            conflicts_with = "min_amount_out",
+            required_unless_present = "min_amount_out"
+        )]
+        amount_out: Option<u128>,
+        /// Instead of `amount-out`: pay exactly `amount-in` for whatever the pool's price pays
+        /// when the swap settles, failing if that is less than this.
         #[arg(long)]
-        amount_out: u128,
+        min_amount_out: Option<u128>,
+        /// Cast the payout as a pending message for a later transaction to receive, instead of
+        /// crediting `to` in this one. A private `to` requires it.
+        #[arg(long, requires = "min_amount_out")]
+        cast: bool,
     },
     /// Estimate a swap from the pool's current reserves.
     ///
@@ -139,26 +151,54 @@ impl AmmProgramAgnosticSubcommand {
         finalize(wallet_core, tx_hash, secrets, &holdings).await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "extracted match arm with many destructured fields"
+    )]
     async fn handle_swap(
         pool: AccountId,
         from: CliAccountMention,
         to: CliAccountMention,
         amount_in: u128,
-        amount_out: u128,
+        amount_out: Option<u128>,
+        min_amount_out: Option<u128>,
+        cast: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let user_input = identity(from, true, wallet_core)?;
         let user_output = identity(to, false, wallet_core)?;
         let traders = [user_input.clone(), user_output.clone()];
 
-        println!(
-            "Paying exactly {amount_in} from {} for exactly {amount_out} into {} through pool {pool}",
-            user_input.account_id(),
-            user_output.account_id()
-        );
-        let (tx_hash, secrets) = Amm(wallet_core)
-            .send_swap(pool, user_input, user_output, amount_in, amount_out)
-            .await?;
+        let (tx_hash, secrets) = match (amount_out, min_amount_out) {
+            (Some(amount_out), None) => {
+                println!(
+                    "Paying exactly {amount_in} from {} for exactly {amount_out} into {} through pool {pool}",
+                    user_input.account_id(),
+                    user_output.account_id()
+                );
+                Amm(wallet_core)
+                    .send_swap(pool, user_input, user_output, amount_in, amount_out)
+                    .await?
+            }
+            (None, Some(min_amount_out)) => {
+                println!(
+                    "Paying exactly {amount_in} from {} for at least {min_amount_out} into {} through pool {pool}",
+                    user_input.account_id(),
+                    user_output.account_id()
+                );
+                Amm(wallet_core)
+                    .send_swap_exact_input(
+                        pool,
+                        user_input,
+                        user_output,
+                        amount_in,
+                        min_amount_out,
+                        crate::cli::delivery(cast),
+                    )
+                    .await?
+            }
+            _ => anyhow::bail!("Give exactly one of --amount-out and --min-amount-out"),
+        };
         finalize(wallet_core, tx_hash, secrets, &traders).await
     }
 
@@ -256,7 +296,21 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 to,
                 amount_in,
                 amount_out,
-            } => Self::handle_swap(pool, from, to, amount_in, amount_out, wallet_core).await,
+                min_amount_out,
+                cast,
+            } => {
+                Self::handle_swap(
+                    pool,
+                    from,
+                    to,
+                    amount_in,
+                    amount_out,
+                    min_amount_out,
+                    cast,
+                    wallet_core,
+                )
+                .await
+            }
             Self::Quote {
                 pool,
                 token_definition,

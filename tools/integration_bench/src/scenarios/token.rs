@@ -44,6 +44,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_keys: None,
                     to_identifier: Some(lee_core::Identifier::ZERO),
                     amount: 1_000,
+                    cast: false,
                 }),
             )
             .await
@@ -65,6 +66,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to_keys: None,
                     to_identifier: Some(lee_core::Identifier::ZERO),
                     amount: 500,
+                    cast: false,
                 }),
             )
             .await

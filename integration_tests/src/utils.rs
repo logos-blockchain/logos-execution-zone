@@ -180,6 +180,7 @@ pub async fn token_send(
         to_keys: None,
         to_identifier: Some(lee_core::Identifier::ZERO),
         amount,
+        cast: false,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     info!("Waiting for next block creation");

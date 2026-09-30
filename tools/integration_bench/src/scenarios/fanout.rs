@@ -53,6 +53,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to_keys: None,
                         to_identifier: Some(lee_core::Identifier::ZERO),
                         amount: AMOUNT_PER_TRANSFER,
+                        cast: false,
                     }),
                 )
                 .await

@@ -1,6 +1,6 @@
 use amm_core::{
-    PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda, compute_pool_pda,
-    compute_vault_pda, swap_transfer,
+    ExactInput, PoolDefinition, SwapOffer, SwapRequest, compute_liquidity_token_pda,
+    compute_pool_pda, compute_vault_pda, swap_transfer,
 };
 use common::HashType;
 use lee::{
@@ -130,6 +130,46 @@ impl Amm<'_> {
         amount_in: u128,
         amount_out: u128,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        self.send_swap_request(
+            pool_id,
+            user_input,
+            user_output,
+            amount_in,
+            Request::Offer { amount_out },
+        )
+        .await
+    }
+
+    pub async fn send_swap_exact_input(
+        &self,
+        pool_id: AccountId,
+        user_input: AccountIdentity,
+        user_output: AccountIdentity,
+        amount_in: u128,
+        min_amount_out: u128,
+        delivery: Delivery,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        self.send_swap_request(
+            pool_id,
+            user_input,
+            user_output,
+            amount_in,
+            Request::ExactInput {
+                min_amount_out,
+                delivery,
+            },
+        )
+        .await
+    }
+
+    async fn send_swap_request(
+        &self,
+        pool_id: AccountId,
+        user_input: AccountIdentity,
+        user_output: AccountIdentity,
+        amount_in: u128,
+        request: Request,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let pool = pool_definition(self.0, pool_id).await?;
         let source = token_holding(self.0, &user_input, pool.token_program_id).await?;
         let terms = SwapTerms::new(
@@ -138,13 +178,22 @@ impl Amm<'_> {
             user_input.account_id(),
             &source,
             amount_in,
-            amount_out,
+            request,
         )?;
-        let accounts = terms.accounts(user_input, user_output);
+        let mut accounts = terms.accounts(user_input, user_output);
         let transfer = terms.transfer(&accounts);
+        if matches!(
+            terms.request,
+            Request::ExactInput {
+                delivery: Delivery::Cast,
+                ..
+            }
+        ) {
+            accounts.remove(1);
+        }
         let message = Program::serialize_message(&transfer).expect("Message should serialize");
         if accounts.iter().any(|mention| mention.identity.is_private()) {
-            let assumed = terms.promised_payout(&accounts);
+            let assumed = terms.promised_payout(&accounts)?;
             self.0
                 .send_privacy_preserving_tx_assuming(
                     accounts,
@@ -256,7 +305,17 @@ struct SwapTerms {
     definition_id_in: AccountId,
     definition_id_out: AccountId,
     amount_in: u128,
-    amount_out: u128,
+    request: Request,
+}
+
+enum Request {
+    Offer {
+        amount_out: u128,
+    },
+    ExactInput {
+        min_amount_out: u128,
+        delivery: Delivery,
+    },
 }
 
 impl SwapTerms {
@@ -266,7 +325,7 @@ impl SwapTerms {
         source_id: AccountId,
         source: &TokenHolding,
         amount_in: u128,
-        amount_out: u128,
+        request: Request,
     ) -> Result<Self, ExecutionFailureKind> {
         // The wallet proves private swaps with the built-in token program only, so both paths
         // refuse any other rather than one of them failing late.
@@ -292,7 +351,7 @@ impl SwapTerms {
             definition_id_in: input.definition_id,
             definition_id_out: output.definition_id,
             amount_in,
-            amount_out,
+            request,
         })
     }
 
@@ -320,16 +379,28 @@ impl SwapTerms {
 
     // The token transfer into the input vault that notifies the pool with the offer.
     fn transfer(&self, accounts: &[AccountMention]) -> token_core::Message {
+        let payout = accounts[1].identity.account_id();
         swap_transfer(
             Actor::new(self.pool_id, programs::amm_account_id()),
             self.input_vault_id,
             fungible(self.definition_id_in),
             self.amount_in,
-            SwapRequest::Offer(SwapOffer {
-                definition_id_out: self.definition_id_out,
-                amount_out: self.amount_out,
-                payout: accounts[1].identity.account_id(),
-            }),
+            match self.request {
+                Request::Offer { amount_out } => SwapRequest::Offer(SwapOffer {
+                    definition_id_out: self.definition_id_out,
+                    amount_out,
+                    payout,
+                }),
+                Request::ExactInput {
+                    min_amount_out,
+                    delivery,
+                } => SwapRequest::ExactInput(ExactInput {
+                    definition_id_out: self.definition_id_out,
+                    min_amount_out,
+                    payout,
+                    delivery,
+                }),
+            },
         )
     }
 
@@ -337,16 +408,35 @@ impl SwapTerms {
     // vault credits exactly the offered amount. So the proof promises it instead of deriving it
     // from today's reserves, and settlement discharges it only if the pool affords the offer
     // then.
-    fn promised_payout(&self, accounts: &[AccountMention]) -> Vec<Vec<Assumption>> {
+    fn promised_payout(
+        &self,
+        accounts: &[AccountMention],
+    ) -> Result<Vec<Vec<Assumption>>, ExecutionFailureKind> {
+        let amount_out = match self.request {
+            Request::Offer { amount_out } => amount_out,
+            Request::ExactInput {
+                delivery: Delivery::Call,
+                ..
+            } if accounts[1].identity.is_private() => {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(
+                        "A private exact-input payout must be cast: its amount is unknown when \
+                         proving"
+                            .to_owned(),
+                    ),
+                ));
+            }
+            Request::ExactInput { .. } => return Ok(vec![Vec::new()]),
+        };
         let vault = Actor::new(self.output_vault_id, self.token_program_id);
         let payout = token_core::Message::Transfer {
             to: accounts[1].identity.account_id(),
             descriptor: fungible(self.definition_id_out),
-            amount: self.amount_out,
+            amount: amount_out,
             notify: None,
             delivery: Delivery::Call,
         };
-        vec![
+        Ok(vec![
             expected_sends(vault, &payout)
                 .into_iter()
                 .filter_map(|action| {
@@ -373,7 +463,7 @@ impl SwapTerms {
                         })
                 })
                 .collect(),
-        ]
+        ])
     }
 }
 
@@ -630,18 +720,21 @@ mod tests {
             SOURCE,
             &fungible(source),
             amount_in,
-            amount_out,
+            Request::Offer { amount_out },
         )
         .unwrap()
     }
 
     fn signed_terms(offer: &SwapTerms) -> (AccountId, AccountId, u128, u128) {
         assert_eq!(offer.token_program_id, pool().token_program_id);
+        let Request::Offer { amount_out } = offer.request else {
+            panic!("a fixed offer signs its amount out");
+        };
         (
             offer.definition_id_in,
             offer.definition_id_out,
             offer.amount_in,
-            offer.amount_out,
+            amount_out,
         )
     }
 
@@ -672,7 +765,14 @@ mod tests {
             token_program_id: AccountId::new([4; 32]),
             ..pool()
         };
-        let Err(err) = SwapTerms::new(POOL, &pool, SOURCE, &fungible(TOKEN_A), 100, 45) else {
+        let Err(err) = SwapTerms::new(
+            POOL,
+            &pool,
+            SOURCE,
+            &fungible(TOKEN_A),
+            100,
+            Request::Offer { amount_out: 45 },
+        ) else {
             panic!("the offer was built through a token program the wallet cannot prove with");
         };
         assert!(
@@ -695,7 +795,14 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                SwapTerms::new(POOL, &pool(), SOURCE, &source, 100, 45),
+                SwapTerms::new(
+                    POOL,
+                    &pool(),
+                    SOURCE,
+                    &source,
+                    100,
+                    Request::Offer { amount_out: 45 }
+                ),
                 Err(ExecutionFailureKind::AccountDataError(account_id)) if account_id == SOURCE
             ));
         }
@@ -773,9 +880,11 @@ mod tests {
     fn a_swap_promises_its_exact_payout_only_into_a_private_holding() {
         let terms = offer(TOKEN_A, 100, 45);
         let payout_to = |destination: AccountIdentity| {
-            terms.promised_payout(
-                &terms.accounts(AccountIdentity::PrivateOwned(SOURCE), destination),
-            )
+            terms
+                .promised_payout(
+                    &terms.accounts(AccountIdentity::PrivateOwned(SOURCE), destination),
+                )
+                .unwrap()
         };
         let vault = Actor::new(terms.output_vault_id, terms.token_program_id);
         let Action::Call(Call {

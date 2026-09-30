@@ -20,6 +20,7 @@ use crate::{
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
         network::NetworkAlias,
+        pending::PendingSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, program_loader::ProgramLoaderSubcommand,
@@ -37,6 +38,7 @@ pub mod config;
 pub mod group;
 pub mod keycard;
 pub mod network;
+pub mod pending;
 pub mod programs;
 pub mod statistics;
 
@@ -76,6 +78,9 @@ pub enum Command {
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
+    /// Pending messages cast to this wallet's accounts (list, receive).
+    #[command(subcommand)]
+    Pending(PendingSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -270,6 +275,9 @@ pub async fn execute_subcommand(
                 .await?
         }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Pending(pending_subcommand) => {
+            pending_subcommand.handle_subcommand(wallet_core).await?
+        }
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -323,6 +331,14 @@ pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> 
 #[must_use]
 pub fn identifier_or_random(identifier: Option<lee_core::Identifier>) -> lee_core::Identifier {
     identifier.unwrap_or_else(|| lee_core::Identifier::new(rand::random()))
+}
+
+pub(crate) const fn delivery(cast: bool) -> token_core::Delivery {
+    if cast {
+        token_core::Delivery::Cast
+    } else {
+        token_core::Delivery::Call
+    }
 }
 
 pub fn read_password_from_stdin() -> Result<String> {

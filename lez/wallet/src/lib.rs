@@ -20,6 +20,7 @@ use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
+    PublicIdentity,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -28,7 +29,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
-    program::{CallInput, MessageData},
+    program::{CallInput, MessageData, StoredMessage},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -610,6 +611,50 @@ impl WalletCore {
         Ok(account)
     }
 
+    pub async fn get_pending_messages(
+        &self,
+        from_sequence: u128,
+        limit: u32,
+    ) -> Result<Vec<StoredMessage>> {
+        Ok(self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| {
+                client.get_pending_messages(from_sequence, limit).await
+            })
+            .await?)
+    }
+
+    pub async fn owned_pending_messages(&self) -> Result<Vec<StoredMessage>> {
+        const PAGE: u16 = 256;
+        let owned: HashSet<AccountId> = {
+            let key_chain = self.storage.key_chain();
+            key_chain
+                .public_account_ids()
+                .chain(key_chain.private_account_ids())
+                .map(|(account_id, _)| account_id)
+                .collect()
+        };
+
+        let mut records = Vec::new();
+        let mut from_sequence = 0;
+        loop {
+            let page = self
+                .get_pending_messages(from_sequence, u32::from(PAGE))
+                .await?;
+            let last_page = page.len() < usize::from(PAGE);
+            if let Some(last) = page.last() {
+                from_sequence = last.sequence.saturating_add(1);
+            }
+            records.extend(
+                page.into_iter()
+                    .filter(|record| owned.contains(&record.body.to.account_id)),
+            );
+            if last_page {
+                return Ok(records);
+            }
+        }
+    }
+
     pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
         match account_id {
             AccountIdWithPrivacy::Public(acc_id) => self.get_account_public(acc_id).await,
@@ -835,8 +880,20 @@ impl WalletCore {
         programs: &ProgramCatalog,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_proven(accounts, root, message, programs, None, tx_pre_check)
-            .await
+        let root = CallInput::Inline {
+            to: root_actor(&accounts, root)?,
+            message,
+        };
+        self.send_proven(
+            accounts,
+            root,
+            Vec::new(),
+            Vec::new(),
+            programs,
+            None,
+            tx_pre_check,
+        )
+        .await
     }
 
     // Proves under `assumed` instead of deriving it from current public state: a conditional
@@ -849,20 +906,36 @@ impl WalletCore {
         assumed: Vec<Vec<Assumption>>,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_proven(accounts, root, message, programs, Some(assumed), |_| Ok(()))
-            .await
+        let root = CallInput::Inline {
+            to: root_actor(&accounts, root)?,
+            message,
+        };
+        self.send_proven(
+            accounts,
+            root,
+            Vec::new(),
+            Vec::new(),
+            programs,
+            Some(assumed),
+            |_| Ok(()),
+        )
+        .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the proving path takes every input of a privacy-preserving transaction"
+    )]
     async fn send_proven(
         &self,
         accounts: Vec<AccountMention>,
-        root: usize,
-        message: MessageData,
+        root: CallInput,
+        messages: Vec<StoredMessage>,
+        identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
         assumed: Option<Vec<Vec<Assumption>>>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let to = root_actor(&accounts, root)?;
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -876,13 +949,14 @@ impl WalletCore {
 
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
-            root: CallInput::Inline { to, message },
+            root,
             public_actors: acc_manager.public_actors(),
             signers: acc_manager.signers(),
             private_witnesses: acc_manager.private_witnesses()?,
             public_shards: acc_manager.public_shards(),
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
+            messages,
         };
 
         let programs = programs.clone();
@@ -892,10 +966,10 @@ impl WalletCore {
         })
         .await??;
 
-        let message = lee::privacy_preserving_transaction::message::Message::from_circuit_output(
-            acc_manager.public_account_nonces(),
-            output,
-        );
+        let message = Message {
+            identities,
+            ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+        };
 
         let message_hash = message.hash();
         let signatures_public_keys = acc_manager
@@ -965,6 +1039,22 @@ impl WalletCore {
         payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let root = CallInput::Inline {
+            to: root_actor(&accounts, root)?,
+            message,
+        };
+        self.send_public(accounts, root, Vec::new(), payer, tx_pre_check)
+            .await
+    }
+
+    async fn send_public(
+        &self,
+        accounts: Vec<AccountMention>,
+        root: CallInput,
+        identities: Vec<PublicIdentity>,
+        payer: Option<AccountId>,
+        tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(|mention| mention.identity.is_private()) {
             return Err(ExecutionFailureKind::TransactionBuildError(
@@ -974,7 +1064,6 @@ impl WalletCore {
             ));
         }
 
-        let to = root_actor(&accounts, root)?;
         let mut acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         tx_pre_check(&acc_manager.selected_shards())?;
@@ -1017,9 +1106,8 @@ impl WalletCore {
             }
         };
 
-        let message = lee::public_transaction::Message::new_preserialized(
-            to,
-            message,
+        let message = lee::public_transaction::Message::new(
+            root,
             public_actors,
             nonces,
             Some(lee::FeeDeclaration::new(
@@ -1028,6 +1116,7 @@ impl WalletCore {
                 0,
                 max_fee_for(self.config.gas_limit),
             )),
+            identities,
         );
 
         let message_hash = message.hash();
@@ -1051,6 +1140,64 @@ impl WalletCore {
                 .metered_send_transaction(LeeTransaction::Public(tx))
                 .await,
         )
+    }
+
+    pub async fn receive_pending_message(
+        &self,
+        record: StoredMessage,
+        payer: Option<AccountId>,
+        programs: &ProgramCatalog,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let to = record.body.to;
+        let root = CallInput::InFlight(record.id());
+        if self
+            .storage
+            .key_chain()
+            .private_account(to.account_id)
+            .is_some()
+        {
+            let accounts = vec![
+                AccountIdentity::PrivateOwned(to.account_id)
+                    .select_program_shard(to.program_account_id),
+            ];
+            return self
+                .send_proven(
+                    accounts,
+                    root,
+                    vec![record],
+                    Vec::new(),
+                    programs,
+                    None,
+                    |_| Ok(()),
+                )
+                .await;
+        }
+
+        let public_key = self
+            .get_account_public_signing_key(to.account_id)
+            .map(lee::PublicKey::new_from_private_key)
+            .ok_or_else(|| {
+                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                    format!(
+                        "Message destination {} is not an account of this wallet",
+                        to.account_id
+                    ),
+                ))
+            })?;
+        let identity = if payer.is_none() {
+            AccountIdentity::Public(to.account_id)
+        } else {
+            AccountIdentity::PublicNoSign(to.account_id)
+        };
+        self.send_public(
+            vec![identity.select_program_shard(to.program_account_id)],
+            root,
+            vec![PublicIdentity::Key(public_key)],
+            payer,
+            |_| Ok(()),
+        )
+        .await
+        .map(|tx_hash| (tx_hash, Vec::new()))
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {

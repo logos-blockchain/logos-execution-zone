@@ -44,8 +44,7 @@ impl Token<'_> {
         accounts: [AccountIdentity; 2],
         message: impl FnOnce(&[AccountMention]) -> Message,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let accounts = token_mentions(accounts);
-        let message = message(&accounts);
+        let (accounts, message) = token_mentions(accounts, message);
         self.0.send_pub_tx(accounts, 0, serialize(&message)).await
     }
 
@@ -54,8 +53,7 @@ impl Token<'_> {
         accounts: [AccountIdentity; 2],
         message: impl FnOnce(&[AccountMention]) -> Message,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let accounts = token_mentions(accounts);
-        let message = message(&accounts);
+        let (accounts, message) = token_mentions(accounts, message);
         self.0
             .send_privacy_preserving_tx(
                 accounts,
@@ -145,9 +143,10 @@ impl Token<'_> {
         sender: AccountIdentity,
         recipient: AccountIdentity,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<HashType, ExecutionFailureKind> {
         let descriptor = self.descriptor(&sender).await?;
-        self.send_public([sender, recipient], transfer(descriptor, amount))
+        self.send_public([sender, recipient], transfer(descriptor, amount, delivery))
             .await
     }
 
@@ -156,12 +155,13 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let sender = self.private(sender_account_id)?;
         let descriptor = self.descriptor(&sender).await?;
         self.send_private(
             [sender, self.private(recipient_account_id)?],
-            transfer(descriptor, amount),
+            transfer(descriptor, amount, delivery),
         )
         .await
         .map(|(resp, secrets)| {
@@ -183,6 +183,7 @@ impl Token<'_> {
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let sender = self.private(sender_account_id)?;
         let descriptor = self.descriptor(&sender).await?;
@@ -191,7 +192,7 @@ impl Token<'_> {
                 sender,
                 foreign(recipient_npk, recipient_vpk, recipient_identifier),
             ],
-            transfer(descriptor, amount),
+            transfer(descriptor, amount, delivery),
         )
         .await
         .map(|(resp, secrets)| {
@@ -211,12 +212,13 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let sender = self.private(sender_account_id)?;
         let descriptor = self.descriptor(&sender).await?;
         self.send_private(
             [sender, AccountIdentity::Public(recipient_account_id)],
-            transfer(descriptor, amount),
+            transfer(descriptor, amount, delivery),
         )
         .await
         .map(|(resp, secrets)| (resp, only(secrets, "expected sender's secret")))
@@ -227,11 +229,12 @@ impl Token<'_> {
         sender: AccountIdentity,
         recipient_account_id: AccountId,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let descriptor = self.descriptor(&sender).await?;
         self.send_private(
             [sender, self.private(recipient_account_id)?],
-            transfer(descriptor, amount),
+            transfer(descriptor, amount, delivery),
         )
         .await
         .map(|(resp, secrets)| (resp, only(secrets, "expected recipient's secret")))
@@ -244,6 +247,7 @@ impl Token<'_> {
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
         amount: u128,
+        delivery: Delivery,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let descriptor = self.descriptor(&sender).await?;
         self.send_private(
@@ -251,7 +255,7 @@ impl Token<'_> {
                 sender,
                 foreign(recipient_npk, recipient_vpk, recipient_identifier),
             ],
-            transfer(descriptor, amount),
+            transfer(descriptor, amount, delivery),
         )
         .await
         .map(|(resp, secrets)| (resp, only(secrets, "expected recipient's secret")))
@@ -454,12 +458,27 @@ impl Token<'_> {
     }
 }
 
-fn token_mentions(accounts: [AccountIdentity; 2]) -> Vec<AccountMention> {
+fn token_mentions(
+    accounts: [AccountIdentity; 2],
+    message: impl FnOnce(&[AccountMention]) -> Message,
+) -> (Vec<AccountMention>, Message) {
     let token_program_id = programs::token_account_id();
-    accounts
+    let mut accounts: Vec<AccountMention> = accounts
         .into_iter()
         .map(|account| account.select_program_shard(token_program_id))
-        .collect()
+        .collect();
+    let message = message(&accounts);
+    // A cast credit reaches its recipient in a later transaction.
+    if matches!(
+        message,
+        Message::Transfer {
+            delivery: Delivery::Cast,
+            ..
+        }
+    ) {
+        accounts.truncate(1);
+    }
+    (accounts, message)
 }
 
 fn serialize(message: &Message) -> Vec<u8> {
@@ -489,13 +508,14 @@ fn new_definition(name: String, total_supply: u128) -> impl FnOnce(&[AccountMent
 fn transfer(
     descriptor: TokenDescriptor,
     amount: u128,
+    delivery: Delivery,
 ) -> impl FnOnce(&[AccountMention]) -> Message {
     move |accounts| Message::Transfer {
         to: accounts[1].identity.account_id(),
         descriptor,
         amount,
         notify: None,
-        delivery: Delivery::Call,
+        delivery,
     }
 }
 
