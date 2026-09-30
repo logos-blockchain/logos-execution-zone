@@ -545,3 +545,76 @@ fn pair(secrets: Vec<SharedSecretKey>, first: &str, second: &str) -> [SharedSecr
     let second = secrets.next().expect(second);
     [first, second]
 }
+
+#[cfg(test)]
+mod tests {
+    use token_core::TokenKind;
+
+    use super::*;
+
+    const SENDER: AccountId = AccountId::new([1; 32]);
+    const RECIPIENT: AccountId = AccountId::new([2; 32]);
+    const DEFINITION: AccountId = AccountId::new([3; 32]);
+
+    fn descriptor() -> TokenDescriptor {
+        TokenDescriptor {
+            definition_id: DEFINITION,
+            kind: TokenKind::Fungible,
+        }
+    }
+
+    fn mentioned(delivery: Delivery) -> (Vec<(AccountIdentity, AccountId)>, Message) {
+        let (mentions, message) = token_mentions(
+            [
+                AccountIdentity::Public(SENDER),
+                AccountIdentity::PrivateOwned(RECIPIENT),
+            ],
+            transfer(descriptor(), 30, delivery),
+        );
+        let shards = mentions
+            .into_iter()
+            .map(|mention| (mention.identity, mention.program_account_id))
+            .collect();
+        (shards, message)
+    }
+
+    fn transfer_to_recipient(delivery: Delivery) -> Message {
+        Message::Transfer {
+            to: RECIPIENT,
+            descriptor: descriptor(),
+            amount: 30,
+            notify: None,
+            delivery,
+        }
+    }
+
+    #[test]
+    fn a_cast_transfer_mentions_only_its_sender_yet_still_addresses_its_recipient() {
+        assert_eq!(
+            mentioned(Delivery::Cast),
+            (
+                vec![(
+                    AccountIdentity::Public(SENDER),
+                    programs::token_account_id()
+                )],
+                transfer_to_recipient(Delivery::Cast)
+            )
+        );
+    }
+
+    #[test]
+    fn a_called_transfer_mentions_both_its_sender_and_its_recipient() {
+        let token_program_id = programs::token_account_id();
+
+        assert_eq!(
+            mentioned(Delivery::Call),
+            (
+                vec![
+                    (AccountIdentity::Public(SENDER), token_program_id),
+                    (AccountIdentity::PrivateOwned(RECIPIENT), token_program_id)
+                ],
+                transfer_to_recipient(Delivery::Call)
+            )
+        );
+    }
+}

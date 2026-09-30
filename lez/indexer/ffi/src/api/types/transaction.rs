@@ -1138,4 +1138,109 @@ mod tests {
             assert_eq!(back.message.fee, original.message.fee);
         }
     }
+
+    fn account_id(tag: u8) -> AccountId {
+        AccountId { value: [tag; 32] }
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> Actor {
+        Actor {
+            account_id: account_id(account_tag),
+            program_account_id: account_id(program_tag),
+        }
+    }
+
+    fn identities() -> Vec<PublicIdentity> {
+        vec![
+            PublicIdentity::Key(PublicKey([1; 32])),
+            PublicIdentity::Pda {
+                program: account_id(2),
+                seed: PdaSeed([3; 32]),
+            },
+        ]
+    }
+
+    #[test]
+    fn public_transaction_in_flight_root_and_identities_roundtrip_over_the_ffi() {
+        let original = PublicTransaction {
+            hash: HashType([4; 32]),
+            message: PublicMessage {
+                root: CallInput::InFlight(MessageId([5; 32])),
+                public_actors: vec![actor(6, 7)],
+                nonces: vec![],
+                fee: None,
+                identities: identities(),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: None,
+            },
+        };
+
+        let ffi: FfiPublicTransactionBody = original.clone().into();
+        let back: PublicTransaction = Box::new(ffi).into();
+
+        assert_eq!(back.message, original.message);
+    }
+
+    #[test]
+    fn private_transaction_in_flight_boundary_claims_and_identities_roundtrip_over_the_ffi() {
+        let original = PrivacyPreservingTransaction {
+            hash: HashType([4; 32]),
+            message: PrivacyPreservingMessage {
+                declared: Declared::default(),
+                boundary: Boundary {
+                    outputs: vec![
+                        Output {
+                            to: actor(5, 6),
+                            message: vec![7],
+                            origin: Origin::Root,
+                            issuer: None,
+                            in_flight: Some(MessageId([8; 32])),
+                            grants: vec![],
+                            pda_seeds: vec![],
+                        },
+                        Output {
+                            to: actor(9, 10),
+                            message: vec![11],
+                            origin: Origin::Program(account_id(12)),
+                            issuer: Some(account_id(13)),
+                            in_flight: Some(MessageId([14; 32])),
+                            grants: vec![account_id(15)],
+                            pda_seeds: vec![PdaSeed([16; 32])],
+                        },
+                    ],
+                    assumptions: vec![Assumption {
+                        from: actor(17, 18),
+                        to: actor(19, 20),
+                        message: vec![21],
+                        in_flight: Some(MessageId([22; 32])),
+                        grants: vec![],
+                        pda_seeds: vec![],
+                    }],
+                    publications: vec![MessageBody {
+                        origin_program: account_id(23),
+                        to: actor(24, 25),
+                        message: vec![26],
+                    }],
+                    schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Publish],
+                },
+                consumed: vec![MessageId([27; 32]), MessageId([28; 32])],
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow((None, None)),
+                timestamp_validity_window: ValidityWindow((None, None)),
+                identities: identities(),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: Some(Proof(vec![])),
+            },
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
+
+        assert_eq!(back.message, original.message);
+    }
 }

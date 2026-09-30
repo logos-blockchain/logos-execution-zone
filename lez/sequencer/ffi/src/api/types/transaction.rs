@@ -1206,4 +1206,106 @@ mod tests {
             assert_eq!(back.message.fee, original.message.fee);
         }
     }
+
+    fn account_id(tag: u8) -> AccountId {
+        AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> Actor {
+        Actor {
+            account_id: account_id(account_tag),
+            program_account_id: account_id(program_tag),
+        }
+    }
+
+    fn identities() -> Vec<PublicIdentity> {
+        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
+        vec![
+            PublicIdentity::Key(PublicKey::new_from_private_key(&signer)),
+            PublicIdentity::Pda {
+                program: account_id(2),
+                seed: PdaSeed::new([3; 32]),
+            },
+        ]
+    }
+
+    #[test]
+    fn public_transaction_in_flight_root_and_identities_roundtrip_over_the_ffi() {
+        let original = PublicTransaction {
+            message: lee::public_transaction::Message {
+                root: CallInput::InFlight(MessageId::new([4; 32])),
+                public_actors: vec![actor(5, 6)],
+                nonces: vec![],
+                fee: None,
+                identities: identities(),
+            },
+            witness_set: lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        };
+
+        let ffi: FfiPublicTransactionBody = original.clone().into();
+        let back: PublicTransaction = Box::new(ffi).try_into().unwrap();
+
+        assert_eq!(back.message, original.message);
+    }
+
+    #[test]
+    fn private_transaction_in_flight_boundary_claims_and_identities_roundtrip_over_the_ffi() {
+        let original = PrivacyPreservingTransaction {
+            message: lee::privacy_preserving_transaction::Message {
+                declared: Declared::default(),
+                boundary: Boundary {
+                    outputs: vec![
+                        Output {
+                            to: actor(4, 5),
+                            message: vec![6],
+                            origin: Origin::Root,
+                            issuer: None,
+                            in_flight: Some(MessageId::new([7; 32])),
+                            grants: vec![],
+                            pda_seeds: vec![],
+                        },
+                        Output {
+                            to: actor(8, 9),
+                            message: vec![10],
+                            origin: Origin::Program(account_id(11)),
+                            issuer: Some(account_id(12)),
+                            in_flight: Some(MessageId::new([13; 32])),
+                            grants: vec![account_id(14)],
+                            pda_seeds: vec![PdaSeed::new([15; 32])],
+                        },
+                    ],
+                    assumptions: vec![Assumption {
+                        from: actor(16, 17),
+                        to: actor(18, 19),
+                        message: vec![20],
+                        in_flight: Some(MessageId::new([21; 32])),
+                        grants: vec![],
+                        pda_seeds: vec![],
+                    }],
+                    publications: vec![MessageBody {
+                        origin_program: account_id(22),
+                        to: actor(23, 24),
+                        message: vec![25],
+                    }],
+                    schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Publish],
+                },
+                consumed: vec![MessageId::new([26; 32]), MessageId::new([27; 32])],
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow::new_unbounded(),
+                timestamp_validity_window: ValidityWindow::new_unbounded(),
+                program_image_claims: vec![],
+                identities: identities(),
+            },
+            witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                vec![],
+                Proof::from_inner(vec![]),
+            ),
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();
+
+        assert_eq!(back.message, original.message);
+    }
 }

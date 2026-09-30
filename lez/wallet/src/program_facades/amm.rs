@@ -725,6 +725,21 @@ mod tests {
         .unwrap()
     }
 
+    fn exact_input(delivery: Delivery) -> SwapTerms {
+        SwapTerms::new(
+            POOL,
+            &pool(),
+            SOURCE,
+            &fungible(TOKEN_A),
+            100,
+            Request::ExactInput {
+                min_amount_out: 40,
+                delivery,
+            },
+        )
+        .unwrap()
+    }
+
     fn signed_terms(offer: &SwapTerms) -> (AccountId, AccountId, u128, u128) {
         assert_eq!(offer.token_program_id, pool().token_program_id);
         let Request::Offer { amount_out } = offer.request else {
@@ -919,6 +934,45 @@ mod tests {
         assert_eq!(
             payout_to(AccountIdentity::Public(DESTINATION)),
             vec![Vec::new()]
+        );
+    }
+
+    #[test]
+    fn an_exact_input_swap_promises_an_empty_group_when_cast_or_paid_publicly() {
+        for (delivery, destination) in [
+            (Delivery::Cast, AccountIdentity::PrivateOwned(DESTINATION)),
+            (Delivery::Cast, AccountIdentity::Public(DESTINATION)),
+            (Delivery::Call, AccountIdentity::Public(DESTINATION)),
+        ] {
+            let terms = exact_input(delivery);
+            let accounts =
+                terms.accounts(AccountIdentity::PrivateOwned(SOURCE), destination.clone());
+            assert_eq!(
+                terms.promised_payout(&accounts).unwrap(),
+                vec![Vec::new()],
+                "{delivery:?} into {destination:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exact_input_payout_into_a_private_holding_is_refused_unless_it_is_cast() {
+        let terms = exact_input(Delivery::Call);
+        let accounts = terms.accounts(
+            AccountIdentity::PrivateOwned(SOURCE),
+            AccountIdentity::PrivateOwned(DESTINATION),
+        );
+
+        let Err(err) = terms.promised_payout(&accounts) else {
+            panic!("an uncast payout into a private holding was promised");
+        };
+        assert!(
+            matches!(
+                &err,
+                ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message))
+                    if message == "A private exact-input payout must be cast: its amount is unknown when proving"
+            ),
+            "refused for the wrong reason: {err:?}"
         );
     }
 

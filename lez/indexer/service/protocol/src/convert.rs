@@ -1408,4 +1408,117 @@ mod tests {
         assert_eq!(restored.message().fee, None);
         assert_eq!(restored.hash(), original_hash);
     }
+
+    fn account_id(tag: u8) -> lee_core::account::AccountId {
+        lee_core::account::AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> lee_core::account::Actor {
+        lee_core::account::Actor::new(account_id(account_tag), account_id(program_tag))
+    }
+
+    fn message_id(tag: u8) -> lee_core::program::MessageId {
+        lee_core::program::MessageId::new([tag; 32])
+    }
+
+    fn identities() -> Vec<lee::PublicIdentity> {
+        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
+        vec![
+            lee::PublicIdentity::Key(lee::PublicKey::new_from_private_key(&signer)),
+            lee::PublicIdentity::Pda {
+                program: account_id(2),
+                seed: lee_core::program::PdaSeed::new([3; 32]),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_public_message_with_an_in_flight_root_and_identities_round_trips_through_the_mirror() {
+        let message = lee::public_transaction::Message::new(
+            lee_core::program::CallInput::InFlight(message_id(4)),
+            vec![actor(5, 6)],
+            vec![lee_core::account::Nonce(7)],
+            Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
+            identities(),
+        );
+
+        let mirrored = PublicMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PublicMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::public_transaction::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_private_message_with_in_flight_deliveries_and_claims_round_trips_through_the_mirror() {
+        let message = lee::privacy_preserving_transaction::message::Message {
+            declared: lee_core::execution_state::Declared::default(),
+            boundary: lee_core::execution_state::Boundary {
+                outputs: vec![
+                    lee_core::execution_state::Output {
+                        to: actor(4, 5),
+                        message: vec![6],
+                        origin: lee_core::program::Origin::Root,
+                        issuer: None,
+                        in_flight: Some(message_id(7)),
+                        grants: vec![],
+                        pda_seeds: vec![],
+                    },
+                    lee_core::execution_state::Output {
+                        to: actor(8, 9),
+                        message: vec![10],
+                        origin: lee_core::program::Origin::Program(account_id(11)),
+                        issuer: Some(account_id(12)),
+                        in_flight: Some(message_id(13)),
+                        grants: vec![account_id(14)],
+                        pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
+                    },
+                ],
+                assumptions: vec![lee_core::execution_state::Assumption {
+                    from: actor(16, 17),
+                    to: actor(18, 19),
+                    message: vec![20],
+                    in_flight: Some(message_id(21)),
+                    grants: vec![],
+                    pda_seeds: vec![],
+                }],
+                publications: vec![lee_core::program::MessageBody {
+                    origin_program: account_id(22),
+                    to: actor(23, 24),
+                    message: vec![25],
+                }],
+                schedule: vec![
+                    lee_core::execution_state::ScheduleOp::CallPublic,
+                    lee_core::execution_state::ScheduleOp::Publish,
+                ],
+            },
+            consumed: vec![message_id(26), message_id(27)],
+            nonces: vec![],
+            private_actions: vec![],
+            block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: lee_core::program::TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
+            identities: identities(),
+        };
+
+        let mirrored = PrivacyPreservingMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PrivacyPreservingMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_message_id_displays_in_base58_like_an_account_id() {
+        assert_eq!(
+            MessageId::from(message_id(1)).to_string(),
+            "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+        );
+    }
 }
