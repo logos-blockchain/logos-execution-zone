@@ -77,6 +77,12 @@ struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
 }
 
+struct PrivateKeys {
+    ask: lee_core::AuthorizationSecretKey,
+    vpk: lee_core::encryption::ViewingPublicKey,
+    account_id: AccountId,
+}
+
 /// The `MsgId` the canned channel gives a published block, derived from its
 /// hash so tests can recompute it.
 fn mock_msg_of(block: &Block) -> MsgId {
@@ -5181,47 +5187,72 @@ fn a_released_unstake_request_never_releases_a_restake() {
     ));
 }
 
-#[test]
-fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
-    use lee::privacy_preserving_transaction::{
-        Message as PrivateMessage, PrivacyPreservingTransaction, WitnessSet as PrivateWitnessSet,
-        circuit::ProgramCatalog,
-    };
-    use lee_core::{
-        AuthorizationSecretKey, Commitment, DUMMY_COMMITMENT_HASH, Identifier, Nullifier,
-        NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
-        encryption::ViewingPublicKey,
-    };
+// Keys and id as lee's `TestPrivateKeys` derives them.
+fn private_keys(seed: u8) -> PrivateKeys {
+    let ask = lee_core::AuthorizationSecretKey([seed; 32]);
+    let vpk = lee_core::encryption::ViewingPublicKey::from_seed(
+        &[seed.wrapping_add(1); 32],
+        &[seed.wrapping_add(2); 32],
+    );
+    let account_id = AccountId::for_regular_private_account(
+        &lee_core::NullifierPublicKey::from(&lee_core::NullifierSecretKey::from(&ask)),
+        &vpk,
+        lee_core::Identifier::ZERO,
+    );
+    PrivateKeys {
+        ask,
+        vpk,
+        account_id,
+    }
+}
 
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let offender = test_sequencer_key(0x44);
-    let program_id = programs::sequencer_stake_account_id();
-    // Keys and id as lee's `TestPrivateKeys` derives them.
-    let private_keys = |seed: u8| {
-        let ask = AuthorizationSecretKey([seed; 32]);
-        let vpk =
-            ViewingPublicKey::from_seed(&[seed.wrapping_add(1); 32], &[seed.wrapping_add(2); 32]);
-        let npk = NullifierPublicKey::from(&NullifierSecretKey::from(&ask));
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, Identifier::ZERO);
-        (ask, vpk, account_id)
-    };
-    let (ownership_ask, ownership_vpk, ownership_id) = private_keys(0x61);
-    let (funding_ask, funding_vpk, funding_id) = private_keys(0x64);
-    let funding = Account::funded(amount);
-    let funding_commitment = Commitment::new(&funding_id, &funding);
-    let mut state = committee_state(&[0x45, 0x46], amount).with_private_accounts([(
-        funding_commitment,
-        Nullifier::for_account_initialization(&funding_id),
-    )]);
+fn init_witness(keys: &PrivateKeys, authorized: bool) -> lee_core::PrivateWitness {
+    lee_core::PrivateWitness {
+        vpk: keys.vpk.clone(),
+        random_seed: [0; 32],
+        identifier: lee_core::Identifier::ZERO,
+        kind: lee_core::WitnessKind::Regular {
+            ask: authorized.then_some(keys.ask),
+        },
+        nullifier: lee_core::NullifierWitness::Init {
+            npk: lee_core::NullifierPublicKey::from(&lee_core::NullifierSecretKey::from(&keys.ask)),
+            commitment_root: lee_core::DUMMY_COMMITMENT_HASH,
+        },
+    }
+}
 
-    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
-    let public_actors = vec![
-        Actor::native_balance(funds_id),
-        Actor::new(
-            system_accounts::sequencer_stake_config_account_id(),
-            program_id,
-        ),
-    ];
+fn update_witness(
+    state: &V03State,
+    keys: &PrivateKeys,
+    account: Account,
+) -> lee_core::PrivateWitness {
+    let membership_proof = state
+        .get_proof_for_commitment(&lee_core::Commitment::new(&keys.account_id, &account))
+        .expect("the account's commitment should be in state");
+    lee_core::PrivateWitness {
+        vpk: keys.vpk.clone(),
+        random_seed: [0; 32],
+        identifier: lee_core::Identifier::ZERO,
+        kind: lee_core::WitnessKind::Regular {
+            ask: Some(keys.ask),
+        },
+        nullifier: lee_core::NullifierWitness::Update {
+            account,
+            view_tag: 0,
+            nsk: lee_core::NullifierSecretKey::from(&keys.ask),
+            membership_proof,
+        },
+    }
+}
+
+fn prove_and_settle(
+    state: &mut V03State,
+    root: CallInput,
+    public_actors: Vec<Actor>,
+    private_witnesses: Vec<lee_core::PrivateWitness>,
+    messages: Vec<lee::StoredMessage>,
+    block_id: u64,
+) {
     let public_shards = public_actors
         .iter()
         .map(|actor| {
@@ -5237,67 +5268,87 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
         .collect();
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
-            root: CallInput::Inline {
-                to: Actor::new(ownership_id, program_id),
-                message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
-                    sequencer_key: offender,
-                    amount,
-                    has_record: false,
-                    funding: funding_id,
-                })
-                .unwrap(),
-            },
+            root,
             public_actors,
             signers: HashSet::new(),
             identities: HashSet::new(),
-            private_witnesses: vec![
-                PrivateWitness {
-                    vpk: ownership_vpk,
-                    random_seed: [0; 32],
-                    identifier: Identifier::ZERO,
-                    kind: WitnessKind::Regular {
-                        ask: Some(ownership_ask),
-                    },
-                    nullifier: NullifierWitness::Init {
-                        npk: NullifierPublicKey::from(&NullifierSecretKey::from(&ownership_ask)),
-                        commitment_root: DUMMY_COMMITMENT_HASH,
-                    },
-                },
-                PrivateWitness {
-                    vpk: funding_vpk,
-                    random_seed: [0; 32],
-                    identifier: Identifier::ZERO,
-                    kind: WitnessKind::Regular {
-                        ask: Some(funding_ask),
-                    },
-                    nullifier: NullifierWitness::Update {
-                        account: funding,
-                        view_tag: 0,
-                        nsk: NullifierSecretKey::from(&funding_ask),
-                        membership_proof: state
-                            .get_proof_for_commitment(&funding_commitment)
-                            .expect("the funding commitment should be in state"),
-                    },
-                },
-            ],
+            private_witnesses,
             public_shards,
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
+            messages,
         },
-        &ProgramCatalog::from([(program_id, programs::sequencer_stake())]),
+        &lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
+            programs::sequencer_stake_account_id(),
+            programs::sequencer_stake(),
+        )]),
     )
-    .expect("the private Stake should prove");
+    .expect("the private transaction should prove");
     state
         .transition_from_privacy_preserving_transaction(
-            &PrivacyPreservingTransaction::new(
-                PrivateMessage::from_circuit_output(vec![], output),
-                PrivateWitnessSet::from_raw_parts(vec![], proof),
+            &lee::PrivacyPreservingTransaction::new(
+                lee::privacy_preserving_transaction::Message::from_circuit_output(vec![], output),
+                lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
             ),
-            3,
+            block_id,
             0,
         )
-        .expect("the private Stake should settle");
+        .expect("the private transaction should settle");
+}
+
+// Two public peers, and `sequencer_key` staked at block 3 by a private owner paying from a
+// private funding account.
+fn privately_staked_state(
+    amount: u128,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+) -> (V03State, PrivateKeys) {
+    let program_id = programs::sequencer_stake_account_id();
+    let ownership = private_keys(0x61);
+    let funding = private_keys(0x64);
+    let funding_account = Account::funded(amount);
+    let mut state = committee_state(&[0x45, 0x46], amount).with_private_accounts([(
+        lee_core::Commitment::new(&funding.account_id, &funding_account),
+        lee_core::Nullifier::for_account_initialization(&funding.account_id),
+    )]);
+    let private_witnesses = vec![
+        init_witness(&ownership, true),
+        update_witness(&state, &funding, funding_account),
+    ];
+    prove_and_settle(
+        &mut state,
+        CallInput::Inline {
+            to: Actor::new(ownership.account_id, program_id),
+            message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
+                sequencer_key,
+                amount,
+                has_record: false,
+                funding: funding.account_id,
+            })
+            .unwrap(),
+        },
+        vec![
+            Actor::native_balance(system_accounts::stake_funds_account_id(
+                &ownership.account_id,
+            )),
+            Actor::new(
+                system_accounts::sequencer_stake_config_account_id(),
+                program_id,
+            ),
+        ],
+        private_witnesses,
+        Vec::new(),
+        3,
+    );
+    (state, ownership)
+}
+
+#[test]
+fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let offender = test_sequencer_key(0x44);
+    let (mut state, ownership) = privately_staked_state(amount, offender);
+    let ownership_id = ownership.account_id;
+    let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     assert_eq!(
         stake_entry(&state, offender),
@@ -5325,6 +5376,129 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
     assert_eq!(balance_of(&state, funds_id), 0);
     assert_eq!(balance_of(&state, slash_sink_id()), amount);
     assert_eq!(stake_entry(&state, offender), None);
+}
+
+#[test]
+fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let sequencer_key = test_sequencer_key(0x44);
+    let program_id = programs::sequencer_stake_account_id();
+    let (mut state, ownership) = privately_staked_state(amount, sequencer_key);
+    let destination = private_keys(0x67);
+
+    // The ownership account as the private Stake committed it.
+    let staked_ownership = Account {
+        nonce: Nonce::private_account_nonce_init(&ownership.account_id),
+        ..Account::default().with_shard(
+            program_id,
+            sequencer_stake_core::StakeRecord { sequencer_key }
+                .to_bytes()
+                .try_into()
+                .expect("a stake record fits a shard"),
+        )
+    };
+    let requested_at = 4;
+    let private_witnesses = vec![update_witness(&state, &ownership, staked_ownership)];
+    prove_and_settle(
+        &mut state,
+        CallInput::Inline {
+            to: Actor::new(ownership.account_id, program_id),
+            message: borsh::to_vec(&sequencer_stake_core::Message::UnstakeRequest {
+                sequencer_key,
+                amount,
+                destination: destination.account_id,
+                requested_at,
+            })
+            .unwrap(),
+        },
+        vec![Actor::new(
+            system_accounts::sequencer_stake_config_account_id(),
+            program_id,
+        )],
+        private_witnesses,
+        Vec::new(),
+        requested_at,
+    );
+
+    let LeeTransaction::Public(finalize) =
+        build_finalize_unstake_tx(ownership.account_id, sequencer_key).unwrap()
+    else {
+        unreachable!("build_finalize_unstake_tx builds a public transaction")
+    };
+    let released_at = exit_delay(&state).saturating_add(requested_at);
+    state
+        .transition_from_public_transaction(&finalize, released_at, 0)
+        .expect("the release should need no witness from the owner");
+    assert_eq!(
+        balance_of(
+            &state,
+            system_accounts::stake_funds_account_id(&ownership.account_id)
+        ),
+        0
+    );
+    assert_eq!(stake_entry(&state, sequencer_key), None);
+    assert!(
+        state
+            .get_account_by_id_ref(destination.account_id)
+            .is_none()
+    );
+    let [(payout, lee_core::native_token::Message::Credit(paid))] =
+        pending_payouts(&state, destination.account_id)[..]
+    else {
+        panic!("exactly one native credit should be pending for the destination");
+    };
+    assert_eq!(paid, amount);
+    let record = state
+        .pending_message(payout)
+        .cloned()
+        .expect("the payout should be pending");
+
+    // No key, signature or seed proves a private destination publicly.
+    let receipt = lee::public_transaction::Message::new(
+        CallInput::InFlight(payout),
+        vec![Actor::native_balance(destination.account_id)],
+        vec![],
+        None,
+        Vec::new(),
+    );
+    let result = state.transition_from_public_transaction(
+        &PublicTransaction::new(
+            receipt,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ),
+        released_at.saturating_add(1),
+        0,
+    );
+    assert!(matches!(
+        result,
+        Err(lee::error::LeeError::InvalidProgramBehavior(
+            lee::error::InvalidProgramBehaviorError::Execution(
+                lee_core::execution_state::ExecutionError::UnprovenPublicIdentity { actor }
+            )
+        )) if actor == Actor::native_balance(destination.account_id)
+    ));
+    assert_eq!(state.pending_message(payout), Some(&record));
+
+    prove_and_settle(
+        &mut state,
+        CallInput::InFlight(payout),
+        Vec::new(),
+        vec![init_witness(&destination, false)],
+        vec![record],
+        released_at.saturating_add(2),
+    );
+    assert!(state.pending_message(payout).is_none());
+    assert!(
+        state
+            .get_proof_for_commitment(&lee_core::Commitment::new(
+                &destination.account_id,
+                &Account {
+                    nonce: Nonce::private_account_nonce_init(&destination.account_id),
+                    ..Account::funded(amount)
+                },
+            ))
+            .is_some()
+    );
 }
 
 #[tokio::test]

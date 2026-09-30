@@ -180,6 +180,13 @@ mod tests {
         }
     }
 
+    fn cast_transfer(amount: Balance) -> Message {
+        Message::CastTransfer {
+            to: AccountId::new([2; 32]),
+            amount,
+        }
+    }
+
     #[test]
     fn a_balance_round_trips_through_the_codec() {
         for balance in [1, 42, u128::from(u64::MAX), Balance::MAX] {
@@ -230,6 +237,27 @@ mod tests {
     fn an_unauthorized_transfer_is_rejected() {
         assert_eq!(
             receive(&input(1, false, 100, &transfer(30, None))),
+            Err(TransferError::UnauthorizedSender {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
+
+    #[test]
+    fn a_cast_transfer_debits_now_and_casts_the_credit() {
+        let transition = receive(&input(1, true, 100, &cast_transfer(30))).unwrap();
+
+        assert_eq!(transition.post_data, Some(encode_balance(70)));
+        assert_eq!(
+            transition.sends,
+            vec![Cast::new(native(2), &Message::Credit(30)).into()]
+        );
+    }
+
+    #[test]
+    fn an_unauthorized_cast_transfer_is_refused() {
+        assert_eq!(
+            receive(&input(1, false, 100, &cast_transfer(30))),
             Err(TransferError::UnauthorizedSender {
                 account_id: AccountId::new([1; 32])
             })
