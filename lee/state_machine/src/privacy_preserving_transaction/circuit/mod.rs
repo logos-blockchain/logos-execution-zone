@@ -5,10 +5,10 @@ use lee_core::{
     DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     PrivateWitness, ProgramImageWitness, ShadowProgramWitness,
     account::{AccountId, Actor, Cycles, ShardData},
-    execution_state::{Assumption, Backend, Declared, ExecutionState, Mode, RootCall},
+    execution_state::{Assumption, Backend, Declared, ExecutionError, ExecutionState, Mode},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{ProgramHeader, ReceiveInput, Transition},
+    program::{CallInput, MessageId, ProgramHeader, ReceiveInput, StoredMessage, Transition},
     to_frame,
 };
 use risc0_zkvm::{
@@ -139,7 +139,7 @@ impl ProgramCatalog {
 
 /// Inputs for proving an LEE program's execution.
 pub struct ProvingInput {
-    pub root: RootCall,
+    pub root: CallInput,
     pub public_actors: Vec<Actor>,
     pub signers: HashSet<AccountId>,
     pub private_witnesses: Vec<PrivateWitness>,
@@ -148,6 +148,7 @@ pub struct ProvingInput {
     /// Minimum length each emitted note is padded to, so notes do not leak their
     /// account's size. `None` leaves them at their natural length.
     pub ciphertext_padding: Option<u32>,
+    pub messages: Vec<StoredMessage>,
 }
 
 impl ProvingInput {
@@ -162,6 +163,7 @@ impl ProvingInput {
 struct Simulator<'input> {
     programs: &'input HashMap<AccountId, Dependency>,
     public_shards: &'input HashMap<Actor, ShardData>,
+    messages: &'input [StoredMessage],
 }
 
 impl Backend for Simulator<'_> {
@@ -189,10 +191,19 @@ impl Backend for Simulator<'_> {
             .get(&actor)
             .map_or_else(ShardData::empty, Clone::clone))
     }
+
+    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, LeeError> {
+        find_message(self.messages, id)
+    }
+
+    fn proves_public_identity(&self, _account_id: AccountId) -> bool {
+        true
+    }
 }
 
 struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
+    messages: &'programs [StoredMessage],
     env_builder: ExecutorEnvBuilder<'static>,
     turns: Vec<Transition>,
 }
@@ -212,6 +223,10 @@ impl Backend for Prover<'_> {
             self.turns.push(transition.clone());
             Ok(transition)
         })
+    }
+
+    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, LeeError> {
+        find_message(self.messages, id)
     }
 }
 
@@ -233,6 +248,14 @@ fn receive_with(
         .program)
 }
 
+fn find_message(messages: &[StoredMessage], id: MessageId) -> Result<StoredMessage, LeeError> {
+    messages
+        .iter()
+        .find(|message| message.id() == id)
+        .cloned()
+        .ok_or_else(|| ExecutionError::UnknownMessage { id }.into())
+}
+
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit, assuming of public execution what running it against `input.public_shards` delivers.
 pub fn execute_and_prove(
@@ -247,6 +270,7 @@ pub fn execute_and_prove(
     .run(&mut Simulator {
         programs: &programs.programs,
         public_shards: &input.public_shards,
+        messages: &input.messages,
     })?
     .assumed;
     execute_and_prove_assuming(input, assumed, programs)
@@ -265,12 +289,14 @@ pub fn execute_and_prove_assuming(
         private_witnesses,
         dummy_inputs,
         ciphertext_padding,
+        messages,
         ..
     } = input;
     let ProgramCatalog { programs } = programs;
 
     let mut backend = Prover {
         programs,
+        messages: &messages,
         env_builder: ExecutorEnv::builder(),
         turns: Vec::new(),
     };
@@ -331,6 +357,7 @@ pub fn execute_and_prove_assuming(
         shadow_program_witnesses,
         turns,
         assumed,
+        messages,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;

@@ -6,12 +6,12 @@ use lee_core::{
     ProgramImageClaim,
     account::Nonce,
     execution_state::{Boundary, Declared},
-    program::{BlockValidityWindow, TimestampValidityWindow},
+    program::{BlockValidityWindow, MessageId, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
 
-use crate::AccountId;
+use crate::{AccountId, PublicIdentity};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
@@ -19,6 +19,7 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 pub struct Message {
     pub declared: Declared,
     pub boundary: Boundary,
+    pub consumed: Vec<MessageId>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
@@ -26,6 +27,7 @@ pub struct Message {
     /// See [`ProgramImageClaim`]: the sequencer checks each one against real chain state before
     /// accepting the proof.
     pub program_image_claims: Vec<ProgramImageClaim>,
+    pub identities: Vec<PublicIdentity>,
 }
 
 impl std::fmt::Debug for Message {
@@ -51,11 +53,13 @@ impl std::fmt::Debug for Message {
         f.debug_struct("Message")
             .field("declared", &self.declared)
             .field("boundary", &self.boundary)
+            .field("consumed", &self.consumed)
             .field("nonces", &self.nonces)
             .field("private_actions", &private_actions)
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
             .field("program_image_claims", &self.program_image_claims)
+            .field("identities", &self.identities)
             .finish()
     }
 }
@@ -66,11 +70,13 @@ impl Message {
         Self {
             declared: output.declared,
             boundary: output.boundary,
+            consumed: output.consumed,
             nonces,
             private_actions: output.private_actions,
             block_validity_window: output.block_validity_window,
             timestamp_validity_window: output.timestamp_validity_window,
             program_image_claims: output.program_image_claims,
+            identities: Vec::new(),
         }
     }
 
@@ -163,6 +169,7 @@ pub mod tests {
         Message {
             declared: Declared::default(),
             boundary: Boundary::default(),
+            consumed: vec![],
             nonces,
             private_actions: vec![PrivateAction {
                 nullifier,
@@ -177,6 +184,7 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
+            identities: vec![],
         }
     }
 
@@ -194,6 +202,8 @@ pub mod tests {
                     to: public,
                     message: b"o".to_vec(),
                     origin: Origin::Program(private.program_account_id),
+                    issuer: Some(private.program_account_id),
+                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -201,9 +211,11 @@ pub mod tests {
                     from: public,
                     to: private,
                     message: b"a".to_vec(),
+                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
+                publications: Vec::new(),
                 schedule: vec![
                     ScheduleOp::CallPublic,
                     ScheduleOp::EnterPrivate,
@@ -211,11 +223,13 @@ pub mod tests {
                     ScheduleOp::ReturnPublic,
                 ],
             },
+            consumed: vec![],
             nonces: vec![Nonce(1)],
             private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             program_image_claims: vec![],
+            identities: vec![],
         };
 
         let expected: Vec<u8> = [
@@ -231,6 +245,9 @@ pub mod tests {
             b"o",
             &[1], // origin: Origin::Program
             &[8; 32],
+            &[1], // issuer: Some
+            &[8; 32],
+            &[0],          // in_flight: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[1, 0, 0, 0], // boundary.assumptions: one assumption
@@ -240,16 +257,20 @@ pub mod tests {
             &[8; 32],
             &[1, 0, 0, 0], // message
             b"a",
+            &[0],          // in_flight: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
+            &[0, 0, 0, 0], // boundary.publications: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
+            &[0, 0, 0, 0], // consumed: none
             &[1, 0, 0, 0], // nonces: one nonce, a little-endian u128
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
             &[0, 0],       // timestamp_validity_window: from None, to None
             &[0, 0, 0, 0], // program_image_claims: none
+            &[0, 0, 0, 0], // identities: none
         ]
         .concat();
 

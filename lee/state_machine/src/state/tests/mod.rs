@@ -183,6 +183,7 @@ pub fn proving_input(root: CallInput) -> ProvingInput {
         public_shards: HashMap::new(),
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
+        messages: Vec::new(),
     }
 }
 

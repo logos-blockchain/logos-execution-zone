@@ -376,8 +376,7 @@ fn delegated_pda_is_not_authorized_in_sibling_call() {
     let result = prove_delegation(
         &Script::default()
             .send(
-                Call::new(delegated_pda(TWIN), &authorized())
-                    .with_pda_seeds(vec![DELEGATED_SEED]),
+                Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
             .send(Call::new(delegated_pda(TWIN), &authorized())),
         false,
@@ -397,8 +396,7 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
     prove_delegation(
         &Script::default()
             .send(
-                Call::new(delegated_pda(TWIN), &authorized())
-                    .with_pda_seeds(vec![DELEGATED_SEED]),
+                Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
             .send(Call::new(delegated_pda(TWIN), &Script::default())),
         false,
@@ -408,13 +406,11 @@ fn sibling_call_may_declare_delegated_pda_unauthorized() {
 
 #[test]
 fn delegated_pda_stays_authorized_in_delegated_subtree() {
-    let forward =
-        Script::default().send(Call::new(delegated_pda(scripted_id()), &authorized()));
+    let forward = Script::default().send(Call::new(delegated_pda(scripted_id()), &authorized()));
 
     prove_delegation(
-        &Script::default().send(
-            Call::new(delegated_pda(TWIN), &forward).with_pda_seeds(vec![DELEGATED_SEED]),
-        ),
+        &Script::default()
+            .send(Call::new(delegated_pda(TWIN), &forward).with_pda_seeds(vec![DELEGATED_SEED])),
         false,
     )
     .expect("a callee that forwards without re-delegating must keep the PDA authorized");
@@ -425,8 +421,7 @@ fn holder_authorization_survives_across_sibling_calls() {
     prove_delegation(
         &Script::default()
             .send(
-                Call::new(delegated_pda(TWIN), &authorized())
-                    .with_pda_seeds(vec![DELEGATED_SEED]),
+                Call::new(delegated_pda(TWIN), &authorized()).with_pda_seeds(vec![DELEGATED_SEED]),
             )
             .send(Call::new(credential_holder(), &authorized())),
         true,
@@ -511,8 +506,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
     let wrong_seed = PdaSeed::new([88; 32]);
 
     let proven = prove_public_outputs(
-        &Script::default()
-            .send(Call::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
+        &Script::default().send(Call::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
         vec![callee],
         [signer_id].into(),
     );

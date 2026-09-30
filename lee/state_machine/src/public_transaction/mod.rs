@@ -1,4 +1,4 @@
-pub use message::Message;
+pub use message::{Message, PublicIdentity};
 pub use transaction::PublicTransaction;
 pub use witness_set::WitnessSet;
 

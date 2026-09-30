@@ -8,13 +8,13 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
-    execution_state::{Declared, ExecutionState, Mode, RootCall},
-    program::{Origin, PROGRAM_LOADER_ACCOUNT_ID, TransactionEvent},
+    execution_state::{Declared, ExecutionState, Mode},
+    program::{CallInput, MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, TransactionEvent},
 };
 use public_backend::PublicBackend;
 
 use crate::{
-    V03State, ensure,
+    PublicIdentity, V03State, ensure,
     error::LeeError,
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
@@ -31,6 +31,8 @@ pub struct StateDiff {
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
     pub events: Vec<TransactionEvent>,
+    pub consumed: Vec<MessageId>,
+    pub published: Vec<MessageBody>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -136,11 +138,11 @@ impl ValidatedStateDiff {
         let authorized: HashSet<AccountId> = signers.iter().copied().collect();
         let mut cycles_used: u64 = 0;
         let result = Self::execute_authorized(
-            message.to,
-            &message.message,
+            message.root.clone(),
             &message.public_actors,
             &authorized,
             signers.clone(),
+            &identity_account_ids(&message.identities),
             state,
             block_id,
             timestamp,
@@ -168,6 +170,8 @@ impl ValidatedStateDiff {
                 new_commitments: Vec::new(),
                 new_nullifiers: Vec::new(),
                 events: Vec::new(),
+                consumed: Vec::new(),
+                published: Vec::new(),
             }),
             // A non-chargeable failure is a structural defect a correct proposer
             // would never include; reject the whole block.
@@ -194,11 +198,14 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
-            to,
-            message,
+            CallInput::Inline {
+                to,
+                message: message.to_vec(),
+            },
             public_actors,
             authorized,
             Vec::new(), // no nonces to advance!
+            &HashSet::new(),
             state,
             block_id,
             timestamp,
@@ -220,11 +227,11 @@ impl ValidatedStateDiff {
         // Signers both authorize the execution and advance their replay nonces.
         let authorized: HashSet<AccountId> = signer_account_ids.iter().copied().collect();
         Self::execute_authorized(
-            message.to,
-            &message.message,
+            message.root.clone(),
             &message.public_actors,
             &authorized,
             signer_account_ids,
+            &identity_account_ids(&message.identities),
             state,
             block_id,
             timestamp,
@@ -242,17 +249,27 @@ impl ValidatedStateDiff {
         reason = "the execution core threads the full invocation context"
     )]
     fn execute_authorized(
-        to: Actor,
-        message: &[u8],
+        root: CallInput,
         public_actors: &[Actor],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
+        identities: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
         cycle_budget: u64,
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
+        let to = match &root {
+            CallInput::Inline { to, .. } => *to,
+            CallInput::InFlight(id) => {
+                state
+                    .pending_message(*id)
+                    .ok_or_else(|| LeeError::InvalidInput("Root message is not pending".into()))?
+                    .body
+                    .to
+            }
+        };
         ensure!(
             public_actors.contains(&to),
             LeeError::InvalidInput("Root actor is not declared".into())
@@ -263,10 +280,8 @@ impl ValidatedStateDiff {
                 public_actors: public_actors.to_vec(),
                 authorized_accounts: sorted(authorized.iter().copied()),
             },
-            Mode::Live(RootCall {
-                to,
-                message: message.to_vec(),
-            }),
+            Mode::Live(root),
+            identities.clone(),
             block_id,
             timestamp,
             cycle_budget,
@@ -374,8 +389,8 @@ impl ValidatedStateDiff {
         if let Some(root) = message
             .boundary
             .outputs
-            .first()
-            .filter(|output| output.origin == Origin::Root)
+            .iter()
+            .find(|output| output.issuer.is_none())
         {
             ensure!(
                 message.declared.public_actors.contains(&root.to),
@@ -387,11 +402,28 @@ impl ValidatedStateDiff {
             state,
             message.declared.clone(),
             Mode::Check(message.boundary.clone()),
+            identity_account_ids(&message.identities),
             block_id,
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
             &mut cycles_used,
         )?;
+        let consumed: Vec<MessageId> = message
+            .consumed
+            .iter()
+            .copied()
+            .chain(settled.consumed)
+            .collect();
+        ensure!(
+            n_unique(&consumed) == consumed.len(),
+            LeeError::InvalidInput("A message is consumed twice".into())
+        );
+        ensure!(
+            consumed
+                .iter()
+                .all(|id| state.pending_message(*id).is_some()),
+            LeeError::InvalidInput("A consumed message is not pending".into())
+        );
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -401,6 +433,7 @@ impl ValidatedStateDiff {
                 .chain(settled.new_commitments)
                 .collect(),
             new_nullifiers,
+            consumed,
             ..settled
         }))
     }
@@ -464,10 +497,15 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the execution core threads the full invocation context"
+)]
 fn settle(
     state: &V03State,
     declared: Declared,
     mode: Mode,
+    identities: HashSet<AccountId>,
     block_id: BlockId,
     timestamp: Timestamp,
     cycle_budget: Cycles,
@@ -475,12 +513,17 @@ fn settle(
 ) -> Result<StateDiff, LeeError> {
     let execution = ExecutionState::initialize(declared, &[], mode)
         .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
-    let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
+    let mut backend = PublicBackend::new(state, identities, cycle_budget, cycles_used);
     let outcome = execution.run(&mut backend)?;
     ensure!(
         outcome.block_validity_window.is_valid_for(block_id)
             && outcome.timestamp_validity_window.is_valid_for(timestamp),
         LeeError::OutOfValidityWindow
+    );
+    ensure!(
+        u128::try_from(outcome.published.len())
+            .is_ok_and(|count| state.next_message_sequence().checked_add(count).is_some()),
+        LeeError::InvalidInput("Message sequence exhausted".into())
     );
     let public_diff = outcome
         .public
@@ -505,6 +548,8 @@ fn settle(
         new_commitments: backend.into_outputs(),
         new_nullifiers: Vec::new(),
         events,
+        consumed: outcome.consumed,
+        published: outcome.published,
     })
 }
 
@@ -512,6 +557,10 @@ pub fn sorted(ids: impl IntoIterator<Item = AccountId>) -> Vec<AccountId> {
     let mut ids: Vec<AccountId> = ids.into_iter().collect();
     ids.sort_unstable();
     ids
+}
+
+fn identity_account_ids(identities: &[PublicIdentity]) -> HashSet<AccountId> {
+    identities.iter().map(PublicIdentity::account_id).collect()
 }
 
 /// Validates the witness set and replay nonces of a public transaction against
@@ -591,6 +640,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     let output = PrivacyPreservingCircuitOutput {
         declared: message.declared.clone(),
         boundary: message.boundary.clone(),
+        consumed: message.consumed.clone(),
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,

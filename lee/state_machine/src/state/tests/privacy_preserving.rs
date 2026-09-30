@@ -394,8 +394,7 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
     let overdraft: u128 = 11;
 
     // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
-    let script =
-        Script::write(vec![1]).send(Call::new(sender, &transfer(recipient_id, overdraft)));
+    let script = Script::write(vec![1]).send(Call::new(sender, &transfer(recipient_id, overdraft)));
     let proven = execute_and_prove(
         ProvingInput {
             public_actors: vec![own, sender],

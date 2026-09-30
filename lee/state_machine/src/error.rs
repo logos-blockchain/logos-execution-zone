@@ -140,7 +140,13 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::UndeclaredAssumedSender { .. }
             | ExecutionError::ScheduleMismatch { .. }
             | ExecutionError::AssumptionMismatch { .. }
-            | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
+            | ExecutionError::IncompleteBoundary
+            | ExecutionError::UnknownMessage { .. }
+            | ExecutionError::MismatchedMessage { .. }
+            | ExecutionError::DuplicateConsumption { .. }
+            | ExecutionError::UnprovenPublicIdentity { .. } => {
+                Self::InvalidProgramBehavior(error.into())
+            }
         }
     }
 }

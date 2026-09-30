@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{account::AccountId, program::CallInput};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::public_transaction::{Message, WitnessSet};
@@ -45,7 +45,9 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.insert(self.message.to.account_id);
+        if let CallInput::Inline { to, .. } = &self.message.root {
+            acc_set.insert(to.account_id);
+        }
         acc_set.extend(
             self.message
                 .public_actors

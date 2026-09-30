@@ -80,6 +80,7 @@ fn privacy_garbage_proof_is_rejected() {
     let message = Message {
         declared: Declared::default(),
         boundary: Boundary::default(),
+        consumed: vec![],
         nonces: vec![],
         private_actions: vec![PrivateAction {
             nullifier: Nullifier::for_account_initialization(&account_id),
@@ -94,6 +95,7 @@ fn privacy_garbage_proof_is_rejected() {
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         program_image_claims: vec![],
+        identities: vec![],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.

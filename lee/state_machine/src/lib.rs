@@ -8,9 +8,12 @@ pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
     account::{Account, AccountData, AccountId, Actor, Balance, Cycles, Fee, Gas, ShardData},
     encryption::EphemeralPublicKey,
-    execution_state::{Assumption, Boundary, Declared, Output, RootCall, ScheduleOp},
+    execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp},
     native_token,
-    program::{MessageData, Origin, ProgramId},
+    program::{
+        Action, Call, CallInput, Cast, MessageBody, MessageData, MessageId, Origin, ProgramId,
+        StoredMessage,
+    },
 };
 pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
@@ -19,7 +22,7 @@ pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
     circuit::{ProvingInput, execute_and_prove, execute_and_prove_assuming},
 };
-pub use public_transaction::PublicTransaction;
+pub use public_transaction::{PublicIdentity, PublicTransaction};
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
 pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};

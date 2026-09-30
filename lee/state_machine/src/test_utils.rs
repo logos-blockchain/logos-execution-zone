@@ -24,5 +24,7 @@ pub const fn validated_state_diff_from_public_diff(
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
         events: Vec::new(),
+        consumed: Vec::new(),
+        published: Vec::new(),
     })
 }

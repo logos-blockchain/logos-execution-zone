@@ -1,44 +1,77 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{Actor, Nonce},
-    program::MessageData,
+    program::{CallInput, MessageData, PdaSeed},
 };
 use sha2::{Digest as _, Sha256};
 
-use crate::{AccountId, error::LeeError, fees::FeeDeclaration, program::Program};
+use crate::{AccountId, PublicKey, error::LeeError, fees::FeeDeclaration, program::Program};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
 
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum PublicIdentity {
+    Key(PublicKey),
+    Pda { program: AccountId, seed: PdaSeed },
+}
+
+impl PublicIdentity {
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        match self {
+            Self::Key(key) => AccountId::from(key),
+            Self::Pda { program, seed } => AccountId::for_public_pda(program, seed),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub to: Actor,
-    pub message: MessageData,
+    pub root: CallInput,
     pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
+    pub identities: Vec<PublicIdentity>,
 }
 
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
-            to,
-            message,
+            root,
             public_actors,
             nonces,
             fee,
+            identities,
         } = self;
         f.debug_struct("Message")
-            .field("to", to)
-            .field("message", message)
+            .field("root", root)
             .field("public_actors", public_actors)
             .field("nonces", nonces)
             .field("fee", fee)
+            .field("identities", identities)
             .finish()
     }
 }
 
 impl Message {
+    #[must_use]
+    pub const fn new(
+        root: CallInput,
+        public_actors: Vec<Actor>,
+        nonces: Vec<Nonce>,
+        fee: Option<FeeDeclaration>,
+        identities: Vec<PublicIdentity>,
+    ) -> Self {
+        Self {
+            root,
+            public_actors,
+            nonces,
+            fee,
+            identities,
+        }
+    }
+
     /// Builds a fee-exempt message (`fee: None`). Correct for system
     /// transactions (clock, deposits, dispatches); charged transactions use
     /// [`Self::try_new_with_fees`].
@@ -81,13 +114,13 @@ impl Message {
         nonces: Vec<Nonce>,
         fee: Option<FeeDeclaration>,
     ) -> Self {
-        Self {
-            to,
-            message,
+        Self::new(
+            CallInput::Inline { to, message },
             public_actors,
             nonces,
             fee,
-        }
+            Vec::new(),
+        )
     }
 
     #[must_use]
@@ -128,7 +161,8 @@ mod tests {
         let message = Message::new_preserialized(to, vec![0], vec![to], vec![Nonce(1)], None);
 
         let expected: Vec<u8> = [
-            &[42; 32][..], // to.account_id
+            &[0][..],      // root: CallInput::Inline
+            &[42; 32],     // to.account_id
             &[0; 32],      // to.program_account_id: the native token program
             &[1, 0, 0, 0], // message
             &[0],
@@ -137,7 +171,8 @@ mod tests {
             &[0; 32],
             &[1, 0, 0, 0], // nonces: one nonce, a little-endian u128
             &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            &[0], // fee: None
+            &[0],          // fee: None
+            &[0, 0, 0, 0], // identities: none
         ]
         .concat();
 

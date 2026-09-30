@@ -1,9 +1,13 @@
+use std::collections::HashSet;
+
 use lee_core::{
     Commitment,
-    account::{Actor, Cycles, ShardData},
-    execution_state::{Backend, ExecutionState},
+    account::{AccountId, Actor, Cycles, ShardData},
+    execution_state::{Backend, ExecutionError, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{Origin, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
+    program::{
+        MessageId, Origin, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, StoredMessage, Transition,
+    },
 };
 use log::debug;
 
@@ -15,6 +19,7 @@ use crate::{
 
 pub(super) struct PublicBackend<'state> {
     state: &'state V03State,
+    identities: HashSet<AccountId>,
     cycle_budget: Cycles,
     cycles_used: &'state mut Cycles,
     new_commitments: Vec<Commitment>,
@@ -23,11 +28,13 @@ pub(super) struct PublicBackend<'state> {
 impl<'state> PublicBackend<'state> {
     pub(super) const fn new(
         state: &'state V03State,
+        identities: HashSet<AccountId>,
         cycle_budget: Cycles,
         cycles_used: &'state mut Cycles,
     ) -> Self {
         Self {
             state,
+            identities,
             cycle_budget,
             cycles_used,
             new_commitments: Vec::new(),
@@ -86,5 +93,16 @@ impl Backend for PublicBackend<'_> {
             .map_or_else(ShardData::empty, |account| {
                 account.data.shard(actor.program_account_id).clone()
             }))
+    }
+
+    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, LeeError> {
+        self.state
+            .pending_message(id)
+            .cloned()
+            .ok_or_else(|| ExecutionError::UnknownMessage { id }.into())
+    }
+
+    fn proves_public_identity(&self, account_id: AccountId) -> bool {
+        self.identities.contains(&account_id) || self.state.is_designated_public_account(account_id)
     }
 }

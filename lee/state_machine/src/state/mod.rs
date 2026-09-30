@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -6,8 +6,8 @@ use lee_core::{
     Timestamp,
     account::{Account, AccountId, ShardData},
     program::{
-        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
-        get_program_via, immutable_mirror_commitment,
+        MessageId, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment,
+        StoredMessage, TransactionEvent, get_program_via, immutable_mirror_commitment,
     },
 };
 
@@ -109,11 +109,20 @@ impl BorshDeserialize for NullifierSet {
     }
 }
 
+#[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(test, derive(Debug))]
+struct PendingMessages {
+    records: BTreeMap<MessageId, StoredMessage>,
+    next_sequence: u128,
+}
+
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
+    pending_messages: PendingMessages,
+    designated_public_accounts: BTreeSet<AccountId>,
 }
 
 impl Default for V03State {
@@ -126,6 +135,8 @@ impl Default for V03State {
         Self {
             public_state: HashMap::default(),
             private_state,
+            pending_messages: PendingMessages::default(),
+            designated_public_accounts: BTreeSet::new(),
         }
     }
 }
@@ -162,6 +173,15 @@ impl V03State {
         public_accounts: impl IntoIterator<Item = (AccountId, Account)>,
     ) -> Self {
         self.public_state.extend(public_accounts);
+        self
+    }
+
+    #[must_use]
+    pub fn with_designated_public_accounts(
+        mut self,
+        account_ids: impl IntoIterator<Item = AccountId>,
+    ) -> Self {
+        self.designated_public_accounts.extend(account_ids);
         self
     }
 
@@ -274,6 +294,8 @@ impl V03State {
             new_commitments,
             new_nullifiers,
             events,
+            consumed,
+            published,
         } = diff.into_state_diff();
         #[expect(
             clippy::iter_over_hash_type,
@@ -289,6 +311,20 @@ impl V03State {
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
+        for id in consumed {
+            self.pending_messages.records.remove(&id);
+        }
+        for body in published {
+            let record = StoredMessage {
+                sequence: self.pending_messages.next_sequence,
+                body,
+            };
+            self.pending_messages.next_sequence = record
+                .sequence
+                .checked_add(1)
+                .expect("settlement reserved the message sequence");
+            self.pending_messages.records.insert(record.id(), record);
+        }
         events
     }
 
@@ -332,6 +368,15 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
+    #[must_use]
+    pub fn pending_message(&self, id: MessageId) -> Option<&StoredMessage> {
+        self.pending_messages.records.get(&id)
+    }
+
+    pub fn pending_messages(&self) -> impl Iterator<Item = &StoredMessage> {
+        self.pending_messages.records.values()
+    }
+
     /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at
     /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
@@ -365,7 +410,8 @@ impl V03State {
     }
 
     /// Order-independent fingerprint of the genesis-relevant state: the public account set
-    /// (which includes deployed programs' storage accounts) and the commitment-set digest.
+    /// (which includes deployed programs' storage accounts), the commitment-set digest, the
+    /// designated public accounts and the pending messages.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -382,6 +428,8 @@ impl V03State {
         let Self {
             public_state,
             private_state,
+            pending_messages,
+            designated_public_accounts,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
@@ -398,6 +446,10 @@ impl V03State {
             hasher.update(&bytes);
         }
         hasher.update(private_state.0.digest());
+        hasher.update(
+            borsh::to_vec(&(designated_public_accounts, pending_messages))
+                .expect("borsh serialization is infallible"),
+        );
 
         let mut out = [0_u8; 32];
         out.copy_from_slice(&hasher.finalize());
@@ -436,6 +488,14 @@ impl V03State {
     /// Whether `digest` is a root the commitment tree has actually had at some point.
     pub(crate) fn is_known_commitment_root(&self, digest: &CommitmentSetDigest) -> bool {
         self.private_state.0.root_history.contains(digest)
+    }
+
+    pub(crate) fn is_designated_public_account(&self, account_id: AccountId) -> bool {
+        self.designated_public_accounts.contains(&account_id)
+    }
+
+    pub(crate) const fn next_message_sequence(&self) -> u128 {
+        self.pending_messages.next_sequence
     }
 }
 

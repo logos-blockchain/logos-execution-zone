@@ -1107,10 +1107,7 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
 #[test]
 fn an_undeclared_actor_is_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();
-    let script = Script::default().send(Call::new(
-        Actor::native_balance(BOB),
-        &Script::default(),
-    ));
+    let script = Script::default().send(Call::new(Actor::native_balance(BOB), &Script::default()));
     let (receipt, turn) = receive_receipt(&scripted, &scripted_root_input(&script, true));
     let input = direct_input(scripted_id(), &script, &[&scripted], vec![turn]);
 
