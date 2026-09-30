@@ -292,14 +292,15 @@ impl State {
 
     fn without_authorization(self) -> Self {
         match self {
-            Self::Public { account, .. } => Self::Public { account, sk: None },
+            Self::Public { account, .. } | Self::PublicKeycard { account, .. } => {
+                Self::Public { account, sk: None }
+            }
             Self::Private(mut pre) => {
                 if let WitnessKind::Regular { ask } = &mut pre.kind {
                     *ask = None;
                 }
                 Self::Private(pre)
             }
-            keycard @ Self::PublicKeycard { .. } => keycard,
         }
     }
 
@@ -376,8 +377,17 @@ impl AccountManager {
                 }
                 None => {
                     let index = states.len();
+                    let prepared_identity =
+                        if let (AccountIdentity::PublicKeycard { account_id, .. }, false) =
+                            (&identity, authorizes)
+                        {
+                            AccountIdentity::PublicNoSign(*account_id)
+                        } else {
+                            identity.clone()
+                        };
                     let state =
-                        prepare_account(wallet, identity.clone(), shard_selector, &mut pin).await?;
+                        prepare_account(wallet, prepared_identity, shard_selector, &mut pin)
+                            .await?;
                     states.push(if authorizes {
                         state
                     } else {
@@ -1384,6 +1394,31 @@ mod tests {
             &witnesses[0].nullifier,
             NullifierWitness::Update { nsk: kept, .. } if *kept == nsk
         ));
+    }
+
+    #[test]
+    fn a_keycard_account_without_authorization_neither_signs_nor_advances_its_nonce() {
+        let account_id = lee::AccountId::new([7; 32]);
+        let keycard = || State::PublicKeycard {
+            account: PreparedAccount {
+                account_id,
+                account: Account {
+                    nonce: Nonce(3),
+                    ..Account::default()
+                },
+            },
+            key_path: "m/44'/60'/0'/0/0".to_owned(),
+        };
+
+        let signing = manager(vec![keycard()]);
+        assert!(signing.selected_shards()[0].is_authorized);
+        assert_eq!(signing.signers(), HashSet::from([account_id]));
+        assert_eq!(signing.public_account_nonces(), vec![Nonce(3)]);
+
+        let unsigned = manager(vec![keycard().without_authorization()]);
+        assert!(!unsigned.selected_shards()[0].is_authorized);
+        assert!(unsigned.signers().is_empty());
+        assert!(unsigned.public_account_nonces().is_empty());
     }
 
     #[test]
