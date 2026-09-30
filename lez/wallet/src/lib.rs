@@ -1503,19 +1503,23 @@ mod tests {
     };
     use token_core::{Delivery, Message, Notify, TokenDescriptor, TokenKind};
 
-    use super::{ExecutionFailureKind, check_receivable};
+    use super::{ExecutionFailureKind, NATIVE_TOKEN_PROGRAM_ID, check_receivable, native_token};
 
     const DESCRIPTOR: TokenDescriptor = TokenDescriptor {
         definition_id: AccountId::new([2; 32]),
         kind: TokenKind::Fungible,
     };
 
-    fn record(origin_program: AccountId, message: &Message) -> StoredMessage {
+    fn record(
+        origin_program: AccountId,
+        to_program: AccountId,
+        message: &impl borsh::BorshSerialize,
+    ) -> StoredMessage {
         StoredMessage {
             sequence: 0,
             body: MessageBody {
                 origin_program,
-                to: Actor::new(AccountId::new([1; 32]), programs::token_account_id()),
+                to: Actor::new(AccountId::new([1; 32]), to_program),
                 message: borsh::to_vec(message).unwrap(),
             },
         }
@@ -1531,7 +1535,8 @@ mod tests {
 
     #[test]
     fn a_plain_token_credit_is_receivable() {
-        assert!(check_receivable(&record(programs::token_account_id(), &credit(None))).is_ok());
+        let token = programs::token_account_id();
+        assert!(check_receivable(&record(token, token, &credit(None))).is_ok());
     }
 
     #[test]
@@ -1550,9 +1555,54 @@ mod tests {
         }));
 
         for refused in [
-            record(token, &transfer),
-            record(token, &notifying),
-            record(AccountId::new([6; 32]), &credit(None)),
+            record(token, token, &transfer),
+            record(token, token, &notifying),
+            record(AccountId::new([6; 32]), token, &credit(None)),
+        ] {
+            assert!(
+                matches!(
+                    check_receivable(&refused),
+                    Err(ExecutionFailureKind::TransactionBuildError(
+                        lee::error::LeeError::InvalidInput(_)
+                    ))
+                ),
+                "{refused:?} must not be receivable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_credit_is_receivable() {
+        let native = NATIVE_TOKEN_PROGRAM_ID;
+        assert!(
+            check_receivable(&record(native, native, &native_token::Message::Credit(5))).is_ok()
+        );
+    }
+
+    #[test]
+    fn native_spending_and_a_foreign_native_credit_are_not_receivable() {
+        let native = NATIVE_TOKEN_PROGRAM_ID;
+        let to = AccountId::new([3; 32]);
+        for refused in [
+            record(
+                native,
+                native,
+                &native_token::Message::Transfer {
+                    to,
+                    amount: 5,
+                    expect_balance: None,
+                },
+            ),
+            record(
+                native,
+                native,
+                &native_token::Message::CastTransfer { to, amount: 5 },
+            ),
+            record(
+                AccountId::new([6; 32]),
+                native,
+                &native_token::Message::Credit(5),
+            ),
         ] {
             assert!(
                 matches!(

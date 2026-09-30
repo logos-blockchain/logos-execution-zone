@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
-use lee::{AccountId, Actor, PrivateKey, PublicKey, native_token, program::Program};
+use lee::{
+    AccountId, Actor, PrivateKey, PublicKey, native_token,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
+};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
@@ -313,7 +316,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         destination_balance,
         "the destination receives the released stake only in a later transaction"
     );
-    let payouts = ctx
+    let mut payouts: Vec<_> = ctx
         .wallet()
         .get_pending_messages(0, 256)
         .await?
@@ -325,13 +328,31 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
                     Actor::native_balance(destination_id),
                 )
         })
-        .map(|pending| borsh::from_slice::<native_token::Message>(&pending.body.message))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
     assert_eq!(
-        payouts,
+        payouts
+            .iter()
+            .map(|pending| borsh::from_slice::<native_token::Message>(&pending.body.message))
+            .collect::<Result<Vec<_>, _>>()?,
         vec![native_token::Message::Credit(u128::from(funding_balance))],
         "the node holds exactly the released stake, cast to the destination"
     );
+
+    // The destination staked its whole balance, so a funded wallet account pays the receipt.
+    ctx.wallet()
+        .receive_pending_message(
+            payouts.remove(0),
+            Some(ctx.existing_public_accounts()[0]),
+            None,
+            &ProgramCatalog::default(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("Failed to receive the unstake payout: {err:?}"))?;
+    poll_until("the payout to reach the destination", 30, || async {
+        Ok(account_balance(&ctx, destination_id).await?
+            == destination_balance + u128::from(funding_balance))
+    })
+    .await?;
 
     // Nothing is at stake for this key any more: a fully drained account has
     // its config entry removed outright.
@@ -342,7 +363,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "the config entry should be gone once the stake is fully released"
     );
     info!(
-        "FinalizeUnstake auto-included: {funding_balance} cast to {destination_id}, nothing left at stake"
+        "FinalizeUnstake auto-included: {funding_balance} cast to and received by {destination_id}, nothing left at stake"
     );
 
     Ok(())
