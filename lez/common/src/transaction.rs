@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, CallInput, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -244,23 +244,25 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     {
         return false;
     }
-    let message = public_tx.message();
-    let program_account_id = message.to.program_account_id;
+    let CallInput::Inline { to, message } = &public_tx.message().root else {
+        return false;
+    };
+    let program_account_id = to.program_account_id;
     if program_account_id == programs::bridge_account_id() {
         return matches!(
-            borsh::from_slice::<bridge_core::Message>(&message.message),
+            borsh::from_slice::<bridge_core::Message>(message),
             Ok(bridge_core::Message::Deposit { .. })
         );
     }
     if program_account_id == programs::cross_zone_inbox_account_id() {
         return matches!(
-            borsh::from_slice::<cross_zone_inbox_core::Message>(&message.message),
+            borsh::from_slice::<cross_zone_inbox_core::Message>(message),
             Ok(cross_zone_inbox_core::Message::Dispatch(_))
         );
     }
     if program_account_id == programs::ping_sender_account_id() {
         return matches!(
-            borsh::from_slice::<ping_core::SenderMessage>(&message.message),
+            borsh::from_slice::<ping_core::SenderMessage>(message),
             Ok(ping_core::SenderMessage::Send { .. })
         );
     }
@@ -279,12 +281,14 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    let message = public_tx.message();
-    if message.to.program_account_id != programs::bridge_lock_account_id() {
+    let CallInput::Inline { to, message } = &public_tx.message().root else {
+        return false;
+    };
+    if to.program_account_id != programs::bridge_lock_account_id() {
         return false;
     }
     matches!(
-        borsh::from_slice::<bridge_lock_core::Message>(&message.message),
+        borsh::from_slice::<bridge_lock_core::Message>(message),
         Ok(bridge_lock_core::Message::Lock { .. })
     )
 }
@@ -300,7 +304,10 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    public_tx.message().to.program_account_id == programs::sequencer_stake_account_id()
+    let CallInput::Inline { to, .. } = &public_tx.message().root else {
+        return false;
+    };
+    to.program_account_id == programs::sequencer_stake_account_id()
 }
 
 /// Returns the canonical Fee Program invocation transaction for the given block fee summary.
@@ -346,9 +353,10 @@ pub fn fee_invocation(
 /// The producer account credited by [`fee_invocation`].
 #[must_use]
 pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
-    let Ok(fee_core::Message::Distribute { producer, .. }) =
-        borsh::from_slice(&fee_tx.message().message)
-    else {
+    let CallInput::Inline { message, .. } = &fee_tx.message().root else {
+        return None;
+    };
+    let Ok(fee_core::Message::Distribute { producer, .. }) = borsh::from_slice(message) else {
         return None;
     };
     Some(producer)
@@ -494,7 +502,10 @@ pub fn validate_user_state_modification(
     validate_no_restricted_account_modification(state, diff)?;
     let injected_program = match tx {
         LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
-            Some(public_tx.message().to.program_account_id)
+            match &public_tx.message().root {
+                CallInput::Inline { to, .. } => Some(to.program_account_id),
+                CallInput::InFlight(_) => None,
+            }
         }
         LeeTransaction::Public(_) | LeeTransaction::PrivacyPreserving(_) => None,
     };

@@ -3,6 +3,7 @@ use kameo::{Actor, message::Message, reply::DelegatedReply};
 use lee_core::{
     BlockId, CommitmentSetDigest, MembershipProof,
     account::{Balance, Nonce},
+    program::StoredMessage,
 };
 
 use crate::{
@@ -11,9 +12,9 @@ use crate::{
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetPendingMessages,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -30,6 +31,7 @@ pub trait ExecutorActorTrait:
     + Message<GetProofsAndRoot, Reply = (Vec<Option<MembershipProof>>, CommitmentSetDigest)>
     + Message<GetAccount, Reply = GetAccountReply>
     + Message<GetAccountView, Reply = GetAccountReply>
+    + Message<GetPendingMessages, Reply = Vec<StoredMessage>>
     + Message<GetChannelId, Reply = Result<ChannelId>>
     + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
     + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>

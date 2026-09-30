@@ -22,7 +22,7 @@ use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, Actor, CallInput, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{debug, error, info, warn};
 use logos_blockchain_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
@@ -2897,8 +2897,13 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 
 #[must_use]
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
-    matches!(tx, LeeTransaction::Public(tx)
-        if is_sequencer_only_program(tx.message().to.program_account_id))
+    let LeeTransaction::Public(tx) = tx else {
+        return false;
+    };
+    let CallInput::Inline { to, .. } = &tx.message().root else {
+        return false;
+    };
+    is_sequencer_only_program(to.program_account_id)
 }
 
 /// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
@@ -2909,12 +2914,14 @@ fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> 
         return None;
     };
 
-    let message = tx.message();
-    if message.to.program_account_id != programs::cross_zone_inbox_account_id() {
+    let CallInput::Inline { to, message } = &tx.message().root else {
+        return None;
+    };
+    if to.program_account_id != programs::cross_zone_inbox_account_id() {
         return None;
     }
 
-    match borsh::from_slice::<cross_zone_inbox_core::Message>(&message.message) {
+    match borsh::from_slice::<cross_zone_inbox_core::Message>(message) {
         Ok(cross_zone_inbox_core::Message::Dispatch(msg)) => Some(msg),
         Ok(
             cross_zone_inbox_core::Message::Mark(_) | cross_zone_inbox_core::Message::InitConfig(_),
@@ -3021,12 +3028,14 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
         return None;
     };
 
-    let message = tx.message();
-    if message.to.program_account_id != programs::bridge_account_id() {
+    let CallInput::Inline { to, message } = &tx.message().root else {
+        return None;
+    };
+    if to.program_account_id != programs::bridge_account_id() {
         return None;
     }
 
-    match borsh::from_slice::<bridge_core::Message>(&message.message).ok()? {
+    match borsh::from_slice::<bridge_core::Message>(message).ok()? {
         bridge_core::Message::Deposit {
             l1_deposit_op_id, ..
         } => Some(HashType(l1_deposit_op_id)),
@@ -3040,15 +3049,17 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
         return None;
     };
 
-    let message = tx.message();
-    if message.to.program_account_id != programs::bridge_account_id() {
+    let CallInput::Inline { to, message } = &tx.message().root else {
+        return None;
+    };
+    if to.program_account_id != programs::bridge_account_id() {
         return None;
     }
 
     let bridge_core::Message::Withdraw {
         amount,
         bedrock_account_pk,
-    } = borsh::from_slice::<bridge_core::Message>(&message.message).ok()?
+    } = borsh::from_slice::<bridge_core::Message>(message).ok()?
     else {
         return None;
     };

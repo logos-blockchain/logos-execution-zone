@@ -3,7 +3,7 @@
 use std::{fmt::Display, str::FromStr};
 
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
-pub use lee::{Account, AccountData, AccountId, Actor, ProgramId};
+pub use lee::{Account, AccountData, AccountId, Actor, ProgramId, StoredMessage};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};

@@ -12,7 +12,8 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+    Account, AccountId, Actor, CallInput, PrivateKey, PublicKey, PublicTransaction, V03State,
+    program::Program,
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::Call};
 use logos_blockchain_core::{
@@ -383,10 +384,10 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     let LeeTransaction::Public(fee_tx) = fee_tx else {
         panic!("fee tx must be public");
     };
-    assert_eq!(
-        fee_tx.message().to.program_account_id,
-        programs::fee_account_id()
-    );
+    let CallInput::Inline { to, .. } = &fee_tx.message().root else {
+        panic!("fee tx must be an inline call");
+    };
+    assert_eq!(to.program_account_id, programs::fee_account_id());
     assert_eq!(
         *clock_tx,
         LeeTransaction::Public(clock_invocation(
@@ -440,11 +441,14 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.to.program_account_id != programs::bridge_account_id() {
+    let CallInput::Inline { to, message } = &public_tx.message.root else {
+        return false;
+    };
+    if to.program_account_id != programs::bridge_account_id() {
         return false;
     }
 
-    let message: bridge_core::Message = match borsh::from_slice(&public_tx.message.message) {
+    let message: bridge_core::Message = match borsh::from_slice(message) {
         Ok(message) => message,
         Err(_err) => return false,
     };
@@ -1086,12 +1090,19 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
     let LeeTransaction::Public(public) = &injected else {
         unreachable!("a dispatch is a public transaction")
     };
+    let CallInput::Inline {
+        to,
+        message: dispatch,
+    } = &public.message().root
+    else {
+        unreachable!("a dispatch is an inline call")
+    };
     let payer = initial_public_user_accounts()[0].account_id;
     let message = lee::public_transaction::Message::try_new_with_fees(
-        public.message().to,
+        *to,
         public.message().public_actors.clone(),
         vec![state.get_account_by_id(payer).nonce],
-        borsh::from_slice::<cross_zone_inbox_core::Message>(&public.message().message)
+        borsh::from_slice::<cross_zone_inbox_core::Message>(dispatch)
             .expect("a dispatch message decodes"),
         common::test_utils::test_fee_declaration(payer),
     )
@@ -5080,10 +5091,13 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
         let LeeTransaction::Public(tx) = tx else {
             return None;
         };
-        (tx.message().to.program_account_id == stake_program_id)
-            .then(|| borsh::from_slice(&tx.message().message).ok())
+        let CallInput::Inline { to, message } = &tx.message().root else {
+            return None;
+        };
+        (to.program_account_id == stake_program_id)
+            .then(|| borsh::from_slice(message).ok())
             .flatten()
-            .map(|message| (message, tx.message().to.account_id))
+            .map(|message| (message, to.account_id))
     };
     assert!(block.body.transactions.iter().any(|tx| {
         matches!(
@@ -5396,7 +5410,10 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         programs::wrapped_token_account_id(),
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().to.program_account_id,
+        LeeTransaction::Public(public) => match &public.message().root {
+            CallInput::Inline { to, .. } => to.program_account_id,
+            CallInput::InFlight(_) => unreachable!("genesis holds only inline calls"),
+        },
         LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")
         }

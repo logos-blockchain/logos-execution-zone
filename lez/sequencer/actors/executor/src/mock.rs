@@ -13,6 +13,7 @@ use kameo::{
 use lee_core::{
     BlockId, CommitmentSetDigest, MembershipProof,
     account::{Balance, Nonce},
+    program::StoredMessage,
 };
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
@@ -22,9 +23,9 @@ use crate::{
     protocol::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetPendingMessages,
+        GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -95,6 +96,12 @@ mockall::mock! {
             msg: GetAccountView,
             ctx: &mut Context<Self, GetAccountReply>
         ) -> GetAccountReply;
+
+        pub fn handle_get_pending_messages(
+            &mut self,
+            msg: GetPendingMessages,
+            ctx: &mut Context<Self, Vec<StoredMessage>>
+        ) -> Vec<StoredMessage>;
 
         pub fn handle_get_channel_id(
             &mut self,
@@ -283,6 +290,18 @@ impl Message<GetAccountView> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_account_view(msg, ctx)
+    }
+}
+
+impl Message<GetPendingMessages> for MockExecutorActor {
+    type Reply = Vec<StoredMessage>;
+
+    async fn handle(
+        &mut self,
+        msg: GetPendingMessages,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_pending_messages(msg, ctx)
     }
 }
 

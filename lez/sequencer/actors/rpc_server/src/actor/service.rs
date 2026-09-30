@@ -10,13 +10,14 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
+use lee::CallInput;
 use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote,
-    HashType, MembershipProof, Nonce, ProgramId,
+    HashType, MembershipProof, Nonce, ProgramId, StoredMessage,
 };
 
 pub struct Service<E: ExecutorActorTrait> {
@@ -83,9 +84,8 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
             if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(
-                    public_tx.message().to.program_account_id,
-                )
+                && let CallInput::Inline { to, .. } = &public_tx.message().root
+                && sequencer_core::is_sequencer_only_program(to.program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
@@ -207,6 +207,20 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .ask(sequencer_executor_actor::protocol::GetAccountView { shard_selector })
             .await
             .map(|reply| reply.account)
+            .map_err(map_infallible_error)
+    }
+
+    async fn get_pending_messages(
+        &self,
+        from_sequence: u128,
+        limit: u32,
+    ) -> Result<Vec<StoredMessage>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetPendingMessages {
+                from_sequence,
+                limit,
+            })
+            .await
             .map_err(map_infallible_error)
     }
 

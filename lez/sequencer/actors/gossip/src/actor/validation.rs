@@ -4,6 +4,7 @@
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
 use common::transaction::LeeTransaction;
+use lee::CallInput;
 use sequencer_channel_config_actor::Wire;
 use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
 use sequencer_slasher_actor::Approval;
@@ -60,7 +61,8 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     };
 
     if let LeeTransaction::Public(public_tx) = &authenticated
-        && sequencer_core::is_sequencer_only_program(public_tx.message().to.program_account_id)
+        && let CallInput::Inline { to, .. } = &public_tx.message().root
+        && sequencer_core::is_sequencer_only_program(to.program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }

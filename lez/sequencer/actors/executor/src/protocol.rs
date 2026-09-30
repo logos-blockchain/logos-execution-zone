@@ -125,6 +125,11 @@ pub struct GetAccountReply {
     pub account: Account,
 }
 
+pub struct GetPendingMessages {
+    pub from_sequence: u128,
+    pub limit: u32,
+}
+
 pub struct GetChannelId;
 
 pub struct GetCrossZoneDeadLetters;

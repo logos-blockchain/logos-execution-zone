@@ -23,7 +23,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
-use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, Actor, CallInput, PublicTransaction, public_transaction::Message};
 use ping_core::{
     ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -157,7 +157,8 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && public_tx.message().to.program_account_id == inbox_id
+                && let CallInput::Inline { to, .. } = &public_tx.message().root
+                && to.program_account_id == inbox_id
             {
                 count = count.saturating_add(1);
             }

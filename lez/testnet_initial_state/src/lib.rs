@@ -250,6 +250,7 @@ fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
 pub fn initial_state(cross_zone: bool) -> V03State {
     lee::V03State::new()
         .with_public_accounts(initial_public_accounts())
+        .with_designated_public_accounts(system_accounts::clock_account_ids())
         .with_private_accounts(initial_private_accounts())
         .with_named_programs(initial_programs(cross_zone))
 }

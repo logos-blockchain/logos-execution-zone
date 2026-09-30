@@ -14,6 +14,7 @@ use kameo::{
 use lee_core::{
     BlockId,
     account::{Actor, Balance, Nonce},
+    program::StoredMessage,
 };
 use log::{info, warn};
 use mempool::MemPoolHandle;
@@ -33,8 +34,8 @@ use crate::{
         ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetLastBlockId, GetPendingMessages, GetProofsAndRoot, GetTransaction, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -445,6 +446,36 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
             })
             .await;
         GetAccountReply { account }
+    }
+}
+
+const MAX_PENDING_MESSAGES_PER_REQUEST: u32 = 256;
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPendingMessages>
+    for ExecutorActor<S, B>
+{
+    type Reply = Vec<StoredMessage>;
+
+    async fn handle(
+        &mut self,
+        GetPendingMessages {
+            from_sequence,
+            limit,
+        }: GetPendingMessages,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let limit = usize::try_from(limit.min(MAX_PENDING_MESSAGES_PER_REQUEST))
+            .expect("the request limit fits in usize");
+        self.sequencer
+            .with_state(|state| {
+                let mut pending: Vec<&StoredMessage> = state
+                    .pending_messages()
+                    .filter(|message| message.sequence >= from_sequence)
+                    .collect();
+                pending.sort_unstable_by_key(|message| message.sequence);
+                pending.into_iter().take(limit).cloned().collect()
+            })
+            .await
     }
 }
 
