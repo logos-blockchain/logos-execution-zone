@@ -929,6 +929,29 @@ fn a_check_whose_live_subtree_reaches_the_loader_fails() {
     assert_eq!(order(&script), vec![(ENTRY, Origin::Root)]);
 }
 
+#[test]
+fn a_record_refuses_an_explicit_delivery_to_the_loader() {
+    let keys = Keys::new(1);
+    let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
+    let mut script = Script::default().on(holder(&keys), sending(vec![send_to(loader)]));
+
+    let result = run(
+        declared(vec![loader]),
+        &[keys.regular(false)],
+        Mode::Record {
+            root: root(holder(&keys)),
+            assumed: vec![Vec::new()],
+        },
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::LoaderOutsideLiveExecution { actor }) if actor == loader
+    ));
+    assert_eq!(order(&script), vec![(holder(&keys), Origin::Root)]);
+}
+
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
 // carries its grant. `assumed_grants` is what the proof claims the relay received.
 fn relayed_grant(
