@@ -148,7 +148,8 @@ fn unstake_request(
         ))
 }
 
-/// Unsigned, so the release is sized and addressed only by the config's pending request.
+/// Unsigned, so the release is sized and addressed only by the config's pending request, and cast
+/// to the destination, which receives it in a later transaction.
 fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
     assert_root(
         input,
@@ -177,12 +178,16 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     let program = input.receiver.program_account_id;
     Response::write(config.to_bytes())
         .block_window(pending.releasable_at(exit_delay)..)
-        .send(custody_transfer(
-            stake_funds_account_id(program, &ownership),
-            stake_funds_seed(&ownership),
-            pending.destination,
-            pending.amount,
-        ))
+        .send(
+            Call::new(
+                Actor::native_balance(stake_funds_account_id(program, &ownership)),
+                &native_token::Message::CastTransfer {
+                    to: pending.destination,
+                    amount: pending.amount,
+                },
+            )
+            .with_pda_seeds(vec![stake_funds_seed(&ownership)]),
+        )
 }
 
 fn slash(
@@ -646,8 +651,15 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                custody_transfer(funds_of(OWNER), stake_funds_seed(&OWNER), DESTINATION, 500)
-                    .into()
+                Call::new(
+                    Actor::native_balance(funds_of(OWNER)),
+                    &native_token::Message::CastTransfer {
+                        to: DESTINATION,
+                        amount: 500,
+                    },
+                )
+                .with_pda_seeds(vec![stake_funds_seed(&OWNER)])
+                .into()
             ]
         );
     }

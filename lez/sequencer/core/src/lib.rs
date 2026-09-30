@@ -2831,8 +2831,8 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
-        .filter_map(|(ownership_id, sequencer_key, pending)| {
-            build_finalize_unstake_tx(ownership_id, sequencer_key, pending.destination)
+        .filter_map(|(ownership_id, sequencer_key)| {
+            build_finalize_unstake_tx(ownership_id, sequencer_key)
                 .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
                 .ok()
         })
@@ -2843,7 +2843,6 @@ fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction>
 fn build_finalize_unstake_tx(
     ownership_id: AccountId,
     sequencer_key: sequencer_stake_core::SequencerKey,
-    destination: AccountId,
 ) -> Result<LeeTransaction> {
     let config = Actor::new(
         system_accounts::sequencer_stake_config_account_id(),
@@ -2854,7 +2853,6 @@ fn build_finalize_unstake_tx(
         vec![
             config,
             Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-            Actor::native_balance(destination),
         ],
         vec![],
         sequencer_stake_core::Message::FinalizeUnstake { sequencer_key },

@@ -1,7 +1,7 @@
 //! Discovery process for the `sequencer_stake` committee.
 
 use log::warn;
-use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig};
+use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.
@@ -81,12 +81,10 @@ pub fn committee_update(
     (desired != live || stale_threshold).then_some(desired)
 }
 
-/// Ownership-account id + pending-release details for every release that may
-/// land in the block after the one the clock in `state` holds.
+/// Ownership-account id + sequencer key for every release that may land in the
+/// block after the one the clock in `state` holds.
 #[must_use]
-pub fn finalize_unstake_candidates(
-    state: &lee::V03State,
-) -> Vec<(lee::AccountId, SequencerKey, PendingUnstake)> {
+pub fn finalize_unstake_candidates(state: &lee::V03State) -> Vec<(lee::AccountId, SequencerKey)> {
     let Some(config) = read_config(state) else {
         return Vec::new();
     };
@@ -103,11 +101,8 @@ pub fn finalize_unstake_candidates(
         .into_iter()
         .filter_map(|(sequencer_key, entry)| {
             let pending = entry.pending_unstake?;
-            (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
-                entry.account_id,
-                sequencer_key,
-                pending,
-            ))
+            (next_block_id >= pending.releasable_at(params.exit_delay))
+                .then_some((entry.account_id, sequencer_key))
         })
         .collect()
 }
@@ -153,7 +148,7 @@ mod tests {
 
     use lee_core::account::Account;
     use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_stake_core::SequencerEntry;
+    use sequencer_stake_core::{PendingUnstake, SequencerEntry};
 
     use super::*;
 
@@ -397,7 +392,7 @@ mod tests {
         assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 2)).is_empty());
         assert_eq!(
             finalize_unstake_candidates(&state_at([staked], releasable_at - 1)),
-            vec![(staked.account_id, staked.key, staked.pending.unwrap())]
+            vec![(staked.account_id, staked.key)]
         );
     }
 

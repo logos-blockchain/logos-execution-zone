@@ -48,7 +48,7 @@ enum Command {
         /// Amount to release.
         #[clap(long)]
         amount: u128,
-        /// Account credited once `FinalizeUnstake` later runs.
+        /// Account the later `FinalizeUnstake` casts the payout to.
         #[clap(long)]
         destination: AccountId,
     },

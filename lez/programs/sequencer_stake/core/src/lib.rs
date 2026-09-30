@@ -92,7 +92,8 @@ pub enum Message {
     },
 
     /// Unsigned, permissionless: releases the key's pending unstake, as the config records it,
-    /// once [`ChannelParams::exit_delay`] blocks have passed since it.
+    /// once [`ChannelParams::exit_delay`] blocks have passed since it. The payout is cast to the
+    /// destination, which receives it in a later transaction.
     FinalizeUnstake { sequencer_key: SequencerKey },
 
     /// Burns the key's whole tracked stake, pending unstake included, to the sink and removes

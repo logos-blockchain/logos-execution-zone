@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{account_balance, get_account, new_account};
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
+use lee::{AccountId, Actor, PrivateKey, PublicKey, native_token, program::Program};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, UnsecuredEd25519Key};
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
@@ -240,6 +240,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     //
     // Unstake recipient is freely chosen during the request.
     let destination_id = funding_id;
+    let destination_balance = account_balance(&ctx, destination_id).await?;
 
     let requested_at = ctx
         .sequencer_client()
@@ -307,11 +308,29 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         0,
         "the ownership account never custodies the stake"
     );
-    let destination_balance = account_balance(&ctx, destination_id).await?;
     assert_eq!(
+        account_balance(&ctx, destination_id).await?,
         destination_balance,
-        u128::from(funding_balance),
-        "destination should receive the released stake"
+        "the destination receives the released stake only in a later transaction"
+    );
+    let payouts = ctx
+        .wallet()
+        .get_pending_messages(0, 256)
+        .await?
+        .into_iter()
+        .filter(|pending| {
+            (pending.body.origin_program, pending.body.to)
+                == (
+                    native_token::NATIVE_TOKEN_PROGRAM_ID,
+                    Actor::native_balance(destination_id),
+                )
+        })
+        .map(|pending| borsh::from_slice::<native_token::Message>(&pending.body.message))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        payouts,
+        vec![native_token::Message::Credit(u128::from(funding_balance))],
+        "the node holds exactly the released stake, cast to the destination"
     );
 
     // Nothing is at stake for this key any more: a fully drained account has
@@ -323,7 +342,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "the config entry should be gone once the stake is fully released"
     );
     info!(
-        "FinalizeUnstake auto-included: {funding_balance} released to {destination_id}, nothing left at stake"
+        "FinalizeUnstake auto-included: {funding_balance} cast to {destination_id}, nothing left at stake"
     );
 
     Ok(())

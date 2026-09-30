@@ -4050,6 +4050,47 @@ fn unstake_request_transaction(
     PublicTransaction::new(message, witness_set)
 }
 
+fn pending_payouts(
+    state: &V03State,
+    destination: AccountId,
+) -> Vec<(lee::MessageId, lee_core::native_token::Message)> {
+    state
+        .pending_messages_from(0)
+        .filter(|record| {
+            record.body.origin_program == lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID
+                && record.body.to == Actor::native_balance(destination)
+        })
+        .map(|record| {
+            (
+                record.id(),
+                borsh::from_slice(&record.body.message).unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn receive_payout(state: &mut V03State, recipient: (AccountId, &PrivateKey), block_id: u64) {
+    let (recipient_id, recipient_key) = recipient;
+    let [(payout, _)] = pending_payouts(state, recipient_id)[..] else {
+        panic!("exactly one payout should be pending for the recipient");
+    };
+    let message = lee::public_transaction::Message::new(
+        CallInput::InFlight(payout),
+        vec![Actor::native_balance(recipient_id)],
+        vec![state.get_account_by_id(recipient_id).nonce],
+        None,
+        Vec::new(),
+    );
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[recipient_key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(message, witness_set),
+            block_id,
+            0,
+        )
+        .expect("the recipient should receive its payout");
+}
+
 /// Anyone can credit a program-owned account, so an `UnstakeRequest` sized off
 /// the balance rather than the tracked stake must be rejected.
 #[test]
@@ -4376,7 +4417,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("UnstakeRequest should succeed");
 
-    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key, funding_id).unwrap();
+    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap();
     let LeeTransaction::Public(finalize) = finalize else {
         panic!("FinalizeUnstake should be a public transaction");
     };
@@ -4384,6 +4425,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     state
         .transition_from_public_transaction(&finalize, released_at, 0)
         .expect("FinalizeUnstake should succeed");
+    receive_payout(&mut state, (funding_id, &funding_key), released_at);
 
     assert_eq!(stake_entry(&state, sequencer_key), None, "key fully exited");
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
@@ -4760,7 +4802,7 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
         .expect("UnstakeRequest should succeed");
     let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
 
-    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap();
+    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap();
     let LeeTransaction::Public(finalize) = finalize else {
         panic!("FinalizeUnstake should be a public transaction");
     };
@@ -4782,8 +4824,12 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
             .data
             .native_balance()
             .unwrap(),
-        amount
+        0
     );
+    assert!(matches!(
+        pending_payouts(&state, destination)[..],
+        [(_, lee_core::native_token::Message::Credit(paid))] if paid == amount
+    ));
     assert_eq!(stake_entry(&state, sequencer_key), None);
 }
 
@@ -4805,7 +4851,7 @@ fn a_finalize_unstake_waits_for_the_exit_delay() {
         .transition_from_public_transaction(&request, requested_at, 0)
         .expect("UnstakeRequest should succeed");
     let LeeTransaction::Public(finalize) =
-        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+        build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap()
     else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
@@ -4827,8 +4873,12 @@ fn a_finalize_unstake_waits_for_the_exit_delay() {
             .data
             .native_balance()
             .unwrap(),
-        amount
+        0
     );
+    assert!(matches!(
+        pending_payouts(&state, destination)[..],
+        [(_, lee_core::native_token::Message::Credit(paid))] if paid == amount
+    ));
 }
 
 #[test]
@@ -4954,7 +5004,7 @@ fn a_slash_claws_back_a_pending_unstake() {
         0
     );
     let LeeTransaction::Public(finalize) =
-        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+        build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap()
     else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
@@ -5012,7 +5062,7 @@ fn an_old_unstake_request_never_releases_a_restake_after_a_slash() {
         .transition_from_public_transaction(&request, 4, 0)
         .expect("UnstakeRequest should succeed");
     let LeeTransaction::Public(finalize) =
-        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+        build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap()
     else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
@@ -5059,6 +5109,7 @@ fn an_old_unstake_request_never_releases_a_restake_after_a_slash() {
         })
     );
     assert_eq!(balance_of(&state, destination), 0);
+    assert!(pending_payouts(&state, destination).is_empty());
 }
 
 #[test]
@@ -5078,7 +5129,7 @@ fn a_released_unstake_request_never_releases_a_restake() {
         .transition_from_public_transaction(&request, 4, 0)
         .expect("UnstakeRequest should succeed");
     let LeeTransaction::Public(finalize) =
-        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+        build_finalize_unstake_tx(ownership_id, sequencer_key).unwrap()
     else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
@@ -5086,7 +5137,11 @@ fn a_released_unstake_request_never_releases_a_restake() {
     state
         .transition_from_public_transaction(&finalize, due, 0)
         .expect("the release is due once the exit delay has passed");
-    assert_eq!(balance_of(&state, destination), amount);
+    assert_eq!(balance_of(&state, destination), 0);
+    assert!(matches!(
+        pending_payouts(&state, destination)[..],
+        [(_, lee_core::native_token::Message::Credit(paid))] if paid == amount
+    ));
     assert_eq!(stake_entry(&state, sequencer_key), None);
 
     restake(
@@ -5119,7 +5174,11 @@ fn a_released_unstake_request_never_releases_a_restake() {
             pending_unstake: None,
         })
     );
-    assert_eq!(balance_of(&state, destination), amount);
+    assert_eq!(balance_of(&state, destination), 0);
+    assert!(matches!(
+        pending_payouts(&state, destination)[..],
+        [(_, lee_core::native_token::Message::Credit(paid))] if paid == amount
+    ));
 }
 
 #[test]
