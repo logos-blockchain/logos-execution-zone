@@ -1230,6 +1230,20 @@ mod tests {
     }
 
     #[test]
+    fn both_program_image_claim_kinds_roundtrip_over_the_ffi() {
+        for claim in [
+            ProgramImageClaim::Disclosed {
+                account_id: account_id(1),
+                image_id: [2; 8],
+            },
+            ProgramImageClaim::Undisclosed { root: [3; 32] },
+        ] {
+            let ffi: FfiProgramImageClaim = claim.into();
+            assert_eq!(ProgramImageClaim::from(ffi), claim);
+        }
+    }
+
+    #[test]
     fn public_transaction_in_flight_root_and_identities_roundtrip_over_the_ffi() {
         let original = PublicTransaction {
             message: lee::public_transaction::Message {
