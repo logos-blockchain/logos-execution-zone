@@ -2829,13 +2829,10 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
 
 /// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
 fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
-    let Some(params) = committee_discovery::channel_params(state) else {
-        return VecDeque::new();
-    };
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
         .filter_map(|(ownership_id, sequencer_key, pending)| {
-            build_finalize_unstake_tx(ownership_id, sequencer_key, pending, params.exit_delay)
+            build_finalize_unstake_tx(ownership_id, sequencer_key, pending.destination)
                 .map_err(|err| warn!("Failed to build FinalizeUnstake tx: {:#}", anyhow!(err)))
                 .ok()
         })
@@ -2846,30 +2843,21 @@ fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction>
 fn build_finalize_unstake_tx(
     ownership_id: AccountId,
     sequencer_key: sequencer_stake_core::SequencerKey,
-    pending: sequencer_stake_core::PendingUnstake,
-    exit_delay: u64,
+    destination: AccountId,
 ) -> Result<LeeTransaction> {
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    let ownership = Actor::new(ownership_id, sequencer_stake_program_id);
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
     let message = Message::try_new(
-        ownership,
+        config,
         vec![
-            ownership,
+            config,
             Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-            Actor::native_balance(pending.destination),
-            Actor::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
+            Actor::native_balance(destination),
         ],
         vec![],
-        sequencer_stake_core::Message::FinalizeUnstake {
-            sequencer_key,
-            amount: pending.amount,
-            requested_at: pending.requested_at,
-            exit_delay,
-            destination: pending.destination,
-        },
+        sequencer_stake_core::Message::FinalizeUnstake { sequencer_key },
     )
     .context("Failed to build FinalizeUnstake message")?;
 

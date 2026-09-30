@@ -91,28 +91,19 @@ pub enum Message {
         requested_at: u64,
     },
 
-    /// Unsigned, permissionless: releases a pending `UnstakeRequest` once
-    /// [`ChannelParams::exit_delay`] blocks have passed since it.
-    FinalizeUnstake {
-        sequencer_key: SequencerKey,
-        amount: u128,
-        requested_at: u64,
-        exit_delay: u64,
-        destination: AccountId,
-    },
+    /// Unsigned, permissionless: releases the key's pending unstake, as the config records it,
+    /// once [`ChannelParams::exit_delay`] blocks have passed since it.
+    FinalizeUnstake { sequencer_key: SequencerKey },
 
-    /// Burns the key's whole stake to the sink and removes its entry.
+    /// Burns the key's whole tracked stake, pending unstake included, to the sink and removes
+    /// its entry.
     ///
     /// Only `approvals` authorize this. The reason for the offence is not checked.
-    ///
-    /// `total_staked` is the burn amount, proposed here and required by the config to be the
-    /// entry's actual tracked stake.
     Slash {
         sequencer_key: SequencerKey,
         /// `MsgId` of the offending inscription, raw to avoid Bedrock types.
         inscription: [u8; 32],
         approvals: Vec<SlashApproval>,
-        total_staked: u128,
     },
 
     /// Sets the channel params and the channel id once, at genesis. Rejected
@@ -133,19 +124,8 @@ pub enum Message {
         sequencer_key: SequencerKey,
         ownership: AccountId,
         amount: u128,
-    },
-    SettleUnstake {
-        sequencer_key: SequencerKey,
-        ownership: AccountId,
-        amount: u128,
-        exit_delay: u64,
-    },
-    ApplySlash {
-        sequencer_key: SequencerKey,
-        ownership: AccountId,
-        inscription: [u8; 32],
-        approvals: Vec<SlashApproval>,
-        total_staked: u128,
+        destination: AccountId,
+        requested_at: u64,
     },
 }
 
@@ -157,11 +137,10 @@ pub struct SlashApproval {
     pub signature: Vec<u8>,
 }
 
-/// The sequencer key backed by an ownership account and any pending unstake.
+/// The sequencer key an ownership account backs.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct StakeRecord {
     pub sequencer_key: SequencerKey,
-    pub pending_unstake: Option<PendingUnstake>,
 }
 
 impl StakeRecord {
@@ -283,7 +262,7 @@ impl SequencerStakeConfig {
 pub struct SequencerEntry {
     pub account_id: AccountId,
     pub total_staked: u128,
-    pub total_pending_unstake: u128,
+    pub pending_unstake: Option<PendingUnstake>,
 }
 
 impl SequencerEntry {
@@ -293,7 +272,11 @@ impl SequencerEntry {
     /// that balance above `total_staked`.
     #[must_use]
     pub const fn net_stake(&self) -> u128 {
-        self.total_staked.saturating_sub(self.total_pending_unstake)
+        let pending = match self.pending_unstake {
+            Some(pending) => pending.amount,
+            None => 0,
+        };
+        self.total_staked.saturating_sub(pending)
     }
 
     /// Whether this entry still backs enough stake to stand for the committee.
@@ -402,31 +385,14 @@ mod tests {
         let off_curve = [2_u8; 32];
         assert!(SequencerKey::new(off_curve).is_none());
 
-        // 32 key bytes then a `None` discriminant: a `StakeRecord` with no
-        // pending unstake.
-        let record = [&off_curve[..], &[0_u8][..]].concat();
-        assert_eq!(StakeRecord::from_bytes(&record), None);
+        // A `StakeRecord` is the 32 key bytes alone.
+        assert_eq!(StakeRecord::from_bytes(&off_curve), None);
     }
 
     #[test]
     fn stake_record_roundtrip() {
         let record = StakeRecord {
             sequencer_key: test_key(7),
-            pending_unstake: None,
-        };
-        let bytes = record.to_bytes();
-        assert_eq!(StakeRecord::from_bytes(&bytes), Some(record));
-    }
-
-    #[test]
-    fn stake_record_with_pending_unstake_roundtrip() {
-        let record = StakeRecord {
-            sequencer_key: test_key(7),
-            pending_unstake: Some(PendingUnstake {
-                amount: 42,
-                destination: test_destination(),
-                requested_at: 3,
-            }),
         };
         let bytes = record.to_bytes();
         assert_eq!(StakeRecord::from_bytes(&bytes), Some(record));
@@ -439,7 +405,7 @@ mod tests {
             SequencerEntry {
                 account_id: test_destination(),
                 total_staked: 1_000_000,
-                total_pending_unstake: 0,
+                pending_unstake: None,
             },
         );
         SequencerStakeConfig {
@@ -464,21 +430,11 @@ mod tests {
     fn stake_record_does_not_decode_as_sequencer_stake_config() {
         // Secondary to the config account's id check, which is what actually
         // keeps an ownership account from being passed as the config.
-        for pending_unstake in [
-            None,
-            Some(PendingUnstake {
-                amount: 0,
-                destination: AccountId::new([0; 32]),
-                requested_at: 0,
-            }),
-        ] {
-            let bytes = StakeRecord {
-                sequencer_key: test_key(0),
-                pending_unstake,
-            }
-            .to_bytes();
-            assert_eq!(SequencerStakeConfig::from_bytes(&bytes), None);
+        let bytes = StakeRecord {
+            sequencer_key: test_key(0),
         }
+        .to_bytes();
+        assert_eq!(SequencerStakeConfig::from_bytes(&bytes), None);
     }
 
     #[test]
@@ -488,11 +444,15 @@ mod tests {
         assert_eq!(SequencerStakeConfig::from_bytes(&bytes), Some(config));
     }
 
-    fn entry(total_staked: u128, total_pending_unstake: u128) -> SequencerEntry {
+    fn entry(total_staked: u128, pending: u128) -> SequencerEntry {
         SequencerEntry {
             account_id: test_destination(),
             total_staked,
-            total_pending_unstake,
+            pending_unstake: (pending > 0).then_some(PendingUnstake {
+                amount: pending,
+                destination: test_destination(),
+                requested_at: 0,
+            }),
         }
     }
 

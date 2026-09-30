@@ -1,7 +1,7 @@
 //! Discovery process for the `sequencer_stake` committee.
 
 use log::warn;
-use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
+use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig};
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.
@@ -100,13 +100,12 @@ pub fn finalize_unstake_candidates(
 
     config
         .entries
-        .into_values()
-        .filter_map(|entry| {
-            let record = stake_record(state, entry.account_id)?;
-            let pending = record.pending_unstake?;
+        .into_iter()
+        .filter_map(|(sequencer_key, entry)| {
+            let pending = entry.pending_unstake?;
             (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
                 entry.account_id,
-                record.sequencer_key,
+                sequencer_key,
                 pending,
             ))
         })
@@ -149,14 +148,6 @@ pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::Cha
     read_config(state)?.channel_params
 }
 
-/// The `StakeRecord` an ownership account carries: which key it backs, plus
-/// whatever release is pending against it.
-fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
-    let account = state.get_account_by_id_ref(ownership_id)?;
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -170,7 +161,7 @@ mod tests {
     /// Blocks an unstake waits in [`state_with`].
     const EXIT_DELAY: u64 = 10;
 
-    /// One staked key: the config entry plus the ownership account backing it.
+    /// One staked key's config entry.
     #[derive(Clone, Copy)]
     struct Staked {
         key: SequencerKey,
@@ -178,9 +169,6 @@ mod tests {
         /// The config entry's tracked stake.
         total: u128,
         pending: Option<PendingUnstake>,
-        /// The ownership account's, which sits above `total_staked` once
-        /// anyone donates to it.
-        balance: u128,
     }
 
     impl Staked {
@@ -190,7 +178,6 @@ mod tests {
                 account_id: lee::AccountId::new([tag.wrapping_add(100); 32]),
                 total,
                 pending: None,
-                balance: total,
             }
         }
 
@@ -219,26 +206,10 @@ mod tests {
         state_with(stakes).with_public_accounts([(system_accounts::clock_account_ids()[0], clock)])
     }
 
-    /// LEZ state holding the config account plus one ownership account per key.
+    /// LEZ state holding the config account.
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
         let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-
-        let ownership_accounts = stakes.iter().map(|staked| {
-            (
-                staked.account_id,
-                Account::funded(staked.balance).with_shard(
-                    sequencer_stake_program_id,
-                    StakeRecord {
-                        sequencer_key: staked.key,
-                        pending_unstake: staked.pending,
-                    }
-                    .to_bytes()
-                    .try_into()
-                    .expect("stake record fits"),
-                ),
-            )
-        });
 
         let config = Account::default().with_shard(
             sequencer_stake_program_id,
@@ -258,9 +229,7 @@ mod tests {
                             SequencerEntry {
                                 account_id: staked.account_id,
                                 total_staked: staked.total,
-                                total_pending_unstake: staked
-                                    .pending
-                                    .map_or(0, |pending| pending.amount),
+                                pending_unstake: staked.pending,
                             },
                         )
                     })
@@ -272,7 +241,6 @@ mod tests {
         );
 
         lee::V03State::new()
-            .with_public_accounts(ownership_accounts)
             .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
     }
 

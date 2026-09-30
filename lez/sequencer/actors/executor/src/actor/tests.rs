@@ -140,7 +140,7 @@ fn stake_entries(sequencer_key: SequencerKey) -> BTreeMap<SequencerKey, Sequence
         SequencerEntry {
             account_id: testnet_initial_state::initial_public_user_accounts()[0].account_id,
             total_staked: 1,
-            total_pending_unstake: 0,
+            pending_unstake: None,
         },
     )]
     .into()

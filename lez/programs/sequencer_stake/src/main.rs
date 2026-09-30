@@ -32,26 +32,12 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             destination,
             requested_at,
         } => unstake_request(input, sequencer_key, amount, destination, requested_at),
-        Message::FinalizeUnstake {
-            sequencer_key,
-            amount,
-            requested_at,
-            exit_delay,
-            destination,
-        } => finalize_unstake(
-            input,
-            sequencer_key,
-            amount,
-            requested_at,
-            exit_delay,
-            destination,
-        ),
+        Message::FinalizeUnstake { sequencer_key } => finalize_unstake(input, sequencer_key),
         Message::Slash {
             sequencer_key,
             inscription,
             approvals,
-            total_staked,
-        } => slash(input, sequencer_key, inscription, approvals, total_staked),
+        } => slash(input, sequencer_key, inscription, &approvals),
         Message::InitChannelParams { params, channel_id } => {
             init_channel_params(input, params, channel_id)
         }
@@ -65,26 +51,17 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             sequencer_key,
             ownership,
             amount,
-        } => track_unstake_request(input, sequencer_key, ownership, amount),
-        Message::SettleUnstake {
-            sequencer_key,
-            ownership,
-            amount,
-            exit_delay,
-        } => settle_unstake(input, sequencer_key, ownership, amount, exit_delay),
-        Message::ApplySlash {
-            sequencer_key,
-            ownership,
-            inscription,
-            approvals,
-            total_staked,
-        } => apply_slash(
+            destination,
+            requested_at,
+        } => track_unstake_request(
             input,
             sequencer_key,
             ownership,
-            inscription,
-            &approvals,
-            total_staked,
+            PendingUnstake {
+                amount,
+                destination,
+                requested_at,
+            },
         ),
     }
 }
@@ -114,38 +91,28 @@ fn stake(
             record.sequencer_key, sequencer_key,
             "ownership account backs a different sequencer key"
         );
-        assert!(
-            record.pending_unstake.is_none(),
-            "cannot top up while an unstake request is pending"
-        );
     }
 
     let program = input.receiver.program_account_id;
     let ownership = input.receiver.account_id;
-    Response::write(
-        StakeRecord {
-            sequencer_key,
-            pending_unstake: None,
-        }
-        .to_bytes(),
-    )
-    .send(to_config(
-        program,
-        &Message::RecordStake {
-            sequencer_key,
-            ownership,
-            amount,
-            has_record,
-        },
-    ))
-    .send(Call::new(
-        Actor::native_balance(funding),
-        &native_token::Message::Transfer {
-            to: stake_funds_account_id(program, &ownership),
-            amount,
-            expect_balance: None,
-        },
-    ))
+    Response::write(StakeRecord { sequencer_key }.to_bytes())
+        .send(to_config(
+            program,
+            &Message::RecordStake {
+                sequencer_key,
+                ownership,
+                amount,
+                has_record,
+            },
+        ))
+        .send(Call::new(
+            Actor::native_balance(funding),
+            &native_token::Message::Transfer {
+                to: stake_funds_account_id(program, &ownership),
+                amount,
+                expect_balance: None,
+            },
+        ))
 }
 
 fn unstake_request(
@@ -160,23 +127,14 @@ fn unstake_request(
         "UnstakeRequest is only invoked as a top-level user transaction",
     );
     assert!(input.is_authorized, "must sign for the ownership account");
-    let mut record = decode_record(&input.pre_data);
+    let record = decode_record(&input.pre_data);
     assert_eq!(
         record.sequencer_key, sequencer_key,
         "ownership account backs a different sequencer key"
     );
-    assert!(
-        record.pending_unstake.is_none(),
-        "an unstake request is already pending"
-    );
-    record.pending_unstake = Some(PendingUnstake {
-        amount,
-        destination,
-        requested_at,
-    });
 
-    // Only data changes here; the transfer happens in FinalizeUnstake.
-    Response::write(record.to_bytes())
+    // The config holds the request; the transfer happens in FinalizeUnstake.
+    Response::keep()
         .block_window(request_window(requested_at))
         .send(to_config(
             input.receiver.program_account_id,
@@ -184,66 +142,46 @@ fn unstake_request(
                 sequencer_key,
                 ownership: input.receiver.account_id,
                 amount,
+                destination,
+                requested_at,
             },
         ))
 }
 
-/// `FinalizeUnstake` carries no signature, so the ownership record is the only thing that says
-/// this release was ever requested, for this amount, to this destination.
-fn finalize_unstake(
-    input: &ReceiveInput,
-    sequencer_key: SequencerKey,
-    amount: u128,
-    requested_at: BlockId,
-    exit_delay: u64,
-    destination: AccountId,
-) -> Response {
+/// Unsigned, so the release is sized and addressed only by the config's pending request.
+fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
     assert_root(
         input,
         "FinalizeUnstake is only invoked as a top-level user transaction",
     );
-    // No signature check: already authorized back in UnstakeRequest. That is exactly why the
-    // release below may only be sized and addressed by what the record turns out to hold.
-    let mut record = decode_record(&input.pre_data);
-    assert_eq!(
-        record.sequencer_key, sequencer_key,
-        "ownership account backs a different sequencer key"
-    );
-    let pending = record
+    assert_config_account(input);
+    let mut config = decode_config(&input.pre_data);
+    let exit_delay = channel_params(&config).exit_delay;
+    let entry = config
+        .entries
+        .get_mut(&sequencer_key)
+        .expect("staked key must already have a config entry");
+    let pending = entry
         .pending_unstake
         .take()
-        .expect("no unstake request pending on this account");
-    assert_eq!(
-        pending.amount, amount,
-        "amount does not match the recorded unstake request"
-    );
-    assert_eq!(
-        pending.destination, destination,
-        "destination does not match the recorded unstake request"
-    );
-    assert_eq!(
-        pending.requested_at, requested_at,
-        "request date does not match the recorded unstake request"
-    );
+        .expect("no unstake request pending for this key");
+    entry.total_staked = entry
+        .total_staked
+        .checked_sub(pending.amount)
+        .expect("total staked underflow");
+    let ownership = entry.account_id;
+    if entry.total_staked == 0 {
+        config.entries.remove(&sequencer_key);
+    }
 
     let program = input.receiver.program_account_id;
-    let ownership = input.receiver.account_id;
-    Response::write(record.to_bytes())
-        .block_window(requested_at.saturating_add(exit_delay)..)
-        .send(to_config(
-            program,
-            &Message::SettleUnstake {
-                sequencer_key,
-                ownership,
-                amount,
-                exit_delay,
-            },
-        ))
+    Response::write(config.to_bytes())
+        .block_window(pending.releasable_at(exit_delay)..)
         .send(custody_transfer(
             stake_funds_account_id(program, &ownership),
             stake_funds_seed(&ownership),
-            destination,
-            amount,
+            pending.destination,
+            pending.amount,
         ))
 }
 
@@ -251,40 +189,30 @@ fn slash(
     input: &ReceiveInput,
     sequencer_key: SequencerKey,
     inscription: [u8; 32],
-    approvals: Vec<SlashApproval>,
-    total_staked: u128,
+    approvals: &[SlashApproval],
 ) -> Response {
     assert_root(
         input,
         "Slash is only invoked as a top-level user transaction",
     );
-    let mut record = decode_record(&input.pre_data);
-    assert_eq!(
-        record.sequencer_key, sequencer_key,
-        "ownership account backs a different sequencer key"
-    );
+    assert_config_account(input);
+    let mut config = decode_config(&input.pre_data);
+    // The approvals are the whole authorization, and accreditation is this config's
+    // own answer.
+    verify_approvals(&config, sequencer_key, inscription, approvals);
     // The whole tracked stake burns, including any pending unstake.
-    record.pending_unstake = None;
+    let entry = config
+        .entries
+        .remove(&sequencer_key)
+        .expect("slashed key must have a config entry");
 
     let program = input.receiver.program_account_id;
-    let ownership = input.receiver.account_id;
-    Response::write(record.to_bytes())
-        .send(to_config(
-            program,
-            &Message::ApplySlash {
-                sequencer_key,
-                ownership,
-                inscription,
-                approvals,
-                total_staked,
-            },
-        ))
-        .send(custody_transfer(
-            stake_funds_account_id(program, &ownership),
-            stake_funds_seed(&ownership),
-            slash_sink_account_id(program),
-            total_staked,
-        ))
+    Response::write(config.to_bytes()).send(custody_transfer(
+        stake_funds_account_id(program, &entry.account_id),
+        stake_funds_seed(&entry.account_id),
+        slash_sink_account_id(program),
+        entry.total_staked,
+    ))
 }
 
 fn init_channel_params(
@@ -349,6 +277,10 @@ fn record_stake(
                 entry.account_id, ownership,
                 "config entry points at a different ownership account"
             );
+            assert!(
+                entry.pending_unstake.is_none(),
+                "cannot top up while an unstake request is pending"
+            );
             entry.total_staked = entry
                 .total_staked
                 .checked_add(amount)
@@ -358,7 +290,7 @@ fn record_stake(
             vacant.insert(SequencerEntry {
                 account_id: ownership,
                 total_staked: amount,
-                total_pending_unstake: 0,
+                pending_unstake: None,
             });
         }
     }
@@ -369,79 +301,23 @@ fn track_unstake_request(
     input: &ReceiveInput,
     sequencer_key: SequencerKey,
     ownership: AccountId,
-    amount: u128,
+    pending: PendingUnstake,
 ) -> Response {
     assert_bookkeeping(input);
     let mut config = decode_config(&input.pre_data);
     let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
     let entry = entry_of(&mut config, sequencer_key, ownership);
+    assert!(
+        entry.pending_unstake.is_none(),
+        "an unstake request is already pending"
+    );
     // Sized against the tracked stake, never the account balance: anyone can
     // credit any account, so balance can exceed `total_staked`.
     assert!(
-        entry.allows_unstake_request(amount, minimum_sequencer_stake),
+        entry.allows_unstake_request(pending.amount, minimum_sequencer_stake),
         "unstake request must be covered by the staked total and leave the key at zero or at/above the minimum"
     );
-    entry.total_pending_unstake = entry
-        .total_pending_unstake
-        .checked_add(amount)
-        .expect("total pending unstake overflow");
-    Response::write(config.to_bytes())
-}
-
-fn settle_unstake(
-    input: &ReceiveInput,
-    sequencer_key: SequencerKey,
-    ownership: AccountId,
-    amount: u128,
-    exit_delay: u64,
-) -> Response {
-    assert_bookkeeping(input);
-    let mut config = decode_config(&input.pre_data);
-    assert_eq!(
-        channel_params(&config).exit_delay,
-        exit_delay,
-        "exit delay does not match the channel params"
-    );
-    let entry = entry_of(&mut config, sequencer_key, ownership);
-    entry.total_staked = entry
-        .total_staked
-        .checked_sub(amount)
-        .expect("total staked underflow");
-    entry.total_pending_unstake = entry
-        .total_pending_unstake
-        .checked_sub(amount)
-        .expect("total pending unstake underflow");
-    if entry.total_staked == 0 {
-        config.entries.remove(&sequencer_key);
-    }
-    Response::write(config.to_bytes())
-}
-
-fn apply_slash(
-    input: &ReceiveInput,
-    sequencer_key: SequencerKey,
-    ownership: AccountId,
-    inscription: [u8; 32],
-    approvals: &[SlashApproval],
-    total_staked: u128,
-) -> Response {
-    assert_bookkeeping(input);
-    let mut config = decode_config(&input.pre_data);
-    // The approvals are the whole authorization, and accreditation is this config's
-    // own answer.
-    verify_approvals(&config, sequencer_key, inscription, approvals);
-    let entry = config
-        .entries
-        .remove(&sequencer_key)
-        .expect("slashed key must have a config entry");
-    assert_eq!(
-        entry.account_id, ownership,
-        "config entry points at a different ownership account"
-    );
-    assert_eq!(
-        entry.total_staked, total_staked,
-        "slash must burn exactly the stake this config tracks"
-    );
+    entry.pending_unstake = Some(pending);
     Response::write(config.to_bytes())
 }
 
@@ -610,32 +486,20 @@ mod tests {
         ])
     }
 
-    fn entry(
-        account_id: AccountId,
-        total_staked: u128,
-        total_pending_unstake: u128,
-    ) -> SequencerEntry {
+    fn entry(account_id: AccountId, total_staked: u128, pending: u128) -> SequencerEntry {
         SequencerEntry {
             account_id,
             total_staked,
-            total_pending_unstake,
+            pending_unstake: (pending > 0).then_some(PendingUnstake {
+                amount: pending,
+                destination: DESTINATION,
+                requested_at: REQUESTED_AT,
+            }),
         }
     }
 
-    fn record(sequencer_key: SequencerKey, pending_unstake: Option<PendingUnstake>) -> Vec<u8> {
-        StakeRecord {
-            sequencer_key,
-            pending_unstake,
-        }
-        .to_bytes()
-    }
-
-    fn pending(amount: u128, destination: AccountId) -> PendingUnstake {
-        PendingUnstake {
-            amount,
-            destination,
-            requested_at: REQUESTED_AT,
-        }
+    fn record(sequencer_key: SequencerKey) -> Vec<u8> {
+        StakeRecord { sequencer_key }.to_bytes()
     }
 
     fn approval(seed: u8, sequencer_key: SequencerKey) -> SlashApproval {
@@ -707,19 +571,8 @@ mod tests {
         SequencerStakeConfig::from_bytes(&written(transition)).expect("the config decodes")
     }
 
-    fn finalize(
-        sequencer_key: SequencerKey,
-        amount: u128,
-        destination: AccountId,
-        requested_at: u64,
-    ) -> Message {
-        Message::FinalizeUnstake {
-            sequencer_key,
-            amount,
-            requested_at,
-            exit_delay: EXIT_DELAY,
-            destination,
-        }
+    fn finalize(sequencer_key: SequencerKey) -> Message {
+        Message::FinalizeUnstake { sequencer_key }
     }
 
     fn request(sequencer_key: SequencerKey, amount: u128) -> Message {
@@ -749,34 +602,21 @@ mod tests {
         }
     }
 
-    fn settle(ownership: AccountId, amount: u128, exit_delay: u64) -> Message {
-        Message::SettleUnstake {
-            sequencer_key: key(1),
-            ownership,
-            amount,
-            exit_delay,
-        }
-    }
-
     fn track(ownership: AccountId, amount: u128) -> Message {
         Message::TrackUnstakeRequest {
             sequencer_key: key(1),
             ownership,
             amount,
+            destination: DESTINATION,
+            requested_at: REQUESTED_AT,
         }
     }
 
-    fn apply_slash(
-        ownership: AccountId,
-        approvals: Vec<SlashApproval>,
-        total_staked: u128,
-    ) -> Message {
-        Message::ApplySlash {
+    fn slash(approvals: Vec<SlashApproval>) -> Message {
+        Message::Slash {
             sequencer_key: key(1),
-            ownership,
             inscription: INSCRIPTION,
             approvals,
-            total_staked,
         }
     }
 
@@ -788,13 +628,16 @@ mod tests {
 
     #[test]
     fn a_release_matching_the_pending_request_consumes_it() {
-        let transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            finalize(key(1), 500, DESTINATION, REQUESTED_AT),
+        let transition = at_config(
+            Origin::Root,
+            &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
+            finalize(key(1)),
         );
 
-        assert_eq!(written(&transition), record(key(1), None));
+        assert_eq!(
+            decoded_config(&transition).entries.get(&key(1)).copied(),
+            Some(entry(OWNER, 2_500, 0))
+        );
         assert_eq!(
             transition.block_validity_window.start(),
             Some(REQUESTED_AT + EXIT_DELAY)
@@ -803,74 +646,30 @@ mod tests {
         assert_eq!(
             transition.sends,
             vec![
-                to_config(PROGRAM, &settle(OWNER, 500, EXIT_DELAY)).into(),
-                custody_transfer(funds_of(OWNER), stake_funds_seed(&OWNER), DESTINATION, 500,)
-                    .into(),
+                custody_transfer(funds_of(OWNER), stake_funds_seed(&OWNER), DESTINATION, 500)
+                    .into()
             ]
         );
     }
 
     #[test]
-    #[should_panic(expected = "no unstake request pending on this account")]
+    #[should_panic(expected = "no unstake request pending for this key")]
     fn a_release_with_no_request_behind_it_is_refused() {
         // FinalizeUnstake carries no signature, so without this any caller drains the funds
         // account of an account that never asked to unstake.
-        let _transition = at_owner(
-            false,
-            &record(key(1), None),
-            finalize(key(1), 500, ATTACKER, REQUESTED_AT),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "amount does not match the recorded unstake request")]
-    fn a_release_larger_than_the_pending_request_is_refused() {
-        let _transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            finalize(key(1), 5_000, DESTINATION, REQUESTED_AT),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "destination does not match the recorded unstake request")]
-    fn a_release_to_another_address_is_refused() {
-        // The whole drain: the custody transfer's recipient is this value.
-        let _transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            finalize(key(1), 500, ATTACKER, REQUESTED_AT),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "ownership account backs a different sequencer key")]
-    fn a_release_naming_another_key_is_refused() {
-        // The key selects which config entry the release is charged to.
-        let _transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            finalize(key(2), 500, DESTINATION, REQUESTED_AT),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "request date does not match the recorded unstake request")]
-    fn a_release_dated_differently_is_refused() {
-        // The date sets the release's earliest block; an earlier one would skip the delay.
-        let _transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            finalize(key(1), 500, DESTINATION, REQUESTED_AT - 1),
+        let _transition = at_config(
+            Origin::Root,
+            &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
+            finalize(key(1)),
         );
     }
 
     #[test]
     fn settling_a_release_drops_a_fully_drained_entry() {
         let transition = at_config(
-            Origin::Program(PROGRAM),
+            Origin::Root,
             &config_with(&[(key(1), entry(OWNER, 3_000, 3_000))]),
-            settle(OWNER, 3_000, EXIT_DELAY),
+            finalize(key(1)),
         );
         assert!(decoded_config(&transition).entries.is_empty());
     }
@@ -878,9 +677,9 @@ mod tests {
     #[test]
     fn settling_a_partial_release_leaves_the_rest_staked() {
         let transition = at_config(
-            Origin::Program(PROGRAM),
+            Origin::Root,
             &config_with(&[(key(1), entry(OWNER, 3_000, 1_000))]),
-            settle(OWNER, 1_000, EXIT_DELAY),
+            finalize(key(1)),
         );
         assert_eq!(
             decoded_config(&transition).entries.get(&key(1)).copied(),
@@ -888,36 +687,13 @@ mod tests {
         );
     }
 
-    #[test]
-    #[should_panic(expected = "config entry points at a different ownership account")]
-    fn a_release_cannot_be_charged_to_another_accounts_entry() {
-        let _transition = at_config(
-            Origin::Program(PROGRAM),
-            &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
-            settle(ATTACKER, 500, EXIT_DELAY),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "exit delay does not match the channel params")]
-    fn a_settlement_claiming_another_exit_delay_is_refused() {
-        let _transition = at_config(
-            Origin::Program(PROGRAM),
-            &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
-            settle(OWNER, 500, EXIT_DELAY - 1),
-        );
-    }
-
     // --- UnstakeRequest ---
 
     #[test]
     fn a_request_records_the_amount_and_destination() {
-        let transition = at_owner(true, &record(key(1), None), request(key(1), 500));
+        let transition = at_owner(true, &record(key(1)), request(key(1), 500));
 
-        assert_eq!(
-            written(&transition),
-            record(key(1), Some(pending(500, DESTINATION)))
-        );
+        assert!(transition.post_data.is_none());
         assert_eq!(transition.block_validity_window.start(), Some(0));
         assert_eq!(
             transition.block_validity_window.end(),
@@ -932,7 +708,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "must sign for the ownership account")]
     fn an_unsigned_unstake_request_is_refused() {
-        let _transition = at_owner(false, &record(key(1), None), request(key(1), 500));
+        let _transition = at_owner(false, &record(key(1)), request(key(1), 500));
     }
 
     #[test]
@@ -940,16 +716,16 @@ mod tests {
     fn a_request_cannot_name_a_key_this_account_does_not_back() {
         // The record and the config both read the proposed key; unchecked, it would point the
         // config's bookkeeping at a victim's entry.
-        let _transition = at_owner(true, &record(key(1), None), request(key(2), 500));
+        let _transition = at_owner(true, &record(key(1)), request(key(2), 500));
     }
 
     #[test]
     #[should_panic(expected = "an unstake request is already pending")]
     fn a_second_request_is_refused() {
-        let _transition = at_owner(
-            true,
-            &record(key(1), Some(pending(100, DESTINATION))),
-            request(key(1), 500),
+        let _transition = at_config(
+            Origin::Program(PROGRAM),
+            &config_with(&[(key(1), entry(OWNER, 3_000, 100))]),
+            track(OWNER, 500),
         );
     }
 
@@ -979,7 +755,7 @@ mod tests {
     fn a_stake_opens_the_record_and_funds_the_stake() {
         let transition = at_owner(true, &[], stake(false));
 
-        assert_eq!(written(&transition), record(key(1), None));
+        assert_eq!(written(&transition), record(key(1)));
         assert_eq!(
             transition.sends,
             vec![
@@ -1026,16 +802,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "stake claims an ownership record this account does not match")]
     fn a_stake_cannot_deny_a_record_the_account_holds() {
-        let _transition = at_owner(true, &record(key(1), None), stake(false));
+        let _transition = at_owner(true, &record(key(1)), stake(false));
     }
 
     #[test]
     #[should_panic(expected = "cannot top up while an unstake request is pending")]
     fn a_top_up_during_a_pending_release_is_refused() {
-        let _transition = at_owner(
-            true,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            stake(true),
+        let _transition = at_config(
+            Origin::Program(PROGRAM),
+            &config_with(&[(key(1), entry(OWNER, 3_000, 500))]),
+            record_stake(OWNER, MINIMUM, true),
         );
     }
 
@@ -1072,43 +848,30 @@ mod tests {
     // --- Slash ---
 
     #[test]
-    fn a_slash_clears_the_record_and_burns_the_stake() {
-        let approvals = vec![approval(2, key(1)), approval(3, key(1))];
-        let transition = at_owner(
-            false,
-            &record(key(1), Some(pending(500, DESTINATION))),
-            Message::Slash {
-                sequencer_key: key(1),
-                inscription: INSCRIPTION,
-                approvals: approvals.clone(),
-                total_staked: 3_000,
-            },
+    fn an_approved_slash_removes_the_entry() {
+        let transition = at_config(
+            Origin::Root,
+            &config_with(&[
+                (key(1), entry(OWNER, 3_000, 500)),
+                (key(2), entry(OTHER_OWNER, 3_000, 0)),
+                (key(3), entry(OTHER_OWNER, 3_000, 0)),
+            ]),
+            slash(vec![approval(2, key(1)), approval(3, key(1))]),
         );
 
-        assert_eq!(written(&transition), record(key(1), None));
+        assert!(!decoded_config(&transition).entries.contains_key(&key(1)));
         assert_eq!(
             transition.sends,
             vec![
-                to_config(PROGRAM, &apply_slash(OWNER, approvals, 3_000)).into(),
                 custody_transfer(
                     funds_of(OWNER),
                     stake_funds_seed(&OWNER),
                     slash_sink_account_id(PROGRAM),
                     3_000,
                 )
-                .into(),
+                .into()
             ]
         );
-    }
-
-    #[test]
-    fn an_approved_slash_removes_the_entry() {
-        let transition = at_config(
-            Origin::Program(PROGRAM),
-            &committee_of_three(),
-            apply_slash(OWNER, vec![approval(2, key(1)), approval(3, key(1))], 3_000),
-        );
-        assert_eq!(decoded_config(&transition).entries.len(), 2);
     }
 
     #[test]
@@ -1117,9 +880,9 @@ mod tests {
         // Accreditation is the entire authorization for a slash, and only the real config
         // knows it.
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Origin::Root,
             &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
-            apply_slash(OWNER, vec![approval(9, key(1))], 3_000),
+            slash(vec![approval(9, key(1))]),
         );
     }
 
@@ -1127,9 +890,9 @@ mod tests {
     #[should_panic(expected = "slash carries fewer approvals than the threshold")]
     fn a_slash_approved_by_a_single_key_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Origin::Root,
             &committee_of_three(),
-            apply_slash(OWNER, vec![approval(2, key(1))], 3_000),
+            slash(vec![approval(2, key(1))]),
         );
     }
 
@@ -1137,37 +900,9 @@ mod tests {
     #[should_panic(expected = "the same key approved twice")]
     fn a_slash_approved_twice_by_one_key_is_refused() {
         let _transition = at_config(
-            Origin::Program(PROGRAM),
+            Origin::Root,
             &committee_of_three(),
-            apply_slash(OWNER, vec![approval(2, key(1)), approval(2, key(1))], 3_000),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "slash must burn exactly the stake this config tracks")]
-    fn a_slash_cannot_burn_more_than_the_tracked_stake() {
-        let _transition = at_config(
-            Origin::Program(PROGRAM),
-            &committee_of_three(),
-            apply_slash(
-                OWNER,
-                vec![approval(2, key(1)), approval(3, key(1))],
-                10_000,
-            ),
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "config entry points at a different ownership account")]
-    fn a_slash_cannot_be_charged_to_another_accounts_funds() {
-        let _transition = at_config(
-            Origin::Program(PROGRAM),
-            &committee_of_three(),
-            apply_slash(
-                ATTACKER,
-                vec![approval(2, key(1)), approval(3, key(1))],
-                3_000,
-            ),
+            slash(vec![approval(2, key(1)), approval(2, key(1))]),
         );
     }
 

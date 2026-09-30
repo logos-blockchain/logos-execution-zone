@@ -307,15 +307,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         0,
         "the ownership account never custodies the stake"
     );
-    let drained_record = sequencer_stake_core::StakeRecord::from_bytes(
-        drained_ownership_account.data.shard(stake_id).as_ref(),
-    )
-    .context("drained ownership account data did not decode as a StakeRecord")?;
-    assert!(
-        drained_record.pending_unstake.is_none(),
-        "pending unstake should be cleared"
-    );
-
     let destination_balance = account_balance(&ctx, destination_id).await?;
     assert_eq!(
         destination_balance,

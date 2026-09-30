@@ -136,11 +136,11 @@ def decode_stake_config(data: bytes) -> dict:
     entries = {}
     for _ in range(r.u32()):
         key = r.take(32).hex()
-        entries[key] = {
-            "owner": b58encode(r.take(32)),
-            "staked": r.u128(),
-            "pending": r.u128(),
-        }
+        entries[key] = {"owner": b58encode(r.take(32)), "staked": r.u128(), "pending": 0}
+        # `pending_unstake: Option<PendingUnstake>` — amount, destination, requested_at.
+        if r.take(1)[0]:
+            entries[key]["pending"] = r.u128()
+            r.take(32 + 8)
     for e in entries.values():
         e["net"] = max(e["staked"] - e["pending"], 0)
     return {

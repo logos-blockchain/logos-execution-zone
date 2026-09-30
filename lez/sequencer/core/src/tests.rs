@@ -4376,17 +4376,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("UnstakeRequest should succeed");
 
-    let finalize = build_finalize_unstake_tx(
-        ownership_id,
-        sequencer_key,
-        sequencer_stake_core::PendingUnstake {
-            amount,
-            destination: funding_id,
-            requested_at: 2,
-        },
-        exit_delay(&state),
-    )
-    .unwrap();
+    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key, funding_id).unwrap();
     let LeeTransaction::Public(finalize) = finalize else {
         panic!("FinalizeUnstake should be a public transaction");
     };
@@ -4447,7 +4437,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let entry = stake_entry(&state, sequencer_key).expect("key is registered again");
     assert_eq!(entry.account_id, ownership_id);
     assert_eq!(entry.total_staked, amount);
-    assert_eq!(entry.total_pending_unstake, 0);
+    assert_eq!(entry.pending_unstake, None);
     assert_eq!(
         state
             .get_account_by_id(funds_id)
@@ -4552,16 +4542,10 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         .transition_from_public_transaction(&tx, 1, 0)
         .expect("the bootstrap sequencer should be able to request an unstake");
 
-    let record = sequencer_stake_core::StakeRecord::from_bytes(
-        state
-            .get_account_by_id(stake_id)
-            .data
-            .shard(programs::sequencer_stake_account_id())
-            .as_ref(),
-    )
-    .expect("genesis stake account should hold a StakeRecord");
     assert_eq!(
-        record.pending_unstake.map(|pending| pending.amount),
+        stake_entry(&state, bootstrap_sequencer_key)
+            .and_then(|entry| entry.pending_unstake)
+            .map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
 }
@@ -4645,7 +4629,6 @@ fn slash_transaction(
     ownership_id: AccountId,
     sequencer_key: sequencer_stake_core::SequencerKey,
     approvals: Vec<sequencer_stake_core::SlashApproval>,
-    total_staked: u128,
 ) -> PublicTransaction {
     let LeeTransaction::Public(tx) = sequencer_slasher_actor::build_slash_tx(
         ownership_id,
@@ -4654,7 +4637,6 @@ fn slash_transaction(
             inscription: TEST_INSCRIPTION,
         },
         approvals,
-        total_staked,
     )
     .expect("Slash tx should build") else {
         unreachable!("build_slash_tx builds a public transaction")
@@ -4674,7 +4656,6 @@ fn a_slash_burns_the_tracked_stake_to_the_sink() {
             test_approval(0x45, sequencer_key),
             test_approval(0x46, sequencer_key),
         ],
-        amount,
     );
     state
         .transition_from_public_transaction(&slash, 4, 0)
@@ -4730,7 +4711,6 @@ fn a_slash_burns_from_funds_carrying_a_stranger_shard() {
             test_approval(0x45, sequencer_key),
             test_approval(0x46, sequencer_key),
         ],
-        amount,
     );
     state
         .transition_from_public_transaction(&slash, 4, 0)
@@ -4780,17 +4760,7 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_shard() {
         .expect("UnstakeRequest should succeed");
     let funds_id = write_stranger_shard_on_stake_funds(&mut state, ownership_id);
 
-    let finalize = build_finalize_unstake_tx(
-        ownership_id,
-        sequencer_key,
-        sequencer_stake_core::PendingUnstake {
-            amount,
-            destination,
-            requested_at: 2,
-        },
-        exit_delay(&state),
-    )
-    .unwrap();
+    let finalize = build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap();
     let LeeTransaction::Public(finalize) = finalize else {
         panic!("FinalizeUnstake should be a public transaction");
     };
@@ -4834,17 +4804,9 @@ fn a_finalize_unstake_waits_for_the_exit_delay() {
     state
         .transition_from_public_transaction(&request, requested_at, 0)
         .expect("UnstakeRequest should succeed");
-    let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
-        ownership_id,
-        sequencer_key,
-        sequencer_stake_core::PendingUnstake {
-            amount,
-            destination,
-            requested_at,
-        },
-        exit_delay(&state),
-    )
-    .unwrap() else {
+    let LeeTransaction::Public(finalize) =
+        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+    else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
 
@@ -4969,7 +4931,6 @@ fn a_slash_claws_back_a_pending_unstake() {
             test_approval(0x45, sequencer_key),
             test_approval(0x46, sequencer_key),
         ],
-        amount,
     );
     state
         .transition_from_public_transaction(&slash, 5, 0)
@@ -4992,17 +4953,9 @@ fn a_slash_claws_back_a_pending_unstake() {
             .unwrap(),
         0
     );
-    let LeeTransaction::Public(finalize) = build_finalize_unstake_tx(
-        ownership_id,
-        sequencer_key,
-        sequencer_stake_core::PendingUnstake {
-            amount,
-            destination,
-            requested_at: 4,
-        },
-        exit_delay(&state),
-    )
-    .unwrap() else {
+    let LeeTransaction::Public(finalize) =
+        build_finalize_unstake_tx(ownership_id, sequencer_key, destination).unwrap()
+    else {
         unreachable!("build_finalize_unstake_tx builds a public transaction")
     };
     assert!(
@@ -5097,20 +5050,19 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
         (to.program_account_id == stake_program_id)
             .then(|| borsh::from_slice(message).ok())
             .flatten()
-            .map(|message| (message, to.account_id))
     };
     assert!(block.body.transactions.iter().any(|tx| {
         matches!(
             stake_instruction(tx),
-            Some((sequencer_stake_core::Message::Slash { sequencer_key, .. }, _))
+            Some(sequencer_stake_core::Message::Slash { sequencer_key, .. })
                 if sequencer_key == offender
         )
     }));
     assert!(!block.body.transactions.iter().any(|tx| {
         matches!(
             stake_instruction(tx),
-            Some((sequencer_stake_core::Message::FinalizeUnstake { .. }, ownership_id))
-                if ownership_id == offender_id
+            Some(sequencer_stake_core::Message::FinalizeUnstake { sequencer_key })
+                if sequencer_key == offender
         )
     }));
 }
@@ -5161,12 +5113,7 @@ fn a_committee_of_three_takes_two_approvals_to_slash() {
     let ownership_id = committee_ownership(seeds[0]).0;
     let offender = test_sequencer_key(seeds[0]);
 
-    let one = slash_transaction(
-        ownership_id,
-        offender,
-        vec![test_approval(0x45, offender)],
-        amount,
-    );
+    let one = slash_transaction(ownership_id, offender, vec![test_approval(0x45, offender)]);
     assert!(
         state
             .transition_from_public_transaction(&one, 4, 0)
@@ -5178,7 +5125,6 @@ fn a_committee_of_three_takes_two_approvals_to_slash() {
         ownership_id,
         offender,
         vec![test_approval(0x45, offender), test_approval(0x46, offender)],
-        amount,
     );
     state
         .transition_from_public_transaction(&two, 4, 0)
@@ -5214,7 +5160,6 @@ fn an_approval_signed_over_another_channel_does_not_slash() {
             test_approval_on(other_zone, 0x45, offender),
             test_approval_on(other_zone, 0x46, offender),
         ],
-        amount,
     );
     assert!(
         state
@@ -5237,7 +5182,6 @@ fn an_approval_signed_over_another_channel_does_not_slash() {
         ownership_id,
         offender,
         vec![test_approval(0x45, offender), test_approval(0x46, offender)],
-        amount,
     );
     state
         .transition_from_public_transaction(&here, 4, 0)
@@ -5274,12 +5218,7 @@ fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
         .transition_from_public_transaction(&exit, 5, 0)
         .expect("UnstakeRequest should succeed");
 
-    let by_leaver = slash_transaction(
-        ownership_id,
-        offender,
-        vec![test_approval(0x47, offender)],
-        amount,
-    );
+    let by_leaver = slash_transaction(ownership_id, offender, vec![test_approval(0x47, offender)]);
     assert!(
         state
             .transition_from_public_transaction(&by_leaver, 6, 0)
@@ -5287,12 +5226,8 @@ fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
         "a key with nothing left staked must not approve a burn"
     );
 
-    let by_one_peer = slash_transaction(
-        ownership_id,
-        offender,
-        vec![test_approval(0x45, offender)],
-        amount,
-    );
+    let by_one_peer =
+        slash_transaction(ownership_id, offender, vec![test_approval(0x45, offender)]);
     assert!(
         state
             .transition_from_public_transaction(&by_one_peer, 6, 0)
@@ -5306,7 +5241,6 @@ fn a_sequencer_on_its_way_out_neither_approves_nor_raises_the_threshold() {
         ownership_id,
         offender,
         vec![test_approval(0x45, offender), test_approval(0x46, offender)],
-        amount,
     );
     state
         .transition_from_public_transaction(&by_two_peers, 6, 0)
@@ -5328,7 +5262,7 @@ fn a_slash_without_enough_approvals_is_rejected() {
     let (mut state, sequencer_key, ownership_id, _ownership_key) = slashable_state(amount);
 
     // No signatures, no authorization.
-    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new(), amount);
+    let unapproved = slash_transaction(ownership_id, sequencer_key, Vec::new());
     assert!(
         state
             .transition_from_public_transaction(&unapproved, 2, 0)
@@ -5340,7 +5274,6 @@ fn a_slash_without_enough_approvals_is_rejected() {
         ownership_id,
         sequencer_key,
         vec![test_approval(0x55, sequencer_key)],
-        amount,
     );
     assert!(
         state
@@ -5359,8 +5292,7 @@ fn a_slash_without_enough_approvals_is_rejected() {
         );
         key.sign_payload(&message).to_bytes().to_vec()
     };
-    let mismatched =
-        slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription], amount);
+    let mismatched = slash_transaction(ownership_id, sequencer_key, vec![wrong_inscription]);
     assert!(
         state
             .transition_from_public_transaction(&mismatched, 2, 0)
