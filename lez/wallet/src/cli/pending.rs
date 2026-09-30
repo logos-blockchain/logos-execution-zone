@@ -1,7 +1,10 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use lee::{AccountId, PublicIdentity, privacy_preserving_transaction::circuit::ProgramCatalog};
-use lee_core::program::{MessageId, PdaSeed};
+use lee_core::{
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{MessageId, PdaSeed},
+};
 
 use crate::{
     AccDecodeData::Decode,
@@ -15,7 +18,8 @@ use crate::{
 pub enum PendingSubcommand {
     /// List the pending messages cast to this wallet's accounts.
     List,
-    /// Receive a pending token credit cast to one of this wallet's accounts or to a public PDA.
+    /// Receive a pending native or token credit cast to one of this wallet's accounts or to a
+    /// public PDA.
     ///
     /// A public destination whose key the wallet holds signs and pays the fee, unless `payer`
     /// pays it instead. A public PDA destination needs `payer`, `pda_program` and `pda_seed`.
@@ -116,6 +120,10 @@ impl WalletSubcommand for PendingSubcommand {
 }
 
 fn receipt_programs(program: AccountId) -> Result<ProgramCatalog> {
+    // The native program runs as protocol code, so its receipt needs no program.
+    if program == NATIVE_TOKEN_PROGRAM_ID {
+        return Ok(ProgramCatalog::default());
+    }
     anyhow::ensure!(
         program == programs::token_account_id(),
         "Program {program} is not one this wallet can receive messages for"

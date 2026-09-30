@@ -29,6 +29,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{CallInput, MessageData, MessageId, StoredMessage},
 };
 use log::warn;
@@ -1463,19 +1464,28 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
 }
 
 fn check_receivable(record: &StoredMessage) -> Result<(), ExecutionFailureKind> {
+    let body = &record.body;
     let token = programs::token_account_id();
-    if record.body.to.program_account_id == token
-        && record.body.origin_program == token
-        && matches!(
-            borsh::from_slice::<token_core::Message>(&record.body.message),
+    let plain_credit = if body.to.program_account_id == token && body.origin_program == token {
+        matches!(
+            borsh::from_slice::<token_core::Message>(&body.message),
             Ok(token_core::Message::Credit { notify: None, .. })
         )
-    {
+    } else {
+        body.to.program_account_id == NATIVE_TOKEN_PROGRAM_ID
+            && body.origin_program == NATIVE_TOKEN_PROGRAM_ID
+            && matches!(
+                borsh::from_slice::<native_token::Message>(&body.message),
+                Ok(native_token::Message::Credit(_))
+            )
+    };
+    if plain_credit {
         Ok(())
     } else {
         Err(ExecutionFailureKind::TransactionBuildError(
             lee::error::LeeError::InvalidInput(
-                "This wallet only receives token credits without a notification".to_owned(),
+                "This wallet only receives native credits and token credits without a notification"
+                    .to_owned(),
             ),
         ))
     }
