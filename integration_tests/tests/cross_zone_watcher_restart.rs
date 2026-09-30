@@ -157,8 +157,8 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && let CallInput::Inline { to, .. } = &public_tx.message().root
-                && to.program_account_id == inbox_id
+                && let CallInput::Inline { to: root, .. } = &public_tx.message().root
+                && root.program_account_id == inbox_id
             {
                 count = count.saturating_add(1);
             }

@@ -45,6 +45,7 @@ mod tests;
 
 /// How many block lookups a single [`GetBlockRange`] keeps in flight.
 const BLOCK_RANGE_CONCURRENCY: usize = 16;
+const MAX_PENDING_MESSAGES_PER_REQUEST: u32 = 256;
 
 pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
@@ -448,8 +449,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
         GetAccountReply { account }
     }
 }
-
-const MAX_PENDING_MESSAGES_PER_REQUEST: u32 = 256;
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPendingMessages>
     for ExecutorActor<S, B>
