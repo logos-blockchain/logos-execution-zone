@@ -11763,7 +11763,10 @@ dependencies = [
 name = "sharding_pool_actor"
 version = "0.1.0"
 dependencies = [
+ "env_logger",
  "kameo",
+ "log",
+ "sequencer_actors_common",
  "tokio",
 ]
 

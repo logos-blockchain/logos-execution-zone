@@ -1,10 +1,13 @@
 //! Sharding Pool provides a pool of actors where each request is routed to a specific actor based
 //! on a sharding key.
+//!
+//! Each child actor is supervised by pool according to the specified restart config.
+//! If a child actor fails the pool will try to restart it and resend the message.
 
 use std::hash::Hash;
 
 #[cfg(feature = "actor")]
-pub use actor::ShardingPoolActor;
+pub use actor::{Key, RestartConfig, ShardingPoolActor};
 
 #[cfg(feature = "actor")]
 pub mod actor;

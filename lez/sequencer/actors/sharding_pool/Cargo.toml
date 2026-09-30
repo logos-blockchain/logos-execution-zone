@@ -8,10 +8,15 @@ license.workspace = true
 workspace = true
 
 [features]
-actor = []
+actor = ["dep:log"]
 
 [dependencies]
+tokio.workspace = true
 kameo.workspace = true
+log = { workspace = true, optional = true }
 
 [dev-dependencies]
+sequencer_actors_common.workspace = true
+
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+env_logger.workspace = true
