@@ -392,10 +392,8 @@ impl V03State {
 
     #[must_use]
     pub fn pending_message(&self, id: MessageId) -> Option<&StoredMessage> {
-        self.pending_messages
-            .ids
-            .get(&id)
-            .and_then(|sequence| self.pending_messages.records.get(sequence))
+        let sequence = self.pending_messages.ids.get(&id)?;
+        self.pending_messages.records.get(sequence)
     }
 
     pub fn pending_messages_from(
