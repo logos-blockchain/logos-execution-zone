@@ -2,7 +2,9 @@
 //! callers cannot drift apart. `Script` is what `scripted` runs.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::program::{Action, BlockValidityWindow, Origin, ProgramEvent, TimestampValidityWindow};
+use lee_core::program::{
+    Action, BlockValidityWindow, Origin, ProgramEvent, TimestampValidityWindow,
+};
 
 pub mod guests;
 

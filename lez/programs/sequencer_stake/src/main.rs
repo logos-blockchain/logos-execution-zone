@@ -804,13 +804,8 @@ mod tests {
             transition.sends,
             vec![
                 to_config(PROGRAM, &settle(OWNER, 500, EXIT_DELAY)).into(),
-                custody_transfer(
-                    funds_of(OWNER),
-                    stake_funds_seed(&OWNER),
-                    DESTINATION,
-                    500,
-                )
-                .into(),
+                custody_transfer(funds_of(OWNER), stake_funds_seed(&OWNER), DESTINATION, 500,)
+                    .into(),
             ]
         );
     }
