@@ -504,3 +504,33 @@ fn origin_tags_follow_declaration_order() {
         [&[1][..], &[2; 32]].concat()
     );
 }
+
+#[test]
+fn stored_message_id_matches_pinned_value() {
+    let record = StoredMessage {
+        sequence: 7,
+        body: MessageBody {
+            origin_program: AccountId::new([5; 32]),
+            to: Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32])),
+            message: b"m".to_vec(),
+        },
+    };
+    let expected = MessageId::new([
+        18, 79, 162, 189, 144, 82, 236, 102, 13, 249, 53, 102, 25, 58, 13, 193, 29, 158, 189, 139,
+        26, 164, 42, 72, 252, 78, 151, 246, 254, 209, 91, 24,
+    ]);
+    assert_eq!(record.id(), expected);
+}
+
+#[test]
+fn stored_message_id_differs_for_different_sequence() {
+    let record = |sequence| StoredMessage {
+        sequence,
+        body: MessageBody {
+            origin_program: AccountId::new([5; 32]),
+            to: Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32])),
+            message: b"m".to_vec(),
+        },
+    };
+    assert_ne!(record(0).id(), record(1).id());
+}

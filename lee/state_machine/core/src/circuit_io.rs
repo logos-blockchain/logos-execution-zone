@@ -276,7 +276,7 @@ mod tests {
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{Output, ScheduleOp},
-        program::Origin,
+        program::{MessageBody, Origin},
     };
 
     fn pinned_statement() -> (Declared, Boundary) {
@@ -362,6 +362,82 @@ mod tests {
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
             &[0, 0, 0, 0], // consumed: none
+            &[0, 0, 0, 0], // private_actions: none
+            &[0, 0],       // block_validity_window: from None, to None
+            &[0, 0],       // timestamp_validity_window: from None, to None
+            &[0, 0, 0, 0], // program_image_claims: none
+        ]
+        .concat();
+
+        assert_eq!(output.to_bytes(), expected);
+    }
+
+    #[test]
+    fn a_circuit_output_journal_with_in_flight_messages_has_a_pinned_layout() {
+        let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
+        let output = PrivacyPreservingCircuitOutput {
+            declared: Declared {
+                public_actors: vec![public],
+                authorized_accounts: Vec::new(),
+            },
+            boundary: Boundary {
+                outputs: vec![Output {
+                    to: public,
+                    message: b"o".to_vec(),
+                    origin: Origin::Program(AccountId::new([8; 32])),
+                    issuer: None,
+                    in_flight: Some(MessageId::new([7; 32])),
+                    grants: Vec::new(),
+                    pda_seeds: Vec::new(),
+                }],
+                assumptions: Vec::new(),
+                publications: vec![MessageBody {
+                    origin_program: AccountId::new([8; 32]),
+                    to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                    message: b"p".to_vec(),
+                }],
+                schedule: vec![
+                    ScheduleOp::CallPublic,
+                    ScheduleOp::ReturnPublic,
+                    ScheduleOp::Publish,
+                ],
+            },
+            consumed: vec![MessageId::new([7; 32])],
+            private_actions: Vec::new(),
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: Vec::new(),
+        };
+
+        let expected: Vec<u8> = [
+            &[128, 1, 0, 0][..], // frame length: the 384 bytes below
+            &[1, 0, 0, 0],       // declared.public_actors: one actor
+            &[5; 32],
+            &[6; 32],
+            &[0, 0, 0, 0], // declared.authorized_accounts: none
+            &[1, 0, 0, 0], // boundary.outputs: one output
+            &[5; 32],      // to
+            &[6; 32],
+            &[1, 0, 0, 0], // message
+            b"o",
+            &[1], // origin: Origin::Program
+            &[8; 32],
+            &[0], // issuer: None
+            &[1], // in_flight: Some
+            &[7; 32],
+            &[0, 0, 0, 0], // grants: none
+            &[0, 0, 0, 0], // pda_seeds: none
+            &[0, 0, 0, 0], // boundary.assumptions: none
+            &[1, 0, 0, 0], // boundary.publications: one message
+            &[8; 32],      // origin_program
+            &[3; 32],      // to
+            &[4; 32],
+            &[1, 0, 0, 0], // message
+            b"p",
+            &[3, 0, 0, 0], // boundary.schedule: three ops
+            &[0, 3, 4],
+            &[1, 0, 0, 0], // consumed: one message
+            &[7; 32],
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
             &[0, 0],       // timestamp_validity_window: from None, to None
