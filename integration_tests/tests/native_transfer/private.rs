@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
@@ -615,6 +615,7 @@ fn prove_init_with_commitment_root(
             },
             public_actors: vec![sender],
             signers: [sender_id].into(),
+            identities: HashSet::new(),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],

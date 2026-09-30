@@ -964,6 +964,7 @@ impl WalletCore {
             root,
             public_actors: acc_manager.public_actors(),
             signers: acc_manager.signers(),
+            identities: identities.iter().map(PublicIdentity::account_id).collect(),
             private_witnesses: acc_manager.private_witnesses()?,
             public_shards: acc_manager.public_shards(),
             dummy_inputs: acc_manager.dummy_inputs_default(),

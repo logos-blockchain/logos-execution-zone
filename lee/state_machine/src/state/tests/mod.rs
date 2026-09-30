@@ -180,6 +180,7 @@ pub fn proving_input(root: CallInput) -> ProvingInput {
         root,
         public_actors: Vec::new(),
         signers: HashSet::new(),
+        identities: HashSet::new(),
         private_witnesses: Vec::new(),
         public_shards: HashMap::new(),
         dummy_inputs: Vec::new(),

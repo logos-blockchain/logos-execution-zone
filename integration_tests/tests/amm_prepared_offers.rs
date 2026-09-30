@@ -158,6 +158,7 @@ async fn prepare_offer(
                 Actor::new(pool.vault_b, token_program_id()),
             ],
             signers: HashSet::new(),
+            identities: HashSet::new(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: spent.key_chain.viewing_public_key.clone(),

@@ -189,6 +189,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             },
             public_actors,
             signers: HashSet::new(),
+            identities: HashSet::new(),
             private_witnesses: Vec::new(),
             public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),

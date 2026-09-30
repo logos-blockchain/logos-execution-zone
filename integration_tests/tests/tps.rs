@@ -281,6 +281,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             },
             public_actors: Vec::new(),
             signers: HashSet::new(),
+            identities: HashSet::new(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: sender_vpk,

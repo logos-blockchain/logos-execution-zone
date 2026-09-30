@@ -142,6 +142,9 @@ pub struct ProvingInput {
     pub root: CallInput,
     pub public_actors: Vec<Actor>,
     pub signers: HashSet<AccountId>,
+    /// Accounts settlement accepts as proven public identities: identity evidence and designated
+    /// accounts.
+    pub identities: HashSet<AccountId>,
     pub private_witnesses: Vec<PrivateWitness>,
     pub public_shards: HashMap<Actor, ShardData>,
     pub dummy_inputs: Vec<DummyInput>,
@@ -164,6 +167,7 @@ struct Simulator<'input> {
     programs: &'input HashMap<AccountId, Dependency>,
     public_shards: &'input HashMap<Actor, ShardData>,
     messages: &'input [StoredMessage],
+    identities: &'input HashSet<AccountId>,
 }
 
 impl Backend for Simulator<'_> {
@@ -196,8 +200,8 @@ impl Backend for Simulator<'_> {
         find_message(self.messages, id)
     }
 
-    fn proves_public_identity(&self, _account_id: AccountId) -> bool {
-        true
+    fn proves_public_identity(&self, account_id: AccountId) -> bool {
+        self.identities.contains(&account_id)
     }
 }
 
@@ -271,6 +275,7 @@ pub fn execute_and_prove(
         programs: &programs.programs,
         public_shards: &input.public_shards,
         messages: &input.messages,
+        identities: &input.identities,
     })?
     .assumed;
     execute_and_prove_assuming(input, assumed, programs)

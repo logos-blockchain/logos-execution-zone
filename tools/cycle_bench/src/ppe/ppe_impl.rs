@@ -87,7 +87,7 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
     (account_id, witness)
 }
 
-const fn proving_input(
+fn proving_input(
     root: CallInput,
     public_actors: Vec<Actor>,
     signers: HashSet<AccountId>,
@@ -98,6 +98,7 @@ const fn proving_input(
         root,
         public_actors,
         signers,
+        identities: HashSet::new(),
         private_witnesses,
         public_shards,
         dummy_inputs: Vec::new(),

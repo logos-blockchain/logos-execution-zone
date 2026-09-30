@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -74,6 +74,7 @@ async fn fund_private_pda(
             },
             public_actors: vec![sender_actor],
             signers: [sender].into(),
+            identities: HashSet::new(),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
