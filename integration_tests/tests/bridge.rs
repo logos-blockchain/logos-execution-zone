@@ -193,6 +193,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
+            messages: Vec::new(),
         },
         // The receipt's own delivery is the one public output; it sends nothing private.
         vec![Vec::new()],

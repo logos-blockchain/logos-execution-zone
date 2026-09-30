@@ -93,6 +93,7 @@ async fn fund_private_pda(
             .into(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
+            messages: Vec::new(),
         },
         &ProgramCatalog::default(),
     )

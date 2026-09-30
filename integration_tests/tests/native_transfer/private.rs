@@ -630,6 +630,7 @@ fn prove_init_with_commitment_root(
             public_shards: [(sender, native_token::encode_balance(1))].into(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
+            messages: Vec::new(),
         },
         &ProgramCatalog::default(),
     )?;
