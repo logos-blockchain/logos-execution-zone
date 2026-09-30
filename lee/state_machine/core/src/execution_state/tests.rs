@@ -6,7 +6,7 @@ use crate::{
     AuthorizationSecretKey, Identifier,
     encryption::ViewingPublicKey,
     native_token,
-    program::{Envelope, Response},
+    program::{Call, Response},
 };
 
 const ENTRY: Actor = Actor::new(AccountId::new([1; 32]), AccountId::new([9; 32]));
@@ -135,19 +135,24 @@ fn data(bytes: &[u8]) -> ShardData {
     bytes.to_vec().try_into().unwrap()
 }
 
-fn send_to(receiver: Actor) -> Envelope {
-    Envelope {
-        to: receiver,
-        message: Vec::new(),
+fn send_to(receiver: Actor) -> Call {
+    Call {
+        input: CallInput::Inline {
+            to: receiver,
+            message: Vec::new(),
+        },
         pda_seeds: Vec::new(),
     }
 }
 
 // The private holder of `Keys::new(1)`, entered from a public turn.
-fn enter(message: &[u8]) -> Envelope {
-    Envelope {
-        message: message.to_vec(),
-        ..send_to(holder(&Keys::new(1)))
+fn enter(message: &[u8]) -> Call {
+    Call {
+        input: CallInput::Inline {
+            to: holder(&Keys::new(1)),
+            message: message.to_vec(),
+        },
+        pda_seeds: Vec::new(),
     }
 }
 
@@ -156,6 +161,11 @@ fn output(to: Actor, origin: Origin) -> Output {
         to,
         message: Vec::new(),
         origin,
+        issuer: match origin {
+            Origin::Root => None,
+            Origin::Program(program) => Some(program),
+        },
+        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     }
@@ -165,20 +175,17 @@ fn echo(input: &ReceiveInput, response: Response) -> Transition {
     response.into_transition(input.clone())
 }
 
-fn sending(envelopes: Vec<Envelope>) -> impl Fn(&ReceiveInput) -> Transition {
+fn sending(calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> Transition {
     move |input| {
         echo(
             input,
-            envelopes
-                .iter()
-                .cloned()
-                .fold(Response::keep(), Response::send),
+            calls.iter().cloned().fold(Response::keep(), Response::send),
         )
     }
 }
 
-fn sending_when(origin: Origin, envelopes: Vec<Envelope>) -> impl Fn(&ReceiveInput) -> Transition {
-    let send = sending(envelopes);
+fn sending_when(origin: Origin, calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> Transition {
+    let send = sending(calls);
     move |input| {
         if input.origin == origin {
             send(input)
@@ -188,8 +195,8 @@ fn sending_when(origin: Origin, envelopes: Vec<Envelope>) -> impl Fn(&ReceiveInp
     }
 }
 
-fn root(to: Actor) -> RootCall {
-    RootCall {
+fn root(to: Actor) -> CallInput {
+    CallInput::Inline {
         to,
         message: Vec::new(),
     }
@@ -231,8 +238,8 @@ fn authorized(script: &Script) -> Vec<(Actor, bool)> {
         .collect()
 }
 
-fn seeded_to(to: Actor, seed: PdaSeed) -> Envelope {
-    Envelope {
+fn seeded_to(to: Actor, seed: PdaSeed) -> Call {
+    Call {
         pda_seeds: vec![seed],
         ..send_to(to)
     }
@@ -258,6 +265,7 @@ fn nested_assumed() -> Vec<Vec<Assumption>> {
             from: ENTRY,
             to: holder(&Keys::new(1)),
             message: ENTER.to_vec(),
+            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }],
@@ -269,7 +277,7 @@ fn nested_private() -> Script {
     Script::default().on(holder(&Keys::new(1)), sending(vec![send_to(CALLEE)]))
 }
 
-fn nested_public(script: Script, entry_sends: Vec<Envelope>) -> Script {
+fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
     script
         .on(ENTRY, sending(entry_sends))
         .on(CALLEE, sending(Vec::new()))
@@ -293,7 +301,7 @@ fn record_nested(assumed: Vec<Vec<Assumption>>) -> (ExecutionOutcome, Script) {
 
 fn check_nested(
     boundary: Boundary,
-    entry_sends: Vec<Envelope>,
+    entry_sends: Vec<Call>,
 ) -> (Result<ExecutionOutcome, ExecutionError>, Script) {
     let mut script = nested_public(Script::default(), entry_sends);
     let result = run(
@@ -434,7 +442,7 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
         AccountId::for_public_pda(&owner.program_account_id, &seed),
         owner.program_account_id,
     );
-    let seeded = Envelope {
+    let seeded = Call {
         pda_seeds: vec![seed],
         ..send_to(vault)
     };
@@ -599,14 +607,18 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     let keys = Keys::new(1);
     let owner = holder(&keys);
     let vault = actor(2, 9);
-    let credit = Envelope {
-        message: b"credit".to_vec(),
-        ..send_to(vault)
+    let credit = Call {
+        input: CallInput::Inline {
+            to: vault,
+            message: b"credit".to_vec(),
+        },
+        pda_seeds: Vec::new(),
     };
     let reply = Assumption {
         from: vault,
         to: owner,
         message: b"credit".to_vec(),
+        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
@@ -651,6 +663,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
                 ..output(vault, Origin::Program(id(8)))
             }],
             assumptions: vec![reply],
+            publications: Vec::new(),
             schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
         }
     );
@@ -711,6 +724,7 @@ fn assumed_deliveries_must_match_the_recorded_outputs() {
         from: stranger,
         to: holder(&keys),
         message: Vec::new(),
+        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
@@ -744,6 +758,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
             from: vault,
             to: owner,
             message: Vec::new(),
+            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         },
@@ -751,6 +766,7 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
             from: vault,
             to: custody,
             message: Vec::new(),
+            in_flight: None,
             grants: Vec::new(),
             pda_seeds: vec![seed],
         },
@@ -793,7 +809,7 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 #[test]
 fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
     let boundary = record_nested(nested_assumed()).0.boundary;
-    let checked = |sends: Vec<Envelope>| check_nested(boundary.clone(), sends).0;
+    let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
     let truncated = Boundary {
         schedule: vec![CallPublic],
         ..boundary.clone()
@@ -906,6 +922,7 @@ fn relayed_grant(
                     from: vault,
                     to: relay,
                     message: ENTER.to_vec(),
+                    in_flight: None,
                     grants: assumed_grants,
                     pda_seeds: Vec::new(),
                 }],
@@ -996,6 +1013,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
                 from: peer,
                 to: custody,
                 message: Vec::new(),
+                in_flight: None,
                 grants: vec![custody.account_id],
                 pda_seeds: Vec::new(),
             }]],
@@ -1119,6 +1137,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                             expect_balance: None,
                         })
                         .unwrap(),
+                        in_flight: None,
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],

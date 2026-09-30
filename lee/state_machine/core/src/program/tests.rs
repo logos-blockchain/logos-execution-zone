@@ -453,18 +453,20 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
             message: b"m".to_vec(),
         },
         post_data: Some(ShardData::try_from(b"xyz".to_vec()).unwrap()),
-        sends: vec![Envelope {
-            to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
-            message: b"q".to_vec(),
+        sends: vec![Action::Call(Call {
+            input: CallInput::Inline {
+                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                message: b"q".to_vec(),
+            },
             pda_seeds: vec![PdaSeed::new([9; 32])],
-        }],
+        })],
         events: Vec::new(),
         block_validity_window: ValidityWindow::new_unbounded(),
         timestamp_validity_window: ValidityWindow::new_unbounded(),
     };
 
     let expected: Vec<u8> = [
-        &[202, 0, 0, 0][..], // frame length: the 202 bytes below
+        &[204, 0, 0, 0][..], // frame length: the 204 bytes below
         &[1; 32],            // input.receiver.account_id
         &[2; 32],            // input.receiver.program_account_id
         &[0],                // input.origin: Origin::Root
@@ -476,7 +478,9 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         &[1], // post_data: Some
         &[3, 0, 0, 0],
         b"xyz",
-        &[1, 0, 0, 0], // sends: one envelope
+        &[1, 0, 0, 0], // sends: one action
+        &[0],          // Action::Call
+        &[0],          // input: CallInput::Inline
         &[3; 32],      // to
         &[4; 32],
         &[1, 0, 0, 0], // message

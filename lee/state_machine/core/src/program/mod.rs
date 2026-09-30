@@ -255,18 +255,96 @@ pub enum Origin {
     Program(AccountId),
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub struct MessageId([u8; 32]);
+
+impl MessageId {
+    #[must_use]
+    pub const fn new(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct Envelope {
+pub struct MessageBody {
+    pub origin_program: AccountId,
     pub to: Actor,
     pub message: MessageData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct StoredMessage {
+    pub sequence: u128,
+    pub body: MessageBody,
+}
+
+impl StoredMessage {
+    #[must_use]
+    pub fn id(&self) -> MessageId {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const MESSAGE_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/MessageId/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+        let bytes = [
+            MESSAGE_ID_PREFIX.as_slice(),
+            &self.sequence.to_le_bytes(),
+            &borsh::to_vec(&self.body).expect("borsh serialization is infallible"),
+        ]
+        .concat();
+        MessageId(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub enum CallInput {
+    Inline { to: Actor, message: MessageData },
+    InFlight(MessageId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Call {
+    pub input: CallInput,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
-impl Envelope {
+impl Call {
     pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
         Self {
-            to,
-            message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+            input: CallInput::Inline {
+                to,
+                message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+            },
+            pda_seeds: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn in_flight(id: MessageId) -> Self {
+        Self {
+            input: CallInput::InFlight(id),
             pda_seeds: Vec::new(),
         }
     }
@@ -275,6 +353,39 @@ impl Envelope {
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
         self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Cast {
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+impl Cast {
+    pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
+        Self {
+            to,
+            message: borsh::to_vec(message).expect("borsh serialization is infallible"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub enum Action {
+    Call(Call),
+    Cast(Cast),
+}
+
+impl From<Call> for Action {
+    fn from(call: Call) -> Self {
+        Self::Call(call)
+    }
+}
+
+impl From<Cast> for Action {
+    fn from(cast: Cast) -> Self {
+        Self::Cast(cast)
     }
 }
 
@@ -311,7 +422,7 @@ impl ReceiveInput {
 pub struct Transition {
     pub input: ReceiveInput,
     pub post_data: Option<ShardData>,
-    pub sends: Vec<Envelope>,
+    pub sends: Vec<Action>,
     pub events: Vec<ProgramEvent>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -327,7 +438,7 @@ impl Transition {
 #[must_use]
 pub struct Response {
     post_data: Option<ShardData>,
-    sends: Vec<Envelope>,
+    sends: Vec<Action>,
     events: Vec<ProgramEvent>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
@@ -357,8 +468,8 @@ impl Response {
         }
     }
 
-    pub fn send(mut self, envelope: Envelope) -> Self {
-        self.sends.push(envelope);
+    pub fn send(mut self, action: impl Into<Action>) -> Self {
+        self.sends.push(action.into());
         self
     }
 

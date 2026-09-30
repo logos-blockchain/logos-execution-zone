@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Actor, Balance, ShardData},
-    program::{Envelope, PdaSeed, ReceiveInput, Response, Transition},
+    program::{Call, PdaSeed, ReceiveInput, Response, Transition},
 };
 
 /// Hardcoded native token shard address.
@@ -98,7 +98,7 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
             let post = balance
                 .checked_sub(amount)
                 .ok_or(TransferError::InsufficientBalance { account_id })?;
-            Response::write(encode_balance(post)).send(Envelope::new(
+            Response::write(encode_balance(post)).send(Call::new(
                 Actor::native_balance(to),
                 &Message::Credit(amount),
             ))
@@ -118,13 +118,8 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
 
 /// A transfer out of an account the caller holds under `seed`.
 #[must_use]
-pub fn custody_transfer(
-    from: AccountId,
-    seed: PdaSeed,
-    to: AccountId,
-    amount: Balance,
-) -> Envelope {
-    Envelope::new(
+pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: Balance) -> Call {
+    Call::new(
         Actor::native_balance(from),
         &Message::Transfer {
             to,
@@ -138,7 +133,7 @@ pub fn custody_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::Origin;
+    use crate::program::{CallInput, Origin};
 
     fn native(tag: u8) -> Actor {
         Actor::native_balance(AccountId::new([tag; 32]))
@@ -197,7 +192,7 @@ mod tests {
         assert_eq!(transition.post_data, Some(encode_balance(70)));
         assert_eq!(
             transition.sends,
-            vec![Envelope::new(native(2), &Message::Credit(30))]
+            vec![Call::new(native(2), &Message::Credit(30)).into()]
         );
     }
 
@@ -300,9 +295,11 @@ mod tests {
 
         assert_eq!(
             custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
-            Envelope {
-                to: native(1),
-                message: borsh::to_vec(&transfer(7, None)).unwrap(),
+            Call {
+                input: CallInput::Inline {
+                    to: native(1),
+                    message: borsh::to_vec(&transfer(7, None)).unwrap(),
+                },
                 pda_seeds: vec![seed],
             }
         );

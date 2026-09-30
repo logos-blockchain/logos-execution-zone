@@ -7,18 +7,12 @@ use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountData, AccountId, Actor, ShardData},
     program::{
-        BlockValidityWindow, ExecutionValidationError, InvalidWindow, MessageData, Origin,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, TimestampValidityWindow,
-        Transition, validate_transition,
+        Action, BlockValidityWindow, CallInput, ExecutionValidationError, InvalidWindow,
+        MessageBody, MessageData, MessageId, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed,
+        ProgramEvent, ReceiveInput, StoredMessage, TimestampValidityWindow, Transition,
+        validate_transition,
     },
 };
-
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct RootCall {
-    pub to: Actor,
-    pub message: MessageData,
-}
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
@@ -28,10 +22,10 @@ pub struct Declared {
 }
 
 pub enum Mode {
-    Live(RootCall),
-    Derive(RootCall),
+    Live(CallInput),
+    Derive(CallInput),
     Record {
-        root: RootCall,
+        root: CallInput,
         assumed: Vec<Vec<Assumption>>,
     },
     Check(Boundary),
@@ -42,6 +36,8 @@ pub struct Output {
     pub to: Actor,
     pub message: MessageData,
     pub origin: Origin,
+    pub issuer: Option<AccountId>,
+    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -51,6 +47,7 @@ pub struct Assumption {
     pub from: Actor,
     pub to: Actor,
     pub message: MessageData,
+    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -63,6 +60,7 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
+    Publish,
 }
 
 #[derive(
@@ -71,6 +69,7 @@ pub enum ScheduleOp {
 pub struct Boundary {
     pub outputs: Vec<Output>,
     pub assumptions: Vec<Assumption>,
+    pub publications: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 
@@ -86,6 +85,14 @@ pub trait Backend {
     /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
     fn public_shard(&mut self, actor: Actor) -> Result<ShardData, Self::Error> {
         Err(ExecutionError::PublicShardUnavailable { actor }.into())
+    }
+
+    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, Self::Error> {
+        Err(ExecutionError::UnknownMessage { id }.into())
+    }
+
+    fn proves_public_identity(&self, _account_id: AccountId) -> bool {
+        false
     }
 }
 
@@ -157,6 +164,20 @@ pub enum ExecutionError {
 
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
+
+    #[error("No pending message has id {id:?}")]
+    UnknownMessage { id: MessageId },
+
+    #[error("Message {id:?} does not match its record")]
+    MismatchedMessage { id: MessageId },
+
+    #[error("Message {id:?} is consumed twice")]
+    DuplicateConsumption { id: MessageId },
+
+    #[error(
+        "An in-flight message reached {actor:?}, whose identity is neither authorized nor proven"
+    )]
+    UnprovenPublicIdentity { actor: Actor },
 }
 
 pub struct ExecutionOutcome {
@@ -167,6 +188,8 @@ pub struct ExecutionOutcome {
     pub boundary: Boundary,
     pub assumed: Vec<Vec<Assumption>>,
     pub events: Vec<(Actor, ProgramEvent)>,
+    pub consumed: Vec<MessageId>,
+    pub published: Vec<MessageBody>,
 }
 
 enum Visibility {
@@ -183,10 +206,19 @@ struct AccountEntry {
 }
 
 enum Item {
+    Call(Box<Request>),
     Deliver(Box<Delivery>),
+    Publish(MessageBody),
     ClosePublic,
     ClosePrivate,
     Continue { root: bool },
+}
+
+struct Request {
+    input: CallInput,
+    sender: Option<Actor>,
+    grants: BTreeSet<AccountId>,
+    pda_seeds: Vec<PdaSeed>,
 }
 
 // The sender is the internal sending actor: `None` for the root and for a proven output, whose
@@ -196,6 +228,8 @@ struct Delivery {
     message: MessageData,
     sender: Option<Actor>,
     origin: Origin,
+    issuer: Option<AccountId>,
+    in_flight: Option<MessageId>,
     grants: BTreeSet<AccountId>,
     pda_seeds: Vec<PdaSeed>,
 }
@@ -215,6 +249,7 @@ enum ModeState {
         cursor: usize,
         outputs_consumed: usize,
         assumptions_consumed: usize,
+        publications_consumed: usize,
     },
 }
 
@@ -229,6 +264,9 @@ pub struct ExecutionState<'witnesses> {
     timestamp_validity_window: TimestampValidityWindow,
     mode: ModeState,
     events: Vec<(Actor, ProgramEvent)>,
+    consumed: Vec<MessageId>,
+    claims: Vec<MessageId>,
+    published: Vec<MessageBody>,
 }
 
 impl<'witnesses> ExecutionState<'witnesses> {
@@ -310,27 +348,25 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::PublicFamilyMemberDeclared { account_id });
         }
 
-        let deliver_root = |call: RootCall| {
-            Item::Deliver(Box::new(Delivery {
-                to: call.to,
-                message: call.message,
+        let call_root = |input: CallInput| {
+            Item::Call(Box::new(Request {
+                input,
                 sender: None,
-                origin: Origin::Root,
                 grants: BTreeSet::new(),
                 pda_seeds: Vec::new(),
             }))
         };
         let (first, mode) = match mode {
-            Mode::Live(call) => (deliver_root(call), ModeState::Live),
-            Mode::Derive(call) => (
-                deliver_root(call),
+            Mode::Live(input) => (call_root(input), ModeState::Live),
+            Mode::Derive(input) => (
+                call_root(input),
                 ModeState::Derive {
                     groups: Vec::new(),
                     open: Vec::new(),
                 },
             ),
             Mode::Record { root, assumed } => (
-                deliver_root(root),
+                call_root(root),
                 ModeState::Record {
                     assumed,
                     boundary: Boundary::default(),
@@ -343,6 +379,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     cursor: 0,
                     outputs_consumed: 0,
                     assumptions_consumed: 0,
+                    publications_consumed: 0,
                 },
             ),
         };
@@ -358,16 +395,24 @@ impl<'witnesses> ExecutionState<'witnesses> {
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             mode,
             events: Vec::new(),
+            consumed: Vec::new(),
+            claims: Vec::new(),
+            published: Vec::new(),
         })
     }
 
     pub fn run<B: Backend>(mut self, backend: &mut B) -> Result<ExecutionOutcome, B::Error> {
         while let Some(item) = self.pending.pop_front() {
             match item {
+                Item::Call(request) => {
+                    let delivery = self.resolve(*request, backend)?;
+                    self.deliver(delivery, backend)?;
+                }
                 Item::Deliver(delivery) => self.deliver(*delivery, backend)?,
+                Item::Publish(body) => self.publish(body),
                 Item::ClosePublic => self.close(ScheduleOp::ReturnPublic)?,
                 Item::ClosePrivate => self.close(ScheduleOp::LeavePrivate)?,
-                Item::Continue { root } => self.resume(root)?,
+                Item::Continue { root } => self.resume(root, backend)?,
             }
         }
         match &self.mode {
@@ -382,10 +427,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 cursor,
                 outputs_consumed,
                 assumptions_consumed,
+                publications_consumed,
             } => {
                 if *cursor != boundary.schedule.len()
                     || *outputs_consumed != boundary.outputs.len()
                     || *assumptions_consumed != boundary.assumptions.len()
+                    || *publications_consumed != boundary.publications.len()
                 {
                     return Err(ExecutionError::IncompleteBoundary.into());
                 }
@@ -411,11 +458,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
         }
     }
 
-    fn resume(&mut self, root: bool) -> Result<(), ExecutionError> {
+    fn resume<B: Backend>(&mut self, root: bool, backend: &mut B) -> Result<(), B::Error> {
         let ModeState::Check {
             boundary,
             cursor,
             outputs_consumed,
+            publications_consumed,
             ..
         } = &mut self.mode
         else {
@@ -426,22 +474,47 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 let output = boundary
                     .outputs
                     .get(*outputs_consumed)
-                    .ok_or(ExecutionError::IncompleteBoundary)?;
-                let delivery = Delivery {
-                    to: output.to,
-                    message: output.message.clone(),
-                    sender: None,
-                    origin: output.origin,
-                    grants: output.grants.iter().copied().collect(),
-                    pda_seeds: output.pda_seeds.clone(),
-                };
+                    .ok_or(ExecutionError::IncompleteBoundary)?
+                    .clone();
                 expect_op(&boundary.schedule, cursor, ScheduleOp::CallPublic)?;
                 *outputs_consumed = outputs_consumed
                     .checked_add(1)
                     .expect("bounded by the output count");
+                if let Some(id) = output.in_flight {
+                    let body = self.consume(id, backend)?;
+                    if body.to != output.to
+                        || body.message != output.message
+                        || Origin::Program(body.origin_program) != output.origin
+                    {
+                        return Err(ExecutionError::MismatchedMessage { id }.into());
+                    }
+                }
                 self.pending.push_front(Item::Continue { root });
                 self.pending.push_front(Item::ClosePublic);
-                self.pending.push_front(Item::Deliver(Box::new(delivery)));
+                self.pending.push_front(Item::Deliver(Box::new(Delivery {
+                    to: output.to,
+                    message: output.message,
+                    sender: None,
+                    origin: output.origin,
+                    issuer: output.issuer,
+                    in_flight: output.in_flight,
+                    grants: output.grants.into_iter().collect(),
+                    pda_seeds: output.pda_seeds,
+                })));
+                Ok(())
+            }
+            (Some(ScheduleOp::Publish), _) => {
+                let publication = boundary
+                    .publications
+                    .get(*publications_consumed)
+                    .ok_or(ExecutionError::IncompleteBoundary)?
+                    .clone();
+                expect_op(&boundary.schedule, cursor, ScheduleOp::Publish)?;
+                *publications_consumed = publications_consumed
+                    .checked_add(1)
+                    .expect("bounded by the publication count");
+                self.published.push(publication);
+                self.pending.push_front(Item::Continue { root });
                 Ok(())
             }
             (None, true) | (Some(ScheduleOp::LeavePrivate), false) => Ok(()),
@@ -454,7 +527,70 @@ impl<'witnesses> ExecutionState<'witnesses> {
             ) => Err(ExecutionError::ScheduleMismatch {
                 index: *cursor,
                 expected: ScheduleOp::CallPublic,
-            }),
+            }
+            .into()),
+        }
+    }
+
+    fn resolve<B: Backend>(
+        &mut self,
+        request: Request,
+        backend: &mut B,
+    ) -> Result<Delivery, B::Error> {
+        let issuer = request.sender.map(|sender| sender.program_account_id);
+        let (to, message, origin, in_flight) = match request.input {
+            CallInput::Inline { to, message } => (
+                to,
+                message,
+                issuer.map_or(Origin::Root, Origin::Program),
+                None,
+            ),
+            CallInput::InFlight(id) => {
+                let body = self.consume(id, backend)?;
+                (
+                    body.to,
+                    body.message,
+                    Origin::Program(body.origin_program),
+                    Some(id),
+                )
+            }
+        };
+        Ok(Delivery {
+            to,
+            message,
+            sender: request.sender,
+            origin,
+            issuer,
+            in_flight,
+            grants: request.grants,
+            pda_seeds: request.pda_seeds,
+        })
+    }
+
+    fn consume<B: Backend>(
+        &mut self,
+        id: MessageId,
+        backend: &mut B,
+    ) -> Result<MessageBody, B::Error> {
+        if self.consumed.contains(&id) {
+            return Err(ExecutionError::DuplicateConsumption { id }.into());
+        }
+        let record = backend.pending_message(id)?;
+        if record.id() != id {
+            return Err(ExecutionError::MismatchedMessage { id }.into());
+        }
+        self.consumed.push(id);
+        Ok(record.body)
+    }
+
+    fn publish(&mut self, body: MessageBody) {
+        match &mut self.mode {
+            ModeState::Live | ModeState::Check { .. } => self.published.push(body),
+            ModeState::Record { boundary, .. } => {
+                boundary.schedule.push(ScheduleOp::Publish);
+                boundary.publications.push(body);
+            }
+            ModeState::Derive { .. } => {}
         }
     }
 
@@ -487,13 +623,15 @@ impl<'witnesses> ExecutionState<'witnesses> {
         delivery: Delivery,
         backend: &mut B,
     ) -> Result<(), B::Error> {
-        if let Some(from) = delivery.sender
-            && self.public_actors.contains(&from)
-        {
+        let crossing = delivery
+            .sender
+            .filter(|sender| self.public_actors.contains(sender));
+        if let Some(from) = crossing {
             let assumption = Assumption {
                 from,
                 to: delivery.to,
                 message: delivery.message.clone(),
+                in_flight: delivery.in_flight,
                 grants: delivery.grants.iter().copied().collect(),
                 pda_seeds: delivery.pda_seeds.clone(),
             };
@@ -513,6 +651,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     unreachable!("only a derivation or a record executes private turns")
                 }
             }
+        }
+        if crossing.is_none()
+            && let Some(id) = delivery.in_flight
+            && matches!(self.mode, ModeState::Record { .. })
+        {
+            self.claims.push(id);
         }
         self.execute(delivery, backend)
     }
@@ -537,6 +681,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         if Some(assumed.from) != delivery.sender
             || assumed.to != delivery.to
             || assumed.message != delivery.message
+            || assumed.in_flight != delivery.in_flight
             || assumed.pda_seeds != delivery.pda_seeds
             || assumed.grants.iter().copied().collect::<BTreeSet<_>>() != delivery.grants
         {
@@ -585,11 +730,16 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 }
                 .into());
             }
-            self.pending.push_front(Item::Deliver(Box::new(Delivery {
-                to: assumption.to,
-                message: assumption.message.clone(),
+            let input = assumption.in_flight.map_or_else(
+                || CallInput::Inline {
+                    to: assumption.to,
+                    message: assumption.message.clone(),
+                },
+                CallInput::InFlight,
+            );
+            self.pending.push_front(Item::Call(Box::new(Request {
+                input,
                 sender: Some(assumption.from),
-                origin: Origin::Program(assumption.from.program_account_id),
                 grants: assumption.grants.iter().copied().collect(),
                 pda_seeds: assumption.pda_seeds.clone(),
             })));
@@ -610,6 +760,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .accounts
             .get_mut(&actor.account_id)
             .expect("an authorized actor has an entry");
+        if delivery.in_flight.is_some()
+            && matches!(entry.visibility, Visibility::Public { .. })
+            && !is_authorized
+            && !backend.proves_public_identity(actor.account_id)
+        {
+            return Err(ExecutionError::UnprovenPublicIdentity { actor }.into());
+        }
         if let Visibility::Public { observed, .. } = &mut entry.visibility
             && !observed.contains(&actor.program_account_id)
         {
@@ -654,15 +811,20 @@ impl<'witnesses> ExecutionState<'witnesses> {
             self.events
                 .extend(transition.events.into_iter().map(|event| (actor, event)));
         }
-        for envelope in transition.sends.into_iter().rev() {
-            self.pending.push_front(Item::Deliver(Box::new(Delivery {
-                to: envelope.to,
-                message: envelope.message,
-                sender: Some(actor),
-                origin: Origin::Program(actor.program_account_id),
-                grants: grants.clone(),
-                pda_seeds: envelope.pda_seeds,
-            })));
+        for action in transition.sends.into_iter().rev() {
+            self.pending.push_front(match action {
+                Action::Call(call) => Item::Call(Box::new(Request {
+                    input: call.input,
+                    sender: Some(actor),
+                    grants: grants.clone(),
+                    pda_seeds: call.pda_seeds,
+                })),
+                Action::Cast(cast) => Item::Publish(MessageBody {
+                    origin_program: actor.program_account_id,
+                    to: cast.to,
+                    message: cast.message,
+                }),
+            });
         }
         Ok(())
     }
@@ -673,10 +835,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         actor: Actor,
     ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
         let account_id = actor.account_id;
-        let caller_account_id = match delivery.origin {
-            Origin::Root => None,
-            Origin::Program(program_account_id) => Some(program_account_id),
-        };
+        let caller_account_id = delivery.issuer;
         let entry = self
             .accounts
             .get(&account_id)
@@ -748,13 +907,21 @@ impl<'witnesses> ExecutionState<'witnesses> {
             timestamp_validity_window,
             mode,
             events,
+            consumed,
+            claims,
+            published,
             ..
         } = self;
 
-        let (public, private_accounts, boundary, assumed) = match mode {
-            ModeState::Derive { groups, .. } => {
-                (Vec::new(), HashMap::new(), Boundary::default(), groups)
-            }
+        let (public, private_accounts, boundary, assumed, consumed, published) = match mode {
+            ModeState::Derive { groups, .. } => (
+                Vec::new(),
+                HashMap::new(),
+                Boundary::default(),
+                groups,
+                Vec::new(),
+                Vec::new(),
+            ),
             ModeState::Record { boundary, .. } => (
                 Vec::new(),
                 accounts
@@ -764,6 +931,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     })
                     .collect(),
                 boundary,
+                Vec::new(),
+                claims,
                 Vec::new(),
             ),
             ModeState::Live | ModeState::Check { .. } => {
@@ -781,7 +950,14 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     }
                     public.push((actor.account_id, data));
                 }
-                (public, HashMap::new(), Boundary::default(), Vec::new())
+                (
+                    public,
+                    HashMap::new(),
+                    Boundary::default(),
+                    Vec::new(),
+                    consumed,
+                    published,
+                )
             }
         };
 
@@ -793,6 +969,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
             boundary,
             assumed,
             events,
+            consumed,
+            published,
         }
     }
 }
@@ -819,6 +997,8 @@ fn boundary_output(delivery: &Delivery) -> Output {
         to: delivery.to,
         message: delivery.message.clone(),
         origin: delivery.origin,
+        issuer: delivery.issuer,
+        in_flight: delivery.in_flight,
         grants: delivery.grants.iter().copied().collect(),
         pda_seeds: delivery.pda_seeds.clone(),
     }
