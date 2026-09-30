@@ -1,8 +1,8 @@
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiNonce, FfiVec,
     transaction::{
-        FfiActor, FfiAssumption, FfiOutput, FfiPrivateAction, FfiScheduleOp,
-        FfiSignaturePubKeyEntry, FfiTransaction,
+        FfiActor, FfiAssumption, FfiMessageBody, FfiOutput, FfiPrivateAction, FfiPublicIdentity,
+        FfiScheduleOp, FfiSignaturePubKeyEntry, FfiTransaction,
     },
 };
 
@@ -29,6 +29,12 @@ pub type FfiOutputList = FfiVec<FfiOutput>;
 pub type FfiAssumptionList = FfiVec<FfiAssumption>;
 
 pub type FfiScheduleOpList = FfiVec<FfiScheduleOp>;
+
+pub type FfiMessageBodyList = FfiVec<FfiMessageBody>;
+
+pub type FfiMessageIdList = FfiVec<FfiBytes32>;
+
+pub type FfiPublicIdentityList = FfiVec<FfiPublicIdentity>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
 

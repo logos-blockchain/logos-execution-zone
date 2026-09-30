@@ -4,12 +4,13 @@ use lee_core::account::Nonce;
 
 use crate::{
     Account, AccountData, AccountId, Actor, Assumption, BedrockStatus, Block, BlockBody,
-    BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment, CommitmentSetDigest,
-    CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, Origin, Output, PdaSeed, PeerHealth,
-    PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof,
-    PublicKey, PublicMessage, PublicTransaction, ScheduleOp, Selector, ShardData, Signature,
-    StallReason, Transaction, ValidityWindow, WitnessSet,
+    BlockHeader, BlockId, BlockIngestError, Boundary, CallInput, Ciphertext, Commitment,
+    CommitmentSetDigest, CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey,
+    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageBody, MessageId,
+    Nullifier, Origin, Output, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicIdentity, PublicKey, PublicMessage,
+    PublicTransaction, ScheduleOp, Selector, ShardData, Signature, StallReason, Transaction,
+    ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -305,41 +306,96 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
         let lee::public_transaction::Message {
-            to,
-            message,
+            root,
             public_actors,
             nonces,
             fee,
+            identities,
         } = value;
         Self {
-            to: to.into(),
-            message,
+            root: root.into(),
             public_actors: public_actors.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             fee: fee.map(Into::into),
+            identities: identities.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<PublicMessage> for lee::public_transaction::Message {
-    fn from(value: PublicMessage) -> Self {
+impl TryFrom<PublicMessage> for lee::public_transaction::Message {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicMessage) -> Result<Self, Self::Error> {
         let PublicMessage {
-            to,
-            message,
+            root,
             public_actors,
             nonces,
             fee,
+            identities,
         } = value;
-        Self::new_preserialized(
-            to.into(),
-            message,
+        Ok(Self::new(
+            root.into(),
             public_actors.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             fee.map(Into::into),
-        )
+            identities
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+        ))
+    }
+}
+
+impl From<lee_core::program::CallInput> for CallInput {
+    fn from(value: lee_core::program::CallInput) -> Self {
+        match value {
+            lee_core::program::CallInput::Inline { to, message } => Self::Inline {
+                to: to.into(),
+                message,
+            },
+            lee_core::program::CallInput::InFlight(id) => Self::InFlight(id.into()),
+        }
+    }
+}
+
+impl From<CallInput> for lee_core::program::CallInput {
+    fn from(value: CallInput) -> Self {
+        match value {
+            CallInput::Inline { to, message } => Self::Inline {
+                to: to.into(),
+                message,
+            },
+            CallInput::InFlight(id) => Self::InFlight(id.into()),
+        }
+    }
+}
+
+impl From<lee::PublicIdentity> for PublicIdentity {
+    fn from(value: lee::PublicIdentity) -> Self {
+        match value {
+            lee::PublicIdentity::Key(key) => Self::Key(key.into()),
+            lee::PublicIdentity::Pda { program, seed } => Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            },
+        }
+    }
+}
+
+impl TryFrom<PublicIdentity> for lee::PublicIdentity {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicIdentity) -> Result<Self, Self::Error> {
+        match value {
+            PublicIdentity::Key(key) => Ok(Self::Key(key.try_into()?)),
+            PublicIdentity::Pda { program, seed } => Ok(Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            }),
+        }
     }
 }
 
@@ -352,6 +408,48 @@ impl From<lee_core::program::PdaSeed> for PdaSeed {
 impl From<PdaSeed> for lee_core::program::PdaSeed {
     fn from(value: PdaSeed) -> Self {
         Self::new(value.0)
+    }
+}
+
+impl From<lee_core::program::MessageId> for MessageId {
+    fn from(value: lee_core::program::MessageId) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
+impl From<MessageId> for lee_core::program::MessageId {
+    fn from(value: MessageId) -> Self {
+        Self::new(value.0)
+    }
+}
+
+impl From<lee_core::program::MessageBody> for MessageBody {
+    fn from(value: lee_core::program::MessageBody) -> Self {
+        let lee_core::program::MessageBody {
+            origin_program,
+            to,
+            message,
+        } = value;
+        Self {
+            origin_program: origin_program.into(),
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<MessageBody> for lee_core::program::MessageBody {
+    fn from(value: MessageBody) -> Self {
+        let MessageBody {
+            origin_program,
+            to,
+            message,
+        } = value;
+        Self {
+            origin_program: origin_program.into(),
+            to: to.into(),
+            message,
+        }
     }
 }
 
@@ -380,6 +478,7 @@ impl From<lee_core::execution_state::ScheduleOp> for ScheduleOp {
             lee_core::execution_state::ScheduleOp::EnterPrivate => Self::EnterPrivate,
             lee_core::execution_state::ScheduleOp::LeavePrivate => Self::LeavePrivate,
             lee_core::execution_state::ScheduleOp::ReturnPublic => Self::ReturnPublic,
+            lee_core::execution_state::ScheduleOp::Publish => Self::Publish,
         }
     }
 }
@@ -391,6 +490,7 @@ impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
             ScheduleOp::EnterPrivate => Self::EnterPrivate,
             ScheduleOp::LeavePrivate => Self::LeavePrivate,
             ScheduleOp::ReturnPublic => Self::ReturnPublic,
+            ScheduleOp::Publish => Self::Publish,
         }
     }
 }
@@ -401,6 +501,8 @@ impl From<lee_core::execution_state::Output> for Output {
             to,
             message,
             origin,
+            issuer,
+            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -408,6 +510,8 @@ impl From<lee_core::execution_state::Output> for Output {
             to: to.into(),
             message,
             origin: origin.into(),
+            issuer: issuer.map(Into::into),
+            in_flight: in_flight.map(Into::into),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -420,6 +524,8 @@ impl From<Output> for lee_core::execution_state::Output {
             to,
             message,
             origin,
+            issuer,
+            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -427,6 +533,8 @@ impl From<Output> for lee_core::execution_state::Output {
             to: to.into(),
             message,
             origin: origin.into(),
+            issuer: issuer.map(Into::into),
+            in_flight: in_flight.map(Into::into),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -439,6 +547,7 @@ impl From<lee_core::execution_state::Assumption> for Assumption {
             from,
             to,
             message,
+            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -446,6 +555,7 @@ impl From<lee_core::execution_state::Assumption> for Assumption {
             from: from.into(),
             to: to.into(),
             message,
+            in_flight: in_flight.map(Into::into),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -458,6 +568,7 @@ impl From<Assumption> for lee_core::execution_state::Assumption {
             from,
             to,
             message,
+            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -465,6 +576,7 @@ impl From<Assumption> for lee_core::execution_state::Assumption {
             from: from.into(),
             to: to.into(),
             message,
+            in_flight: in_flight.map(Into::into),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -476,11 +588,13 @@ impl From<lee_core::execution_state::Boundary> for Boundary {
         let lee_core::execution_state::Boundary {
             outputs,
             assumptions,
+            publications,
             schedule,
         } = value;
         Self {
             outputs: outputs.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
+            publications: publications.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -491,11 +605,13 @@ impl From<Boundary> for lee_core::execution_state::Boundary {
         let Boundary {
             outputs,
             assumptions,
+            publications,
             schedule,
         } = value;
         Self {
             outputs: outputs.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
+            publications: publications.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -543,6 +659,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
         let lee::privacy_preserving_transaction::message::Message {
             declared,
             boundary,
+            consumed,
             nonces,
             private_actions,
             block_validity_window,
@@ -551,14 +668,17 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
             // address-flexible program dispatch is tracked separately.
             program_image_claims: _,
+            identities,
         } = value;
         Self {
             declared: declared.into(),
             boundary: boundary.into(),
+            consumed: consumed.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            identities: identities.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -581,10 +701,12 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let PrivacyPreservingMessage {
             declared,
             boundary,
+            consumed,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            identities,
         } = value;
 
         let private_actions = private_actions.into_iter().map(Into::into).collect();
@@ -592,6 +714,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         Ok(Self {
             declared: declared.into(),
             boundary: boundary.into(),
+            consumed: consumed.into_iter().map(Into::into).collect(),
             nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
@@ -607,6 +730,10 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             // A privacy-preserving tx submitted through this protocol will fail proof
             // verification for any program not at its bijection address until this is wired.
             program_image_claims: Vec::new(),
+            identities: identities
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
         })
     }
 }
@@ -698,7 +825,7 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
         } = witness_set;
 
         Ok(Self::new(
-            message.into(),
+            message.try_into()?,
             lee::public_transaction::WitnessSet::from_raw_parts(
                 signatures_and_public_keys
                     .into_iter()
@@ -1174,12 +1301,15 @@ mod tests {
             ),
             message: vec![data],
             origin: lee_core::program::Origin::Root,
+            issuer: None,
+            in_flight: None,
             grants: vec![],
             pda_seeds: vec![],
         };
         let boundary = lee_core::execution_state::Boundary {
             outputs: vec![output(7), output(8), output(9), output(7)],
             assumptions: vec![],
+            publications: vec![],
             schedule: vec![],
         };
 

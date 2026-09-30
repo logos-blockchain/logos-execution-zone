@@ -59,7 +59,7 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
-    AccountId, Actor, PublicTransaction,
+    AccountId, Actor, CallInput, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use log::{info, warn};
@@ -471,8 +471,10 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                         let LeeTransaction::Public(public) = tx else {
                             continue;
                         };
-                        let program_id = public.message.to.program_account_id;
-                        let data = &public.message.message;
+                        let CallInput::Inline { to, message: data } = &public.message.root else {
+                            continue;
+                        };
+                        let program_id = to.program_account_id;
                         // A tx targets at most one of these programs; check both
                         // independently rather than chaining (avoids an empty else).
                         if program_id == inbox_id

@@ -14,7 +14,7 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, BedrockStatus, Block, BlockBody,
-    BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
+    BlockHeader, BlockId, Boundary, CallInput, Commitment, CommitmentSetDigest, Declared,
     EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
     IndexerStatus, IndexerSyncState, Origin, Output, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, PublicKey, PublicMessage, PublicTransaction,
@@ -516,8 +516,10 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            to,
-            message: vec![1, 2, 3, 4],
+            root: CallInput::Inline {
+                to,
+                message: vec![1, 2, 3, 4],
+            },
             public_actors: vec![
                 to,
                 Actor {
@@ -527,6 +529,7 @@ fn mock_public_tx(
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             fee: None,
+            identities: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],
@@ -557,12 +560,16 @@ fn mock_privacy_preserving_tx(
                     to,
                     message: vec![0xdd, 0xee],
                     origin: Origin::Root,
+                    issuer: None,
+                    in_flight: None,
                     grants: vec![],
                     pda_seeds: vec![],
                 }],
                 assumptions: vec![],
+                publications: vec![],
                 schedule: vec![ScheduleOp::CallPublic],
             },
+            consumed: vec![],
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {
                 nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
@@ -576,6 +583,7 @@ fn mock_privacy_preserving_tx(
             }],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
+            identities: vec![],
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],

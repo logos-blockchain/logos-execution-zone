@@ -16,11 +16,22 @@ typedef enum OperationStatus {
   ResponseTooBig = 7,
 } OperationStatus;
 
+typedef enum FfiCallInputKind {
+  Inline = 0,
+  InFlight,
+} FfiCallInputKind;
+
+typedef enum FfiPublicIdentityKind {
+  Key = 0,
+  Pda,
+} FfiPublicIdentityKind;
+
 typedef enum FfiScheduleOp {
   CallPublic = 0,
   EnterPrivate,
   LeavePrivate,
   ReturnPublic,
+  Publish,
 } FfiScheduleOp;
 
 typedef enum FfiProgramImageClaimKind {
@@ -158,6 +169,13 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiMessageDataList;
 
+typedef struct FfiCallInput {
+  enum FfiCallInputKind kind;
+  struct FfiActor to;
+  FfiMessageDataList message;
+  struct FfiBytes32 message_id;
+} FfiCallInput;
+
 typedef struct FfiVec_FfiActor {
   struct FfiActor *entries;
   uintptr_t len;
@@ -195,13 +213,28 @@ typedef struct FfiFeeDeclaration {
   struct FfiU128 max_fee;
 } FfiFeeDeclaration;
 
+typedef struct FfiPublicIdentity {
+  enum FfiPublicIdentityKind kind;
+  FfiPublicKey key;
+  FfiAccountId program;
+  struct FfiBytes32 seed;
+} FfiPublicIdentity;
+
+typedef struct FfiVec_FfiPublicIdentity {
+  struct FfiPublicIdentity *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicIdentity;
+
+typedef struct FfiVec_FfiPublicIdentity FfiPublicIdentityList;
+
 typedef struct FfiPublicMessage {
-  struct FfiActor to;
-  FfiMessageDataList message;
+  struct FfiCallInput root;
   FfiActorList public_actors;
   FfiNonceList nonces;
   bool has_fee;
   struct FfiFeeDeclaration fee;
+  FfiPublicIdentityList identities;
 } FfiPublicMessage;
 
 typedef struct FfiSignaturePubKeyEntry {
@@ -257,6 +290,10 @@ typedef struct FfiOutput {
   struct FfiActor to;
   FfiMessageDataList message;
   struct FfiOrigin origin;
+  bool has_issuer;
+  FfiAccountId issuer;
+  bool has_in_flight;
+  struct FfiBytes32 in_flight;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
 } FfiOutput;
@@ -273,6 +310,8 @@ typedef struct FfiAssumption {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
+  bool has_in_flight;
+  struct FfiBytes32 in_flight;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
 } FfiAssumption;
@@ -285,6 +324,20 @@ typedef struct FfiVec_FfiAssumption {
 
 typedef struct FfiVec_FfiAssumption FfiAssumptionList;
 
+typedef struct FfiMessageBody {
+  FfiAccountId origin_program;
+  struct FfiActor to;
+  FfiMessageDataList message;
+} FfiMessageBody;
+
+typedef struct FfiVec_FfiMessageBody {
+  struct FfiMessageBody *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiMessageBody;
+
+typedef struct FfiVec_FfiMessageBody FfiMessageBodyList;
+
 typedef struct FfiVec_FfiScheduleOp {
   enum FfiScheduleOp *entries;
   uintptr_t len;
@@ -296,8 +349,11 @@ typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
 typedef struct FfiBoundary {
   FfiOutputList outputs;
   FfiAssumptionList assumptions;
+  FfiMessageBodyList publications;
   FfiScheduleOpList schedule;
 } FfiBoundary;
+
+typedef struct FfiVec_FfiBytes32 FfiMessageIdList;
 
 typedef struct FfiVec_u8 FfiVecU8;
 
@@ -340,11 +396,13 @@ typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiDeclared declared;
   struct FfiBoundary boundary;
+  FfiMessageIdList consumed;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
+  FfiPublicIdentityList identities;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

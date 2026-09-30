@@ -244,12 +244,12 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub to: Actor,
-    pub message: MessageData,
+    pub root: CallInput,
     pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
+    pub identities: Vec<PublicIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -270,6 +270,38 @@ pub struct PdaSeed(
 );
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct MessageId(
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded message id")]
+    pub [u8; 32],
+);
+
+impl Display for MessageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct MessageBody {
+    pub origin_program: AccountId,
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum CallInput {
+    Inline { to: Actor, message: MessageData },
+    InFlight(MessageId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum PublicIdentity {
+    Key(PublicKey),
+    Pda { program: AccountId, seed: PdaSeed },
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Origin {
     Root,
     Program(AccountId),
@@ -281,6 +313,7 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
+    Publish,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -288,6 +321,8 @@ pub struct Output {
     pub to: Actor,
     pub message: MessageData,
     pub origin: Origin,
+    pub issuer: Option<AccountId>,
+    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -297,6 +332,7 @@ pub struct Assumption {
     pub from: Actor,
     pub to: Actor,
     pub message: MessageData,
+    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -305,6 +341,7 @@ pub struct Assumption {
 pub struct Boundary {
     pub outputs: Vec<Output>,
     pub assumptions: Vec<Assumption>,
+    pub publications: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 
@@ -329,10 +366,12 @@ pub struct PrivateAction {
 pub struct PrivacyPreservingMessage {
     pub declared: Declared,
     pub boundary: Boundary,
+    pub consumed: Vec<MessageId>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub identities: Vec<PublicIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

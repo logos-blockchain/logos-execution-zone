@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    Boundary, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
-    PublicTransaction, WitnessSet,
+    Boundary, CallInput, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PublicMessage, PublicTransaction, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -15,18 +15,25 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         witness_set,
     } = tx;
     let PublicMessage {
-        to,
-        message,
+        root,
         public_actors,
         nonces,
         fee,
+        identities: _,
     } = message;
     let WitnessSet {
         signatures_and_public_keys,
         proof,
     } = witness_set;
 
-    let program_id_str = to.program_account_id.to_string();
+    let (program_id_str, message_str, root_actors) = match root {
+        CallInput::Inline { to, message: data } => (
+            to.program_account_id.to_string(),
+            format!("{} bytes", data.len()),
+            vec![to],
+        ),
+        CallInput::InFlight(id) => ("None (in flight)".to_owned(), id.to_string(), Vec::new()),
+    };
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
     let signer_nonces_str = nonces
@@ -54,7 +61,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Message:"</span>
-                    <span class="info-value">{format!("{} bytes", message.len())}</span>
+                    <span class="info-value">{message_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Proof Size:"</span>
@@ -79,7 +86,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
             </div>
 
             <h3>"Root Actor"</h3>
-            <ActorList actors=vec![to] />
+            <ActorList actors=root_actors />
 
             <h3>"Public Actors"</h3>
             <ActorList actors=public_actors />
@@ -98,10 +105,12 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let PrivacyPreservingMessage {
         declared,
         boundary,
+        consumed: _,
         nonces,
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        identities: _,
     } = message;
     let Declared {
         public_actors,
@@ -110,6 +119,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let Boundary {
         outputs,
         assumptions,
+        publications: _,
         schedule,
     } = boundary;
     let private_action_count = private_actions.len();
