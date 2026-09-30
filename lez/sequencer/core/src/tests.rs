@@ -591,11 +591,8 @@ async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
     }
 
     let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .store
-        .block_at_id(block_id)
+    let block = block_at(&sequencer, block_id)
         .await
-        .unwrap()
         .expect("produced block is stored");
 
     let position = |needle: &LeeTransaction| {
