@@ -47,6 +47,7 @@ mod events;
 mod flash_swap;
 mod genesis;
 mod native_transfer;
+mod pending_messages;
 mod privacy_preserving;
 mod public_program_rules;
 mod validity_window;
