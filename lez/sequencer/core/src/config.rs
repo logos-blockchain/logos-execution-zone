@@ -186,8 +186,8 @@ where
 
     if size.as_u64() > MAX_PUBLISHABLE_BLOCK_SIZE {
         return Err(serde::de::Error::custom(format!(
-            "max_block_size {size} exceeds Bedrock's inscription limit of {} bytes",
-            MAX_PUBLISHABLE_BLOCK_SIZE,
+            "max_block_size {size} exceeds Bedrock's inscription limit of \
+             {MAX_PUBLISHABLE_BLOCK_SIZE} bytes",
         )));
     }
     Ok(size)

@@ -33,8 +33,7 @@ use sequencer_storage_actor::{
 };
 use tokio::test;
 
-use super::{sequencer_config, spawn_bedrock_pool};
-use crate::ExecutorActor;
+use super::{new_executor, sequencer_config, spawn_bedrock_pool};
 
 /// The peer zone a delivery comes from.
 const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
@@ -278,10 +277,10 @@ fn channel_serving(
 /// Starts an executor over `storage_ref` against Bedrock actors built by `bedrock`.
 async fn start(
     storage_ref: &ActorRef<MockStorageActor>,
-    bedrock: impl Fn(&ChannelId) -> MockBedrockActor + Send + 'static,
+    bedrock: impl Fn(&ChannelId) -> MockBedrockActor + Send + Sync + 'static,
 ) -> Result<()> {
     let (config, _home) = sequencer_config();
-    ExecutorActor::new(config, storage_ref.clone(), spawn_bedrock_pool(bedrock))
+    new_executor(config, storage_ref.clone(), spawn_bedrock_pool(bedrock))
         .await
         .map(drop)
         .map_err(anyhow::Error::new)

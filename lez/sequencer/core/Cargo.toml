@@ -41,7 +41,6 @@ tempfile.workspace = true
 chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-tokio-retry.workspace = true
 rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true

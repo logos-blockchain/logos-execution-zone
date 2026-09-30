@@ -81,11 +81,12 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
-/// Fixed, public key behind a genesis-only funding account: the bridge can
-/// only be called top-level, not as `Stake`'s mover, so this account is a
-/// pass-through that receives the genesis deposit and then moves it into the
-/// real stake account. Not a secret: every node derives the same account, and
-/// it holds nothing once genesis has run.
+/// Fixed, public key behind a genesis-only funding account.
+///
+/// The bridge can only be called top-level, not as `Stake`'s mover, so this
+/// account is a pass-through that receives the genesis deposit and then moves
+/// it into the real stake account. Not a secret: every node derives the same
+/// account, and it holds nothing once genesis has run.
 // TODO: replace the pass-through with a real Bedrock deposit, once that path
 // exists. The genesis deposit funding it is synthetic, so this stays a fixed
 // genesis-only key rather than a founding sequencer staking bridged funds.
@@ -193,6 +194,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// observed Bedrock confirmation lag.
     const COMMITTEE_SUBMISSION_COOLDOWN: SlotCount = 10;
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TODO: Refactor when SequencerCore will be implementation detail of ExecutorActor"
+    )]
     pub async fn new(
         config: SequencerConfig,
         mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
@@ -1719,6 +1724,7 @@ async fn record_dead_letter_gauge<S: StorageActorTrait>(storage_ref: &ActorRef<S
     }
 }
 
+#[must_use]
 pub fn genesis_stake_funding_account() -> AccountId {
     let key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY)
         .expect("GENESIS_STAKE_FUNDING_KEY is a valid private key");
@@ -1727,6 +1733,7 @@ pub fn genesis_stake_funding_account() -> AccountId {
 
 /// The exact `Stake` message the founding sequencer at `index` must sign. Shared
 /// offchain by the genesis sequencer.
+#[must_use]
 pub fn genesis_stake_message(
     index: usize,
     sequencer_key: sequencer_stake_core::SequencerKey,

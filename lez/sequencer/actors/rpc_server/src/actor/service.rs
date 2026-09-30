@@ -207,6 +207,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetProofsAndRoot { commitments })
             .await
+            .map(|reply| (reply.proofs, reply.root))
             .map_err(map_executor_error)
     }
 

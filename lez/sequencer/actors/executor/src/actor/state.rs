@@ -18,6 +18,10 @@ pub mod bootstrapping;
 mod genesis;
 pub mod online;
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Bootstrapping and Online states have the same size and None is never accessible"
+)]
 pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Unreachable state used in [`Self::modify`].
     None,
@@ -52,6 +56,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
 
         let consistency_check = Self::validate(channel_tip_slot, &storage_ref).await?;
 
+        let actors = ActorsBundle {
+            storage_ref,
+            bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
+            slasher_prepared,
+        };
+
         if let Some((channel_tip_slot, channel_tip_msg_id)) =
             channel_tip_slot.zip(channel_tip_msg_id)
         {
@@ -67,39 +78,28 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 bedrock_signing_key,
                 consistency_check,
                 bootstrap_to,
-                storage_ref,
-                bedrock_pool_ref,
-                accredited_keys_pubsub_ref,
-                slasher_prepared,
+                actors,
             )))
         } else {
             info!("Channel does not exist yet; starting it as channel creator");
 
             Ok(Self::Online(
-                online::OnlineState::from_empty_chain(
-                    config,
-                    chain,
-                    bedrock_signing_key,
-                    storage_ref,
-                    bedrock_pool_ref,
-                    accredited_keys_pubsub_ref,
-                    slasher_prepared,
-                )
-                .await?,
+                online::OnlineState::from_empty_chain(config, chain, bedrock_signing_key, actors)
+                    .await?,
             ))
         }
     }
 
-    pub fn online(&self) -> Result<&online::OnlineState<S, B>> {
-        if let State::Online(online) = self {
+    pub const fn online(&self) -> Result<&online::OnlineState<S, B>> {
+        if let Self::Online(online) = self {
             Ok(online)
         } else {
             Err(Error::NotOnline)
         }
     }
 
-    pub fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
-        if let State::Online(online) = self {
+    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
+        if let Self::Online(online) = self {
             Ok(online)
         } else {
             Err(Error::NotOnline)
@@ -114,7 +114,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         FN: FnOnce(Self) -> F,
         F: std::future::Future<Output = Self>,
     {
-        let current = std::mem::replace(self, State::None);
+        let current = std::mem::replace(self, Self::None);
         let new_state = f(current).await;
         *self = new_state;
     }
@@ -175,15 +175,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
 
         // The replayed head must reproduce the persisted state, else store
         // and config disagree (e.g. edited genesis actions).
-        if let Some(state) = &stored_head_state {
-            if chain.head_state() != state {
-                return Err(Error::StorageInconsistency(
-                    "Persisted state does not match the replayed chain; \
-                     reset the store or restore the original config \
-                     (cross_zone presence included)"
-                        .to_owned(),
-                ));
-            }
+        if let Some(state) = &stored_head_state
+            && chain.head_state() != state
+        {
+            return Err(Error::StorageInconsistency(
+                "Persisted state does not match the replayed chain; \
+                 reset the store or restore the original config \
+                 (cross_zone presence included)"
+                    .to_owned(),
+            ));
         }
 
         Ok(chain)
@@ -232,6 +232,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
 
         Ok(consistency_check)
     }
+}
+
+struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
+    storage_ref: ActorRef<S>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
+    slasher_prepared: PreparedActor<SlasherActor<S>>,
 }
 
 /// The persisted zone-sdk checkpoint, decoded from the encoding

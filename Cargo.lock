@@ -11101,6 +11101,7 @@ dependencies = [
  "futures",
  "kameo",
  "kameo_actors",
+ "lee_core",
  "log",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
@@ -11110,6 +11111,7 @@ dependencies = [
  "rand 0.8.6",
  "sequencer_actors_common",
  "sequencer_stake_core",
+ "sequencer_storage_actor",
  "sharding_pool_actor",
  "system_accounts",
  "thiserror 2.0.18",
@@ -11166,7 +11168,6 @@ dependencies = [
  "thiserror 2.0.18",
  "token_core",
  "tokio",
- "tokio-retry",
  "url",
 ]
 
@@ -11301,7 +11302,6 @@ dependencies = [
  "log",
  "metrics-exporter-prometheus",
  "programs",
- "sequencer_actors_common",
  "sequencer_bedrock_actor",
  "sequencer_core",
  "sequencer_executor_actor",

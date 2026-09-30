@@ -2,23 +2,19 @@ use std::collections::HashSet;
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
 use common::block::{Block, BlockMeta};
-use kameo::actor::{ActorRef, PreparedActor};
-use kameo_actors::pubsub::PubSub;
+use kameo::actor::ActorRef;
 use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{BlockData, ChannelId, Ed25519Key, FinalizedBlock, MsgId, Slot},
+    protocol::{BlockData, Ed25519Key, FinalizedBlock, MsgId, Slot},
 };
 use sequencer_core::config::SequencerConfig;
-use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
-use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
     Result,
-    actor::state::{State, online},
+    actor::state::{ActorsBundle, State, online},
     error::Error,
-    protocol::AccreditedKeys,
 };
 
 #[derive(Clone, PartialEq, Eq)]
@@ -33,23 +29,21 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) bedrock_signing_key: Ed25519Key,
     pub(super) consistency_check: Option<AnchorConsistencyCheck>,
     pub(super) bootstrap_to: Tip,
-    pub(super) storage_ref: ActorRef<S>,
-    pub(super) bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-    pub(super) accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-    pub(super) slasher_prepared: PreparedActor<SlasherActor<S>>,
+    pub(super) actors: ActorsBundle<S, B>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
-    pub fn new(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Bootstrapping carries everything the online state is started with"
+    )]
+    pub(super) const fn new(
         config: SequencerConfig,
         chain: ChainState,
         bedrock_signing_key: Ed25519Key,
         consistency_check: Option<AnchorConsistencyCheck>,
         bootstrap_to: Tip,
-        storage_ref: ActorRef<S>,
-        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        actors: ActorsBundle<S, B>,
     ) -> Self {
         Self {
             config,
@@ -57,10 +51,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             bedrock_signing_key,
             consistency_check,
             bootstrap_to,
-            storage_ref,
-            bedrock_pool_ref,
-            accredited_keys_pubsub_ref,
-            slasher_prepared,
+            actors,
         }
     }
 
@@ -111,6 +102,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         slot: Slot,
     ) -> Result<()> {
         let tip = self
+            .actors
             .storage_ref
             .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
             .await?;
@@ -131,13 +123,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         if let Some(tip) = &tip
             && block_id <= tip.id
             && let Some(stored) = self
+                .actors
                 .storage_ref
                 .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
                 .await?
             && stored.header.hash == block_hash
         {
-            self.settle_reconstructed_deliveries(&stored).await?;
-            self.storage_ref
+            Self::settle_reconstructed_deliveries(&self.actors.storage_ref, &stored).await?;
+            self.actors
+                .storage_ref
                 .ask(sequencer_storage_actor::protocol::SetZoneAnchor { anchor: record })
                 .await?;
             return Ok(());
@@ -183,14 +177,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         // The same for the deliveries it carries: the inbox has seen them, so
         // the drain would skip them anyway, and the records are owed nothing.
         let finalized_dispatch_keys =
-            sequencer_core::settled_dispatch_keys(&self.storage_ref, &block).await;
+            sequencer_core::settled_dispatch_keys(&self.actors.storage_ref, block).await;
 
         // The tip meta stays pinned to the head tip even when the reconstructed
         // block lands below it, and the anchor only advances if the block
         // itself landed.
         let head_tip = self.chain.head_tip().map(|head| BlockMeta::from(&head));
         let final_meta = self.chain.final_tip().map(|meta| BlockMeta::from(&meta));
-        self.storage_ref
+        self.actors
+            .storage_ref
             .ask(sequencer_storage_actor::protocol::AtomicUpdate {
                 blocks: vec![block.clone()],
                 head_tip,
@@ -216,12 +211,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ///
     /// A persist failure is only logged: the deliveries are already irreversible, so
     /// the worst case is a record the next drain drops instead.
-    async fn settle_reconstructed_deliveries(&mut self, block: &Block) -> Result<()> {
-        let keys = sequencer_core::settled_dispatch_keys(&self.storage_ref, block).await;
+    async fn settle_reconstructed_deliveries(
+        storage_ref: &ActorRef<S>,
+        block: &Block,
+    ) -> Result<()> {
+        let keys = sequencer_core::settled_dispatch_keys(storage_ref, block).await;
         if keys.is_empty() {
             return Ok(());
         }
-        self.storage_ref
+        storage_ref
             .ask(
                 sequencer_storage_actor::protocol::DropSettledCrossZoneDispatches {
                     message_keys: keys,

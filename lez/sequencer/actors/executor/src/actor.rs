@@ -37,8 +37,8 @@ use crate::{
         AccreditedKeys, ChannelId, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
         GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetProofsAndRoot,
-        GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply,
-        Transaction,
+        GetProofsAndRootReply, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
+        RequeueCrossZoneDeadLetterReply, Transaction,
     },
 };
 
@@ -417,10 +417,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for E
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for ExecutorActor<S, B> {
-    type Reply = Result<(
-        Vec<Option<lee_core::MembershipProof>>,
-        lee_core::CommitmentSetDigest,
-    )>;
+    type Reply = Result<GetProofsAndRootReply>;
 
     async fn handle(
         &mut self,
@@ -436,7 +433,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
                     .iter()
                     .map(|commitment| state.get_proof_for_commitment(commitment))
                     .collect();
-                (proofs, state.commitment_root())
+                GetProofsAndRootReply {
+                    proofs,
+                    root: state.commitment_root(),
+                }
             })
             .await)
     }
@@ -531,7 +531,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                         match state {
                             State::None => unreachable!(),
                             State::Bootstrapping(bootstrapping) => bootstrapping
-                                .on_finalized_block(finalized_block)
+                                .on_finalized_block(*finalized_block)
                                 .await
                                 .expect("Failed to handle finalized block during bootstrapping"),
                             State::Online(_) => {
@@ -540,7 +540,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                             }
                         }
                     })
-                    .await
+                    .await;
             }
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
                 State::None => unreachable!(),

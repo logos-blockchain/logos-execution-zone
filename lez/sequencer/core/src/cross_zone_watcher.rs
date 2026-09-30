@@ -752,7 +752,7 @@ mod tests {
     use common::test_utils::produce_dummy_block;
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use kameo::actor::Spawn as _;
+    use kameo::{actor::Spawn as _, supervision::RestartPolicy};
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use sequencer_bedrock_actor::{error::Error as BedrockError, mock::MockBedrockActor};
@@ -761,6 +761,7 @@ mod tests {
         mock::MockStorageActor,
         protocol::{AtomicUpdate, CrossZoneMessageKey, GetPendingCrossZoneDispatches},
     };
+    use sharding_pool_actor::RestartConfig;
     use tempfile::TempDir;
 
     use super::*;
@@ -779,16 +780,23 @@ mod tests {
 
     /// A Bedrock pool whose every committee read fails.
     fn unreachable_bedrock_pool() -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
-        ShardingPoolActor::spawn(ShardingPoolActor::new(|_channel_id| {
-            let mut mock = MockBedrockActor::default();
-            mock.expect_handle_get_accredited_keys()
-                .returning(|_msg, _ctx| {
-                    Err(BedrockError::NodeRequestFailed(anyhow::anyhow!(
-                        "node unreachable"
-                    )))
-                });
-            mock
-        }))
+        ShardingPoolActor::spawn(ShardingPoolActor::new(
+            RestartConfig {
+                policy: RestartPolicy::Never,
+                limit: 0,
+                within: Duration::ZERO,
+            },
+            |_channel_id| {
+                let mut mock = MockBedrockActor::default();
+                mock.expect_handle_get_accredited_keys()
+                    .returning(|_msg, _ctx| {
+                        Err(BedrockError::NodeRequestFailed(anyhow::anyhow!(
+                            "node unreachable"
+                        )))
+                    });
+                mock
+            },
+        ))
     }
 
     /// The gate itself, on the two paths the latch tests cannot see: a

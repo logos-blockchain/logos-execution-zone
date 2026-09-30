@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
 use anyhow::anyhow;
 use common::block::Block;
-use futures::{Stream, StreamExt as _, TryStreamExt, future::OptionFuture};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, future::OptionFuture};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -10,7 +10,8 @@ use kameo::{
     message::{Context, Message},
 };
 use kameo_actors::broker::Broker;
-use log::warn;
+use lee_core::BlockId;
+use log::{info, warn};
 use logos_blockchain_common_http_client::{BasicAuthCredentials, ProcessedBlockEvent};
 use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
@@ -20,13 +21,13 @@ use logos_blockchain_zone_sdk::{
     sequencer::{ChannelUpdateTx, InscriptionInfo, PendingTx},
 };
 use sequencer_actors_common::SendErrorExt as _;
+use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneAnchor};
 use tokio::select;
-use url::Url;
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
 use crate::{
-    BedrockActorTrait, Result,
+    BedrockActorTrait, Result, Url,
     error::Error,
     protocol::{
         AccreditedKeys, BlockData, ChangeChannelConfig, ChannelEvent, ChannelEventKind, ChannelId,
@@ -40,6 +41,14 @@ mod publisher;
 #[cfg(test)]
 mod tests;
 
+pub struct Args<S: StorageActorTrait> {
+    pub node_url: Url,
+    pub basic_auth: Option<BasicAuthCredentials>,
+    pub channel_id: ChannelId,
+    pub storage_ref: ActorRef<S>,
+    pub broker_ref: ActorRef<Broker<ChannelEvent>>,
+}
+
 /// Bedrock Actor responsible for interacting with the Bedrock node and managing channel events.
 ///
 /// This actor is expected to be used together with [`sharding_pool_actor`]. However it can be used
@@ -50,49 +59,38 @@ mod tests;
 /// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
 ///
 /// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - `channel/<channel_id>/finalized_block`: for [`ChannelEvent::FinalizedBlock`].
+/// - `channel/<channel_id>/finalized_block`: for [`ChannelEventKind::FinalizedBlock`].
 /// - If publisher was initialized with [`InitializeChannelPublisher`]:
 ///   - `channel/<channel_id>/publisher/update`: for
 ///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)
 ///   - `channel/<channel_id>/publisher/turn`: for
 ///     [`PublisherEvent::Turn`](crate::protocol::PublisherEvent::Turn)
-pub struct BedrockActor {
+pub struct BedrockActor<S> {
     channel_id: ChannelId,
     node: NodeHttpClient,
     node_stream: BoxStream<Result<(ZoneMessage, Slot)>>,
+    last_seen_block: Option<BlockId>,
     /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
     publisher: Option<publisher::Publisher>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
+    _storage_ref: PhantomData<S>,
 }
 
-impl BedrockActor {
-    #[must_use]
-    pub async fn new(
-        node_url: Url,
-        basic_auth: Option<BasicAuthCredentials>,
-        channel_id: ChannelId,
-        stream_from: Option<Slot>,
-        broker_ref: ActorRef<Broker<ChannelEvent>>,
-    ) -> Result<Self> {
-        let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), node_url);
-
-        Ok(Self {
-            channel_id,
-            node_stream: Box::pin(Self::node_stream(node.clone(), stream_from, channel_id).await?),
-            node,
-            publisher: None,
-            broker_ref,
-        })
-    }
-
+impl<S: StorageActorTrait> BedrockActor<S> {
     async fn node_stream(
         node: NodeHttpClient,
-        stream_from: Option<Slot>,
+        last_seen_slot: Option<Slot>,
         channel_id: ChannelId,
     ) -> Result<impl Stream<Item = Result<(ZoneMessage, Slot)>>> {
         const BATCH_SIZE: Slot = Slot::new(100);
         const STREAM_ATTEMPT_LIMIT: usize = 5;
         const STREAM_RETRY_TIMEOUT: Duration = Duration::from_millis(100);
+
+        struct StreamState {
+            last_processed_slot: Option<Slot>,
+            last_known_lib_slot: Slot,
+            real_time_stream: BoxStream<ProcessedBlockEvent>,
+        }
 
         let lib_slot = node
             .consensus_info()
@@ -101,21 +99,15 @@ impl BedrockActor {
             .cryptarchia_info
             .lib_slot;
 
-        let stream = node
+        let real_time_stream = node
             .block_stream()
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?;
 
-        struct StreamState {
-            last_processed_slot: Option<Slot>,
-            last_known_lib_slot: Slot,
-            real_time_stream: BoxStream<ProcessedBlockEvent>,
-        }
-
         let initial_state = StreamState {
-            last_processed_slot: stream_from,
+            last_processed_slot: last_seen_slot,
             last_known_lib_slot: lib_slot,
-            real_time_stream: stream,
+            real_time_stream,
         };
 
         let stream = futures::stream::try_unfold(initial_state, move |mut stream_state| {
@@ -124,14 +116,14 @@ impl BedrockActor {
                 // Fetch new lib_slot if needed
                 while stream_state
                     .last_processed_slot
-                    .map_or(true, |slot| slot >= stream_state.last_known_lib_slot)
+                    .is_none_or(|slot| slot >= stream_state.last_known_lib_slot)
                 {
-                    let mut attempt_count = 0;
+                    let mut attempt_count: usize = 0;
                     let block_event = loop {
                         if let Some(block_event) = stream_state.real_time_stream.next().await {
                             break block_event;
-                        };
-                        attempt_count += 1;
+                        }
+                        attempt_count = attempt_count.saturating_add(1);
                         if attempt_count < STREAM_ATTEMPT_LIMIT {
                             tokio::time::sleep(STREAM_RETRY_TIMEOUT).await;
 
@@ -164,7 +156,7 @@ impl BedrockActor {
                     .zone_messages_in_blocks(start_slot, end_slot, channel_id)
                     .await
                     .map_err(|err| Error::NodeRequestFailed(err.into()))?
-                    .map(|tuple| Ok(tuple));
+                    .map(Ok);
 
                 stream_state.last_processed_slot = Some(end_slot);
                 Ok(Some((backfill_stream.boxed(), stream_state)))
@@ -179,7 +171,20 @@ impl BedrockActor {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let block = match borsh::from_slice::<Block>(&zone_block.data) {
-                    Ok(block) => BlockData::Block(block),
+                    Ok(block) => {
+                        let block_id = block.header.block_id;
+                        if let Some(last_seen_block) = self.last_seen_block
+                            && last_seen_block > block_id
+                        {
+                            info!(
+                                "Skipping block with ID {block_id} as it is older than the last seen block {last_seen_block}",
+                            );
+                            return Ok(());
+                        }
+                        self.last_seen_block = Some(block_id);
+
+                        BlockData::Block(block)
+                    }
                     Err(_) => BlockData::Undecodable(zone_block.data.into()),
                 };
 
@@ -188,11 +193,11 @@ impl BedrockActor {
                         topic: format!("channel/{}/finalized_block", self.channel_id),
                         message: ChannelEvent {
                             channel_id: self.channel_id,
-                            event: ChannelEventKind::FinalizedBlock(FinalizedBlock {
+                            event: ChannelEventKind::FinalizedBlock(Box::new(FinalizedBlock {
                                 block,
                                 msg_id: zone_block.id,
                                 slot,
-                            }),
+                            })),
                         },
                     })
                     .await
@@ -216,14 +221,42 @@ impl BedrockActor {
     }
 }
 
-impl BedrockActorTrait for BedrockActor {}
+impl<S: StorageActorTrait> BedrockActorTrait for BedrockActor<S> {}
 
-impl Actor for BedrockActor {
-    type Args = Self;
+impl<S: StorageActorTrait> Actor for BedrockActor<S> {
+    type Args = Args<S>;
     type Error = Error;
 
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
-        Ok(args)
+        let Args {
+            node_url,
+            basic_auth,
+            channel_id,
+            storage_ref,
+            broker_ref,
+        } = args;
+        let anchor = storage_ref
+            .ask(GetZoneAnchor)
+            .await
+            .map_err(|err| Error::StorageRequestFailed(err.erase_message()))?;
+        let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), node_url);
+
+        Ok(Self {
+            channel_id,
+            node_stream: Box::pin(
+                Self::node_stream(
+                    node.clone(),
+                    anchor.as_ref().map(|anchor| Slot::from(anchor.slot)),
+                    channel_id,
+                )
+                .await?,
+            ),
+            last_seen_block: anchor.as_ref().map(|anchor| anchor.block_id),
+            node,
+            publisher: None,
+            broker_ref,
+            _storage_ref: PhantomData,
+        })
     }
 
     async fn next(
@@ -255,7 +288,7 @@ impl Actor for BedrockActor {
     }
 }
 
-impl Message<InitializeChannelPublisher> for BedrockActor {
+impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
@@ -292,7 +325,7 @@ impl Message<InitializeChannelPublisher> for BedrockActor {
     }
 }
 
-impl Message<CreateChannel> for BedrockActor {
+impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
@@ -313,7 +346,7 @@ impl Message<CreateChannel> for BedrockActor {
     }
 }
 
-impl Message<PublishBlock> for BedrockActor {
+impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
@@ -334,7 +367,7 @@ impl Message<PublishBlock> for BedrockActor {
     }
 }
 
-impl Message<ChangeChannelConfig> for BedrockActor {
+impl<S: StorageActorTrait> Message<ChangeChannelConfig> for BedrockActor<S> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -363,7 +396,7 @@ impl Message<ChangeChannelConfig> for BedrockActor {
     }
 }
 
-impl Message<CheckChannelExists> for BedrockActor {
+impl<S: StorageActorTrait> Message<CheckChannelExists> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
@@ -380,7 +413,7 @@ impl Message<CheckChannelExists> for BedrockActor {
     }
 }
 
-impl Message<CheckIsOurTurn> for BedrockActor {
+impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
@@ -394,7 +427,7 @@ impl Message<CheckIsOurTurn> for BedrockActor {
     }
 }
 
-impl Message<GetAccreditedKeys> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetAccreditedKeys> for BedrockActor<S> {
     type Reply = Result<Option<AccreditedKeys>>;
 
     async fn handle(
@@ -418,7 +451,7 @@ impl Message<GetAccreditedKeys> for BedrockActor {
     }
 }
 
-impl Message<GetChannelTipSlot> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetChannelTipSlot> for BedrockActor<S> {
     type Reply = Result<Option<Slot>>;
 
     async fn handle(
@@ -437,7 +470,7 @@ impl Message<GetChannelTipSlot> for BedrockActor {
     }
 }
 
-impl Message<GetChannelTipMessageId> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
     type Reply = Result<Option<MsgId>>;
 
     async fn handle(
@@ -457,7 +490,7 @@ impl Message<GetChannelTipMessageId> for BedrockActor {
 }
 
 // TODO: Remove when cross zones become actor(-s)
-impl Message<ReadChannel> for BedrockActor {
+impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
     type Reply = Result<BoxStream<(ZoneMessage, Slot)>>;
 
     async fn handle(
@@ -516,7 +549,7 @@ impl Message<ReadChannel> for BedrockActor {
 }
 
 #[cfg(feature = "test-utils")]
-impl Message<PublishRawInscription> for BedrockActor {
+impl<S: StorageActorTrait> Message<PublishRawInscription> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(

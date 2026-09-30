@@ -31,7 +31,7 @@ pub struct ChannelEvent {
 pub enum ChannelEventKind {
     /// A block that has been finalized on chain since configured `stream_from` arriving to
     /// `channel/<channel_id>/finalized_block` topic.
-    FinalizedBlock(FinalizedBlock),
+    FinalizedBlock(Box<FinalizedBlock>),
 
     /// Events related to the channel publisher arriving to `channel/<channel_id>/publisher/`
     /// topics.
@@ -97,6 +97,7 @@ pub struct ChannelUpdate {
 ///
 /// If no previous channel publisher exists, this will initialize it and return `true`; otherwise,
 /// it will just return `false` without reinitializing the channel publisher.
+#[derive(Debug, Clone)]
 pub struct InitializeChannelPublisher {
     pub channel_id: ChannelId,
     pub bedrock_signing_key: Ed25519Key,
@@ -118,6 +119,7 @@ impl ShardingKey for InitializeChannelPublisher {
 ///
 /// Only valid while the channel does not exist, and `keys[0]` must be this sequencer's own key,
 /// since creation hands the first turn to index 0.
+#[derive(Debug, Clone)]
 pub struct CreateChannel {
     pub channel_id: ChannelId,
     pub genesis: Block,
@@ -134,6 +136,7 @@ impl ShardingKey for CreateChannel {
 }
 
 /// Publish block to the configured channel.
+#[derive(Debug, Clone)]
 pub struct PublishBlock {
     pub channel_id: ChannelId,
     pub block: Block,
@@ -152,6 +155,7 @@ impl ShardingKey for PublishBlock {
 }
 
 /// Outcome of a publish operation.
+#[derive(Debug, Clone)]
 pub struct PublishOutcome {
     /// The `MsgId` zone-sdk assigned the published inscription.
     pub this_msg: MsgId,
@@ -165,6 +169,7 @@ pub struct PublishOutcome {
 /// Inscribe raw bytes on top of the channel tip. Only a test that provokes an
 /// offence needs it.
 #[cfg(feature = "test-utils")]
+#[derive(Debug, Clone)]
 pub struct PublishRawInscription {
     pub channel_id: ChannelId,
     pub data: Vec<u8>,
@@ -180,6 +185,7 @@ impl ShardingKey for PublishRawInscription {
 }
 
 /// Change the configuration of the channel.
+#[derive(Debug, Clone)]
 pub struct ChangeChannelConfig {
     pub channel_id: ChannelId,
     pub new_keys: Vec<Ed25519PublicKey>,
@@ -202,6 +208,7 @@ impl ShardingKey for ChangeChannelConfig {
 }
 
 /// Check if configured channel exists.
+#[derive(Debug, Clone)]
 pub struct CheckChannelExists {
     pub channel_id: ChannelId,
 }
@@ -217,6 +224,7 @@ impl ShardingKey for CheckChannelExists {
 /// Whether this sequencer is currently authorized to write to the channel.
 ///
 /// Prefer subscribing to `channel/<channel_id>/turn` topic instead of polling this.
+#[derive(Debug, Clone)]
 pub struct CheckIsOurTurn {
     pub channel_id: ChannelId,
 }
@@ -234,6 +242,7 @@ impl ShardingKey for CheckIsOurTurn {
 ///
 /// The config entry is what tells a caller whether this committee is the
 /// finalized one: compare it to the checkpoint's `finalized_config`.
+#[derive(Debug, Clone)]
 pub struct GetAccreditedKeys {
     pub channel_id: ChannelId,
 }
@@ -248,7 +257,7 @@ impl ShardingKey for GetAccreditedKeys {
 
 /// The channel's accredited keys, the config entry they come from, and whose
 /// turn the tip was written on.
-#[derive(Reply)]
+#[derive(Debug, Clone, Reply)]
 pub struct AccreditedKeys {
     pub keys: Vec<Ed25519PublicKey>,
     pub config_tip: MsgId,
@@ -268,6 +277,7 @@ impl AccreditedKeys {
 }
 
 /// Get current channel frontier slot on the connected chain.
+#[derive(Debug, Clone)]
 pub struct GetChannelTipSlot {
     pub channel_id: ChannelId,
 }
@@ -281,6 +291,7 @@ impl ShardingKey for GetChannelTipSlot {
 }
 
 /// Get live channel tip message id.
+#[derive(Debug, Clone)]
 pub struct GetChannelTipMessageId {
     pub channel_id: ChannelId,
 }
@@ -294,6 +305,7 @@ impl ShardingKey for GetChannelTipMessageId {
 }
 
 /// Finalized channel messages from `after` (exclusive) up to LIB.
+#[derive(Debug, Clone)]
 pub struct ReadChannel {
     pub channel_id: ChannelId,
     /// Passing [`None`] will read from the channel's genesis.

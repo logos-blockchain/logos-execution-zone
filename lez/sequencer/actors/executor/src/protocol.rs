@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 
 use common::{HashType, transaction::LeeTransaction};
 use kameo::Reply;
-use lee_core::{BlockId, Commitment, account::AccountId};
+use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::AccountId};
 pub use sequencer_bedrock_actor::protocol::ChannelId;
 pub use sequencer_core::AccreditedKeys;
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
@@ -107,6 +107,14 @@ pub struct GetAccountNonces {
 
 pub struct GetProofsAndRoot {
     pub commitments: Vec<Commitment>,
+}
+
+#[derive(Reply)]
+pub struct GetProofsAndRootReply {
+    /// Proof for each of [`GetProofsAndRoot::commitments`] in the same order, [`None`] for an
+    /// unknown commitment.
+    pub proofs: Vec<Option<MembershipProof>>,
+    pub root: CommitmentSetDigest,
 }
 
 pub struct GetAccount {

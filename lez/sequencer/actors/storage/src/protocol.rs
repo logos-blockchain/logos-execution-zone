@@ -130,6 +130,8 @@ pub struct SetCrossZonePeerTip {
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
+// TODO: Process orphaned blocks
+// TODO: Experiment with per-actor data types and agnostic storage.
 pub struct AtomicUpdate {
     /// Serialized zone-sdk checkpoint for this event.
     pub checkpoint: Option<Vec<u8>>,

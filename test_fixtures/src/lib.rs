@@ -15,6 +15,7 @@ use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
 use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_storage_actor::mock::MockStorageActor;
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -43,6 +44,10 @@ pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
 
 static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
+
+/// [`sequencer_bedrock_actor::BedrockActor`] running outside any sequencer, streaming the channel
+/// from genesis.
+pub type StandaloneBedrockActor = sequencer_bedrock_actor::BedrockActor<MockStorageActor>;
 
 struct IndexerComponents {
     indexer_handle: IndexerHandle,
@@ -1090,18 +1095,26 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
 pub fn spawn_standalone_bedrock_actor(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
+) -> Result<ActorRef<StandaloneBedrockActor>> {
     let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock = sequencer_bedrock_actor::BedrockActor::new(
-        config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-        None,
-        channel_id,
-        broker_ref,
-    );
-    Ok(sequencer_bedrock_actor::BedrockActor::spawn(bedrock))
+    let mut storage = MockStorageActor::default();
+    storage
+        .expect_handle_get_zone_anchor()
+        .returning(|_msg, _ctx| Ok(None));
+    let storage_ref = MockStorageActor::spawn(storage);
+
+    Ok(StandaloneBedrockActor::spawn(
+        sequencer_bedrock_actor::actor::Args {
+            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+            basic_auth: None,
+            channel_id,
+            storage_ref,
+            broker_ref,
+        },
+    ))
 }
 
 /// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` for tests to
@@ -1109,7 +1122,7 @@ pub fn spawn_standalone_bedrock_actor(
 pub fn spawn_channel_observer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
+) -> Result<ActorRef<StandaloneBedrockActor>> {
     spawn_standalone_bedrock_actor(bedrock_addr, channel_id)
 }
 

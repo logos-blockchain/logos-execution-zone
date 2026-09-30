@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use chain_state::ChainState;
 use common::transaction::LeeTransaction;
-use kameo::actor::{ActorRef, PreparedActor};
-use kameo_actors::pubsub::PubSub;
+use kameo::actor::ActorRef;
 use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
@@ -12,15 +11,13 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, Ed25519Key, SerializeOp as _},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
-use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 
 use crate::{
     Result,
-    actor::state::{bootstrapping, genesis, zone_checkpoint},
+    actor::state::{ActorsBundle, bootstrapping, genesis, zone_checkpoint},
     error::Error,
-    protocol::AccreditedKeys,
 };
 
 pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
@@ -33,7 +30,7 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
-    pub async fn from_bootstrapping(
+    pub(super) async fn from_bootstrapping(
         bootstrapping_state: bootstrapping::BootstrappingState<S, B>,
     ) -> Result<Self> {
         Self::start(
@@ -41,57 +38,41 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.bedrock_signing_key,
-            bootstrapping_state.storage_ref,
-            bootstrapping_state.bedrock_pool_ref,
-            bootstrapping_state.accredited_keys_pubsub_ref,
-            bootstrapping_state.slasher_prepared,
+            bootstrapping_state.actors,
         )
         .await
     }
 
-    pub async fn from_empty_chain(
+    pub(super) async fn from_empty_chain(
         config: SequencerConfig,
         chain: ChainState,
         bedrock_signing_key: Ed25519Key,
-        storage_ref: ActorRef<S>,
-        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(
-            false,
-            config,
-            chain,
-            bedrock_signing_key,
-            storage_ref,
-            bedrock_pool_ref,
-            accredited_keys_pubsub_ref,
-            slasher_prepared,
-        )
-        .await
+        Self::start(false, config, chain, bedrock_signing_key, actors).await
     }
 
-    pub fn sequencer(&self) -> &SequencerCore<S, B> {
+    pub const fn sequencer(&self) -> &SequencerCore<S, B> {
         &self.sequencer
     }
 
-    pub fn sequencer_mut(&mut self) -> &mut SequencerCore<S, B> {
+    pub const fn sequencer_mut(&mut self) -> &mut SequencerCore<S, B> {
         &mut self.sequencer
     }
 
-    pub fn mempool_handle(&self) -> &MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
+    pub const fn mempool_handle(&self) -> &MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
         &self.mempool_handle
     }
 
-    pub fn is_our_turn(&self) -> bool {
+    pub const fn is_our_turn(&self) -> bool {
         self.is_our_turn
     }
 
-    pub fn set_is_our_turn(&mut self, is_our_turn: bool) {
+    pub const fn set_is_our_turn(&mut self, is_our_turn: bool) {
         self.is_our_turn = is_our_turn;
     }
 
-    pub fn background_tasks(&self) -> &sequencer_core::task_group::TaskGroup {
+    pub const fn background_tasks(&self) -> &sequencer_core::task_group::TaskGroup {
         &self.background_tasks
     }
 
@@ -100,11 +81,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         mut chain: ChainState,
         bedrock_signing_key: Ed25519Key,
-        storage_ref: ActorRef<S>,
-        bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
-        accredited_keys_pubsub_ref: ActorRef<PubSub<AccreditedKeys>>,
-        slasher_prepared: PreparedActor<SlasherActor<S>>,
+        actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
+        let ActorsBundle {
+            storage_ref,
+            bedrock_pool_ref,
+            accredited_keys_pubsub_ref,
+            slasher_prepared,
+        } = actors;
+
         let initial_checkpoint = zone_checkpoint(&storage_ref).await?;
 
         let own_sequencer_key =
@@ -211,12 +196,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     ) -> Result<()> {
         let signing_key = config
             .block_signing_key()
-            .map_err(|err| Error::InvalidSigningKey(err.into()))?;
+            .map_err(Error::InvalidSigningKey)?;
 
         let (block, state) =
             genesis::genesis_block_and_state(&signing_key, Some(own_sequencer_key), config);
 
-        let founding_committee_keys = genesis::founding_committee(&config, own_sequencer_key)
+        let founding_committee_keys = genesis::founding_committee(config, own_sequencer_key)
             .ok_or(Error::FoundingCommitteeContainsNoKeys)?;
 
         let channel_params =

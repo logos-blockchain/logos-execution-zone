@@ -10,7 +10,9 @@ use common::{
 use kameo::{
     actor::{ActorRef, Spawn as _},
     error::SendError,
+    supervision::RestartPolicy,
 };
+use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
     Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
     public_transaction::{Message, WitnessSet},
@@ -22,8 +24,9 @@ use sequencer_core::{
     MsgId,
     config::{BedrockConfig, SequencerConfig},
 };
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::mock::MockStorageActor;
-use sharding_pool_actor::ShardingPoolActor;
+use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
@@ -236,9 +239,36 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
 }
 
 fn spawn_bedrock_pool(
-    ctr: impl Fn(&ChannelId) -> MockBedrockActor + Send + 'static,
+    ctr: impl Fn(&ChannelId) -> MockBedrockActor + Send + Sync + 'static,
 ) -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
-    ShardingPoolActor::spawn(ShardingPoolActor::new(ctr))
+    ShardingPoolActor::spawn(ShardingPoolActor::new(
+        RestartConfig {
+            policy: RestartPolicy::Never,
+            limit: 0,
+            within: Duration::ZERO,
+        },
+        move |channel_id| ctr(&channel_id),
+    ))
+}
+
+async fn new_executor(
+    config: SequencerConfig,
+    storage_ref: ActorRef<MockStorageActor>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
+) -> crate::Result<ExecutorActor<MockStorageActor, MockBedrockActor>> {
+    let bedrock_signing_key =
+        sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+            .expect("Failed to load or create bedrock signing key");
+
+    ExecutorActor::new(
+        config,
+        bedrock_signing_key,
+        storage_ref,
+        bedrock_pool_ref,
+        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        SlasherActor::prepare(),
+    )
+    .await
 }
 
 /// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.
@@ -297,7 +327,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::new(
+        new_executor(
             config,
             storage_ref.clone(),
             spawn_bedrock_pool(|channel_id| {
@@ -337,7 +367,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = ExecutorActor::spawn(
-        ExecutorActor::new(
+        new_executor(
             config,
             storage_ref.clone(),
             spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
@@ -412,7 +442,7 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::new(
+        new_executor(
             config,
             storage_ref.clone(),
             spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
@@ -461,7 +491,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = ExecutorActor::spawn(
-        ExecutorActor::new(
+        new_executor(
             config,
             storage_ref.clone(),
             spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),

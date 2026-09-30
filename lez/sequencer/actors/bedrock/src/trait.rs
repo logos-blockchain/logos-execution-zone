@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub trait BedrockActorTrait:
-    Actor<Args = Self, Error = Error>
+    Actor<Error = Error>
     + Message<InitializeChannelPublisher, Reply = Result<bool>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>

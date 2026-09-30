@@ -652,10 +652,10 @@ impl Message<AccreditedKeys> for GossipActor {
 
     async fn handle(
         &mut self,
-        keys: AccreditedKeys,
+        msg: AccreditedKeys,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.accredited_keys = Some(keys);
+        self.accredited_keys = Some(msg);
     }
 }
 

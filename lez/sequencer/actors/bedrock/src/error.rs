@@ -16,6 +16,11 @@ pub enum Error {
     #[error("Zone-sdk readiness channel closed before becoming ready")]
     ReadinessChannelClosed,
 
+    #[error("Storage request failed")]
+    StorageRequestFailed(
+        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
+    ),
+
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
 

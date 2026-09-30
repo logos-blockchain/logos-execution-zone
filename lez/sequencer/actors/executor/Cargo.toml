@@ -12,8 +12,6 @@ workspace = true
 actor = [
   "dep:sequencer_executor_actor_metrics",
   "dep:sharding_pool_actor",
-  "dep:lee",
-  "dep:sequencer_core",
   "dep:sequencer_core_metrics",
   "dep:sequencer_stake_core",
   "dep:mempool",
@@ -47,8 +45,10 @@ sequencer_executor_actor_metrics = { workspace = true, features = [
 sharding_pool_actor = { workspace = true, features = [
   "actor",
 ], optional = true }
-lee = { workspace = true, optional = true }
-sequencer_core = { workspace = true, optional = true }
+lee.workspace = true
+# TODO: We import that just because of AccreditedKeys type.
+# Need refactor that and not expose this dependency without `actor` feature.
+sequencer_core.workspace = true
 # TODO: Don't import that
 sequencer_core_metrics = { workspace = true, features = [
   "record",

@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result, anyhow};
 use clap::Parser;
 use kameo::actor::Spawn as _;
 use sequencer_core::Ed25519PublicKey;
+use sequencer_storage_actor::mock::MockStorageActor;
 
 #[derive(Debug, Parser)]
 #[clap(version)]
@@ -63,13 +64,20 @@ async fn main() -> Result<()> {
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock = sequencer_bedrock_actor::BedrockActor::new(
-        config.bedrock_config.node_url,
-        config.bedrock_config.auth.map(Into::into),
-        config.bedrock_config.channel_id,
-        broker_ref,
-    );
-    let bedrock_ref = sequencer_bedrock_actor::BedrockActor::spawn(bedrock);
+    let mut storage = MockStorageActor::default();
+    storage
+        .expect_handle_get_zone_anchor()
+        .returning(|_msg, _ctx| Ok(None));
+    let storage_ref = MockStorageActor::spawn(storage);
+
+    let bedrock_ref =
+        sequencer_bedrock_actor::BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {
+            node_url: config.bedrock_config.node_url,
+            basic_auth: config.bedrock_config.auth.map(Into::into),
+            channel_id: config.bedrock_config.channel_id,
+            storage_ref,
+            broker_ref,
+        });
     bedrock_ref
         .ask(
             sequencer_bedrock_actor::protocol::InitializeChannelPublisher {

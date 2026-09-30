@@ -18,6 +18,7 @@ use sequencer_bedrock_actor::{
         PublishRawInscription,
     },
 };
+use sequencer_storage_actor::mock::MockStorageActor;
 
 #[derive(Debug, Parser)]
 #[clap(version)]
@@ -38,7 +39,7 @@ struct Args {
 
 /// Waits for the tip to become `msg`. False if the turn ends first: L1 refused it.
 async fn wait_until_tip(
-    bedrock_ref: &ActorRef<BedrockActor>,
+    bedrock_ref: &ActorRef<BedrockActor<MockStorageActor>>,
     channel_id: ChannelId,
     msg: MsgId,
 ) -> Result<bool> {
@@ -85,13 +86,19 @@ async fn main() -> Result<()> {
         kameo_actors::DeliveryStrategy::Guaranteed,
     ));
 
-    let bedrock = BedrockActor::new(
-        config.bedrock_config.node_url,
-        config.bedrock_config.auth.map(Into::into),
+    let mut storage = MockStorageActor::default();
+    storage
+        .expect_handle_get_zone_anchor()
+        .returning(|_msg, _ctx| Ok(None));
+    let storage_ref = MockStorageActor::spawn(storage);
+
+    let bedrock_ref = BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {
+        node_url: config.bedrock_config.node_url,
+        basic_auth: config.bedrock_config.auth.map(Into::into),
         channel_id,
+        storage_ref,
         broker_ref,
-    );
-    let bedrock_ref = BedrockActor::spawn(bedrock);
+    });
     bedrock_ref
         .ask(InitializeChannelPublisher {
             channel_id,
