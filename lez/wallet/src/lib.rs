@@ -29,7 +29,7 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
-    program::{CallInput, MessageData, StoredMessage},
+    program::{CallInput, MessageData, MessageId, StoredMessage},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -625,7 +625,6 @@ impl WalletCore {
     }
 
     pub async fn owned_pending_messages(&self) -> Result<Vec<StoredMessage>> {
-        const PAGE: u16 = 256;
         let owned: HashSet<AccountId> = {
             let key_chain = self.storage.key_chain();
             key_chain
@@ -635,6 +634,22 @@ impl WalletCore {
                 .collect()
         };
 
+        self.pending_messages_where(|record| owned.contains(&record.body.to.account_id))
+            .await
+    }
+
+    pub async fn find_pending_message(&self, id: MessageId) -> Result<Option<StoredMessage>> {
+        Ok(self
+            .pending_messages_where(|record| record.id() == id)
+            .await?
+            .pop())
+    }
+
+    async fn pending_messages_where(
+        &self,
+        keep: impl Fn(&StoredMessage) -> bool,
+    ) -> Result<Vec<StoredMessage>> {
+        const PAGE: u16 = 256;
         let mut records = Vec::new();
         let mut from_sequence = 0;
         loop {
@@ -645,10 +660,7 @@ impl WalletCore {
             if let Some(last) = page.last() {
                 from_sequence = last.sequence.saturating_add(1);
             }
-            records.extend(
-                page.into_iter()
-                    .filter(|record| owned.contains(&record.body.to.account_id)),
-            );
+            records.extend(page.into_iter().filter(&keep));
             if last_page {
                 return Ok(records);
             }
@@ -1146,19 +1158,17 @@ impl WalletCore {
         &self,
         record: StoredMessage,
         payer: Option<AccountId>,
+        evidence: Option<PublicIdentity>,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        check_receivable(&record)?;
         let to = record.body.to;
         let root = CallInput::InFlight(record.id());
-        if self
-            .storage
-            .key_chain()
-            .private_account(to.account_id)
-            .is_some()
-        {
+        if let Some(identity) = self.resolve_private_account(to.account_id) {
             let accounts = vec![
-                AccountIdentity::PrivateOwned(to.account_id)
-                    .select_program_shard(to.program_account_id),
+                identity
+                    .select_program_shard(to.program_account_id)
+                    .without_authorization(),
             ];
             return self
                 .send_proven(
@@ -1173,26 +1183,35 @@ impl WalletCore {
                 .await;
         }
 
-        let public_key = self
-            .get_account_public_signing_key(to.account_id)
-            .map(lee::PublicKey::new_from_private_key)
-            .ok_or_else(|| {
-                ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
-                    format!(
-                        "Message destination {} is not an account of this wallet",
+        let (identity, evidence) = match (
+            self.get_account_public_signing_key(to.account_id),
+            payer,
+            evidence,
+        ) {
+            (Some(_), None, _) => (AccountIdentity::Public(to.account_id), None),
+            (Some(key), Some(_), _) => (
+                AccountIdentity::PublicNoSign(to.account_id),
+                Some(PublicIdentity::Key(lee::PublicKey::new_from_private_key(
+                    key,
+                ))),
+            ),
+            (None, Some(_), Some(evidence)) if evidence.account_id() == to.account_id => {
+                (AccountIdentity::PublicNoSign(to.account_id), Some(evidence))
+            }
+            (None, _, _) => {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(format!(
+                        "Message destination {} is not this wallet's; receiving it needs a payer \
+                         and evidence of its identity",
                         to.account_id
-                    ),
-                ))
-            })?;
-        let identity = if payer.is_none() {
-            AccountIdentity::Public(to.account_id)
-        } else {
-            AccountIdentity::PublicNoSign(to.account_id)
+                    )),
+                ));
+            }
         };
         self.send_public(
             vec![identity.select_program_shard(to.program_account_id)],
             root,
-            vec![PublicIdentity::Key(public_key)],
+            evidence.into_iter().collect(),
             payer,
             |_| Ok(()),
         )
@@ -1442,11 +1461,99 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
         })
 }
 
+fn check_receivable(record: &StoredMessage) -> Result<(), ExecutionFailureKind> {
+    let token = programs::token_account_id();
+    if record.body.to.program_account_id == token
+        && record.body.origin_program == token
+        && matches!(
+            borsh::from_slice::<token_core::Message>(&record.body.message),
+            Ok(token_core::Message::Credit { notify: None, .. })
+        )
+    {
+        Ok(())
+    } else {
+        Err(ExecutionFailureKind::TransactionBuildError(
+            lee::error::LeeError::InvalidInput(
+                "This wallet only receives token credits without a notification".to_owned(),
+            ),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
+    use lee::AccountId;
+    use lee_core::{
+        account::Actor,
+        program::{MessageBody, StoredMessage},
+    };
+    use token_core::{Delivery, Message, Notify, TokenDescriptor, TokenKind};
+
+    use super::{ExecutionFailureKind, check_receivable};
+
+    const DESCRIPTOR: TokenDescriptor = TokenDescriptor {
+        definition_id: AccountId::new([2; 32]),
+        kind: TokenKind::Fungible,
+    };
+
+    fn record(origin_program: AccountId, message: &Message) -> StoredMessage {
+        StoredMessage {
+            sequence: 0,
+            body: MessageBody {
+                origin_program,
+                to: Actor::new(AccountId::new([1; 32]), programs::token_account_id()),
+                message: borsh::to_vec(message).unwrap(),
+            },
+        }
+    }
+
+    const fn credit(notify: Option<Notify>) -> Message {
+        Message::Credit {
+            descriptor: DESCRIPTOR,
+            amount: 5,
+            notify,
+        }
+    }
+
+    #[test]
+    fn a_plain_token_credit_is_receivable() {
+        assert!(check_receivable(&record(programs::token_account_id(), &credit(None))).is_ok());
+    }
+
+    #[test]
+    fn a_transfer_a_notifying_credit_and_a_foreign_credit_are_not_receivable() {
+        let token = programs::token_account_id();
+        let transfer = Message::Transfer {
+            to: AccountId::new([3; 32]),
+            descriptor: DESCRIPTOR,
+            amount: 5,
+            notify: None,
+            delivery: Delivery::Call,
+        };
+        let notifying = credit(Some(Notify {
+            to: Actor::new(AccountId::new([4; 32]), AccountId::new([5; 32])),
+            payload: Vec::new(),
+        }));
+
+        for refused in [
+            record(token, &transfer),
+            record(token, &notifying),
+            record(AccountId::new([6; 32]), &credit(None)),
+        ] {
+            assert!(
+                matches!(
+                    check_receivable(&refused),
+                    Err(ExecutionFailureKind::TransactionBuildError(
+                        lee::error::LeeError::InvalidInput(_)
+                    ))
+                ),
+                "{refused:?} must not be receivable"
+            );
+        }
+    }
 
     #[test]
     fn mnemonic_roundtrip() {

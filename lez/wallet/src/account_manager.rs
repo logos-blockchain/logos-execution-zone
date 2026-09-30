@@ -191,6 +191,7 @@ impl AccountIdentity {
         AccountMention {
             identity: self,
             program_account_id: program,
+            authorizes: true,
         }
     }
 
@@ -206,12 +207,19 @@ impl AccountIdentity {
 pub struct AccountMention {
     pub identity: AccountIdentity,
     pub program_account_id: AccountId,
+    pub authorizes: bool,
 }
 
 impl AccountMention {
     #[must_use]
     pub fn actor(&self) -> Actor {
         Actor::new(self.identity.account_id(), self.program_account_id)
+    }
+
+    #[must_use]
+    pub const fn without_authorization(mut self) -> Self {
+        self.authorizes = false;
+        self
     }
 }
 
@@ -282,6 +290,19 @@ impl State {
         }
     }
 
+    fn without_authorization(self) -> Self {
+        match self {
+            Self::Public { account, .. } => Self::Public { account, sk: None },
+            Self::Private(mut pre) => {
+                if let WitnessKind::Regular { ask } = &mut pre.kind {
+                    *ask = None;
+                }
+                Self::Private(pre)
+            }
+            keycard @ Self::PublicKeycard { .. } => keycard,
+        }
+    }
+
     fn selected(&self, selector: Actor) -> SelectedShard {
         SelectedShard {
             selector,
@@ -318,20 +339,27 @@ impl AccountManager {
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
-        let mut prepared: HashMap<AccountId, (usize, AccountIdentity)> = HashMap::new();
+        let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
         let mut pin = None;
 
         for AccountMention {
             identity,
             program_account_id,
+            authorizes,
         } in mentions
         {
             let account_id = identity.account_id();
             let shard_selector = Actor::new(account_id, program_account_id);
 
-            let known = prepared
-                .get(&account_id)
-                .map(|(index, prepared_identity)| (*index, *prepared_identity == identity));
+            let known =
+                prepared
+                    .get(&account_id)
+                    .map(|(index, prepared_identity, prepared_authorizes)| {
+                        (
+                            *index,
+                            *prepared_identity == identity && *prepared_authorizes == authorizes,
+                        )
+                    });
 
             let index = match known {
                 Some((_, false)) => {
@@ -348,10 +376,14 @@ impl AccountManager {
                 }
                 None => {
                     let index = states.len();
-                    states.push(
-                        prepare_account(wallet, identity.clone(), shard_selector, &mut pin).await?,
-                    );
-                    prepared.insert(account_id, (index, identity));
+                    let state =
+                        prepare_account(wallet, identity.clone(), shard_selector, &mut pin).await?;
+                    states.push(if authorizes {
+                        state
+                    } else {
+                        state.without_authorization()
+                    });
+                    prepared.insert(account_id, (index, identity, authorizes));
                     index
                 }
             };
@@ -830,8 +862,6 @@ fn private_key_tree_acc_preparation(
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
-    // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
-    // support from that in the wallet.
     let sender_pre = PreparedAccount {
         account_id,
         account: from_acc.account.clone(),
@@ -1319,6 +1349,40 @@ mod tests {
         assert!(matches!(
             &witnesses[0].nullifier,
             NullifierWitness::Init { npk: init_npk, .. } if *init_npk == npk
+        ));
+    }
+
+    #[test]
+    fn an_owned_account_without_authorization_keeps_only_its_nullifier_key() {
+        let ask = AuthorizationSecretKey([5; 32]);
+        let nsk = NullifierSecretKey::from(&ask);
+        let npk = NullifierPublicKey::from(&nsk);
+        let vpk = ViewingPublicKey::from_seed(&[2; 32], &[3; 32]);
+        let account_id = lee::AccountId::from((&npk, &vpk, Identifier::ZERO));
+        let owned = State::Private(Box::new(AccountPreparedData {
+            kind: witness_kind(&PrivateAccountKind::Regular(Identifier::ZERO), Some(ask)),
+            nsk: Some(nsk),
+            npk,
+            identifier: Identifier::ZERO,
+            vpk,
+            pre_state: PreparedAccount {
+                account_id,
+                account: Account::funded(5),
+            },
+            proof: Some((0, Vec::new())),
+            random_seed: [0; 32],
+        }));
+
+        let manager = manager(vec![owned.without_authorization()]);
+        assert!(!manager.selected_shards()[0].is_authorized);
+        let witnesses = manager.private_witnesses().unwrap();
+        assert!(matches!(
+            witnesses[0].kind,
+            WitnessKind::Regular { ask: None }
+        ));
+        assert!(matches!(
+            &witnesses[0].nullifier,
+            NullifierWitness::Update { nsk: kept, .. } if *kept == nsk
         ));
     }
 

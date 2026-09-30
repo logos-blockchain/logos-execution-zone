@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
-use lee::{AccountId, privacy_preserving_transaction::circuit::ProgramCatalog};
-use lee_core::program::MessageId;
+use lee::{AccountId, PublicIdentity, privacy_preserving_transaction::circuit::ProgramCatalog};
+use lee_core::program::{MessageId, PdaSeed};
 
 use crate::{
     AccDecodeData::Decode,
@@ -15,9 +15,10 @@ use crate::{
 pub enum PendingSubcommand {
     /// List the pending messages cast to this wallet's accounts.
     List,
-    /// Receive a pending message cast to one of this wallet's accounts.
+    /// Receive a pending token credit cast to one of this wallet's accounts or to a public PDA.
     ///
-    /// A public destination signs and pays the fee, unless `payer` pays it instead.
+    /// A public destination whose key the wallet holds signs and pays the fee, unless `payer`
+    /// pays it instead. A public PDA destination needs `payer`, `pda_program` and `pda_seed`.
     Receive {
         /// `id` - valid 32 byte base58 string.
         #[arg(long)]
@@ -25,6 +26,13 @@ pub enum PendingSubcommand {
         /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
         payer: Option<CliAccountMention>,
+        /// `pda_program` - program deriving the destination PDA, valid 32 byte base58 string
+        /// WITHOUT privacy prefix.
+        #[arg(long, requires = "pda_seed")]
+        pda_program: Option<AccountId>,
+        /// `pda_seed` - seed of the destination PDA, valid 32 byte base58 string.
+        #[arg(long, requires = "pda_program")]
+        pda_seed: Option<String>,
     },
 }
 
@@ -48,7 +56,12 @@ impl WalletSubcommand for PendingSubcommand {
                 }
                 Ok(SubcommandReturnValue::Empty)
             }
-            Self::Receive { id, payer } => {
+            Self::Receive {
+                id,
+                payer,
+                pda_program,
+                pda_seed,
+            } => {
                 let id = MessageId::new(
                     id.parse::<AccountId>()
                         .context("Message id must be a valid 32 byte base58 string")?
@@ -64,17 +77,26 @@ impl WalletSubcommand for PendingSubcommand {
                         anyhow::bail!("Payer must be a public account")
                     }
                 };
+                let evidence = match pda_program.zip(pda_seed) {
+                    None => None,
+                    Some((program, seed)) => Some(PublicIdentity::Pda {
+                        program,
+                        seed: PdaSeed::new(
+                            seed.parse::<AccountId>()
+                                .context("PDA seed must be a valid 32 byte base58 string")?
+                                .into_value(),
+                        ),
+                    }),
+                };
                 let record = wallet_core
-                    .owned_pending_messages()
+                    .find_pending_message(id)
                     .await?
-                    .into_iter()
-                    .find(|record| record.id() == id)
-                    .context("No pending message with this id is addressed to this wallet")?;
+                    .context("No pending message with this id")?;
                 let to = record.body.to;
                 let programs = receipt_programs(to.program_account_id)?;
 
                 let (tx_hash, secrets) = wallet_core
-                    .receive_pending_message(record, payer, &programs)
+                    .receive_pending_message(record, payer, evidence, &programs)
                     .await?;
                 if secrets.is_empty() {
                     return wallet_core
