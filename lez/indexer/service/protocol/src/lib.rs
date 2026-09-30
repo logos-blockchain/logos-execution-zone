@@ -278,7 +278,7 @@ pub struct MessageId(
 
 impl Display for MessageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0))
+        write!(f, "{}", self.0.to_base58())
     }
 }
 
