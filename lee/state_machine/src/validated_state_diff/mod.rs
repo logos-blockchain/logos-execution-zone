@@ -304,7 +304,6 @@ impl ValidatedStateDiff {
         let witness_set = &tx.witness_set;
         let commitments = message.commitments();
         let nullifiers = message.nullifiers();
-        let public_account_ids = message.public_account_ids();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
@@ -314,13 +313,7 @@ impl ValidatedStateDiff {
             )
         );
 
-        // 2. Check there are no duplicate account_ids in the public_account_ids list.
-        ensure!(
-            n_unique(&public_account_ids) == public_account_ids.len(),
-            LeeError::InvalidInput("Duplicate account_ids found in message".into())
-        );
-
-        // Check there are no duplicate nullifiers in the new_nullifiers list
+        // 2. Check there are no duplicate nullifiers in the new_nullifiers list
         ensure!(
             n_unique(&nullifiers.iter().map(|(n, _)| n).collect::<Vec<_>>()) == nullifiers.len(),
             LeeError::InvalidInput("Duplicate nullifiers found in message".into())
@@ -386,17 +379,6 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        if let Some(root) = message
-            .boundary
-            .outputs
-            .iter()
-            .find(|output| output.issuer.is_none())
-        {
-            ensure!(
-                message.declared.public_actors.contains(&root.to),
-                LeeError::InvalidInput("Root actor is not declared".into())
-            );
-        }
         let mut cycles_used = 0;
         let settled = settle(
             state,
