@@ -1303,7 +1303,6 @@ fn a_direct_transfer_from_the_holding_is_refused() {
         lee_core::native_token::Message::Transfer {
             to: escrow.account_id,
             amount: INITIAL_BALANCE,
-            expect_balance: None,
         },
     )
     .expect("build transfer message");

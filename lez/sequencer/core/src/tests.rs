@@ -4134,7 +4134,6 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         lee_core::native_token::Message::Transfer {
             to: funds_id,
             amount: donation,
-            expect_balance: None,
         },
     )
     .unwrap();
@@ -4215,7 +4214,6 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
         lee_core::native_token::Message::Transfer {
             to: funds_id,
             amount: dust,
-            expect_balance: None,
         },
     )
     .unwrap();

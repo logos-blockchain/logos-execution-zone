@@ -1579,11 +1579,7 @@ mod tests {
             record(
                 native,
                 native,
-                &native_token::Message::Transfer {
-                    to,
-                    amount: 5,
-                    expect_balance: None,
-                },
+                &native_token::Message::Transfer { to, amount: 5 },
             ),
             record(
                 native,

@@ -199,9 +199,5 @@ pub fn create_transaction_native_token_transfer_without_fee(
 }
 
 const fn native_transfer(to: AccountId, amount: u128) -> lee_core::native_token::Message {
-    lee_core::native_token::Message::Transfer {
-        to,
-        amount,
-        expect_balance: None,
-    }
+    lee_core::native_token::Message::Transfer { to, amount }
 }

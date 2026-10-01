@@ -96,7 +96,6 @@ impl TpsTestManager {
                     lee_core::native_token::Message::Transfer {
                         to: recipient.account_id,
                         amount,
-                        expect_balance: None,
                     },
                     // A generous max_fee (a ceiling, not the fee paid) so the
                     // base-fee rise this test's own sustained load causes cannot
@@ -272,7 +271,6 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 message: Program::serialize_message(lee_core::native_token::Message::Transfer {
                     to: recipient_id,
                     amount: balance_to_move,
-                    expect_balance: None,
                 })
                 .unwrap(),
             },

@@ -35,7 +35,6 @@ fn receive(
             &native_token::Message::Transfer {
                 to: receiver,
                 amount,
-                expect_balance: None,
             },
         ))
 }

@@ -145,11 +145,7 @@ pub fn scripted_programs() -> ProgramCatalog {
 }
 
 pub const fn transfer(to: AccountId, amount: Balance) -> NativeMessage {
-    NativeMessage::Transfer {
-        to,
-        amount,
-        expect_balance: None,
-    }
+    NativeMessage::Transfer { to, amount }
 }
 
 pub fn credit(from: Actor, to: Actor, amount: Balance) -> Assumption {

@@ -1187,7 +1187,6 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                             message: borsh::to_vec(&native_token::Message::Transfer {
                                 to: payee.account_id,
                                 amount: 0,
-                                expect_balance: None,
                             })
                             .unwrap(),
                         },

@@ -91,7 +91,6 @@ pub mod tests {
         NativeMessage::Transfer {
             to: recipient,
             amount: 1337,
-            expect_balance: None,
         }
     }
 

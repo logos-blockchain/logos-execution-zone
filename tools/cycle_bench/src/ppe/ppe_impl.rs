@@ -120,7 +120,6 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
                 message: to_vec(&native_token::Message::Transfer {
                     to: recipient_id,
                     amount: AMOUNT_TO_TRANSFER,
-                    expect_balance: None,
                 })?,
             },
             vec![sender],

@@ -402,7 +402,6 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
         lee_core::native_token::Message::Transfer {
             to: inbox.account_id,
             amount,
-            expect_balance: None,
         },
     )
     .expect("Fee reserve message should always be constructable")

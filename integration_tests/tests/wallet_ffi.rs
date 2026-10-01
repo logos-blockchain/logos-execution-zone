@@ -1666,12 +1666,9 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let account_mentions = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountMention;
 
     // The sender's native actor, mention 0, is the root.
-    let message = Program::serialize_message(lee_core::native_token::Message::Transfer {
-        to: to_id,
-        amount,
-        expect_balance: None,
-    })
-    .unwrap();
+    let message =
+        Program::serialize_message(lee_core::native_token::Message::Transfer { to: to_id, amount })
+            .unwrap();
     let message_size = message.len();
     let message_ptr = Box::into_raw(message.into_boxed_slice()) as *const u8;
 

@@ -28,7 +28,6 @@ fn native_transfer_preparation(
     let message = Program::serialize_message(Message::Transfer {
         to: accounts[1].identity.account_id(),
         amount: balance_to_move,
-        expect_balance: None,
     })
     .unwrap();
 

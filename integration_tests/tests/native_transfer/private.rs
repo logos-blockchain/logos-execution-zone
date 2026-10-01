@@ -621,7 +621,6 @@ fn prove_init_with_commitment_root(
                 message: Program::serialize_message(native_token::Message::Transfer {
                     to: recipient_account_id,
                     amount: 1,
-                    expect_balance: None,
                 })?,
             },
             declared: Declared::new(vec![sender], [sender_id]),

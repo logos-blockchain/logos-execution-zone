@@ -91,7 +91,6 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
     NativeMessage::Transfer {
         to: recipient,
         amount: 1337,
-        expect_balance: None,
     }
 }
 

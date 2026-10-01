@@ -10,16 +10,9 @@ pub const NATIVE_TOKEN_PROGRAM_ID: AccountId = AccountId::new([0; 32]);
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    Transfer {
-        to: AccountId,
-        amount: Balance,
-        expect_balance: Option<Balance>,
-    },
+    Transfer { to: AccountId, amount: Balance },
     Credit(Balance),
-    CastTransfer {
-        to: AccountId,
-        amount: Balance,
-    },
+    CastTransfer { to: AccountId, amount: Balance },
     ReadState(ReadState),
     StateReply(StateReply),
 }
@@ -36,12 +29,6 @@ pub enum TransferError {
     ForeignCredit { account_id: AccountId },
     #[error(transparent)]
     InvalidBalance(#[from] InvalidBalanceEncoding),
-    #[error("sender {account_id} holds {actual}, not the expected {expected}")]
-    BalanceMismatch {
-        account_id: AccountId,
-        expected: Balance,
-        actual: Balance,
-    },
     #[error("sender {account_id} holds less than the transferred amount")]
     InsufficientBalance { account_id: AccountId },
     #[error("recipient {account_id} balance overflows")]
@@ -83,15 +70,11 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     };
     let account_id = input.receiver.account_id;
     let response = match message {
-        Message::Transfer {
-            to,
-            amount,
-            expect_balance,
-        } => debit(input, to, amount, expect_balance)?.send(Call::new(
+        Message::Transfer { to, amount } => debit(input, to, amount)?.send(Call::new(
             Actor::native_balance(to),
             &Message::Credit(amount),
         )),
-        Message::CastTransfer { to, amount } => debit(input, to, amount, None)?.send(Cast::new(
+        Message::CastTransfer { to, amount } => debit(input, to, amount)?.send(Cast::new(
             Actor::native_balance(to),
             &Message::Credit(amount),
         )),
@@ -113,12 +96,7 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
     Ok(response.into_transition(input.clone()))
 }
 
-fn debit(
-    input: &ReceiveInput,
-    to: AccountId,
-    amount: Balance,
-    expect_balance: Option<Balance>,
-) -> Result<Response, TransferError> {
+fn debit(input: &ReceiveInput, to: AccountId, amount: Balance) -> Result<Response, TransferError> {
     let account_id = input.receiver.account_id;
     if to == account_id {
         return Err(TransferError::InvalidInputs);
@@ -126,17 +104,7 @@ fn debit(
     if !input.is_authorized {
         return Err(TransferError::UnauthorizedSender { account_id });
     }
-    let balance = decode_balance(&input.pre_state)?;
-    if let Some(expected) = expect_balance
-        && balance != expected
-    {
-        return Err(TransferError::BalanceMismatch {
-            account_id,
-            expected,
-            actual: balance,
-        });
-    }
-    let post = balance
+    let post = decode_balance(&input.pre_state)?
         .checked_sub(amount)
         .ok_or(TransferError::InsufficientBalance { account_id })?;
     Ok(Response::write(encode_balance(post)))
@@ -147,11 +115,7 @@ fn debit(
 pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: Balance) -> Call {
     Call::new(
         Actor::native_balance(from),
-        &Message::Transfer {
-            to,
-            amount,
-            expect_balance: None,
-        },
+        &Message::Transfer { to, amount },
     )
     .with_pda_seeds(vec![seed])
 }
@@ -182,11 +146,10 @@ mod tests {
         })
     }
 
-    fn transfer(amount: Balance, expect_balance: Option<Balance>) -> Message {
+    fn transfer(amount: Balance) -> Message {
         Message::Transfer {
             to: AccountId::new([2; 32]),
             amount,
-            expect_balance,
         }
     }
 
@@ -220,7 +183,7 @@ mod tests {
 
     #[test]
     fn a_transfer_debits_the_sender_and_credits_the_recipient() {
-        let transition = receive(&input(1, true, 100, &transfer(30, None))).unwrap();
+        let transition = receive(&input(1, true, 100, &transfer(30))).unwrap();
 
         assert_eq!(transition.response.post_state, Some(encode_balance(70)));
         assert_eq!(
@@ -234,7 +197,6 @@ mod tests {
         let to_self = Message::Transfer {
             to: AccountId::new([1; 32]),
             amount: 30,
-            expect_balance: None,
         };
 
         assert_eq!(
@@ -246,7 +208,7 @@ mod tests {
     #[test]
     fn an_unauthorized_transfer_is_rejected() {
         assert_eq!(
-            receive(&input(1, false, 100, &transfer(30, None))),
+            receive(&input(1, false, 100, &transfer(30))),
             Err(TransferError::UnauthorizedSender {
                 account_id: AccountId::new([1; 32])
             })
@@ -278,7 +240,7 @@ mod tests {
     fn a_public_origin_debits_an_account_only_with_its_authorization() {
         let from_public = |authorized| ReceiveInput {
             origin: Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
-            ..input(1, authorized, 100, &transfer(30, None))
+            ..input(1, authorized, 100, &transfer(30))
         };
 
         assert_eq!(
@@ -294,22 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn an_expected_balance_must_match_the_sender_balance() {
-        assert_eq!(
-            receive(&input(1, true, 100, &transfer(30, Some(99)))),
-            Err(TransferError::BalanceMismatch {
-                account_id: AccountId::new([1; 32]),
-                expected: 99,
-                actual: 100,
-            })
-        );
-        assert!(receive(&input(1, true, 100, &transfer(30, Some(100)))).is_ok());
-    }
-
-    #[test]
     fn a_transfer_beyond_the_sender_balance_is_rejected() {
         assert_eq!(
-            receive(&input(1, true, 100, &transfer(101, None))),
+            receive(&input(1, true, 100, &transfer(101))),
             Err(TransferError::InsufficientBalance {
                 account_id: AccountId::new([1; 32])
             })
@@ -351,7 +300,7 @@ mod tests {
             custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
             Call {
                 to: native(1),
-                message: borsh::to_vec(&transfer(7, None)).unwrap(),
+                message: borsh::to_vec(&transfer(7)).unwrap(),
                 pda_seeds: vec![seed],
             }
         );

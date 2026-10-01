@@ -63,7 +63,6 @@ async fn fund_private_pda(
     let transfer = Program::serialize_message(NativeMessage::Transfer {
         to: pda_account_id,
         amount,
-        expect_balance: None,
     })
     .context("failed to serialize the native transfer message")?;
 
@@ -145,7 +144,6 @@ async fn spend_private_pda(
             &NativeMessage::Transfer {
                 to: accounts[2].identity.account_id(),
                 amount,
-                expect_balance: None,
             },
         )
         .with_pda_seeds(vec![seed]),

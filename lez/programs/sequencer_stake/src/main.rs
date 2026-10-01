@@ -110,7 +110,6 @@ fn stake(
             &native_token::Message::Transfer {
                 to: stake_funds_account_id(program, &ownership),
                 amount,
-                expect_balance: None,
             },
         ))
 }
@@ -784,7 +783,6 @@ mod tests {
                     &native_token::Message::Transfer {
                         to: funds_of(OWNER),
                         amount: MINIMUM,
-                        expect_balance: None,
                     },
                 )
                 .into(),
