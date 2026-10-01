@@ -687,7 +687,6 @@ impl ZoneTestContextBuilder {
 
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
-        let mut sequencer_addrs = vec![];
         let mut sequencer_components = vec![];
 
         // First, need to start a leader.
@@ -737,12 +736,11 @@ impl ZoneTestContextBuilder {
 
         log::info!("Passed wait untill genesis");
 
-        sequencer_addrs.push(leader_addr);
         sequencer_components.push(leader_components);
 
         // Followers are already accredited by their genesis stakes.
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
-            let (sequencer_addr, sequencer_component) = build_sequencer_components(
+            let (_, sequencer_component) = build_sequencer_components(
                 follower_sequencer_partial_config.unwrap_or(partial_config),
                 bedrock_addr,
                 enable_wallet,
@@ -757,18 +755,16 @@ impl ZoneTestContextBuilder {
             )
             .await?;
 
-            sequencer_addrs.push(sequencer_addr);
             sequencer_components.push(sequencer_component);
         }
 
         let wallet_components = if enable_wallet {
             let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
-                &sequencer_addrs,
+                &leader_addr,
                 &initial_public_accounts,
                 &initial_private_accounts,
                 wallet_config_overrides,
             )
-            .await
             .context("Failed to setup wallet")?;
 
             if use_prebuilt {

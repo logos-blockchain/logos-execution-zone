@@ -66,10 +66,8 @@ async fn main() -> Result<()> {
     let wallet = WalletCore::new_update_chain(
         args.wallet.join("wallet_config.json"),
         args.wallet.join("storage.json"),
-        args.wallet.join("statistics.json"),
         None,
     )
-    .await
     .context("Failed to open wallet")?;
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
