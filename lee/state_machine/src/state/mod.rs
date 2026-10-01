@@ -223,8 +223,6 @@ impl V03State {
     ) {
         let binary = risc0_binfmt::ProgramBinary::decode(program.elf())
             .expect("builtin program must be a valid ProgramBinary");
-        // Only `user_elf` is stored, and dispatch re-attaches the default kernel to it. A builtin
-        // built against any other kernel would run a different binary than its header's image id.
         assert!(
             binary.kernel_elf == risc0_zkos_v1compat::V1COMPAT_ELF,
             "builtin program must be built with the protocol's default kernel"

@@ -147,8 +147,6 @@ fn state_serialization_roundtrip() {
     assert_eq!(state, state_from_bytes);
 }
 
-/// Dispatch re-attaches the default kernel to a builtin's stored `user_elf`, so seeding one built
-/// against another kernel must fail rather than store an image id dispatch won't run.
 #[test]
 #[should_panic(expected = "builtin program must be built with the protocol's default kernel")]
 fn genesis_rejects_a_builtin_with_a_non_default_kernel() {
