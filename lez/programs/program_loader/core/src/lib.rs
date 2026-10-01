@@ -82,10 +82,10 @@ pub const fn segment_count(user_elf: &[u8]) -> usize {
     user_elf.len().div_ceil(MAX_SEGMENT_DATA_LEN)
 }
 
-/// Splits `user_elf` into the segment chain a deployment writes to `segment_ids`, in chain order.
+/// Splits `user_elf` into a segment chain written to `segment_ids`, each linking to the next.
 ///
-/// Each segment links to the next id. Checks everything `WriteSegment` and `CreateHeader` would
-/// reject on size, so a deployer can refuse a program before paying for any of its segments.
+/// A deployer's pre-check, not a consensus rule: it refuses a program the loader would reject on
+/// size before any segment is paid for.
 pub fn build_segments(
     user_elf: &[u8],
     segment_ids: &[AccountId],
