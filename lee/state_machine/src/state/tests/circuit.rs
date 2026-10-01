@@ -1,5 +1,5 @@
 use lee_core::{
-    EncryptionScheme, Identifier, SharedSecretKey,
+    EncryptionScheme, Identifier, ProgramImageClaim, SharedSecretKey,
     program::{
         PROGRAM_LOADER_ACCOUNT_ID, PrivateAccountKind, ProgramHeader, immutable_mirror_commitment,
     },
@@ -1620,6 +1620,76 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
     assert!(
         matches!(result, Err(LeeError::UnknownProgram { chained: false })),
         "expected the shadow program to be unknown at settlement, got {result:?}"
+    );
+}
+
+/// A shadow program can't write its own shard on a public account (see above), but it can still
+/// act on public state through a deployed program it chain-calls: that callee's public effect is
+/// settled by the callee's own deployed code.
+#[test]
+fn a_shadow_program_reaches_public_state_through_a_deployed_callee() {
+    let forwarder = crate::test_methods::reorders_and_forwards();
+    let writer = crate::test_methods::reordering_writer();
+    let writer_id = AccountId::from_builtin_program(writer.id());
+    let writer_image = writer.id();
+    let mut state = V03State::new().with_programs([writer.clone()]);
+
+    let program_with_deps = ProgramWithDependencies::new(
+        forwarder.clone(),
+        AccountId::from_builtin_program(forwarder.id()),
+        [(writer_id, writer)].into(),
+    )
+    .as_shadow_program();
+    let public_id = AccountId::new([7; 32]);
+    // A private transaction must nullify or commit something.
+    let keys = test_private_account_keys_1();
+    let private_id =
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
+    let written: Vec<u8> = vec![7; 4];
+
+    // The forwarder hands both handles to the writer reversed, so the writer's first handle (the
+    // one it writes `written` to) is the public account.
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            shard_selectors: vec![
+                ProgramShardSelector::new(private_id, writer_id),
+                ProgramShardSelector::new(public_id, writer_id),
+            ],
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            instruction_data: Program::serialize_instruction((
+                writer_image,
+                Program::serialize_instruction(written.clone()).unwrap(),
+                Vec::<PdaSeed>::new(),
+            ))
+            .unwrap(),
+            ..Default::default()
+        },
+        &program_with_deps,
+    )
+    .unwrap();
+    assert_eq!(
+        output.program_image_claims,
+        vec![ProgramImageClaim::Disclosed {
+            account_id: writer_id,
+            image_id: writer_image,
+        }],
+        "only the deployed callee is claimed; the shadow program never appears"
+    );
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .expect("the deployed callee's public effect settles");
+    assert_eq!(
+        state
+            .get_account_by_id(public_id)
+            .data
+            .shard(writer_id)
+            .as_ref(),
+        written.as_slice()
     );
 }
 
