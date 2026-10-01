@@ -17,7 +17,7 @@ amm_core.workspace = true
 testnet_initial_state.workspace = true
 token_core.workspace = true
 bridge_core.workspace = true
-keycard_wallet.workspace = true
+keycard_wallet = { workspace = true, optional = true }
 programs.workspace = true
 system_accounts.workspace = true
 associated_token_account_core.workspace = true
@@ -50,9 +50,14 @@ url.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 
 [features]
+# Keycard hardware-wallet support (PC/SC via `keycard-wallet` -> `pcsc-sys`).
+# On by default for desktop targets; mobile builds (Android/iOS) have no PC/SC
+# stack and should disable default features.
+default = ["keycard"]
+keycard = ["dep:keycard_wallet"]
 # Enables `keycard get-private-keys` command that prints sensitive secret keys to terminal.
 # Never enable in production builds.
-keycard-debug = []
+keycard-debug = ["keycard"]
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
