@@ -18,14 +18,14 @@ use common::{
 };
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, OffChain, StallState, alerts_at,
-    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip, pinned_keys,
-    screen_peer_block, signed_by_any,
+    build_dispatch_from_emission, equivocation_report, extract_emission, link_to_tip,
+    screen_peer_block,
 };
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, PublicKey};
+use lee::GENESIS_BLOCK_ID;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -151,8 +151,8 @@ struct PeerChain {
     /// [`OffChain::NotTheGenesis`] and freeze the run.
     ///
     /// The link it walks means something only because [`accept_peer_block`]
-    /// recomputes `header.hash` and checks the pinned key before anything is
-    /// cached. Without that it compared two fields the peer wrote.
+    /// recomputes `header.hash` before anything is cached. Without that it compared two fields the
+    /// peer wrote.
     verified_prefix: Option<PeerChainTip>,
 }
 
@@ -659,13 +659,6 @@ struct TipEvidence {
 #[derive(Clone)]
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
-    /// Pinned block-signing keys per peer zone, enforced during re-derivation:
-    /// a block is acceptable when signed by any of them, one entry per peer
-    /// sequencer. Rotation rules come later with decentralized sequencing. The
-    /// pin is largely redundant given Bedrock's turn-based write authorization,
-    /// so it is optional: a peer with no configured keys is not
-    /// signature-checked.
-    peer_pubkeys: HashMap<ZoneId, Vec<PublicKey>>,
     peers: PeerBlocks,
     /// One channel client per peer, used only for the one-shot refetch of an
     /// evicted body. Built exactly like the reader's own client.
@@ -685,7 +678,6 @@ impl CrossZoneVerifier {
         let self_zone: ZoneId = *config.channel_id.as_ref();
         let peers = PeerBlocks::new(config.peer_block_cache_window);
         let watch = PeerWatch::default();
-        let mut peer_pubkeys = HashMap::new();
         let mut refetch_clients = HashMap::new();
 
         for peer in &cross_zone.peers {
@@ -703,14 +695,11 @@ impl CrossZoneVerifier {
                     node.clone(),
                 )),
             );
-            let expected_pubkeys = pinned_keys(peer);
-            peer_pubkeys.insert(peer.channel_id, expected_pubkeys.clone());
             watch.register(peer.channel_id);
             tokio::spawn(read_peer(
                 ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
                 tip_node,
                 peer.channel_id,
-                expected_pubkeys,
                 peer.min_committee_size,
                 peers.clone(),
                 watch.clone(),
@@ -720,7 +709,6 @@ impl CrossZoneVerifier {
 
         Some(Self {
             self_zone,
-            peer_pubkeys,
             peers,
             refetch_clients,
             refetch_attempts: Arc::new(AtomicU64::new(0)),
@@ -864,15 +852,6 @@ impl CrossZoneVerifier {
                     waited,
                 },
             })?;
-
-        // Equivocation defense: the source block must be signed by one of the
-        // peer's pinned block-signing keys, not merely inscribed on the channel.
-        if !signed_by_any(&peer_block, self.pinned_for(msg.src_zone)) {
-            return Err(forged(
-                msg,
-                "peer block is not signed by any pinned block-signing key".to_owned(),
-            ));
-        }
 
         // Everything below is a property of the peer block just read, so a
         // mismatch is the dispatch lying about it, not a transient condition.
@@ -1049,12 +1028,7 @@ impl CrossZoneVerifier {
             .next_messages(cursor)
             .await
             .map_err(|err| anyhow!("channel read failed: {err}"))?;
-        refetched_block(stream, read_at, block_id, block_hash, self.pinned_for(zone)).await
-    }
-
-    /// The keys pinned for `zone`, empty when none are configured.
-    fn pinned_for(&self, zone: ZoneId) -> &[PublicKey] {
-        self.peer_pubkeys.get(&zone).map_or(&[], Vec::as_slice)
+        refetched_block(stream, read_at, block_id, block_hash).await
     }
 }
 
@@ -1154,8 +1128,8 @@ fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
 /// says why each check exists.
 ///
 /// [`ScreenRefusal`]: cross_zone::ScreenRefusal
-fn accept_peer_block(block: &Block, peer_zone: ZoneId, expected_pubkeys: &[PublicKey]) -> bool {
-    match screen_peer_block(block, expected_pubkeys) {
+fn accept_peer_block(block: &Block, peer_zone: ZoneId) -> bool {
+    match screen_peer_block(block) {
         Ok(_) => true,
         Err(refusal) => {
             warn!(
@@ -1173,15 +1147,10 @@ fn accept_peer_block(block: &Block, peer_zone: ZoneId, expected_pubkeys: &[Publi
     clippy::infinite_loop,
     reason = "the peer reader runs for the lifetime of the indexer process"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one spawn site; a config struct would only rename the arguments"
-)]
 async fn read_peer(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
     tip_node: NodeHttpClient,
     peer_zone: ZoneId,
-    expected_pubkeys: Vec<PublicKey>,
     min_committee_size: u32,
     peers: PeerBlocks,
     watch: PeerWatch,
@@ -1228,8 +1197,7 @@ async fn read_peer(
         }
         match zone_indexer.next_messages(cursor).await {
             Ok(stream) => {
-                let pass =
-                    consume_peer_stream(stream, peer_zone, &expected_pubkeys, &peers, cursor).await;
+                let pass = consume_peer_stream(stream, peer_zone, &peers, cursor).await;
                 cursor = pass.cursor;
                 if let Some((slot, attempts)) = stall.after_pass(pass.stalled_at, pass.cursor)
                     && alerts_at(attempts)
@@ -1295,7 +1263,6 @@ async fn read_peer(
 async fn consume_peer_stream<S>(
     stream: S,
     peer_zone: ZoneId,
-    expected_pubkeys: &[PublicKey],
     peers: &PeerBlocks,
     resume_from: Option<Slot>,
 ) -> PeerPass
@@ -1320,7 +1287,7 @@ where
             Ok(block) => {
                 // Before caching, not when a dispatch names it: an unchecked
                 // block steers the prefix, and by then the damage is a halt.
-                if accept_peer_block(&block, peer_zone, expected_pubkeys) {
+                if accept_peer_block(&block, peer_zone) {
                     peers.insert(peer_zone, block, slot).await;
                 }
             }
@@ -1352,21 +1319,11 @@ where
 /// missing-block error; the next attempt re-reads the slot. A same-id block
 /// hashing differently is reported by name, an endpoint fault per the gate in
 /// [`CrossZoneVerifier::wait_for_peer_block`].
-///
-/// When `pinned` holds the zone's block-signing keys, a candidate signed by
-/// none of them is skipped like a wrong id. The hash preimage excludes the
-/// signature, so a same-content twin with a corrupted signature would pass the
-/// hash check here only to halt ingestion as Forged at [`rederive`]'s
-/// pinned-key gate; skipping it lets the honest copy later in the slot match,
-/// and a slot with no valid copy stays retriable.
-///
-/// [`rederive`]: CrossZoneVerifier::rederive
 async fn refetched_block<S>(
     stream: S,
     read_at: Slot,
     block_id: u64,
     block_hash: HashType,
-    pinned: &[PublicKey],
 ) -> anyhow::Result<Block>
 where
     S: Stream<Item = (ZoneMessage, Slot)>,
@@ -1387,9 +1344,6 @@ where
             continue;
         };
         if block.header.block_id != block_id {
-            continue;
-        }
-        if !signed_by_any(&block, pinned) {
             continue;
         }
         let recomputed = block.recompute_hash();
@@ -1416,7 +1370,7 @@ mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
     use cross_zone::test_utils::{linked_chain_to, ping_emission};
     use futures::stream;
-    use lee::{PrivateKey, ProgramShardSelector, PublicKey};
+    use lee::ProgramShardSelector;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use ping_core::{ping_record_pda, receiver_config_account_id};
@@ -1433,15 +1387,8 @@ mod tests {
     const READ_SLOT: Slot = Slot::new(0);
 
     fn verifier() -> CrossZoneVerifier {
-        verifier_with_pinned_keys(HashMap::new())
-    }
-
-    fn verifier_with_pinned_keys(
-        peer_pubkeys: HashMap<ZoneId, Vec<PublicKey>>,
-    ) -> CrossZoneVerifier {
         CrossZoneVerifier {
             self_zone: SELF_ZONE,
-            peer_pubkeys,
             peers: PeerBlocks::default(),
             refetch_clients: HashMap::new(),
             refetch_attempts: Arc::new(AtomicU64::new(0)),
@@ -1610,86 +1557,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verifies_dispatch_signed_by_the_pinned_peer_key() {
-        // produce_dummy_block signs with PrivateKey([37; 32]); pin its pubkey.
-        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
-        let mut keys = HashMap::new();
-        keys.insert(PEER_ZONE, vec![signer]);
-        let verifier = verifier_with_pinned_keys(keys);
-        cache_chain(&verifier, peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .expect("a dispatch from the pinned signer verifies");
-    }
-
-    #[tokio::test]
-    async fn rejects_dispatch_from_a_block_not_signed_by_the_pinned_key() {
-        // Pin a different key than the one that signed the peer block.
-        let mut keys = HashMap::new();
-        keys.insert(PEER_ZONE, vec![PublicKey::try_new([42; 32]).unwrap()]);
-        let verifier = verifier_with_pinned_keys(keys);
-        cache_chain(&verifier, peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        let err = verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("pinned"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn verifies_dispatch_signed_by_any_key_in_the_pinned_set() {
-        // The multi-sequencer peer shape: the block's signer is one configured
-        // key among several, not the first one listed.
-        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
-        let mut keys = HashMap::new();
-        keys.insert(
-            PEER_ZONE,
-            vec![PublicKey::try_new([42; 32]).unwrap(), signer],
-        );
-        let verifier = verifier_with_pinned_keys(keys);
-        cache_chain(&verifier, peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .expect("any listed key admits the source block");
-    }
-
-    #[tokio::test]
-    async fn rejects_dispatch_from_a_block_signed_by_no_key_in_the_set() {
-        // Neither pinned key signed the peer block.
-        let mut keys = HashMap::new();
-        keys.insert(
-            PEER_ZONE,
-            vec![
-                PublicKey::try_new([42; 32]).unwrap(),
-                PublicKey::new_from_private_key(&PrivateKey::try_new([99; 32]).unwrap()),
-            ],
-        );
-        let verifier = verifier_with_pinned_keys(keys);
-        cache_chain(&verifier, peer_chain(b"hi")).await;
-
-        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        let err = verifier
-            .verify_block(&block, Slot::from(0))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("pinned"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[tokio::test]
     async fn leaves_a_replayed_dispatch_to_the_inbox() {
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;
@@ -1791,7 +1658,7 @@ mod tests {
             peer_block_msg(&chain[1], 1),
         ]);
 
-        let pass = consume_peer_stream(stream, PEER_ZONE, &[], &peers, None).await;
+        let pass = consume_peer_stream(stream, PEER_ZONE, &peers, None).await;
 
         assert_eq!(pass.cursor, Some(Slot::from(1)));
         assert_eq!(pass.stalled_at, None);
@@ -1884,7 +1751,7 @@ mod tests {
             peer_block_msg(&chain[2], 2),
         ]);
 
-        let pass = consume_peer_stream(stream, PEER_ZONE, &[], &peers, None).await;
+        let pass = consume_peer_stream(stream, PEER_ZONE, &peers, None).await;
 
         assert_eq!(pass.cursor, Some(Slot::from(0)));
         assert_eq!(pass.stalled_at, Some(Slot::from(1)));
@@ -1899,7 +1766,7 @@ mod tests {
         // One slot can carry several messages; the second one fails.
         let stream = stream::iter(vec![peer_block_msg(&chain[0], 7), undecodable_msg(7)]);
 
-        let pass = consume_peer_stream(stream, PEER_ZONE, &[], &peers, Some(Slot::from(6))).await;
+        let pass = consume_peer_stream(stream, PEER_ZONE, &peers, Some(Slot::from(6))).await;
 
         // Slot 7 is re-read whole next pass, not resumed past the failure.
         assert_eq!(pass.cursor, Some(Slot::from(6)));
@@ -1918,7 +1785,7 @@ mod tests {
             peer_block_msg(&chain[2], 2),
         ]);
 
-        let pass = consume_peer_stream(stream, PEER_ZONE, &[], &peers, None).await;
+        let pass = consume_peer_stream(stream, PEER_ZONE, &peers, None).await;
 
         assert_eq!(pass.cursor, Some(Slot::from(0)), "the slot is held");
         assert_eq!(pass.stalled_at, Some(Slot::from(1)));
@@ -1938,7 +1805,7 @@ mod tests {
             undecodable_msg(1),
             peer_block_msg(&chain[2], 2),
         ]);
-        consume_peer_stream(stream, PEER_ZONE, &[], &verifier.peers, None).await;
+        consume_peer_stream(stream, PEER_ZONE, &verifier.peers, None).await;
 
         // Regression: block 2 used to be reported as forged, halting ingestion
         // permanently, because a `max(cached ids)` high-water mark counted
@@ -2024,7 +1891,6 @@ mod tests {
         let pass = consume_peer_stream(
             stream::iter(vec![undecodable_msg(0)]),
             PEER_ZONE,
-            &[],
             &verifier.peers,
             None,
         )
@@ -2038,7 +1904,6 @@ mod tests {
                 peer_block_msg(block, u64::try_from(index).expect("test index fits in u64"))
             })),
             PEER_ZONE,
-            &[],
             &verifier.peers,
             pass.cursor,
         )
@@ -2281,7 +2146,6 @@ mod tests {
         let pass = consume_peer_stream(
             stream::iter(vec![peer_block_msg(&tampered, 0)]),
             PEER_ZONE,
-            &[],
             &verifier.peers,
             None,
         )
@@ -2294,50 +2158,6 @@ mod tests {
         assert!(
             verifier.peers.get(PEER_ZONE, PEER_BLOCK_ID).await.is_none(),
             "a block that does not hash to its own contents must not be cached"
-        );
-    }
-
-    /// The watcher drops unsigned peer blocks before use; the reader applied no
-    /// check at all, so anything on the channel entered the cache.
-    #[tokio::test]
-    async fn a_block_not_signed_by_the_pinned_key_is_not_cached() {
-        let verifier = verifier();
-        let block = linked_chain(1).pop().expect("genesis block");
-        let wrong_key = PublicKey::try_new([42; 32]).unwrap();
-
-        let pass = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(&block, 0)]),
-            PEER_ZONE,
-            &[wrong_key],
-            &verifier.peers,
-            None,
-        )
-        .await;
-
-        assert_eq!(pass.stalled_at, None);
-        assert!(
-            verifier.peers.get(PEER_ZONE, PEER_BLOCK_ID).await.is_none(),
-            "a block not signed by the pinned key must not reach the cache"
-        );
-
-        // The same block under its real signer is cached, so the gate is the key
-        // and not the path.
-        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
-        consume_peer_stream(
-            stream::iter(vec![peer_block_msg(&block, 1)]),
-            PEER_ZONE,
-            &[signer],
-            &verifier.peers,
-            None,
-        )
-        .await;
-        assert!(
-            verifier
-                .peers
-                .get(PEER_ZONE, GENESIS_BLOCK_ID)
-                .await
-                .is_some(),
-            "the pinned signer's own block is cached"
         );
     }
 
@@ -2715,7 +2535,7 @@ mod tests {
             peer_block_msg(target, 4),
         ]);
 
-        let block = refetched_block(stream, Slot::from(4), 2, target.header.hash, &[])
+        let block = refetched_block(stream, Slot::from(4), 2, target.header.hash)
             .await
             .expect("the recorded slot serves the block");
         assert_eq!(block.header.hash, target.header.hash);
@@ -2730,7 +2550,7 @@ mod tests {
         tampered.header.hash = HashType([0xAB; 32]);
         let stream = stream::iter(vec![peer_block_msg(&tampered, 4)]);
 
-        let block = refetched_block(stream, Slot::from(4), GENESIS_BLOCK_ID, certified, &[])
+        let block = refetched_block(stream, Slot::from(4), GENESIS_BLOCK_ID, certified)
             .await
             .expect("the recomputed hash matches the index");
         assert_eq!(
@@ -2842,61 +2662,12 @@ mod tests {
         let served = produce_dummy_block(2, Some(chain[0].header.hash), vec![emission(b"other")]);
         let stream = stream::iter(vec![peer_block_msg(&served, 4)]);
 
-        let err = refetched_block(stream, Slot::from(4), 2, chain[1].header.hash, &[])
+        let err = refetched_block(stream, Slot::from(4), 2, chain[1].header.hash)
             .await
             .expect_err("different bytes than the walk saw must be refused");
         assert!(
             err.to_string().contains("different bytes"),
             "unexpected error: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn refetch_skips_a_same_content_twin_with_a_corrupted_signature() {
-        // produce_dummy_block signs with PrivateKey([37; 32]); pin its pubkey.
-        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
-        let honest = linked_chain(1).pop().expect("genesis block");
-        let mut twin = honest.clone();
-        twin.header.signature =
-            lee::Signature::new(&PrivateKey::try_new([99; 32]).unwrap(), &[0; 32]);
-        let stream = stream::iter(vec![peer_block_msg(&twin, 4), peer_block_msg(&honest, 4)]);
-
-        let block = refetched_block(
-            stream,
-            Slot::from(4),
-            GENESIS_BLOCK_ID,
-            honest.header.hash,
-            std::slice::from_ref(&signer),
-        )
-        .await
-        .expect("the honest copy later in the slot matches");
-        assert!(
-            block.is_signed_by(&signer),
-            "the returned copy carries the pinned signer's signature"
-        );
-    }
-
-    #[tokio::test]
-    async fn refetch_with_only_the_corrupted_twin_stays_retriable() {
-        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
-        let honest = linked_chain(1).pop().expect("genesis block");
-        let mut twin = honest.clone();
-        twin.header.signature =
-            lee::Signature::new(&PrivateKey::try_new([99; 32]).unwrap(), &[0; 32]);
-        let stream = stream::iter(vec![peer_block_msg(&twin, 4)]);
-
-        let err = refetched_block(
-            stream,
-            Slot::from(4),
-            GENESIS_BLOCK_ID,
-            honest.header.hash,
-            std::slice::from_ref(&signer),
-        )
-        .await
-        .expect_err("a slot with no validly signed copy has no block to return");
-        assert!(
-            err.to_string().contains("no longer serves"),
-            "the miss must stay retriable, never a mismatch verdict: {err}"
         );
     }
 
@@ -2907,7 +2678,6 @@ mod tests {
             Slot::from(4),
             2,
             HashType([1; 32]),
-            &[],
         )
         .await
         .expect_err("nothing at the slot decodes to the block");

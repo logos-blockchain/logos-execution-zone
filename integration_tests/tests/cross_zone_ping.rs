@@ -52,7 +52,6 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
-            expected_block_signing_pubkeys: Vec::new(),
             min_committee_size: 0,
         }],
         source_authority: None,
