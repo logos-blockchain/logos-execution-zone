@@ -1,5 +1,7 @@
-pub mod types;
+#![allow(clippy::undocumented_unsafe_blocks, reason = "It is an FFI")]
+
 pub mod errors;
-pub mod runtime;
-pub mod result;
 pub mod memory;
+pub mod result;
+pub mod runtime;
+pub mod types;

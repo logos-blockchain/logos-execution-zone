@@ -1,18 +1,21 @@
-///! Re-exports to include our free functions in the final header.
+/// ! Re-exports to include our free functions in the final header.
+use std::ffi::c_char;
 
-use std::ffi::{c_char};
-
-use primitives_ffi::types::{FfiOption, FfiVec, account::FfiAccount, block::{FfiBlock, FfiBlockOpt}, event::FfiEventRecord, transaction::FfiTransaction};
+use primitives_ffi::types::{
+    FfiOption, FfiVec,
+    account::FfiAccount,
+    block::{FfiBlock, FfiBlockOpt},
+    event::FfiEventRecord,
+    transaction::FfiTransaction,
+};
 
 /// # Safety
 /// It's up to the caller to pass a proper pointer, if somehow from c/c++ side
 /// this is called with a type which doesn't come from a returned `CString` it
 /// will cause a segfault.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_cstring(block: *mut c_char) {
-    unsafe{
-        primitives_ffi::memory::primitives_ffi_free_cstring(block)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_cstring(block: *mut c_char) {
+    unsafe { primitives_ffi::memory::primitives_ffi_free_cstring(block) }
 }
 
 /// Frees the resources associated with the given ffi account.
@@ -35,10 +38,8 @@ pub unsafe extern "C" fn primitives_ffi_free_cstring(block: *mut c_char) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
-    unsafe{
-        primitives_ffi::types::account::primitives_ffi_free_ffi_account(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
+    unsafe { primitives_ffi::types::account::primitives_ffi_free_ffi_account(val) }
 }
 
 /// Frees the resources owned by an `FfiBlock` value.
@@ -62,10 +63,8 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_block(val: FfiBlock) {
-    unsafe{
-        primitives_ffi::types::block::primitives_ffi_free_ffi_block(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block(val: FfiBlock) {
+    unsafe { primitives_ffi::types::block::primitives_ffi_free_ffi_block(val) }
 }
 
 /// Frees the resources associated with the given ffi block option.
@@ -87,10 +86,8 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_block(val: FfiBlock) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
-    unsafe{
-        primitives_ffi::types::block::primitives_ffi_free_ffi_block_opt(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt) {
+    unsafe { primitives_ffi::types::block::primitives_ffi_free_ffi_block_opt(val) }
 }
 
 /// Frees the resources associated with the given ffi block vector.
@@ -112,10 +109,8 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
-    unsafe{
-        primitives_ffi::types::block::primitives_ffi_free_ffi_block_vec(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>) {
+    unsafe { primitives_ffi::types::block::primitives_ffi_free_ffi_block_vec(val) }
 }
 
 /// Frees the resources associated with the given vector of ffi event records.
@@ -137,10 +132,8 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiB
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
-    unsafe{
-        primitives_ffi::types::event::primitives_ffi_free_ffi_event_record_vec(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_event_record_vec(val: *mut FfiVec<FfiEventRecord>) {
+    unsafe { primitives_ffi::types::event::primitives_ffi_free_ffi_event_record_vec(val) }
 }
 
 /// Frees the resources associated with the given ffi transaction.
@@ -158,10 +151,8 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_event_record_vec(val: *mut FfiV
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiTransaction`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
-    unsafe {
-        primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction(val: FfiTransaction) {
+    unsafe { primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction(val) }
 }
 
 /// Frees the resources associated with the given ffi transaction option.
@@ -184,12 +175,10 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction(val: FfiTransaction
 /// - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
 ///   freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_opt(
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_opt(
     val: *mut FfiOption<FfiTransaction>,
 ) {
-    unsafe {
-        primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction_opt(val)
-    }
+    unsafe { primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction_opt(val) }
 }
 
 /// Frees the resources associated with the given vector of ffi transactions.
@@ -211,8 +200,6 @@ pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_opt(
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
-    unsafe {
-        primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction_vec(val)
-    }
+pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
+    unsafe { primitives_ffi::types::transaction::primitives_ffi_free_ffi_transaction_vec(val) }
 }

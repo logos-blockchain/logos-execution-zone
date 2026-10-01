@@ -4,5 +4,5 @@ pub use sequencer::SequencerServiceFFI;
 
 pub mod api;
 pub mod error;
-mod sequencer;
 mod reexports;
+mod sequencer;

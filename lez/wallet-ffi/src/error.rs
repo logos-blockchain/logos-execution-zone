@@ -68,6 +68,15 @@ impl WalletFfiError {
     }
 }
 
+impl From<PrimitiveOperationStatus> for WalletFfiError {
+    fn from(value: PrimitiveOperationStatus) -> Self {
+        match value {
+            PrimitiveOperationStatus::Ok => Self::Success,
+            PrimitiveOperationStatus::CastError => Self::InvalidTypeConversion,
+        }
+    }
+}
+
 /// Log an error message to stderr.
 #[expect(
     clippy::print_stderr,
@@ -75,13 +84,4 @@ impl WalletFfiError {
 )]
 pub fn print_error(msg: impl Into<String>) {
     eprintln!("[wallet-ffi] {}", msg.into());
-}
-
-impl From<PrimitiveOperationStatus> for WalletFfiError {
-    fn from(value: PrimitiveOperationStatus) -> Self {
-        match value {
-            PrimitiveOperationStatus::Ok => WalletFfiError::Success,
-            PrimitiveOperationStatus::CastError => WalletFfiError::InvalidTypeConversion,
-        }
-    }
 }

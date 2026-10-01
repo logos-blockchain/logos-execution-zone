@@ -1,6 +1,8 @@
 use common::HashType;
 use lee::{AccountId, ProgramId, PublicKey, SharedSecretKey, Signature};
-use lee_core::{NullifierPublicKey, account::Nonce, encryption::MlKem768EncapsulationKey, program::PdaSeed};
+use lee_core::{
+    NullifierPublicKey, account::Nonce, encryption::MlKem768EncapsulationKey, program::PdaSeed,
+};
 use sequencer_storage_actor::actor::event_filter::Selector;
 
 use crate::{errors::PrimitiveOperationStatus, types::vectors::FfiVecU8};
@@ -226,16 +228,23 @@ pub struct FfiPrivateAccountKeys {
     pub viewing_public_key: FfiVecU8,
 }
 
+impl Default for FfiPrivateAccountKeys {
+    fn default() -> Self {
+        Self {
+            nullifier_public_key: FfiBytes32 { data: [0; 32] },
+            viewing_public_key: Vec::new().into(),
+        }
+    }
+}
+
 impl TryFrom<FfiVecU8> for MlKem768EncapsulationKey {
     type Error = PrimitiveOperationStatus;
 
     fn try_from(value: FfiVecU8) -> Result<Self, Self::Error> {
         if value.len == 1184 {
             let std_vec = value.into();
-            Ok(
-                lee_core::encryption::ViewingPublicKey::from_bytes(std_vec)
-                    .expect("primitives_ffi: length already validated to 1184 bytes"),
-            )
+            Ok(Self::from_bytes(std_vec)
+                .expect("primitives_ffi: length already validated to 1184 bytes"))
         } else {
             Err(PrimitiveOperationStatus::CastError)
         }
@@ -250,46 +259,13 @@ impl FfiPrivateAccountKeys {
 
     pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, PrimitiveOperationStatus> {
         if self.viewing_public_key.len == 1184 {
-            let std_vec = unsafe{ self.viewing_public_key.read_to_vec() };
-            Ok(
-                lee_core::encryption::ViewingPublicKey::from_bytes(std_vec)
-                    .expect("primitives_ffi: length already validated to 1184 bytes"),
-            )
+            let std_vec = unsafe { self.viewing_public_key.read_to_vec() };
+            Ok(lee_core::encryption::ViewingPublicKey::from_bytes(std_vec)
+                .expect("primitives_ffi: length already validated to 1184 bytes"))
         } else {
             Err(PrimitiveOperationStatus::CastError)
         }
     }
-}
-
-/// Free private account keys struct.
-///
-/// # Safety
-/// The keys must be valid.
-pub unsafe fn primitives_ffi_free_private_account_keys_owned(keys: FfiPrivateAccountKeys) {
-    if keys.viewing_public_key.entries.is_null() {
-        return;
-    }
-
-    let FfiPrivateAccountKeys { nullifier_public_key: _, viewing_public_key } = keys;
-
-    let std_vec: Vec<_> = viewing_public_key.into();
-
-    drop(std_vec);
-}
-
-/// Free private account keys pointer.
-///
-/// # Safety
-/// The keys must be valid. Pointer must not be used again.
-pub unsafe fn primitives_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
-    if keys.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
-        return;
-    }
-
-    let boxed = unsafe { Box::from_raw(keys) };
-
-    unsafe{ primitives_ffi_free_private_account_keys_owned(*boxed) }
 }
 
 /// Public key info for a public account.
@@ -316,7 +292,6 @@ impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
         Ok(public_key)
     }
 }
-
 
 #[repr(C)]
 #[derive(Debug)]
@@ -354,19 +329,16 @@ impl<T> FfiVec<T> {
     }
 }
 
-impl<T: Clone> FfiVec<T> { 
+impl<T: Clone> FfiVec<T> {
     /// Reads data from pointer into new vector.
     ///
     /// # Safety
     /// `self` must be valid.
+    #[must_use]
     pub unsafe fn read_to_vec(&self) -> Vec<T> {
         let mut std_vec = Vec::with_capacity(self.capacity);
         for i in 0..self.len {
-            std_vec.push(
-                unsafe{
-                    self.get(i)
-                }.clone()
-            );
+            std_vec.push(unsafe { self.get(i) }.clone());
         }
         std_vec
     }
@@ -405,4 +377,53 @@ impl<T> From<FfiOption<T>> for Option<T> {
     fn from(value: FfiOption<T>) -> Self {
         value.is_some.then(|| unsafe { value.value.read() })
     }
+}
+
+/// Free private account keys struct.
+///
+/// # Safety
+/// The keys must be valid.
+pub unsafe fn primitives_ffi_free_private_account_keys_owned(keys: FfiPrivateAccountKeys) {
+    if keys.viewing_public_key.entries.is_null() {
+        return;
+    }
+
+    let FfiPrivateAccountKeys {
+        nullifier_public_key: _,
+        viewing_public_key,
+    } = keys;
+
+    let std_vec: Vec<_> = viewing_public_key.into();
+
+    drop(std_vec);
+}
+
+/// Free private boxed account keys pointer.
+///
+/// # Safety
+/// The keys must be valid. Pointer must not be used again.
+pub unsafe fn primitives_ffi_free_private_account_keys_boxed(keys: *mut FfiPrivateAccountKeys) {
+    if keys.is_null() {
+        log::error!("Trying to free a null pointer. Exiting");
+        return;
+    }
+
+    let boxed = unsafe { Box::from_raw(keys) };
+
+    unsafe { primitives_ffi_free_private_account_keys_owned(*boxed) }
+}
+
+/// Free private boxed account keys pointer.
+///
+/// # Safety
+/// The keys must be valid. Pointer must not be used again.
+pub unsafe fn primitives_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
+    if keys.is_null() {
+        log::error!("Trying to free a null pointer. Exiting");
+        return;
+    }
+
+    let owned = unsafe { keys.read() };
+
+    unsafe { primitives_ffi_free_private_account_keys_owned(owned) }
 }

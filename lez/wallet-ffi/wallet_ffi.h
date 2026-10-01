@@ -1524,7 +1524,7 @@ char *wallet_ffi_get_sequencer_addr(struct WalletHandle *handle);
  * this is called with a type which doesn't come from a returned `CString` it
  * will cause a segfault.
  */
-void primitives_ffi_free_cstring(char *block);
+void wallet_ffi_free_string(char *block);
 
 /**
  * Free private account keys returned by `wallet_ffi_get_private_account_keys`.

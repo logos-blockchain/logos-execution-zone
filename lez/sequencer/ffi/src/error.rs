@@ -31,8 +31,8 @@ impl OperationStatus {
 impl From<PrimitiveOperationStatus> for OperationStatus {
     fn from(value: PrimitiveOperationStatus) -> Self {
         match value {
-            PrimitiveOperationStatus::Ok => OperationStatus::Ok,
-            PrimitiveOperationStatus::CastError => OperationStatus::CastError,
+            PrimitiveOperationStatus::Ok => Self::Ok,
+            PrimitiveOperationStatus::CastError => Self::CastError,
         }
     }
 }

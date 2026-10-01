@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use lee::{Account, AccountData, AccountId, ShardData};
 
-use crate::{errors::PrimitiveOperationStatus, types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8}};
+use crate::{
+    errors::PrimitiveOperationStatus,
+    types::{FfiAccountId, FfiBytes32, FfiU128, FfiVec, vectors::FfiVecU8},
+};
 
 #[repr(C)]
 pub struct FfiAccountData {
@@ -78,6 +81,12 @@ pub struct FfiAccount {
     pub account_data: FfiAccountData,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
+}
+
+impl Default for FfiAccount {
+    fn default() -> Self {
+        Account::default().into()
+    }
 }
 
 // Helper functions to convert between Rust and FFI types

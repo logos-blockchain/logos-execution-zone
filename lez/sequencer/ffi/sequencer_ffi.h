@@ -391,7 +391,7 @@ bool is_error(const enum OperationStatus *self);
  * this is called with a type which doesn't come from a returned `CString` it
  * will cause a segfault.
  */
-void primitives_ffi_free_cstring(char *block);
+void sequencer_ffi_free_cstring(char *block);
 
 /**
  * Frees the resources associated with the given ffi account.
@@ -414,7 +414,7 @@ void primitives_ffi_free_cstring(char *block);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_account(FfiAccount *val);
+void sequencer_ffi_free_ffi_account(FfiAccount *val);
 
 /**
  * Frees the resources owned by an `FfiBlock` value.
@@ -438,7 +438,7 @@ void primitives_ffi_free_ffi_account(FfiAccount *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_block(FfiBlock val);
+void sequencer_ffi_free_ffi_block(FfiBlock val);
 
 /**
  * Frees the resources associated with the given ffi block option.
@@ -460,7 +460,7 @@ void primitives_ffi_free_ffi_block(FfiBlock val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_block_opt(FfiBlockOpt *val);
+void sequencer_ffi_free_ffi_block_opt(FfiBlockOpt *val);
 
 /**
  * Frees the resources associated with the given ffi block vector.
@@ -482,7 +482,7 @@ void primitives_ffi_free_ffi_block_opt(FfiBlockOpt *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_block_vec(FfiVec<FfiBlock> *val);
+void sequencer_ffi_free_ffi_block_vec(FfiVec<FfiBlock> *val);
 
 /**
  * Frees the resources associated with the given vector of ffi event records.
@@ -504,7 +504,7 @@ void primitives_ffi_free_ffi_block_vec(FfiVec<FfiBlock> *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiEventRecord>` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_event_record_vec(FfiVec<FfiEventRecord> *val);
+void sequencer_ffi_free_ffi_event_record_vec(FfiVec<FfiEventRecord> *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.
@@ -522,7 +522,7 @@ void primitives_ffi_free_ffi_event_record_vec(FfiVec<FfiEventRecord> *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiTransaction`.
  */
-void primitives_ffi_free_ffi_transaction(FfiTransaction val);
+void sequencer_ffi_free_ffi_transaction(FfiTransaction val);
 
 /**
  * Frees the resources associated with the given ffi transaction option.
@@ -545,7 +545,7 @@ void primitives_ffi_free_ffi_transaction(FfiTransaction val);
  * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
  *   freed.
  */
-void primitives_ffi_free_ffi_transaction_opt(FfiOption<FfiTransaction> *val);
+void sequencer_ffi_free_ffi_transaction_opt(FfiOption<FfiTransaction> *val);
 
 /**
  * Frees the resources associated with the given vector of ffi transactions.
@@ -567,7 +567,7 @@ void primitives_ffi_free_ffi_transaction_opt(FfiOption<FfiTransaction> *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
-void primitives_ffi_free_ffi_transaction_vec(FfiVec<FfiTransaction> *val);
+void sequencer_ffi_free_ffi_transaction_vec(FfiVec<FfiTransaction> *val);
 
 #ifdef __cplusplus
 }  // extern "C"

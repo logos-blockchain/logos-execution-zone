@@ -8,7 +8,7 @@ use std::{
 };
 
 use common::HashType;
-use lee::{AccountId};
+use lee::AccountId;
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -476,7 +476,7 @@ mod tests {
         NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
     };
     use primitives_ffi::types::FfiBytes32;
-use wallet::AccountIdentity;
+    use wallet::AccountIdentity;
 
     use crate::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind};
 

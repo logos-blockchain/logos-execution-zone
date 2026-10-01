@@ -4,16 +4,15 @@ use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
 use lee::{AccountId, ProgramShardSelector};
-use primitives_ffi::types::{FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys, account::FfiAccount};
+use primitives_ffi::types::{
+    account::FfiAccount, FfiBytes32, FfiIdentifier, FfiPrivateAccountKeys,
+};
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
-    types::{
-        FfiAccountList, FfiAccountListEntry,
-        WalletHandle,
-    },
+    types::{FfiAccountList, FfiAccountListEntry, WalletHandle},
     wallet::get_wallet,
 };
 

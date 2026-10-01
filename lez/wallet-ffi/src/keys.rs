@@ -8,7 +8,7 @@ use wallet::AccountIdentity;
 
 use crate::{
     error::{print_error, WalletFfiError},
-    types::{ WalletHandle},
+    types::WalletHandle,
     wallet::get_wallet,
     FfiAccountIdentity,
 };

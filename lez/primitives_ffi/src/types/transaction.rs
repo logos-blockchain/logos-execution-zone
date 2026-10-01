@@ -13,14 +13,17 @@ use lee_core::{
 };
 use sequencer_executor_actor::protocol::Transaction;
 
-use crate::{errors::PrimitiveOperationStatus, types::{
+use crate::{
+    errors::PrimitiveOperationStatus,
+    types::{
         FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128,
         FfiVec,
         vectors::{
             FfiInstructionDataList, FfiNonceList, FfiPrivateActionList, FfiProof,
             FfiPublicActionList, FfiPublicEffectList, FfiSignaturePubKeyList, FfiVecU8,
         },
-    }};
+    },
+};
 
 #[repr(C)]
 pub struct FfiPublicTransactionBody {
@@ -615,6 +618,10 @@ pub enum FfiTransactionKind {
 ///
 /// The caller must ensure that:
 /// - `val` is a valid instance of `FfiTransaction`.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Not needless, this free invalidates innner pointers inside struct, so it should not be used any more"
+)]
 pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
     match val.kind {
         FfiTransactionKind::Public => {
@@ -661,9 +668,7 @@ pub unsafe fn primitives_ffi_free_ffi_transaction(val: FfiTransaction) {
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
 ///   freed.
-pub unsafe fn primitives_ffi_free_ffi_transaction_opt(
-    val: *mut FfiOption<FfiTransaction>,
-) {
+pub unsafe fn primitives_ffi_free_ffi_transaction_opt(val: *mut FfiOption<FfiTransaction>) {
     if val.is_null() {
         log::error!("Trying to free a null pointer. Exiting");
         return;
@@ -729,7 +734,9 @@ fn cast_validity_window(window: ValidityWindow<u64>) -> [u64; 2] {
     ]
 }
 
-fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> Result<ValidityWindow<u64>, PrimitiveOperationStatus> {
+fn cast_ffi_validity_window(
+    ffi_window: [u64; 2],
+) -> Result<ValidityWindow<u64>, PrimitiveOperationStatus> {
     let left = if ffi_window[0] == 0 {
         None
     } else {

@@ -1,16 +1,14 @@
 use std::ffi::c_char;
 
-use primitives_ffi::types::{FfiPrivateAccountKeys, account::FfiAccount};
+use primitives_ffi::types::{account::FfiAccount, FfiPrivateAccountKeys};
 
 /// # Safety
 /// It's up to the caller to pass a proper pointer, if somehow from c/c++ side
 /// this is called with a type which doesn't come from a returned `CString` it
 /// will cause a segfault.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn primitives_ffi_free_cstring(block: *mut c_char) {
-    unsafe{
-        primitives_ffi::memory::primitives_ffi_free_cstring(block)
-    }
+pub unsafe extern "C" fn wallet_ffi_free_string(block: *mut c_char) {
+    unsafe { primitives_ffi::memory::primitives_ffi_free_cstring(block) }
 }
 
 /// Free private account keys returned by `wallet_ffi_get_private_account_keys`.
@@ -20,7 +18,9 @@ pub unsafe extern "C" fn primitives_ffi_free_cstring(block: *mut c_char) {
 /// `wallet_ffi_get_private_account_keys`.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys) {
-    unsafe{ primitives_ffi::types::primitives_ffi_free_private_account_keys(keys); }
+    unsafe {
+        primitives_ffi::types::primitives_ffi_free_private_account_keys(keys);
+    }
 }
 
 /// Frees the resources associated with the given ffi account.
@@ -42,6 +42,8 @@ pub unsafe extern "C" fn wallet_ffi_free_private_account_keys(keys: *mut FfiPriv
 ///
 /// The caller must ensure that:
 /// - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
-pub unsafe fn primitives_ffi_free_ffi_account(val: *mut FfiAccount) {
-    unsafe{ primitives_ffi::types::account::primitives_ffi_free_ffi_account(val) };
+pub unsafe fn wallet_ffi_free_ffi_account(val: *mut FfiAccount) {
+    unsafe {
+        primitives_ffi::types::account::primitives_ffi_free_ffi_account(val);
+    }
 }
