@@ -182,12 +182,22 @@ pub enum ExecutionError {
 pub struct ExecutionOutcome {
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
-    pub public: Vec<(AccountId, AccountData)>,
-    pub private_accounts: HashMap<AccountId, AccountData>,
-    pub boundary: Boundary,
-    pub assumed: Vec<Vec<Assumption>>,
-    pub events: Vec<(Actor, ProgramEvent)>,
-    pub published: Vec<MessageBody>,
+    pub result: ExecutionResult,
+}
+
+pub enum ExecutionResult {
+    Derived {
+        assumed: Vec<Vec<Assumption>>,
+    },
+    Recorded {
+        private_accounts: HashMap<AccountId, AccountData>,
+        boundary: Boundary,
+    },
+    Settled {
+        public: Vec<(AccountId, AccountData)>,
+        events: Vec<(Actor, ProgramEvent)>,
+        casts: Vec<MessageBody>,
+    },
 }
 
 enum Visibility {
@@ -866,26 +876,17 @@ impl<'witnesses> ExecutionState<'witnesses> {
             ..
         } = self;
 
-        let (public, private_accounts, boundary, assumed, published) = match mode {
-            ModeState::Derive { groups, .. } => (
-                Vec::new(),
-                HashMap::new(),
-                Boundary::default(),
-                groups,
-                Vec::new(),
-            ),
-            ModeState::Record { boundary, .. } => (
-                Vec::new(),
-                accounts
+        let result = match mode {
+            ModeState::Derive { groups, .. } => ExecutionResult::Derived { assumed: groups },
+            ModeState::Record { boundary, .. } => ExecutionResult::Recorded {
+                private_accounts: accounts
                     .into_iter()
                     .filter_map(|(account_id, AccountEntry { data, visibility })| {
                         matches!(visibility, Visibility::Private(_)).then_some((account_id, data))
                     })
                     .collect(),
                 boundary,
-                Vec::new(),
-                Vec::new(),
-            ),
+            },
             ModeState::Live | ModeState::Check { .. } => {
                 let mut public = Vec::new();
                 for actor in declared.public_actors {
@@ -901,25 +902,18 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     }
                     public.push((actor.account_id, data));
                 }
-                (
+                ExecutionResult::Settled {
                     public,
-                    HashMap::new(),
-                    Boundary::default(),
-                    Vec::new(),
-                    published,
-                )
+                    events,
+                    casts: published,
+                }
             }
         };
 
         ExecutionOutcome {
             block_validity_window,
             timestamp_validity_window,
-            public,
-            private_accounts,
-            boundary,
-            assumed,
-            events,
-            published,
+            result,
         }
     }
 }

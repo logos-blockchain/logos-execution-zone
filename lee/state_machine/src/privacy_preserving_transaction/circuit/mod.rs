@@ -5,7 +5,9 @@ use lee_core::{
     DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     PrivateWitness, ProgramImageWitness, ShadowProgramWitness,
     account::{AccountId, Actor, Cycles, ShardData},
-    execution_state::{Assumption, Backend, Declared, ExecutionState, Mode, TransactionEntry},
+    execution_state::{
+        Assumption, Backend, Declared, ExecutionResult, ExecutionState, Mode, TransactionEntry,
+    },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{ProgramHeader, ReceiveInput, StoredMessage, Transition},
@@ -248,7 +250,7 @@ pub fn execute_and_prove(
             input.identities.contains(&account_id)
         })?;
     }
-    let assumed = ExecutionState::initialize(
+    let ExecutionResult::Derived { assumed } = ExecutionState::initialize(
         declared,
         &input.private_witnesses,
         Mode::Derive(input.root.clone()),
@@ -257,7 +259,10 @@ pub fn execute_and_prove(
         programs: &programs.programs,
         public_shards: &input.public_shards,
     })?
-    .assumed;
+    .result
+    else {
+        unreachable!("a derivation yields its assumptions")
+    };
     execute_and_prove_assuming(input, assumed, programs)
 }
 

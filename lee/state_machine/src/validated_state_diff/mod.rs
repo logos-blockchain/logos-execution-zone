@@ -8,7 +8,7 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
-    execution_state::{Declared, ExecutionState, Mode, TransactionEntry},
+    execution_state::{Declared, ExecutionResult, ExecutionState, Mode, TransactionEntry},
     program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
 use public_backend::PublicBackend;
@@ -513,13 +513,20 @@ fn settle(
             && outcome.timestamp_validity_window.is_valid_for(timestamp),
         LeeError::OutOfValidityWindow
     );
+    let ExecutionResult::Settled {
+        public,
+        events,
+        casts,
+    } = outcome.result
+    else {
+        unreachable!("a live or checked execution settles")
+    };
     ensure!(
-        u128::try_from(outcome.published.len())
+        u128::try_from(casts.len())
             .is_ok_and(|count| state.next_message_sequence().checked_add(count).is_some()),
         LeeError::InvalidInput("Message sequence exhausted".into())
     );
-    let public_diff = outcome
-        .public
+    let public_diff = public
         .into_iter()
         .map(|(account_id, data)| {
             let mut account = state.get_account_by_id(account_id);
@@ -527,8 +534,7 @@ fn settle(
             (account_id, account)
         })
         .collect();
-    let events = outcome
-        .events
+    let events = events
         .into_iter()
         .map(|(actor, event)| TransactionEvent {
             account_id: actor.program_account_id,
@@ -542,7 +548,7 @@ fn settle(
         new_nullifiers: Vec::new(),
         events,
         consumed: Vec::new(),
-        published: outcome.published,
+        published: casts,
     })
 }
 

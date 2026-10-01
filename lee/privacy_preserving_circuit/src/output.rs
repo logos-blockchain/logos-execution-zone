@@ -6,7 +6,7 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{Declared, ExecutionOutcome},
+    execution_state::{Declared, ExecutionOutcome, ExecutionResult},
     program::MessageId,
 };
 
@@ -22,10 +22,15 @@ pub fn compute_circuit_output(
     let ExecutionOutcome {
         block_validity_window,
         timestamp_validity_window,
-        mut private_accounts,
-        boundary,
-        ..
-    } = outcome;
+        result:
+            ExecutionResult::Recorded {
+                mut private_accounts,
+                boundary,
+            },
+    } = outcome
+    else {
+        unreachable!("a record yields its private accounts and boundary")
+    };
     let mut output = PrivacyPreservingCircuitOutput {
         declared,
         boundary,
@@ -300,12 +305,10 @@ mod tests {
             ExecutionOutcome {
                 block_validity_window: BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-                public: Vec::new(),
-                private_accounts: private.into_iter().collect(),
-                boundary: Boundary::default(),
-                assumed: Vec::new(),
-                events: Vec::new(),
-                published: Vec::new(),
+                result: ExecutionResult::Recorded {
+                    private_accounts: private.into_iter().collect(),
+                    boundary: Boundary::default(),
+                },
             },
             Declared::default(),
             None,

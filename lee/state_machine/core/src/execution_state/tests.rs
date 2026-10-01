@@ -15,6 +15,11 @@ const BYSTANDER: Actor = Actor::new(AccountId::new([3; 32]), AccountId::new([9; 
 const ENTER: &[u8] = b"enter";
 
 type Handler = Box<dyn FnMut(&ReceiveInput) -> Transition>;
+type Settled = (
+    Vec<(AccountId, AccountData)>,
+    Vec<(Actor, ProgramEvent)>,
+    Vec<MessageBody>,
+);
 
 struct Keys {
     ask: AuthorizationSecretKey,
@@ -289,7 +294,26 @@ fn nested_public(script: Script, entry_sends: Vec<Call>) -> Script {
         .on(BYSTANDER, sending(Vec::new()))
 }
 
-fn record_nested(assumed: Vec<Vec<Assumption>>) -> (ExecutionOutcome, Script) {
+fn recorded_boundary(outcome: ExecutionOutcome) -> Boundary {
+    let ExecutionResult::Recorded { boundary, .. } = outcome.result else {
+        panic!("expected a recorded execution")
+    };
+    boundary
+}
+
+fn settled(outcome: ExecutionOutcome) -> Settled {
+    let ExecutionResult::Settled {
+        public,
+        events,
+        casts,
+    } = outcome.result
+    else {
+        panic!("expected a settled execution")
+    };
+    (public, events, casts)
+}
+
+fn record_nested(assumed: Vec<Vec<Assumption>>) -> (Boundary, Script) {
     let mut script = nested_private();
     let outcome = run(
         declared(vec![ENTRY, CALLEE, BYSTANDER]),
@@ -301,7 +325,7 @@ fn record_nested(assumed: Vec<Vec<Assumption>>) -> (ExecutionOutcome, Script) {
         &mut script,
     )
     .unwrap();
-    (outcome, script)
+    (recorded_boundary(outcome), script)
 }
 
 fn check_nested(
@@ -335,16 +359,17 @@ fn a_root_delivery_stages_its_write_and_reports_its_events() {
             )
         });
 
-    let outcome = run(declared(vec![receiver]), &[], live(receiver), &mut script).unwrap();
+    let (public, events, _) =
+        settled(run(declared(vec![receiver]), &[], live(receiver), &mut script).unwrap());
 
     assert_eq!(
-        outcome.public,
+        public,
         vec![(
             receiver.account_id,
             AccountData::default().with_shard(receiver.program_account_id, data(b"new"))
         )]
     );
-    assert_eq!(outcome.events, vec![(receiver, event)]);
+    assert_eq!(events, vec![(receiver, event)]);
 }
 
 #[test]
@@ -573,7 +598,8 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
             }
         });
 
-    let outcome = run(declared(vec![clearing]), &[], live(clearing), &mut script).unwrap();
+    let (public, _, _) =
+        settled(run(declared(vec![clearing]), &[], live(clearing), &mut script).unwrap());
 
     let seen: Vec<_> = script
         .log
@@ -583,7 +609,7 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
     assert_eq!(seen, vec![data(b"orig"), ShardData::empty()]);
     assert_eq!(script.shards[&clearing], data(b"orig"));
     assert_eq!(
-        outcome.public,
+        public,
         vec![(
             clearing.account_id,
             AccountData {
@@ -642,7 +668,10 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         }
     });
 
-    let outcome = run(
+    let ExecutionResult::Recorded {
+        private_accounts,
+        boundary,
+    } = run(
         declared(vec![vault]),
         &[keys.regular(true)],
         Mode::Record {
@@ -651,14 +680,18 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         },
         &mut script,
     )
-    .unwrap();
+    .unwrap()
+    .result
+    else {
+        panic!("expected a recorded execution")
+    };
 
     assert_eq!(
         order(&script),
         vec![(owner, Origin::Root), (owner, Origin::Program(id(9)))]
     );
     assert_eq!(
-        outcome.boundary,
+        boundary,
         Boundary {
             outputs: vec![Output {
                 message: b"credit".to_vec(),
@@ -669,20 +702,18 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
             schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
         }
     );
-    assert!(outcome.public.is_empty());
-    assert!(outcome.events.is_empty());
     assert_eq!(
-        outcome.private_accounts[&owner.account_id],
+        private_accounts[&owner.account_id],
         AccountData::default().with_shard(owner.program_account_id, data(b"second"))
     );
 }
 
 #[test]
 fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
-    let (outcome, script) = record_nested(nested_assumed());
+    let (boundary, script) = record_nested(nested_assumed());
 
     assert_eq!(
-        outcome.boundary.schedule,
+        boundary.schedule,
         vec![
             CallPublic,
             EnterPrivate,
@@ -693,7 +724,7 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
         ]
     );
     assert_eq!(
-        outcome.boundary.outputs,
+        boundary.outputs,
         vec![
             output(ENTRY, Origin::Root),
             output(CALLEE, Origin::Program(id(8))),
@@ -790,9 +821,9 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
 
 #[test]
 fn a_check_replays_the_public_side_of_a_recorded_statement() {
-    let (recorded, _) = record_nested(nested_assumed());
+    let (boundary, _) = record_nested(nested_assumed());
 
-    let (result, script) = check_nested(recorded.boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
+    let (result, script) = check_nested(boundary, vec![enter(ENTER), send_to(BYSTANDER)]);
 
     assert!(result.is_ok());
     assert_eq!(
@@ -807,7 +838,7 @@ fn a_check_replays_the_public_side_of_a_recorded_statement() {
 
 #[test]
 fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
-    let boundary = record_nested(nested_assumed()).0.boundary;
+    let boundary = record_nested(nested_assumed()).0;
     let checked = |sends: Vec<Call>| check_nested(boundary.clone(), sends).0;
     let truncated = Boundary {
         schedule: vec![CallPublic],
@@ -970,7 +1001,7 @@ fn relayed_grant(
     let result = run(
         declared(actors),
         &[],
-        Mode::Check(recorded.boundary),
+        Mode::Check(recorded_boundary(recorded)),
         &mut checking,
     );
     (result, checking)
@@ -1046,10 +1077,8 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         authorized(&recording),
         vec![(owner, false), (custody, true), (custody, true)]
     );
-    assert_eq!(
-        recorded.boundary.outputs[0].grants,
-        vec![custody.account_id]
-    );
+    let boundary = recorded_boundary(recorded);
+    assert_eq!(boundary.outputs[0].grants, vec![custody.account_id]);
 
     let mut checking = Script::default()
         .on(
@@ -1061,7 +1090,7 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         run(
             declared(vec![peer, peer_vault]),
             &[],
-            Mode::Check(recorded.boundary),
+            Mode::Check(boundary),
             &mut checking,
         )
         .is_ok()
@@ -1097,38 +1126,27 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
 }
 
 #[test]
-fn a_check_publishes_live_events_and_a_record_publishes_none() {
+fn a_check_publishes_live_events() {
     let event = ProgramEvent {
         selector: [7; 8],
         data: Vec::new(),
     };
-    let emitting = |emitted: ProgramEvent| {
-        move |input: &ReceiveInput| echo(input, Response::keep().event(emitted.clone()))
-    };
-    let keys = Keys::new(1);
-    let mut recording = Script::default().on(holder(&keys), emitting(event.clone()));
-    let recorded = run(
-        Declared::default(),
-        &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: Vec::new(),
-        },
-        &mut recording,
-    )
-    .unwrap();
-    assert_eq!(recording.log.len(), 1);
-    assert!(recorded.events.is_empty());
+    let emitted = event.clone();
+    let mut checking = Script::default().on(ENTRY, move |input| {
+        echo(input, Response::keep().event(emitted.clone()))
+    });
 
-    let mut checking = Script::default().on(ENTRY, emitting(event.clone()));
-    let checked = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Check(root_statement()),
-        &mut checking,
-    )
-    .unwrap();
-    assert_eq!(checked.events, vec![(ENTRY, event)]);
+    let (_, events, _) = settled(
+        run(
+            declared(vec![ENTRY]),
+            &[],
+            Mode::Check(root_statement()),
+            &mut checking,
+        )
+        .unwrap(),
+    );
+
+    assert_eq!(events, vec![(ENTRY, event)]);
 }
 
 // A public turn asks a private account's native balance to pay: the private turn runs under the
@@ -1168,7 +1186,7 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     };
 
     assert_eq!(
-        record(true).unwrap().boundary.outputs[1],
+        recorded_boundary(record(true).unwrap()).outputs[1],
         Output {
             message: borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
             ..output(
@@ -1248,18 +1266,21 @@ fn a_derived_statement_records_and_checks_a_nested_mixed_graph() {
     let entry_sends = vec![enter(ENTER), send_to(BYSTANDER)];
     let mut deriving = nested_public(nested_private(), entry_sends.clone());
 
-    let derived = run(
+    let ExecutionResult::Derived { assumed } = run(
         declared(vec![ENTRY, CALLEE, BYSTANDER]),
         &[Keys::new(1).regular(false)],
         Mode::Derive(root(ENTRY)),
         &mut deriving,
     )
     .unwrap()
-    .assumed;
+    .result
+    else {
+        panic!("expected a derived execution")
+    };
 
-    assert_eq!(derived, nested_assumed());
-    let (recorded, _) = record_nested(derived);
-    assert!(check_nested(recorded.boundary, entry_sends).0.is_ok());
+    assert_eq!(assumed, nested_assumed());
+    let (boundary, _) = record_nested(assumed);
+    assert!(check_nested(boundary, entry_sends).0.is_ok());
 }
 
 #[test]
@@ -1279,7 +1300,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     .unwrap();
 
     assert_eq!(
-        recorded.boundary.outputs,
+        recorded_boundary(recorded).outputs,
         vec![output(
             ENTRY,
             Origin::Program(holder(&keys).program_account_id)
@@ -1289,7 +1310,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 
 #[test]
 fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_assumption() {
-    let (recorded, _) = record_nested(nested_assumed());
+    let (boundary, _) = record_nested(nested_assumed());
     let mut script = nested_public(Script::default(), vec![send_to(BYSTANDER)])
         .on(BYSTANDER, sending(vec![enter(ENTER)]));
     assert_eq!(BYSTANDER.program_account_id, ENTRY.program_account_id);
@@ -1297,7 +1318,7 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
     let result = run(
         declared(vec![ENTRY, CALLEE, BYSTANDER]),
         &[],
-        Mode::Check(recorded.boundary),
+        Mode::Check(boundary),
         &mut script,
     );
 
@@ -1334,13 +1355,15 @@ fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
         })
         .on(BYSTANDER, sending(Vec::new()));
 
-    let outcome = run(
-        declared(vec![ENTRY, CALLEE, BYSTANDER]),
-        &[],
-        live(ENTRY),
-        &mut script,
-    )
-    .unwrap();
+    let (_, _, casts) = settled(
+        run(
+            declared(vec![ENTRY, CALLEE, BYSTANDER]),
+            &[],
+            live(ENTRY),
+            &mut script,
+        )
+        .unwrap(),
+    );
 
     assert_eq!(
         order(&script),
@@ -1351,7 +1374,7 @@ fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
         ]
     );
     assert_eq!(
-        outcome.published,
+        casts,
         vec![
             MessageBody {
                 origin_program: id(9),
@@ -1414,7 +1437,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
         order(&script),
         vec![(holder(&keys), Origin::Program(id(5)))]
     );
-    assert_eq!(outcome.boundary, Boundary::default());
+    assert_eq!(recorded_boundary(outcome), Boundary::default());
 }
 
 #[test]
@@ -1435,22 +1458,21 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
             }),
         )
     });
-    let recorded = run(
-        declared(vec![ENTRY]),
-        &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: vec![Vec::new()],
-        },
-        &mut recording,
-    )
-    .unwrap();
-
-    assert_eq!(
-        recorded.boundary.schedule,
-        vec![CallPublic, ReturnPublic, Publish]
+    let boundary = recorded_boundary(
+        run(
+            declared(vec![ENTRY]),
+            &[keys.regular(false)],
+            Mode::Record {
+                root: root(holder(&keys)),
+                assumed: vec![Vec::new()],
+            },
+            &mut recording,
+        )
+        .unwrap(),
     );
-    assert_eq!(recorded.boundary.publications, vec![private_cast.clone()]);
+
+    assert_eq!(boundary.schedule, vec![CallPublic, ReturnPublic, Publish]);
+    assert_eq!(boundary.publications, vec![private_cast.clone()]);
 
     let mut checking = Script::default().on(ENTRY, move |input| {
         echo(
@@ -1461,16 +1483,18 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
             }),
         )
     });
-    let checked = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Check(recorded.boundary),
-        &mut checking,
-    )
-    .unwrap();
+    let (_, _, casts) = settled(
+        run(
+            declared(vec![ENTRY]),
+            &[],
+            Mode::Check(boundary),
+            &mut checking,
+        )
+        .unwrap(),
+    );
 
     assert_eq!(
-        checked.published,
+        casts,
         vec![
             MessageBody {
                 origin_program: id(9),
