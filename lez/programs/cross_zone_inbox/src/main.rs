@@ -188,9 +188,9 @@ mod tests {
     #[test]
     fn a_first_delivery_is_recorded() {
         let first = mark_at_seen(Vec::new(), HASH, 3);
-        assert_eq!(first.post_state, Some(written(shard_with(&[3]))));
+        assert_eq!(first.response.post_state, Some(written(shard_with(&[3]))));
         assert_eq!(
-            first.sends,
+            first.response.sends,
             vec![
                 Call::new(
                     Actor::new(TARGET, TARGET),
@@ -205,7 +205,7 @@ mod tests {
         );
 
         assert_eq!(
-            mark_at_seen(shard_with(&[3]), HASH, 4).post_state,
+            mark_at_seen(shard_with(&[3]), HASH, 4).response.post_state,
             Some(written(shard_with(&[3, 4])))
         );
     }
@@ -257,9 +257,9 @@ mod tests {
             Message::Dispatch(message.clone()),
         );
 
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![Call::new(seen_actor(), &Message::Mark(message)).into()]
         );
     }

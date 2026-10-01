@@ -566,6 +566,7 @@ mod tests {
 
     fn written(transition: &Transition) -> Vec<u8> {
         transition
+            .response
             .post_state
             .as_ref()
             .expect("the shard is written")
@@ -644,12 +645,12 @@ mod tests {
             Some(entry(OWNER, 2_500, 0))
         );
         assert_eq!(
-            transition.block_validity_window.start(),
+            transition.response.block_validity_window.start(),
             Some(REQUESTED_AT + EXIT_DELAY)
         );
-        assert_eq!(transition.block_validity_window.end(), None);
+        assert_eq!(transition.response.block_validity_window.end(), None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     Actor::native_balance(funds_of(OWNER)),
@@ -711,14 +712,14 @@ mod tests {
     fn a_request_records_the_amount_and_destination() {
         let transition = at_owner(true, &record(key(1)), request(key(1), 500));
 
-        assert!(transition.post_state.is_none());
-        assert_eq!(transition.block_validity_window.start(), Some(0));
+        assert!(transition.response.post_state.is_none());
+        assert_eq!(transition.response.block_validity_window.start(), Some(0));
         assert_eq!(
-            transition.block_validity_window.end(),
+            transition.response.block_validity_window.end(),
             Some(REQUESTED_AT + 1)
         );
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![to_config(PROGRAM, &track(OWNER, 500)).into()]
         );
     }
@@ -775,7 +776,7 @@ mod tests {
 
         assert_eq!(written(&transition), record(key(1)));
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 to_config(PROGRAM, &record_stake(OWNER, MINIMUM, false)).into(),
                 Call::new(
@@ -879,7 +880,7 @@ mod tests {
 
         assert!(!decoded_config(&transition).entries.contains_key(&key(1)));
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 custody_transfer(
                     funds_of(OWNER),

@@ -147,13 +147,13 @@ fn create_grants_the_ata_seed_only_when_the_owner_signed() {
     );
 
     let unsigned = turn(false, create(TOKEN_PROGRAM_ID));
-    assert_eq!(unsigned.post_state, None);
+    assert_eq!(unsigned.response.post_state, None);
     assert_eq!(
-        unsigned.sends,
+        unsigned.response.sends,
         vec![assert_kind.clone().into(), ensure.clone().into()]
     );
     assert_eq!(
-        turn(true, create(TOKEN_PROGRAM_ID)).sends,
+        turn(true, create(TOKEN_PROGRAM_ID)).response.sends,
         vec![assert_kind.into(), ensure.with_pda_seeds(seeds).into()]
     );
 }
@@ -168,7 +168,8 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
         transfer(STRANGER_PROGRAM_ID),
         burn(STRANGER_PROGRAM_ID),
     ] {
-        let Some(Action::Call(Call { to: target, .. })) = turn(true, message).sends.pop() else {
+        let Some(Action::Call(Call { to: target, .. })) = turn(true, message).response.sends.pop()
+        else {
             panic!("every message sends to the ATA");
         };
         assert_eq!(target, stranger_ata);
@@ -181,7 +182,7 @@ fn transfer_delegates_the_proposed_descriptor_under_the_ata_seed() {
     let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
     assert_eq!(
-        turn(true, transfer(TOKEN_PROGRAM_ID)).sends,
+        turn(true, transfer(TOKEN_PROGRAM_ID)).response.sends,
         vec![
             Call::new(
                 ata,
@@ -210,7 +211,7 @@ fn burn_delegates_the_named_definition_under_the_ata_seed() {
     let (ata, seeds) = holding(TOKEN_PROGRAM_ID);
 
     assert_eq!(
-        turn(true, burn(TOKEN_PROGRAM_ID)).sends,
+        turn(true, burn(TOKEN_PROGRAM_ID)).response.sends,
         vec![
             Call::new(
                 ata,

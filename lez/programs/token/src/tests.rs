@@ -161,7 +161,9 @@ fn written(message: &Message, pre_state: &ActorState) -> Option<ActorState> {
     } else {
         HOLDING_ID
     };
-    turn(receiver, true, TOKEN_ORIGIN, pre_state, message).post_state
+    turn(receiver, true, TOKEN_ORIGIN, pre_state, message)
+        .response
+        .post_state
 }
 
 fn rejection(message: &Message, pre_state: &ActorState) -> String {
@@ -206,11 +208,11 @@ fn settle(
             &pre_state,
             &message,
         );
-        if let Some(post_state) = transition.post_state {
+        if let Some(post_state) = transition.response.post_state {
             state.insert(account, post_state);
         }
         let sender = Origin::Program(token_actor(account).program_account_id);
-        for action in transition.sends.into_iter().rev() {
+        for action in transition.response.sends.into_iter().rev() {
             let Action::Call(Call {
                 to, message: data, ..
             }) = action
@@ -544,10 +546,10 @@ fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() 
     };
 
     assert_eq!(
-        request(true).post_state,
+        request(true).response.post_state,
         Some(ActorState::from(&fungible(SENDER_POST_TRANSFER)))
     );
-    let refusal = std::panic::catch_unwind(|| request(false).post_state)
+    let refusal = std::panic::catch_unwind(|| request(false).response.post_state)
         .expect_err("an unauthorized transfer was accepted");
     assert_eq!(
         refusal.downcast_ref::<&str>(),
@@ -598,7 +600,7 @@ fn a_credit_with_notify_sends_one_notification() {
     );
 
     assert_eq!(
-        transition.sends,
+        transition.response.sends,
         vec![
             Call::new(
                 listener,
@@ -656,11 +658,13 @@ fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
     let cast = run(&cast_transfer(FUNGIBLE, TRANSFER_AMOUNT));
 
     assert_eq!(
-        cast.post_state,
-        run(&transfer(FUNGIBLE, TRANSFER_AMOUNT)).post_state
+        cast.response.post_state,
+        run(&transfer(FUNGIBLE, TRANSFER_AMOUNT))
+            .response
+            .post_state
     );
     assert_eq!(
-        cast.sends,
+        cast.response.sends,
         vec![
             Cast::new(
                 token_actor(HOLDING_ID_2),
@@ -765,10 +769,10 @@ fn another_actor_replaces_a_funded_holding_only_with_authorization() {
     };
 
     assert_eq!(
-        request(true).post_state,
+        request(true).response.post_state,
         Some(ActorState::from(&fungible(0)))
     );
-    let refusal = std::panic::catch_unwind(|| request(false).post_state)
+    let refusal = std::panic::catch_unwind(|| request(false).response.post_state)
         .expect_err("an unauthorized reset was accepted");
     assert_eq!(
         refusal.downcast_ref::<&str>(),
@@ -789,6 +793,7 @@ fn ensure_holding_keeps_a_matching_funded_holding() {
                     descriptor: FUNGIBLE,
                 },
             )
+            .response
             .post_state,
             None
         );
@@ -807,6 +812,7 @@ fn ensure_holding_keeps_a_funded_master_for_a_printed_copy_descriptor() {
                 descriptor: PRINTED,
             },
         )
+        .response
         .post_state,
         None
     );
@@ -1215,7 +1221,7 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
     );
 
     assert_eq!(
-        transition.sends,
+        transition.response.sends,
         vec![
             Call::new(
                 token_actor(DEFINITION_ID),

@@ -102,9 +102,9 @@ mod tests {
     fn the_pinned_outbox_is_accepted() {
         let transition = run(Origin::Root, &outbox_bytes(OUTBOX), send_through(OUTBOX));
 
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     Actor::new(AccountId::new([2; 32]), OUTBOX),
@@ -139,7 +139,7 @@ mod tests {
             outbox_account_id: OUTBOX,
         };
         assert_eq!(
-            run(Origin::Root, &[], init).post_state,
+            run(Origin::Root, &[], init).response.post_state,
             Some(config(OUTBOX))
         );
     }
@@ -150,7 +150,9 @@ mod tests {
             outbox_account_id: OUTBOX,
         };
         assert_eq!(
-            run(Origin::Root, &outbox_bytes(OUTBOX), init).post_state,
+            run(Origin::Root, &outbox_bytes(OUTBOX), init)
+                .response
+                .post_state,
             Some(config(OUTBOX))
         );
     }

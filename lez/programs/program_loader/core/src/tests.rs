@@ -78,11 +78,14 @@ fn write_segment_writes_the_loader_shard() {
         shards.read(),
     );
 
-    let post_state = transition.post_state.expect("a segment was written");
+    let post_state = transition
+        .response
+        .post_state
+        .expect("a segment was written");
     let segment = ProgramSegment::from_bytes(&post_state).expect("valid segment");
     assert_eq!(segment.bytecode, vec![1, 2, 3]);
     assert_eq!(segment.next_segment, None);
-    assert!(transition.sends.is_empty());
+    assert!(transition.response.sends.is_empty());
     assert!(new_commitment.is_none());
 }
 

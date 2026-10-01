@@ -274,7 +274,8 @@ mod tests {
         message: &ReceiverMessage,
     ) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] = <[Action; 1]>::try_from(entry.sends).expect("one forwarded change");
+        let [forwarded] =
+            <[Action; 1]>::try_from(entry.response.sends).expect("one forwarded change");
         let Action::Call(Call {
             to, message: data, ..
         }) = forwarded
@@ -307,6 +308,7 @@ mod tests {
     fn written_config(transition: &Transition) -> ReceiverConfig {
         ReceiverConfig::from_bytes(
             transition
+                .response
                 .post_state
                 .as_ref()
                 .expect("the config is written"),
@@ -332,9 +334,9 @@ mod tests {
             &delivery,
         );
 
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![to_config(&record_from(INBOX, SOURCE)).into()]
         );
     }
@@ -361,9 +363,9 @@ mod tests {
             &record_from(INBOX, SOURCE),
         );
 
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     actor(ping_record_pda(RECEIVER)),
@@ -423,7 +425,7 @@ mod tests {
         );
 
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![to_config(&update(AUTHORITY, None)).into()]
         );
     }

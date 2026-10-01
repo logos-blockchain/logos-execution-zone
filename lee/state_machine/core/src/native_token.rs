@@ -213,9 +213,9 @@ mod tests {
     fn a_transfer_debits_the_sender_and_credits_the_recipient() {
         let transition = receive(&input(1, true, 100, &transfer(30, None))).unwrap();
 
-        assert_eq!(transition.post_state, Some(encode_balance(70)));
+        assert_eq!(transition.response.post_state, Some(encode_balance(70)));
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![Call::new(native(2), &Message::Credit(30)).into()]
         );
     }
@@ -248,9 +248,9 @@ mod tests {
     fn a_cast_transfer_debits_now_and_casts_the_credit() {
         let transition = receive(&input(1, true, 100, &cast_transfer(30))).unwrap();
 
-        assert_eq!(transition.post_state, Some(encode_balance(70)));
+        assert_eq!(transition.response.post_state, Some(encode_balance(70)));
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![Cast::new(native(2), &Message::Credit(30)).into()]
         );
     }
@@ -273,7 +273,7 @@ mod tests {
         };
 
         assert_eq!(
-            receive(&from_public(true)).unwrap().post_state,
+            receive(&from_public(true)).unwrap().response.post_state,
             Some(encode_balance(70))
         );
         assert_eq!(
@@ -311,7 +311,7 @@ mod tests {
     fn a_credit_adds_to_the_balance_unless_it_overflows() {
         let from_native = Origin::Program(NATIVE_TOKEN_PROGRAM_ID);
         assert_eq!(
-            credit(5, 100, from_native).unwrap().post_state,
+            credit(5, 100, from_native).unwrap().response.post_state,
             Some(encode_balance(105))
         );
         assert_eq!(

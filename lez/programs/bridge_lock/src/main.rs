@@ -284,9 +284,9 @@ mod tests {
         );
 
         let holder = HOLDER.into_value();
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     config_actor(),
@@ -332,7 +332,9 @@ mod tests {
     #[test]
     fn the_route_genesis_pinned_is_accepted() {
         assert_eq!(
-            check_route(OUTBOX_ID, WRAPPED_ID, config()).post_state,
+            check_route(OUTBOX_ID, WRAPPED_ID, config())
+                .response
+                .post_state,
             None
         );
     }
@@ -375,7 +377,9 @@ mod tests {
     #[test]
     fn a_first_init_writes_the_route() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, Vec::new()).post_state,
+            init(Origin::Root, WRAPPED_ID, Vec::new())
+                .response
+                .post_state,
             Some(ActorState::try_from(config()).unwrap())
         );
     }
@@ -383,7 +387,7 @@ mod tests {
     #[test]
     fn replaying_the_same_init_is_a_no_op() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, config()).post_state,
+            init(Origin::Root, WRAPPED_ID, config()).response.post_state,
             Some(ActorState::try_from(config()).unwrap())
         );
     }

@@ -132,6 +132,7 @@ fn user_turn(pool_state: ActorState, message: &Message) -> Transition {
 fn written(transition: &Transition) -> PoolDefinition {
     PoolDefinition::try_from(
         transition
+            .response
             .post_state
             .as_ref()
             .expect("the pool writes its shard"),
@@ -484,7 +485,7 @@ fn call_add_liquidity_successful() {
         }
     );
     assert_eq!(
-        transition.sends,
+        transition.response.sends,
         vec![
             lp_send(&token_core::Message::Mint {
                 to: USER_LP_ID,
@@ -599,7 +600,7 @@ fn call_remove_liquidity_successful() {
         }
     );
     assert_eq!(
-        transition.sends,
+        transition.response.sends,
         vec![
             Call::new(
                 token_actor(USER_LP_ID),
@@ -723,7 +724,7 @@ fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
     assert_eq!(written(&transition), pool_base());
     // The supply the pool records and the supply the LP definition is created with are one value.
     assert_eq!(
-        transition.sends,
+        transition.response.sends,
         vec![
             lp_send(&token_core::Message::NewDefinition {
                 definition: NewTokenDefinition::Fungible {
@@ -768,7 +769,7 @@ fn new_definition_lp_asymmetric_amounts() {
 
     assert_eq!(written(&transition).liquidity_pool_supply, LP_SUPPLY);
     assert_eq!(
-        transition.sends.first(),
+        transition.response.sends.first(),
         Some(
             &lp_send(&token_core::Message::Mint {
                 to: USER_LP_ID,
@@ -786,7 +787,7 @@ fn new_definition_lp_symmetric_amounts() {
 
     assert_eq!(written(&transition).liquidity_pool_supply, 100);
     assert_eq!(
-        transition.sends.first(),
+        transition.response.sends.first(),
         Some(
             &lp_send(&token_core::Message::NewDefinition {
                 definition: NewTokenDefinition::Fungible {
@@ -929,7 +930,9 @@ fn a_swap_pays_the_signed_amounts_and_seeds_only_the_withdrawal() {
         let [_, output_vault, _, user_output] = swap_route(input_is_token_a);
 
         assert_eq!(
-            swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out).sends,
+            swap_turn(&pool_base(), input_is_token_a, amount_in, amount_out)
+                .response
+                .sends,
             vec![
                 withdrawal(
                     output_vault,
@@ -985,7 +988,8 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
         Origin::Program(TOKEN_PROGRAM_ID),
         notice_message,
     );
-    let [payout] = <[Action; 1]>::try_from(settled.sends).expect("a swap sends one withdrawal");
+    let [payout] =
+        <[Action; 1]>::try_from(settled.response.sends).expect("a swap sends one withdrawal");
     let (payout_to, payout_message) = inline(payout);
     assert_eq!(payout_to, token_actor(output_vault));
     assert_eq!(
@@ -1056,7 +1060,7 @@ fn an_exact_input_swap_pays_its_live_quote_by_cast() {
             }
         );
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 withdrawal(
                     output_vault,
@@ -1074,7 +1078,9 @@ fn an_exact_input_swap_pays_its_live_quote_by_cast() {
 #[test]
 fn an_exact_input_swap_pays_its_live_quote_by_call_when_asked() {
     assert_eq!(
-        exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call).sends,
+        exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call)
+            .response
+            .sends,
         vec![withdrawal(vault_b_id(), USER_B_ID, TOKEN_B_ID, 166, Delivery::Call).into()]
     );
 }

@@ -792,16 +792,16 @@ impl<'witnesses> ExecutionState<'witnesses> {
         })?;
         let block = self
             .block_validity_window
-            .intersect(transition.block_validity_window)
+            .intersect(transition.response.block_validity_window)
             .map_err(|InvalidWindow| ExecutionError::EmptyBlockWindowIntersection)?;
         let timestamp = self
             .timestamp_validity_window
-            .intersect(transition.timestamp_validity_window)
+            .intersect(transition.response.timestamp_validity_window)
             .map_err(|InvalidWindow| ExecutionError::EmptyTimestampWindowIntersection)?;
         self.block_validity_window = block;
         self.timestamp_validity_window = timestamp;
 
-        if let Some(data) = transition.post_state {
+        if let Some(data) = transition.response.post_state {
             self.accounts
                 .get_mut(&actor.account_id)
                 .expect("an authorized actor has an entry")
@@ -809,10 +809,15 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 .set_shard(actor.program_account_id, data);
         }
         if matches!(self.mode, ModeState::Live | ModeState::Check { .. }) {
-            self.events
-                .extend(transition.events.into_iter().map(|event| (actor, event)));
+            self.events.extend(
+                transition
+                    .response
+                    .events
+                    .into_iter()
+                    .map(|event| (actor, event)),
+            );
         }
-        for action in transition.sends.into_iter().rev() {
+        for action in transition.response.sends.into_iter().rev() {
             self.pending.push_front(match action {
                 Action::Call(Call {
                     to,

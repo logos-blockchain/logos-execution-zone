@@ -408,11 +408,7 @@ impl ReceiveInput {
 #[must_use = "a Transition does nothing unless written"]
 pub struct Transition {
     pub input: ReceiveInput,
-    pub post_state: Option<ActorState>,
-    pub sends: Vec<Action>,
-    pub events: Vec<ProgramEvent>,
-    pub block_validity_window: BlockValidityWindow,
-    pub timestamp_validity_window: TimestampValidityWindow,
+    pub response: Response,
 }
 
 impl Transition {
@@ -422,13 +418,15 @@ impl Transition {
 }
 
 /// What a handler returns. `None` keeps the shard, empty data clears it, other data replaces it.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use]
 pub struct Response {
-    post_state: Option<ActorState>,
-    sends: Vec<Action>,
-    events: Vec<ProgramEvent>,
-    block_validity_window: BlockValidityWindow,
-    timestamp_validity_window: TimestampValidityWindow,
+    pub post_state: Option<ActorState>,
+    pub sends: Vec<Action>,
+    pub events: Vec<ProgramEvent>,
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
 }
 
 impl Response {
@@ -491,14 +489,10 @@ impl Response {
         Ok(self)
     }
 
-    pub fn into_transition(self, input: ReceiveInput) -> Transition {
+    pub const fn into_transition(self, input: ReceiveInput) -> Transition {
         Transition {
             input,
-            post_state: self.post_state,
-            sends: self.sends,
-            events: self.events,
-            block_validity_window: self.block_validity_window,
-            timestamp_validity_window: self.timestamp_validity_window,
+            response: self,
         }
     }
 }

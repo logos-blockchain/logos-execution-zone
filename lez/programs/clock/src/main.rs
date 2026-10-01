@@ -131,15 +131,15 @@ mod tests {
     fn the_every_block_account_advances_by_one() {
         let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(8));
 
-        assert_eq!(transition.post_state, written(data(8)));
-        assert!(transition.sends.is_empty());
+        assert_eq!(transition.response.post_state, written(data(8)));
+        assert!(transition.response.sends.is_empty());
     }
 
     #[test]
     fn a_tick_records_into_the_coarser_accounts_it_is_due_at() {
         let at_ten = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(9), tick(10));
         assert_eq!(
-            at_ten.sends,
+            at_ten.response.sends,
             vec![record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(10)).into()]
         );
 
@@ -150,7 +150,7 @@ mod tests {
             tick(50),
         );
         assert_eq!(
-            at_fifty.sends,
+            at_fifty.response.sends,
             vec![
                 record_to(CLOCK_10_PROGRAM_ACCOUNT_ID, data(50)).into(),
                 record_to(CLOCK_50_PROGRAM_ACCOUNT_ID, data(50)).into(),
@@ -187,7 +187,7 @@ mod tests {
             Message::Record(data(50)),
         );
 
-        assert_eq!(transition.post_state, written(data(50)));
+        assert_eq!(transition.response.post_state, written(data(50)));
     }
 
     #[test]
@@ -214,8 +214,8 @@ mod tests {
             },
         );
 
-        assert_eq!(transition.post_state, None);
-        assert!(transition.sends.is_empty());
+        assert_eq!(transition.response.post_state, None);
+        assert!(transition.response.sends.is_empty());
     }
 
     #[test]

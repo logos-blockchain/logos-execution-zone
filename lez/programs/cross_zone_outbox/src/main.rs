@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
-            run(from_emitter(), Vec::new()).post_state,
+            run(from_emitter(), Vec::new()).response.post_state,
             Some(ActorState::try_from(record().to_bytes()).unwrap())
         );
     }

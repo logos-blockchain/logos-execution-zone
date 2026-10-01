@@ -114,8 +114,8 @@ fn response_try_with_block_validity_window_range() {
         .try_block_window(10_u64..100)
         .unwrap()
         .into_transition(receive_input());
-    assert_eq!(transition.block_validity_window.start(), Some(10));
-    assert_eq!(transition.block_validity_window.end(), Some(100));
+    assert_eq!(transition.response.block_validity_window.start(), Some(10));
+    assert_eq!(transition.response.block_validity_window.end(), Some(100));
 }
 
 #[test]
@@ -123,8 +123,8 @@ fn response_with_block_validity_window_range_from() {
     let transition = Response::keep()
         .block_window(10_u64..)
         .into_transition(receive_input());
-    assert_eq!(transition.block_validity_window.start(), Some(10));
-    assert_eq!(transition.block_validity_window.end(), None);
+    assert_eq!(transition.response.block_validity_window.start(), Some(10));
+    assert_eq!(transition.response.block_validity_window.end(), None);
 }
 
 #[test]
@@ -132,8 +132,8 @@ fn response_with_block_validity_window_range_to() {
     let transition = Response::keep()
         .block_window(..100_u64)
         .into_transition(receive_input());
-    assert_eq!(transition.block_validity_window.start(), None);
-    assert_eq!(transition.block_validity_window.end(), Some(100));
+    assert_eq!(transition.response.block_validity_window.start(), None);
+    assert_eq!(transition.response.block_validity_window.end(), Some(100));
 }
 
 #[test]
@@ -452,15 +452,17 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
             pre_state: ActorState::try_from(b"ab".to_vec()).unwrap(),
             message: b"m".to_vec(),
         },
-        post_state: Some(ActorState::try_from(b"xyz".to_vec()).unwrap()),
-        sends: vec![Action::Call(Call {
-            to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
-            message: b"q".to_vec(),
-            pda_seeds: vec![PdaSeed::new([9; 32])],
-        })],
-        events: Vec::new(),
-        block_validity_window: ValidityWindow::new_unbounded(),
-        timestamp_validity_window: ValidityWindow::new_unbounded(),
+        response: Response {
+            post_state: Some(ActorState::try_from(b"xyz".to_vec()).unwrap()),
+            sends: vec![Action::Call(Call {
+                to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
+                message: b"q".to_vec(),
+                pda_seeds: vec![PdaSeed::new([9; 32])],
+            })],
+            events: Vec::new(),
+            block_validity_window: ValidityWindow::new_unbounded(),
+            timestamp_validity_window: ValidityWindow::new_unbounded(),
+        },
     };
 
     let expected: Vec<u8> = [

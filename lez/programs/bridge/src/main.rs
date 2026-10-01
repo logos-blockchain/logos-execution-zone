@@ -97,11 +97,11 @@ mod tests {
         let transition = run(Origin::Root, &[]);
 
         assert_eq!(
-            transition.post_state,
+            transition.response.post_state,
             Some(ActorState::try_from(RECEIPT_MARKER.to_vec()).unwrap())
         );
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 custody_transfer(
                     bridge_core::compute_bridge_account_id(BRIDGE),
@@ -112,7 +112,7 @@ mod tests {
                 .into()
             ]
         );
-        assert_eq!(transition.events.len(), 1);
+        assert_eq!(transition.response.events.len(), 1);
     }
 
     #[test]

@@ -394,6 +394,7 @@ mod tests {
     fn written_config(transition: &Transition) -> WrappedTokenConfig {
         WrappedTokenConfig::from_bytes(
             transition
+                .response
                 .post_state
                 .as_ref()
                 .expect("a wrapped-token config is written"),
@@ -419,7 +420,8 @@ mod tests {
     // forwards, as the driver would deliver it.
     fn through_authority(origin: Origin, is_authorized: bool, message: &Message) -> Transition {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
-        let [forwarded] = <[Action; 1]>::try_from(entry.sends).expect("one forwarded change");
+        let [forwarded] =
+            <[Action; 1]>::try_from(entry.response.sends).expect("one forwarded change");
         let Action::Call(Call {
             to, message: data, ..
         }) = forwarded
@@ -461,9 +463,9 @@ mod tests {
             &delivery,
         );
 
-        assert_eq!(transition.post_state, None);
+        assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10)).into()],
             "the deliverer travels from the runtime's origin, and the config is checked first"
         );
@@ -496,7 +498,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![Call::new(holding_actor(), &Message::Credit(400)).into()]
         );
     }
@@ -553,8 +555,11 @@ mod tests {
 
     #[test]
     fn a_credit_adds_to_the_recipients_balance() {
-        let written =
-            |pre, amount| credit_at_holding(Origin::Program(WRAPPED_ID), pre, amount).post_state;
+        let written = |pre, amount| {
+            credit_at_holding(Origin::Program(WRAPPED_ID), pre, amount)
+                .response
+                .post_state
+        };
         let balance =
             |amount: u128| Some(ActorState::try_from(balance_bytes(amount).to_vec()).unwrap());
         assert_eq!(written(40, 2), balance(42));
@@ -735,7 +740,7 @@ mod tests {
             },
         );
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 to_config(&Message::UpdateSources {
                     authority: AUTHORITY,

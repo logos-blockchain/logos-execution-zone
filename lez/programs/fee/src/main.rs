@@ -160,7 +160,7 @@ mod tests {
 
         let transition = distribute_at(&state, block, payout);
         assert_eq!(
-            transition.post_state,
+            transition.response.post_state,
             Some(ActorState::try_from(expected.to_bytes()).unwrap())
         );
     }
@@ -208,7 +208,7 @@ mod tests {
         let inbox = compute_fee_inbox_account_id(FEE);
         let escrow = compute_fee_escrow_account_id(FEE);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     Actor::native_balance(inbox),
@@ -240,7 +240,7 @@ mod tests {
         let inbox = compute_fee_inbox_account_id(FEE);
         let escrow = compute_fee_escrow_account_id(FEE);
         assert_eq!(
-            transition.sends,
+            transition.response.sends,
             vec![
                 Call::new(
                     Actor::native_balance(inbox),
