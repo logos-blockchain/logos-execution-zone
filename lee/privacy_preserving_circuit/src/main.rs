@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    PrivacyPreservingCircuitInput, ProgramImageWitness,
+    PrivacyPreservingCircuitInput, ProgramImageWitness, ProvingInput,
     account::AccountId,
     execution_state::{ExecutionState, Mode},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
@@ -15,11 +15,14 @@ mod private_backend;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
-        root,
-        declared,
-        private_witnesses,
-        dummy_inputs,
-        ciphertext_padding,
+        input:
+            ProvingInput {
+                root,
+                declared,
+                private_witnesses,
+                dummy_inputs,
+                ciphertext_padding,
+            },
         program_image_witnesses,
         shadow_program_witnesses,
         turns,

@@ -34,7 +34,7 @@ impl PrivateRoot {
             .get_proof_for_commitment(&Commitment::new(&self.account_id, &self.pre_account))
             .expect("the account's commitment must be in state");
         ProvingInput {
-            public_actors,
+            declared: Declared::new(public_actors, []),
             private_witnesses: vec![update_witness(
                 &self.keys,
                 Identifier::ZERO,
@@ -48,6 +48,7 @@ impl PrivateRoot {
     fn prove(&self, script: &Script, public_actors: Vec<Actor>) -> PrivacyPreservingTransaction {
         let proven = execute_and_prove(
             self.proving_input(script, public_actors),
+            &Simulation::default(),
             &synthetic_program(crate::test_methods::scripted()),
         )
         .unwrap();
@@ -70,7 +71,7 @@ impl NestedBoundary {
         let (outer, inner) = nested_actors();
         let proven = execute_and_prove_assuming(
             ProvingInput {
-                public_actors: vec![outer, inner],
+                declared: Declared::new(vec![outer, inner], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
                 ..proving_input(root(outer, outer_script))
             },
@@ -396,11 +397,13 @@ fn a_failing_public_turn_leaves_the_state_untouched() {
     let script = Script::write(vec![1]).send(Call::new(sender, &transfer(recipient_id, overdraft)));
     let proven = execute_and_prove(
         ProvingInput {
-            public_actors: vec![own, sender],
-            signers: [sender_id].into(),
+            declared: Declared::new(vec![own, sender], [sender_id]),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
-            public_shards: [(sender, encode_balance(overdraft))].into(),
             ..proving_input(root(own, &script))
+        },
+        &Simulation {
+            public_shards: [(sender, encode_balance(overdraft))].into(),
+            ..Simulation::default()
         },
         &synthetic_program(crate::test_methods::scripted()),
     )
@@ -530,6 +533,7 @@ fn scripted_program_should_fail_for_too_large_data_in_privacy_preserving_circuit
                 &Script::write(large_data),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -551,7 +555,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     // An honest prover would refuse the debit; this one assumes its credit without running it.
     let proven = execute_and_prove_assuming(
         ProvingInput {
-            public_actors: vec![sender],
+            declared: Declared::new(vec![sender], []),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
             ..proving_input(root(sender, &transfer(recipient_id, 10)))
         },

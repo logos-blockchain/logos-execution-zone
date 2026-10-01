@@ -271,10 +271,7 @@ impl ValidatedStateDiff {
                 (TransactionEntry::Receive(record.clone()), Some(id))
             }
         };
-        let declared = Declared {
-            public_actors: public_actors.to_vec(),
-            authorized_accounts: sorted(authorized.iter().copied()),
-        };
+        let declared = Declared::new(public_actors.to_vec(), authorized.iter().copied());
         ensure!(
             public_actors.contains(&root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())

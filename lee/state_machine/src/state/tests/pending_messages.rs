@@ -270,6 +270,7 @@ fn a_private_account_receives_a_cast_by_proof() {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(TransactionEntry::Receive(record))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
     .unwrap();
@@ -302,6 +303,7 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(TransactionEntry::Receive(record))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
     .unwrap();
@@ -331,6 +333,7 @@ fn a_cast_from_a_private_root_is_published_at_settlement() {
                 &Script::default().send(Cast::new(receiver(), &received())),
             ))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
     .unwrap();
@@ -370,6 +373,7 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
             ..proving_input(TransactionEntry::Receive(record))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
     .unwrap();
@@ -390,10 +394,13 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
     let prove = |identities: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                public_actors: vec![receiver()],
-                identities,
+                declared: Declared::new(vec![receiver()], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
                 ..proving_input(TransactionEntry::Receive(record.clone()))
+            },
+            &Simulation {
+                proven_public_accounts: identities,
+                ..Simulation::default()
             },
             &scripted_programs(),
         )

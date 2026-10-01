@@ -14,6 +14,7 @@ fn windowed_private_tx(script: &Script) -> PrivacyPreservingTransaction {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(Actor::new(account_id, scripted_id()), script))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .unwrap();

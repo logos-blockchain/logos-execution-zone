@@ -3,15 +3,12 @@
 //! `prove_native_transfer_in_ppe` is reused by the `verify` criterion bench under
 //! `benches/verify.rs` (re-exported via `super::prove_native_transfer_in_ppe`).
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Instant,
-};
+use std::{collections::HashSet, time::Instant};
 
 use borsh::to_vec;
 use lee::{
-    execute_and_prove,
-    privacy_preserving_transaction::circuit::{ProgramCatalog, Proof, ProvingInput},
+    Declared, ProvingInput, Simulation, execute_and_prove,
+    privacy_preserving_transaction::circuit::{ProgramCatalog, Proof},
 };
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey,
@@ -93,15 +90,11 @@ fn proving_input(
     public_actors: Vec<Actor>,
     signers: HashSet<AccountId>,
     private_witnesses: Vec<PrivateWitness>,
-    public_shards: HashMap<Actor, ShardData>,
 ) -> ProvingInput {
     ProvingInput {
         root,
-        public_actors,
-        signers,
-        identities: HashSet::new(),
+        declared: Declared::new(public_actors, signers),
         private_witnesses,
-        public_shards,
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
     }
@@ -133,8 +126,11 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
             vec![sender],
             [sender.account_id].into(),
             vec![recipient_witness],
-            [(sender, native_token::encode_balance(AMOUNT_TO_TRANSFER))].into(),
         ),
+        &Simulation {
+            public_shards: [(sender, native_token::encode_balance(AMOUNT_TO_TRANSFER))].into(),
+            ..Simulation::default()
+        },
         &ProgramCatalog::default(),
     )?)
 }
@@ -196,8 +192,8 @@ fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutp
             vec![recipient()],
             HashSet::new(),
             vec![sender_witness],
-            HashMap::new(),
         ),
+        &Simulation::default(),
         &catalog,
     )?)
 }
@@ -233,8 +229,8 @@ fn prove_scripted_transfers(
             vec![recipient()],
             HashSet::new(),
             vec![sender_witness],
-            HashMap::new(),
         ),
+        &Simulation::default(),
         &catalog,
     )?)
 }

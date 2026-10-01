@@ -100,8 +100,9 @@ pub struct ShadowProgramWitness {
     pub image_id: ProgramId,
 }
 
+/// Inputs for proving an LEE program's execution.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub struct PrivacyPreservingCircuitInput {
+pub struct ProvingInput {
     pub root: TransactionEntry<StoredMessage>,
     pub declared: Declared,
     /// One witness for each private account used by the transaction.
@@ -110,6 +111,11 @@ pub struct PrivacyPreservingCircuitInput {
     /// Minimum length of each note the guest encrypts, capped at `MAX_CIPHERTEXT_PADDING`.
     /// `dummy_inputs` carry their own ciphertexts and are checked against it, not padded.
     pub ciphertext_padding: Option<u32>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PrivacyPreservingCircuitInput {
+    pub input: ProvingInput,
     /// Real `image_id`s for every address-deployed program invoked in the call graph, keyed by
     /// account id.
     pub program_image_witnesses: Vec<ProgramImageWitness>,

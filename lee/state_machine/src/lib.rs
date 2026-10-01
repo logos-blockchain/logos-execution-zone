@@ -5,7 +5,7 @@
 
 pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
-    GENESIS_BLOCK_ID, SharedSecretKey,
+    GENESIS_BLOCK_ID, ProvingInput, SharedSecretKey,
     account::{Account, AccountData, AccountId, Actor, Balance, Cycles, Fee, Gas, ShardData},
     encryption::EphemeralPublicKey,
     execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp, TransactionEntry},
@@ -19,7 +19,7 @@ pub use privacy_preserving_circuit::{
 };
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
-    circuit::{ProvingInput, execute_and_prove, execute_and_prove_assuming},
+    circuit::{Simulation, execute_and_prove, execute_and_prove_assuming},
 };
 pub use public_transaction::{PublicIdentity, PublicTransaction};
 pub use signature::{PrivateKey, PublicKey, Signature};

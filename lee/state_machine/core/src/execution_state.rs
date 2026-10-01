@@ -44,6 +44,22 @@ pub struct Declared {
     pub authorized_accounts: Vec<AccountId>,
 }
 
+impl Declared {
+    pub fn new(
+        public_actors: Vec<Actor>,
+        authorized_accounts: impl IntoIterator<Item = AccountId>,
+    ) -> Self {
+        Self {
+            public_actors,
+            authorized_accounts: authorized_accounts
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
 pub enum Mode {
     Live(TransactionEntry<StoredMessage>),
     Derive(TransactionEntry<StoredMessage>),

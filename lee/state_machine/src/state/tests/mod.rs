@@ -26,7 +26,7 @@ use lee_core::{
 use test_guest_core::{ForgeField, Script};
 
 use crate::{
-    ProvingInput, PublicKey, PublicTransaction, V03State,
+    Declared, ProvingInput, PublicKey, PublicTransaction, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     execute_and_prove, execute_and_prove_assuming,
     privacy_preserving_transaction::{
@@ -177,11 +177,8 @@ pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<Stored
 pub fn proving_input(root: TransactionEntry<StoredMessage>) -> ProvingInput {
     ProvingInput {
         root,
-        public_actors: Vec::new(),
-        signers: HashSet::new(),
-        identities: HashSet::new(),
+        declared: Declared::default(),
         private_witnesses: Vec::new(),
-        public_shards: HashMap::new(),
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
     }
@@ -419,11 +416,13 @@ fn shielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            public_actors: vec![sender],
-            signers: [sender_id].into(),
+            declared: Declared::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(recipient_keys, Identifier::ZERO)],
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
             ..proving_input(root(sender, &transfer(recipient_id, balance_to_move)))
+        },
+        &Simulation {
+            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )
@@ -473,6 +472,7 @@ fn private_balance_transfer_for_tests(
                 &transfer(recipient_id, balance_to_move),
             ))
         },
+        &Simulation::default(),
         &ProgramCatalog::default(),
     )
     .unwrap();
@@ -497,7 +497,7 @@ fn deshielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            public_actors: vec![recipient],
+            declared: Declared::new(vec![recipient], []),
             private_witnesses: vec![update_witness(
                 sender_keys,
                 Identifier::ZERO,
@@ -511,6 +511,7 @@ fn deshielded_balance_transfer_for_tests(
                 &transfer(recipient.account_id, balance_to_move),
             ))
         },
+        &Simulation::default(),
         &ProgramCatalog::default(),
     )
     .unwrap();

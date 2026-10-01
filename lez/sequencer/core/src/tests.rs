@@ -5268,13 +5268,14 @@ fn prove_and_settle(
     let (output, proof) = lee::execute_and_prove(
         lee::ProvingInput {
             root,
-            public_actors,
-            signers: HashSet::new(),
-            identities: HashSet::new(),
+            declared: lee::Declared::new(public_actors, []),
             private_witnesses,
-            public_shards,
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
+        },
+        &lee::Simulation {
+            public_shards,
+            ..lee::Simulation::default()
         },
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
             programs::sequencer_stake_account_id(),

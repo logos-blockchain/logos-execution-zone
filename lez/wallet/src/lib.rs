@@ -19,8 +19,8 @@ use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, Assumption, PrivacyPreservingTransaction, ProgramId, ProvingInput,
-    PublicIdentity,
+    Account, AccountId, Assumption, Declared, PrivacyPreservingTransaction, ProgramId,
+    ProvingInput, PublicIdentity, Simulation,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog,
         message::{EncryptedAccountData, Message},
@@ -945,20 +945,30 @@ impl WalletCore {
         let private_account_keys = acc_manager.private_account_keys();
         let input = ProvingInput {
             root,
-            public_actors: acc_manager.public_actors(),
-            signers: acc_manager.signers(),
-            identities: identities.iter().map(PublicIdentity::account_id).collect(),
+            declared: Declared::new(acc_manager.public_actors(), acc_manager.signers()),
             private_witnesses: acc_manager.private_witnesses()?,
-            public_shards: acc_manager.public_shards(),
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
         };
 
         let programs = programs.clone();
-        let (output, proof) = tokio::task::spawn_blocking(move || match assumed {
-            None => lee::execute_and_prove(input, &programs),
-            Some(assumed) => lee::execute_and_prove_assuming(input, assumed, &programs),
-        })
+        let (output, proof) = match assumed {
+            None => {
+                let simulation = Simulation {
+                    public_shards: acc_manager.public_shards(),
+                    proven_public_accounts: identities
+                        .iter()
+                        .map(PublicIdentity::account_id)
+                        .collect(),
+                };
+                tokio::task::spawn_blocking(move || {
+                    lee::execute_and_prove(input, &simulation, &programs)
+                })
+            }
+            Some(assumed) => tokio::task::spawn_blocking(move || {
+                lee::execute_and_prove_assuming(input, assumed, &programs)
+            }),
+        }
         .await??;
 
         let message = Message {

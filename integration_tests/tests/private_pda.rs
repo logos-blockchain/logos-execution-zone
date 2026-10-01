@@ -3,7 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -12,9 +12,9 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
+    AccountId, Actor, Declared, PrivacyPreservingTransaction, PrivateKey, ProvingInput, PublicKey,
     privacy_preserving_transaction::{
-        circuit::{ProgramCatalog, execute_and_prove},
+        circuit::{ProgramCatalog, Simulation, execute_and_prove},
         message::Message,
         witness_set::WitnessSet,
     },
@@ -73,9 +73,7 @@ async fn fund_private_pda(
                 to: sender_actor,
                 message: transfer,
             },
-            public_actors: vec![sender_actor],
-            signers: [sender].into(),
-            identities: HashSet::new(),
+            declared: Declared::new(vec![sender_actor], [sender]),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
@@ -88,13 +86,16 @@ async fn fund_private_pda(
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             }],
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+        },
+        &Simulation {
             public_shards: [(
                 sender_actor,
                 sender_account.data.shard(NATIVE_TOKEN_PROGRAM_ID).clone(),
             )]
             .into(),
-            dummy_inputs: Vec::new(),
-            ciphertext_padding: None,
+            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )

@@ -5,7 +5,7 @@ use lee_core::{
     Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
     SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce, ShardData},
-    execution_state::{Boundary, ExecutionError, Output},
+    execution_state::{Boundary, Declared, ExecutionError, Output},
     native_token::encode_balance,
     program::{Call, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
 };
@@ -46,6 +46,7 @@ fn prove_scripted(
             ciphertext_padding,
             ..proving_input(root(root_actor, script))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
 }
@@ -101,11 +102,13 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let root_transfer = transfer(recipient_account_id, balance_to_move);
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_actors: vec![sender],
-            signers: [sender_id].into(),
+            declared: Declared::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(&recipient_keys, Identifier::ZERO)],
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
             ..proving_input(root(sender, &root_transfer))
+        },
+        &Simulation {
+            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )
@@ -228,6 +231,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                 &transfer(recipient_account_id, balance_to_move),
             ))
         },
+        &Simulation::default(),
         &ProgramCatalog::default(),
     )
     .unwrap();
@@ -464,8 +468,7 @@ fn prove_pda_spend(
     let recipient = Actor::native_balance(AccountId::new([0; 32]));
     execute_and_prove(
         ProvingInput {
-            public_actors: vec![recipient],
-            signers: [recipient.account_id].into(),
+            declared: Declared::new(vec![recipient], [recipient.account_id]),
             private_witnesses: vec![witness],
             ..proving_input(root(
                 Actor::new(handle_account, scripted_id()),
@@ -478,6 +481,7 @@ fn prove_pda_spend(
                 ),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .map(|(output, _proof)| output)
@@ -532,11 +536,13 @@ fn shared_account_receives_via_simple_transfer() {
 
     let result = execute_and_prove(
         ProvingInput {
-            public_actors: vec![sender],
-            signers: [sender_id].into(),
+            declared: Declared::new(vec![sender], [sender_id]),
             private_witnesses: vec![init_witness(&shared_keys, shared_identifier)],
-            public_shards: [(sender, encode_balance(balance_to_move))].into(),
             ..proving_input(root(sender, &transfer(shared_account_id, balance_to_move)))
+        },
+        &Simulation {
+            public_shards: [(sender, encode_balance(balance_to_move))].into(),
+            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     );
@@ -686,13 +692,14 @@ fn a_signer_entry_does_not_authorize_a_private_witness_without_ask() {
 
     let result = execute_and_prove(
         ProvingInput {
-            signers: [account_id].into(),
+            declared: Declared::new(Vec::new(), [account_id]),
             private_witnesses: vec![unauthorized_update(&keys, account, membership_proof)],
             ..proving_input(root(
                 Actor::new(account_id, scripted_id()),
                 &Script::default().authorized(),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -867,6 +874,7 @@ fn private_pda_init_identifier_mismatch_fails() {
                 &Script::default(),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -887,13 +895,14 @@ fn a_signer_entry_does_not_authorize_a_private_pda() {
 
     let result = execute_and_prove(
         ProvingInput {
-            signers: [account_id].into(),
+            declared: Declared::new(Vec::new(), [account_id]),
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
             ..proving_input(root(
                 Actor::new(account_id, scripted_id()),
                 &Script::default().authorized(),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -920,9 +929,10 @@ fn the_prover_never_reads_a_public_shard() {
     // `Prover` supplies no public shard, so executing either public turn would fail the proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_actors: vec![root_actor, callee],
+            declared: Declared::new(vec![root_actor, callee], []),
             ..proving_input(root(root_actor, &script))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
     .unwrap();
@@ -1003,14 +1013,16 @@ fn direct_input(
 ) -> PrivacyPreservingCircuitInput {
     let keys = test_private_account_keys_1();
     PrivacyPreservingCircuitInput {
-        root: root(
-            Actor::new(regular_id(&keys, Identifier::ZERO), program_account_id),
-            script,
-        ),
-        declared: Declared::default(),
-        private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-        dummy_inputs: Vec::new(),
-        ciphertext_padding: None,
+        input: ProvingInput {
+            root: root(
+                Actor::new(regular_id(&keys, Identifier::ZERO), program_account_id),
+                script,
+            ),
+            declared: Declared::default(),
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+        },
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
         turns,

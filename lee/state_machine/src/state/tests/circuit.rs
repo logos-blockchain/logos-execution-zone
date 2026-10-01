@@ -59,6 +59,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
                 &Script::write(written.clone()),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .unwrap();
@@ -113,7 +114,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            public_actors: vec![recipient],
+            declared: Declared::new(vec![recipient], []),
             private_witnesses: vec![update_witness(
                 &keys,
                 Identifier::ZERO,
@@ -128,6 +129,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
                 )),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .unwrap();
@@ -203,6 +205,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 &transfer(recipient_id, 10),
             ))
         },
+        &Simulation::default(),
         &ProgramCatalog::default(),
     );
 
@@ -240,6 +243,7 @@ fn private_pda_witness_binding_succeeds() {
                 &Script::default(),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .expect("witness-bound private PDA should succeed");
@@ -274,6 +278,7 @@ fn private_pda_npk_mismatch_fails() {
                 &Script::default(),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -329,6 +334,7 @@ fn prove_delegation(
             private_witnesses,
             ..proving_input(root(delegated_pda(scripted_id()), script))
         },
+        &Simulation::default(),
         &scripted_programs(),
     )
 }
@@ -454,8 +460,7 @@ fn prove_public_outputs(
     // Assumes each public output delivers nothing back, without running it.
     execute_and_prove_assuming(
         ProvingInput {
-            public_actors,
-            signers,
+            declared: Declared::new(public_actors, signers),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(
                 Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id()),
@@ -581,6 +586,7 @@ fn two_private_pdas_bound_under_same_seed_are_rejected() {
             ],
             ..proving_input(root(Actor::new(account_a, program_id), &Script::default()))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -658,6 +664,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
             private_witnesses: vec![witness.clone(), witness],
             ..proving_input(root(Actor::native_balance(sender_id), &Script::default()))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     );
 
@@ -676,6 +683,7 @@ fn prove_scripted_init(keys: &TestPrivateKeys, script: &Script) -> PrivacyPreser
                 script,
             ))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .unwrap();
@@ -775,11 +783,13 @@ fn two_private_pda_family_members_receive_and_spend() {
     let shield = |from: Actor, witness: PrivateWitness, pda_id: AccountId| {
         execute_and_prove(
             ProvingInput {
-                public_actors: vec![from],
-                signers: [from.account_id].into(),
+                declared: Declared::new(vec![from], [from.account_id]),
                 private_witnesses: vec![witness],
-                public_shards: [(from, encode_balance(amount))].into(),
                 ..proving_input(root(from, &transfer(pda_id, amount)))
+            },
+            &Simulation {
+                public_shards: [(from, encode_balance(amount))].into(),
+                ..Simulation::default()
             },
             &ProgramCatalog::default(),
         )
@@ -789,8 +799,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let spend = |witness: PrivateWitness, pda_id: AccountId, signers: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                public_actors: vec![recipient],
-                signers,
+                declared: Declared::new(vec![recipient], signers),
                 private_witnesses: vec![witness],
                 ..proving_input(root(
                     Actor::new(pda_id, proxy_id),
@@ -803,6 +812,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     ),
                 ))
             },
+            &Simulation::default(),
             &synthetic_program(crate::test_methods::scripted()),
         )
         .unwrap()
@@ -970,6 +980,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
                 &transfer(recipient_id, 10),
             ))
         },
+        &Simulation::default(),
         &ProgramCatalog::default(),
     );
 
@@ -1003,6 +1014,7 @@ fn a_forged_echo_is_caught_before_proving() {
                     &field,
                 ))
             },
+            &Simulation::default(),
             &synthetic_program(crate::test_methods::forges_echo()),
         );
 
@@ -1044,6 +1056,7 @@ fn shadow_program_claims_a_private_pda_it_legitimately_owns() {
             )],
             ..proving_input(root(Actor::new(account_id, shadow_id), &Script::default()))
         },
+        &Simulation::default(),
         &programs,
     );
 
@@ -1073,6 +1086,7 @@ fn shadow_program_claims_a_regular_private_account_it_legitimately_owns() {
             private_witnesses: vec![init_witness(&keys, identifier)],
             ..proving_input(root(Actor::new(account_id, shadow_id), &Script::default()))
         },
+        &Simulation::default(),
         &programs,
     );
 
@@ -1096,10 +1110,11 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_actors: vec![public],
+            declared: Declared::new(vec![public], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
             ..proving_input(root(public, &Script::write(vec![7; 4])))
         },
+        &Simulation::default(),
         &programs,
     )
     .unwrap();
@@ -1177,6 +1192,7 @@ fn prove_undisclosed(
                 &Script::default(),
             ))
         },
+        &Simulation::default(),
         &programs,
     )
     .expect("the circuit has no live chain state to check the proof against, so proving succeeds");

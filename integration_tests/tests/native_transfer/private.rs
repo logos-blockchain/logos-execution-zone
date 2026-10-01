@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
@@ -8,7 +8,7 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor, ProvingInput, execute_and_prove,
+    AccountId, Actor, Declared, ProvingInput, Simulation, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
@@ -614,9 +614,7 @@ fn prove_init_with_commitment_root(
                     expect_balance: None,
                 })?,
             },
-            public_actors: vec![sender],
-            signers: [sender_id].into(),
-            identities: HashSet::new(),
+            declared: Declared::new(vec![sender], [sender_id]),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
@@ -627,11 +625,14 @@ fn prove_init_with_commitment_root(
                     commitment_root,
                 },
             }],
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+        },
+        &Simulation {
             // The proof is only inspected, never settled, so the snapshot states just enough
             // balance.
             public_shards: [(sender, native_token::encode_balance(1))].into(),
-            dummy_inputs: Vec::new(),
-            ciphertext_padding: None,
+            ..Simulation::default()
         },
         &ProgramCatalog::default(),
     )?;

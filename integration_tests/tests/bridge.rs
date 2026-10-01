@@ -3,10 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
@@ -187,11 +184,8 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
                 to: receipt,
                 message: deposit,
             },
-            public_actors,
-            signers: HashSet::new(),
-            identities: HashSet::new(),
+            declared: lee::Declared::new(public_actors, []),
             private_witnesses: Vec::new(),
-            public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
         },

@@ -3,8 +3,6 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::collections::{HashMap, HashSet};
-
 use amm_core::{SwapOffer, SwapRequest, swap_transfer};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -16,7 +14,8 @@ use integration_tests::{
     wait_for_inclusion, wait_until,
 };
 use lee::{
-    AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, execute_and_prove_assuming,
+    AccountId, Actor, Declared, PrivacyPreservingTransaction, ProvingInput,
+    execute_and_prove_assuming,
     privacy_preserving_transaction::{
         circuit::ProgramCatalog, message::Message, witness_set::WitnessSet,
     },
@@ -153,13 +152,14 @@ async fn prepare_offer(
                 to: Actor::new(trader.input, token_program_id()),
                 message: swap_message(pool, trader)?,
             },
-            public_actors: vec![
-                Actor::new(pool.pool_id, amm_program_id()),
-                Actor::new(pool.vault_a, token_program_id()),
-                Actor::new(pool.vault_b, token_program_id()),
-            ],
-            signers: HashSet::new(),
-            identities: HashSet::new(),
+            declared: Declared::new(
+                vec![
+                    Actor::new(pool.pool_id, amm_program_id()),
+                    Actor::new(pool.vault_a, token_program_id()),
+                    Actor::new(pool.vault_b, token_program_id()),
+                ],
+                [],
+            ),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: spent.key_chain.viewing_public_key.clone(),
@@ -186,7 +186,6 @@ async fn prepare_offer(
                     },
                 },
             ],
-            public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
         },

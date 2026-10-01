@@ -2,15 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ShadowProgramWitness,
+    MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    ProgramImageWitness, ProvingInput, ShadowProgramWitness,
     account::{AccountId, Actor, Cycles, ShardData},
-    execution_state::{
-        Assumption, Backend, Declared, ExecutionResult, ExecutionState, Mode, TransactionEntry,
-    },
+    execution_state::{Assumption, Backend, ExecutionResult, ExecutionState, Mode},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{ProgramHeader, ReceiveInput, StoredMessage, Transition},
+    program::{ProgramHeader, ReceiveInput, Transition},
     to_frame,
 };
 use risc0_zkvm::{
@@ -21,7 +19,7 @@ use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
-    validated_state_diff::{admit_public_receipt, sorted},
+    validated_state_diff::admit_public_receipt,
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -139,29 +137,12 @@ impl ProgramCatalog {
     }
 }
 
-/// Inputs for proving an LEE program's execution.
-pub struct ProvingInput {
-    pub root: TransactionEntry<StoredMessage>,
-    pub public_actors: Vec<Actor>,
-    pub signers: HashSet<AccountId>,
+#[derive(Default)]
+pub struct Simulation {
+    pub public_shards: HashMap<Actor, ShardData>,
     /// Accounts settlement accepts as proven public identities: identity evidence and designated
     /// accounts.
-    pub identities: HashSet<AccountId>,
-    pub private_witnesses: Vec<PrivateWitness>,
-    pub public_shards: HashMap<Actor, ShardData>,
-    pub dummy_inputs: Vec<DummyInput>,
-    /// Minimum length each emitted note is padded to, so notes do not leak their
-    /// account's size. `None` leaves them at their natural length.
-    pub ciphertext_padding: Option<u32>,
-}
-
-impl ProvingInput {
-    fn declared(&self) -> Declared {
-        Declared {
-            public_actors: self.public_actors.clone(),
-            authorized_accounts: sorted(self.signers.iter().copied()),
-        }
-    }
+    pub proven_public_accounts: HashSet<AccountId>,
 }
 
 struct Simulator<'input> {
@@ -239,25 +220,26 @@ fn receive_with(
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
-/// circuit, assuming of public execution what running it against `input.public_shards` delivers.
+/// circuit, assuming of public execution what running it against `simulation.public_shards`
+/// delivers.
 pub fn execute_and_prove(
     input: ProvingInput,
+    simulation: &Simulation,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    let declared = input.declared();
     if let Some(record) = input.root.receipt() {
-        admit_public_receipt(record, &declared, |account_id| {
-            input.identities.contains(&account_id)
+        admit_public_receipt(record, &input.declared, |account_id| {
+            simulation.proven_public_accounts.contains(&account_id)
         })?;
     }
     let ExecutionResult::Derived { assumed } = ExecutionState::initialize(
-        declared,
+        input.declared.clone(),
         &input.private_witnesses,
         Mode::Derive(input.root.clone()),
     )?
     .run(&mut Simulator {
         programs: &programs.programs,
-        public_shards: &input.public_shards,
+        public_shards: &simulation.public_shards,
     })?
     .result
     else {
@@ -273,14 +255,6 @@ pub fn execute_and_prove_assuming(
     assumed: Vec<Vec<Assumption>>,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    let declared = input.declared();
-    let ProvingInput {
-        root,
-        private_witnesses,
-        dummy_inputs,
-        ciphertext_padding,
-        ..
-    } = input;
     let ProgramCatalog { programs } = programs;
 
     let mut backend = Prover {
@@ -289,10 +263,10 @@ pub fn execute_and_prove_assuming(
         turns: Vec::new(),
     };
     ExecutionState::initialize(
-        declared.clone(),
-        &private_witnesses,
+        input.declared.clone(),
+        &input.private_witnesses,
         Mode::Record {
-            root: root.clone(),
+            root: input.root.clone(),
             assumed: assumed.clone(),
         },
     )?
@@ -336,11 +310,7 @@ pub fn execute_and_prove_assuming(
     }
 
     let circuit_input = PrivacyPreservingCircuitInput {
-        root,
-        declared,
-        private_witnesses,
-        dummy_inputs,
-        ciphertext_padding,
+        input,
         program_image_witnesses,
         shadow_program_witnesses,
         turns,

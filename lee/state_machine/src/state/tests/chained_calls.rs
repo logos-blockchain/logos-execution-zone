@@ -256,6 +256,7 @@ fn private_sent_calls(number_of_calls: u32) {
             ],
             ..proving_input(root(Actor::new(from_account_id, scripted_id()), &script))
         },
+        &Simulation::default(),
         &synthetic_program(crate::test_methods::scripted()),
     )
     .unwrap();

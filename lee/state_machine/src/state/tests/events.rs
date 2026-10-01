@@ -224,6 +224,7 @@ fn event_emitting_program_proves_and_validates_on_the_private_path() {
                 &emitting(vec![emitted(0), emitted(1)]),
             ))
         },
+        &Simulation::default(),
         &synthetic_program(emitter.clone()),
     )
     .expect("emitting guest must prove on the private path");
