@@ -9439,13 +9439,9 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
- "programs",
  "sequencer_executor_actor",
- "sequencer_service",
  "sequencer_storage_actor",
- "serde_json",
  "tokio",
- "wallet",
 ]
 
 [[package]]
@@ -11288,18 +11284,15 @@ name = "sequencer_ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
- "common",
  "env_logger",
  "kameo",
  "lee",
- "lee_core",
  "log",
  "primitives_ffi",
  "sequencer_executor_actor",
  "sequencer_service",
  "sequencer_storage_actor",
  "serde_json",
- "tokio",
 ]
 
 [[package]]
