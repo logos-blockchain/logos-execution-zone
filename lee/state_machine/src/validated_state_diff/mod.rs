@@ -35,7 +35,8 @@ use crate::{
 mod public_backend;
 
 /// Cycles charged per loader shard byte read: the loader runs natively and records no guest
-/// cycles. Unmeasured: ~55 ns/byte of hashing against an assumed ~20 MHz executor.
+/// cycles. Measured ~55 ns/byte against ~15 ns per executor cycle, so 1 under-charges ~3.7x; kept
+/// so the default wallet gas limit covers every legal chain.
 const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 pub struct StateDiff {
