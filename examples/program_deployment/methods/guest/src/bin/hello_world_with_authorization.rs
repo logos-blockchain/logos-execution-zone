@@ -19,7 +19,7 @@ fn receive(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
     assert!(input.is_authorized, "Missing required authorization");
     // ####
 
-    let mut bytes = input.pre_data.to_vec();
+    let mut bytes = input.pre_state.to_vec();
     bytes.extend(greeting);
     Response::write(bytes)
 }

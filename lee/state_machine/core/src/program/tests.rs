@@ -6,7 +6,7 @@ fn receive_input() -> ReceiveInput {
         receiver,
         origin: Origin::Root,
         is_authorized: false,
-        pre_data: ShardData::empty(),
+        pre_state: ActorState::empty(),
         message: Vec::new(),
     }
 }
@@ -170,8 +170,8 @@ fn get_program_via_reads_the_loader_shard() {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let program_shard: ShardData = header.to_bytes().try_into().unwrap();
-    let segment_shard: ShardData = segment.to_bytes().try_into().unwrap();
+    let program_shard: ActorState = header.to_bytes().try_into().unwrap();
+    let segment_shard: ActorState = segment.to_bytes().try_into().unwrap();
     let lookup = |id| {
         if id == program_account {
             Some(&program_shard)
@@ -186,7 +186,7 @@ fn get_program_via_reads_the_loader_shard() {
         Some(([7; 8], vec![1, 2, 3]))
     );
 
-    let deleted = ShardData::empty();
+    let deleted = ActorState::empty();
     let deleted_header = |id| (id == program_account).then_some(&deleted);
     assert_eq!(get_program_via(program_account, deleted_header), None);
 }
@@ -449,10 +449,10 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
             receiver,
             origin: Origin::Root,
             is_authorized: true,
-            pre_data: ShardData::try_from(b"ab".to_vec()).unwrap(),
+            pre_state: ActorState::try_from(b"ab".to_vec()).unwrap(),
             message: b"m".to_vec(),
         },
-        post_data: Some(ShardData::try_from(b"xyz".to_vec()).unwrap()),
+        post_state: Some(ActorState::try_from(b"xyz".to_vec()).unwrap()),
         sends: vec![Action::Call(Call {
             to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
             message: b"q".to_vec(),
@@ -469,11 +469,11 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         &[2; 32],            // input.receiver.program_account_id
         &[0],                // input.origin: Origin::Root
         &[1],                // input.is_authorized
-        &[2, 0, 0, 0],       // input.pre_data
+        &[2, 0, 0, 0],       // input.pre_state
         b"ab",
         &[1, 0, 0, 0], // input.message
         b"m",
-        &[1], // post_data: Some
+        &[1], // post_state: Some
         &[3, 0, 0, 0],
         b"xyz",
         &[1, 0, 0, 0], // sends: one action

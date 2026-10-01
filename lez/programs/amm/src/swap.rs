@@ -1,6 +1,6 @@
 use amm_core::{PoolDefinition, SwapRequest};
 use lee_core::{
-    account::ShardData,
+    account::ActorState,
     program::{ReceiveInput, Response},
 };
 use token_core::{Delivery, Notification};
@@ -102,7 +102,7 @@ pub fn swap(input: &ReceiveInput, pool: &PoolDefinition, notification: &Notifica
         amount_out,
         delivery,
     );
-    Response::write(ShardData::from(&PoolDefinition {
+    Response::write(ActorState::from(&PoolDefinition {
         reserve_a,
         reserve_b,
         ..pool.clone()

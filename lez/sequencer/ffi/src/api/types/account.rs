@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use lee::{Account, AccountData, AccountId, ShardData};
+use lee::{Account, AccountData, AccountId, ActorState};
 
 use crate::{
     OperationStatus,
@@ -23,7 +23,7 @@ impl From<AccountData> for FfiAccountData {
         let acc_data_values = shards
             .values()
             .cloned()
-            .map(ShardData::into_inner)
+            .map(ActorState::into_inner)
             .map(Into::into)
             .collect::<Vec<_>>();
 
@@ -54,7 +54,7 @@ impl TryFrom<FfiAccountData> for AccountData {
         let mut values_std = vec![];
 
         for raw_shard in values_std_raw {
-            let shard: ShardData = raw_shard.try_into().map_err(|e| {
+            let shard: ActorState = raw_shard.try_into().map_err(|e| {
                 log::error!("Failed to cast `FfiAccount` into `Account`, err: {e}");
                 OperationStatus::CastError
             })?;
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_account(val: *mut FfiAccount) {
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee::{Account, AccountData, AccountId, ShardData};
+    use lee::{Account, AccountData, AccountId, ActorState};
     use lee_core::account::Nonce;
 
     use crate::api::types::account::FfiAccount;
@@ -170,15 +170,15 @@ mod tests {
 
         shards.insert(
             AccountId::new([42; 32]),
-            ShardData::try_from(vec![1, 1, 1, 1]).expect("Must fit"),
+            ActorState::try_from(vec![1, 1, 1, 1]).expect("Must fit"),
         );
         shards.insert(
             AccountId::new([43; 32]),
-            ShardData::try_from(vec![2, 2, 2, 2]).expect("Must fit"),
+            ActorState::try_from(vec![2, 2, 2, 2]).expect("Must fit"),
         );
         shards.insert(
             AccountId::new([44; 32]),
-            ShardData::try_from(vec![3, 3, 3, 3]).expect("Must fit"),
+            ActorState::try_from(vec![3, 3, 3, 3]).expect("Must fit"),
         );
 
         let account_std = Account {

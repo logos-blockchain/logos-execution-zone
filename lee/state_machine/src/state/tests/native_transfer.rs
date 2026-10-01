@@ -88,7 +88,7 @@ fn transition_from_sequence_of_native_transfer_invocations() {
 fn a_guest_writes_its_own_shard_and_sends_a_transfer_of_the_same_account() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_record: ShardData = b"untouched".to_vec().try_into().unwrap();
+    let stranger_record: ActorState = b"untouched".to_vec().try_into().unwrap();
 
     let sender_key = PrivateKey::try_new([11; 32]).unwrap();
     let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
@@ -187,7 +187,7 @@ fn a_transfer_from_a_non_canonical_balance_is_rejected() {
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
-    let zero_padded = ShardData::try_from(vec![0; 16]).unwrap();
+    let zero_padded = ActorState::try_from(vec![0; 16]).unwrap();
     let mut state = V03State::new().with_public_accounts([(
         from,
         Account::default().with_shard(NATIVE_TOKEN_PROGRAM_ID, zero_padded),

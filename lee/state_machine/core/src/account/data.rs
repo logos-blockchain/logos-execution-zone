@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(100);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, BorshSerialize)]
-pub struct ShardData(Vec<u8>);
+pub struct ActorState(Vec<u8>);
 
-impl ShardData {
+impl ActorState {
     #[must_use]
     pub const fn empty() -> Self {
         Self(Vec::new())
@@ -25,13 +25,13 @@ impl ShardData {
 #[error("data length exceeds maximum allowed length of {} bytes", DATA_MAX_LENGTH.as_u64())]
 pub struct DataTooBigError;
 
-impl From<ShardData> for Vec<u8> {
-    fn from(data: ShardData) -> Self {
+impl From<ActorState> for Vec<u8> {
+    fn from(data: ActorState) -> Self {
         data.0
     }
 }
 
-impl TryFrom<Vec<u8>> for ShardData {
+impl TryFrom<Vec<u8>> for ActorState {
     type Error = DataTooBigError;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
@@ -45,7 +45,7 @@ impl TryFrom<Vec<u8>> for ShardData {
     }
 }
 
-impl Deref for ShardData {
+impl Deref for ActorState {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -53,31 +53,31 @@ impl Deref for ShardData {
     }
 }
 
-impl AsRef<[u8]> for ShardData {
+impl AsRef<[u8]> for ActorState {
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl Borrow<[u8]> for ShardData {
+impl Borrow<[u8]> for ActorState {
     fn borrow(&self) -> &[u8] {
         &self.0
     }
 }
 
-impl<'de> Deserialize<'de> for ShardData {
+impl<'de> Deserialize<'de> for ActorState {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        /// `ShardData` deserialization visitor.
+        /// `ActorState` deserialization visitor.
         ///
         /// Compared to a simple deserialization into a `Vec<u8>`, this visitor enforces
         /// early length check defined by [`DATA_MAX_LENGTH`].
         struct DataVisitor;
 
         impl<'de> serde::de::Visitor<'de> for DataVisitor {
-            type Value = ShardData;
+            type Value = ActorState;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(
@@ -108,7 +108,7 @@ impl<'de> Deserialize<'de> for ShardData {
                     vec.push(value);
                 }
 
-                Ok(ShardData(vec))
+                Ok(ActorState(vec))
             }
         }
 
@@ -116,7 +116,7 @@ impl<'de> Deserialize<'de> for ShardData {
     }
 }
 
-impl BorshDeserialize for ShardData {
+impl BorshDeserialize for ActorState {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         // Implementation adapted from `impl BorshDeserialize for Vec<T>`
 
@@ -147,7 +147,7 @@ mod tests {
             usize::try_from(DATA_MAX_LENGTH.as_u64())
                 .expect("DATA_MAX_LENGTH fits in usize")
         ];
-        let result = ShardData::try_from(max_vec);
+        let result = ActorState::try_from(max_vec);
         assert!(result.is_ok());
     }
 
@@ -159,7 +159,7 @@ mod tests {
                 .expect("DATA_MAX_LENGTH fits in usize")
                 + 1
         ];
-        let result = ShardData::try_from(big_vec);
+        let result = ActorState::try_from(big_vec);
         assert!(matches!(result, Err(DataTooBigError)));
     }
 
@@ -174,7 +174,7 @@ mod tests {
         let mut serialized = Vec::new();
         <_ as BorshSerialize>::serialize(&too_big_data, &mut serialized).unwrap();
 
-        let result = <ShardData as BorshDeserialize>::deserialize(&mut serialized.as_ref());
+        let result = <ActorState as BorshDeserialize>::deserialize(&mut serialized.as_ref());
         assert!(result.is_err());
     }
 
@@ -188,7 +188,7 @@ mod tests {
         ];
         let json = serde_json::to_string(&data).unwrap();
 
-        let result: Result<ShardData, _> = serde_json::from_str(&json);
+        let result: Result<ActorState, _> = serde_json::from_str(&json);
         assert!(result.is_err());
     }
 }

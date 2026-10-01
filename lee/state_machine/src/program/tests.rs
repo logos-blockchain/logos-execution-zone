@@ -1,5 +1,5 @@
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::{Origin, ReceiveInput, Transition},
     to_frame,
 };
@@ -20,7 +20,7 @@ fn receive_input(program: &Program, message: Vec<u8>) -> ReceiveInput {
         receiver,
         origin: Origin::Root,
         is_authorized: true,
-        pre_data: ShardData::empty(),
+        pre_state: ActorState::empty(),
         message,
     }
 }
@@ -44,7 +44,7 @@ fn program_execution() {
     // The transition echoes the exact input it was handed — that echo is what the engine matches
     // against the delivery it scheduled.
     assert_eq!(transition.input, input);
-    assert_eq!(transition.post_data, Some(written.try_into().unwrap()));
+    assert_eq!(transition.post_state, Some(written.try_into().unwrap()));
     assert!(transition.sends.is_empty());
 }
 

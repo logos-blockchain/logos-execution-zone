@@ -4,7 +4,7 @@
 //! out-of-process r0vm executor; the cached leg is unaffected by that variable.
 
 use lee_core::{
-    account::{AccountId, Actor, Cycles, ShardData},
+    account::{AccountId, Actor, ActorState, Cycles},
     program::{Origin, ReceiveInput},
 };
 use risc0_binfmt::ProgramBinary;
@@ -44,7 +44,7 @@ fn env_for(program: &Program, message: &[u8], budget: Cycles) -> ExecutorEnv<'st
             receiver,
             origin: Origin::Root,
             is_authorized: true,
-            pre_data: ShardData::empty(),
+            pre_state: ActorState::empty(),
             message: message.to_vec(),
         },
         &mut builder,

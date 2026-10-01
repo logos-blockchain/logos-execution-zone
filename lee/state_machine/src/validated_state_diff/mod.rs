@@ -7,7 +7,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
-    account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
+    account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{Declared, ExecutionResult, ExecutionState, Mode, TransactionEntry},
     program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
@@ -433,7 +433,7 @@ impl ValidatedStateDiff {
 
 fn load_program<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<Program> {
     let (program_id, elf) = crate::program::resolve_program(account_id, loader_shard)?;
     Some(Program::new_unchecked(program_id, Cow::Owned(elf)))
@@ -455,7 +455,7 @@ fn loader_shard<'state>(
     execution: &'state ExecutionState<'_>,
     state: &'state V03State,
     account_id: AccountId,
-) -> Option<&'state ShardData> {
+) -> Option<&'state ActorState> {
     execution
         .pending_shard(account_id, PROGRAM_LOADER_ACCOUNT_ID)
         .or_else(|| state.loader_shard(account_id))

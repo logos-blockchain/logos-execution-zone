@@ -2,7 +2,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::PdaSeed,
 };
 use token_core::{Delivery, Notify, TokenDescriptor};
@@ -114,15 +114,15 @@ impl PoolDefinition {
     }
 }
 
-impl TryFrom<&ShardData> for PoolDefinition {
+impl TryFrom<&ActorState> for PoolDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&PoolDefinition> for ShardData {
+impl From<&PoolDefinition> for ActorState {
     fn from(definition: &PoolDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -130,7 +130,7 @@ impl From<&PoolDefinition> for ShardData {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
+        Self::try_from(data).expect("Token definition encoded data should fit into ActorState")
     }
 }
 

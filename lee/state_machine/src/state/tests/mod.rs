@@ -11,7 +11,7 @@ use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
     PrivacyPreservingCircuitOutput, PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, Actor, Balance, Nonce, data::ShardData},
+    account::{Account, AccountId, Actor, Balance, Nonce, data::ActorState},
     encryption::ViewingPublicKey,
     execution_state::{Assumption, ExecutionError, TransactionEntry},
     native_token::{
@@ -310,7 +310,7 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
             segment_ids[i],
             Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ShardData::try_from(
+                ActorState::try_from(
                     ProgramSegment {
                         bytecode: chunks[i].to_vec(),
                         next_segment: segment_ids.get(i + 1).copied(),

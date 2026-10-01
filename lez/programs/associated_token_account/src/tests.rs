@@ -4,7 +4,7 @@ use associated_token_account_core::{
     Message, ata_of, compute_ata_seed, get_associated_token_account_id,
 };
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::{Action, Call, Origin, PdaSeed, ReceiveInput, Transition},
 };
 use token_core::{Delivery, TokenDescriptor, TokenKind};
@@ -48,7 +48,7 @@ fn turn(is_authorized: bool, message: Message) -> Transition {
         receiver: Actor::new(owner_id(), ATA_PROGRAM_ID),
         origin: Origin::Root,
         is_authorized,
-        pre_data: ShardData::empty(),
+        pre_state: ActorState::empty(),
         message: borsh::to_vec(&message).expect("the message serializes"),
     };
     crate::receive(&input, message).into_transition(input)
@@ -147,7 +147,7 @@ fn create_grants_the_ata_seed_only_when_the_owner_signed() {
     );
 
     let unsigned = turn(false, create(TOKEN_PROGRAM_ID));
-    assert_eq!(unsigned.post_data, None);
+    assert_eq!(unsigned.post_state, None);
     assert_eq!(
         unsigned.sends,
         vec![assert_kind.clone().into(), ensure.clone().into()]

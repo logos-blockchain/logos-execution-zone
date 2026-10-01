@@ -717,8 +717,8 @@ fn a_public_turn_forging_its_receiver_is_refused() {
 }
 
 #[test]
-fn a_public_turn_forging_the_pre_data_it_was_given_is_refused() {
-    assert_forged_field_is_refused(ForgeField::PreData);
+fn a_public_turn_forging_the_pre_state_it_was_given_is_refused() {
+    assert_forged_field_is_refused(ForgeField::PreState);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 pub use amm_core as core;
 use amm_core::{Message, PoolDefinition};
 use lee_core::{
-    account::ShardData,
+    account::ActorState,
     program::{ReceiveInput, Response},
 };
 
@@ -19,7 +19,7 @@ pub mod swap;
 mod tests;
 
 pub fn receive(input: &ReceiveInput) -> Response {
-    if let Ok(pool) = PoolDefinition::try_from(&input.pre_data)
+    if let Ok(pool) = PoolDefinition::try_from(&input.pre_state)
         && input.origin_program() == Some(pool.token_program_id)
     {
         let token_core::Message::Notification(notification) =
@@ -58,7 +58,7 @@ pub fn receive(input: &ReceiveInput) -> Response {
             amount_liquidity,
             ..
         } => {
-            let pool = PoolDefinition::try_from(&input.pre_data)
+            let pool = PoolDefinition::try_from(&input.pre_state)
                 .expect("Add liquidity: AMM Program expects valid Pool Definition Account");
             let after = add::pool_after_add(
                 &pool,
@@ -76,7 +76,7 @@ pub fn receive(input: &ReceiveInput) -> Response {
             amount_to_remove_token_b,
             ..
         } => {
-            let pool = PoolDefinition::try_from(&input.pre_data)
+            let pool = PoolDefinition::try_from(&input.pre_state)
                 .expect("Remove liquidity: AMM Program expects a valid Pool Definition Account");
             let after = remove::pool_after_remove(
                 &pool,
@@ -89,5 +89,5 @@ pub fn receive(input: &ReceiveInput) -> Response {
     };
     liquidity_sends(input.receiver.account_id, &pool, &message, creates_lp)
         .into_iter()
-        .fold(Response::write(ShardData::from(&after)), Response::send)
+        .fold(Response::write(ActorState::from(&after)), Response::send)
 }

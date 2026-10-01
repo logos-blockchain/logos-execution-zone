@@ -545,7 +545,7 @@ fn validate_no_inbox_state_modification(
 fn bridge_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
         account: &lee::Account,
-    ) -> impl Iterator<Item = (&lee::AccountId, &lee::ShardData)> {
+    ) -> impl Iterator<Item = (&lee::AccountId, &lee::ActorState)> {
         account
             .data
             .shards
@@ -828,7 +828,7 @@ mod tests {
         let mut post = pre.clone();
         post.data.set_shard(
             programs::cross_zone_inbox_account_id(),
-            lee::ShardData::try_from(vec![1]).expect("fits"),
+            lee::ActorState::try_from(vec![1]).expect("fits"),
         );
         state_and_diff(AccountId::new([5; 32]), pre, post)
     }

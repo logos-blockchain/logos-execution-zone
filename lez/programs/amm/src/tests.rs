@@ -11,7 +11,7 @@ use amm_core::{
     swap_transfer,
 };
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::{Action, Call, Origin, ReceiveInput, Transition},
 };
 use token_core::{
@@ -75,8 +75,8 @@ fn pool_base() -> PoolDefinition {
     }
 }
 
-fn pool_shard(pool: &PoolDefinition) -> ShardData {
-    ShardData::from(pool)
+fn pool_shard(pool: &PoolDefinition) -> ActorState {
+    ActorState::from(pool)
 }
 
 fn token_actor(account_id: AccountId) -> Actor {
@@ -102,7 +102,7 @@ fn swap_route(input_is_token_a: bool) -> [AccountId; 4] {
 
 fn turn(
     pool_account: AccountId,
-    pool_state: ShardData,
+    pool_state: ActorState,
     origin: Origin,
     message: Vec<u8>,
 ) -> Transition {
@@ -110,18 +110,18 @@ fn turn(
         receiver: Actor::new(pool_account, AMM_PROGRAM_ID),
         origin,
         is_authorized: false,
-        pre_data: pool_state,
+        pre_state: pool_state,
         message,
     };
     crate::receive(&input).into_transition(input)
 }
 
-fn pool_turn(pool_state: ShardData, origin: Origin, message: Vec<u8>) -> Transition {
+fn pool_turn(pool_state: ActorState, origin: Origin, message: Vec<u8>) -> Transition {
     turn(pool_id(), pool_state, origin, message)
 }
 
 // A liquidity operation: a user's root delivery to the pool.
-fn user_turn(pool_state: ShardData, message: &Message) -> Transition {
+fn user_turn(pool_state: ActorState, message: &Message) -> Transition {
     pool_turn(
         pool_state,
         Origin::Root,
@@ -132,7 +132,7 @@ fn user_turn(pool_state: ShardData, message: &Message) -> Transition {
 fn written(transition: &Transition) -> PoolDefinition {
     PoolDefinition::try_from(
         transition
-            .post_data
+            .post_state
             .as_ref()
             .expect("the pool writes its shard"),
     )
@@ -652,13 +652,13 @@ fn remove_liquidity_full_drain_deactivates_the_pool() {
 #[should_panic(expected = "Token A should have a nonzero amount")]
 #[test]
 fn call_new_definition_with_zero_balance_1() {
-    let _transition = user_turn(ShardData::empty(), &new_definition_message(0, RESERVE_B));
+    let _transition = user_turn(ActorState::empty(), &new_definition_message(0, RESERVE_B));
 }
 
 #[should_panic(expected = "Token B should have a nonzero amount")]
 #[test]
 fn call_new_definition_with_zero_balance_2() {
-    let _transition = user_turn(ShardData::empty(), &new_definition_message(RESERVE_A, 0));
+    let _transition = user_turn(ActorState::empty(), &new_definition_message(RESERVE_A, 0));
 }
 
 #[should_panic(expected = "Cannot set up a swap for a token with itself")]
@@ -678,7 +678,7 @@ fn call_new_definition_same_token_definition() {
         unreachable!("the helper builds a new definition");
     };
     let _transition = user_turn(
-        ShardData::empty(),
+        ActorState::empty(),
         &Message::NewDefinition {
             token_a_amount,
             token_b_amount,
@@ -697,7 +697,7 @@ fn call_new_definition_same_token_definition() {
 fn call_new_definition_wrong_pool_id() {
     let _transition = turn(
         UNRELATED_ID,
-        ShardData::empty(),
+        ActorState::empty(),
         Origin::Root,
         borsh::to_vec(&new_definition_message(RESERVE_A, RESERVE_B))
             .expect("the message serializes"),
@@ -716,7 +716,7 @@ fn call_new_definition_cannot_initialize_active_pool() {
 #[test]
 fn new_definition_uninitialized_pool_creates_the_liquidity_definition() {
     let transition = user_turn(
-        ShardData::empty(),
+        ActorState::empty(),
         &new_definition_message(RESERVE_A, RESERVE_B),
     );
 
@@ -782,7 +782,7 @@ fn new_definition_lp_asymmetric_amounts() {
 #[test]
 fn new_definition_lp_symmetric_amounts() {
     // token_a = 100, token_b = 100 -> LP = sqrt(10_000) = 100
-    let transition = user_turn(ShardData::empty(), &new_definition_message(100, 100));
+    let transition = user_turn(ActorState::empty(), &new_definition_message(100, 100));
 
     assert_eq!(written(&transition).liquidity_pool_supply, 100);
     assert_eq!(

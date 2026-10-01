@@ -226,7 +226,7 @@ mod tests {
     use lee_core::{
         AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, EphemeralPublicKey, Identifier,
         NullifierPublicKey,
-        account::{AccountData, ShardData},
+        account::{AccountData, ActorState},
         execution_state::Boundary,
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
@@ -319,7 +319,7 @@ mod tests {
         )
     }
 
-    fn data(bytes: &[u8]) -> ShardData {
+    fn data(bytes: &[u8]) -> ActorState {
         bytes.to_vec().try_into().expect("test data is small")
     }
 

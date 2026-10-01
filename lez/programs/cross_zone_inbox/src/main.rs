@@ -22,7 +22,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         // a written config must already hold exactly this.
         Message::InitConfig(config) => {
             assert_root_origin_at_config(input);
-            Response::write(write_once(&input.pre_data, config.to_bytes()))
+            Response::write(write_once(&input.pre_state, config.to_bytes()))
         }
     }
 }
@@ -43,7 +43,7 @@ fn dispatch(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         msg.l1_inclusion_witness.is_none(),
         "l1_inclusion_witness must be None in v1"
     );
-    let cfg = InboxConfig::from_bytes(&input.pre_data).expect("inbox config decodes");
+    let cfg = InboxConfig::from_bytes(&input.pre_state).expect("inbox config decodes");
     assert!(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
@@ -71,7 +71,7 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         ),
         "A delivery is marked only at its own seen shard"
     );
-    let mut shard = SeenShard::from_bytes(&input.pre_data).expect("seen shard decodes");
+    let mut shard = SeenShard::from_bytes(&input.pre_state).expect("seen shard decodes");
     // One block id, one delivering block. The address binds the zone and block id but
     // not which block claimed them, so an equivocating peer's two blocks at one id land
     // here; the first binds the shard and the second aborts.
@@ -111,7 +111,7 @@ fn assert_root_origin_at_config(input: &ReceiveInput) {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, ShardData},
+        account::{AccountId, ActorState},
         program::Transition,
     };
 
@@ -151,7 +151,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -174,8 +174,8 @@ mod tests {
         shard.to_bytes()
     }
 
-    fn written(bytes: Vec<u8>) -> ShardData {
-        ShardData::try_from(bytes).unwrap()
+    fn written(bytes: Vec<u8>) -> ActorState {
+        ActorState::try_from(bytes).unwrap()
     }
 
     fn config() -> Vec<u8> {
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn a_first_delivery_is_recorded() {
         let first = mark_at_seen(Vec::new(), HASH, 3);
-        assert_eq!(first.post_data, Some(written(shard_with(&[3]))));
+        assert_eq!(first.post_state, Some(written(shard_with(&[3]))));
         assert_eq!(
             first.sends,
             vec![
@@ -205,7 +205,7 @@ mod tests {
         );
 
         assert_eq!(
-            mark_at_seen(shard_with(&[3]), HASH, 4).post_data,
+            mark_at_seen(shard_with(&[3]), HASH, 4).post_state,
             Some(written(shard_with(&[3, 4])))
         );
     }
@@ -257,7 +257,7 @@ mod tests {
             Message::Dispatch(message.clone()),
         );
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![Call::new(seen_actor(), &Message::Mark(message)).into()]

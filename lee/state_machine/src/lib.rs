@@ -6,7 +6,7 @@
 pub use fees::{FeeDeclaration, SignedMessage, is_fee_authorized};
 pub use lee_core::{
     GENESIS_BLOCK_ID, ProvingInput, SharedSecretKey,
-    account::{Account, AccountData, AccountId, Actor, Balance, Cycles, Fee, Gas, ShardData},
+    account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
     execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp, TransactionEntry},
     native_token,

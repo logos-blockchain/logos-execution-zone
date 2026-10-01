@@ -13,7 +13,7 @@ pub use lee_core::program::{
 };
 use lee_core::{
     Commitment,
-    account::{AccountId, ShardData},
+    account::{AccountId, ActorState},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ReceiveInput, Response, Transition},
 };
@@ -42,7 +42,7 @@ pub enum Message {
 
 pub fn receive<'state>(
     input: &ReceiveInput,
-    shard: impl Fn(AccountId) -> &'state ShardData,
+    shard: impl Fn(AccountId) -> &'state ActorState,
 ) -> (Transition, Option<Commitment>) {
     let message: Message = borsh::from_slice(&input.message).expect("a loader message must decode");
     assert_eq!(
@@ -56,7 +56,10 @@ pub fn receive<'state>(
             bytecode,
             next_segment,
         } => {
-            assert!(input.pre_data.is_empty(), "segment target already deployed");
+            assert!(
+                input.pre_state.is_empty(),
+                "segment target already deployed"
+            );
             if let Some(next) = next_segment {
                 assert!(
                     ProgramSegment::from_bytes(shard(next)).is_some(),
@@ -73,7 +76,7 @@ pub fn receive<'state>(
             first_segment,
             immutable,
         } => {
-            assert!(input.pre_data.is_empty(), "header target already deployed");
+            assert!(input.pre_state.is_empty(), "header target already deployed");
             assert!(
                 input.is_authorized,
                 "CreateHeader target must be an authorized account"
@@ -84,7 +87,7 @@ pub fn receive<'state>(
             first_segment,
             immutable,
         } => {
-            let old_header = ProgramHeader::from_bytes(&input.pre_data).expect(
+            let old_header = ProgramHeader::from_bytes(&input.pre_state).expect(
                 "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
             );
             assert!(
@@ -122,7 +125,7 @@ fn header_write<'state>(
     input: &ReceiveInput,
     first_segment: AccountId,
     immutable: bool,
-    shard: impl Fn(AccountId) -> &'state ShardData,
+    shard: impl Fn(AccountId) -> &'state ActorState,
 ) -> (Vec<u8>, Option<Commitment>) {
     let header = build_header(first_segment, immutable, shard);
     let new_commitment =
@@ -133,7 +136,7 @@ fn header_write<'state>(
 fn build_header<'state>(
     first_segment: AccountId,
     immutable: bool,
-    shard: impl Fn(AccountId) -> &'state ShardData,
+    shard: impl Fn(AccountId) -> &'state ActorState,
 ) -> ProgramHeader {
     ProgramHeader {
         image_id: compute_image_id(first_segment, shard),
@@ -144,7 +147,7 @@ fn build_header<'state>(
 
 fn compute_image_id<'state>(
     first_segment: AccountId,
-    shard: impl Fn(AccountId) -> &'state ShardData,
+    shard: impl Fn(AccountId) -> &'state ActorState,
 ) -> ProgramId {
     let mut elf = Vec::new();
     let mut expected_next = Some(first_segment);

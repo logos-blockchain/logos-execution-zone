@@ -41,7 +41,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 .checked_add(summary.revenue_tip)
                 .expect("block revenue fits u128");
 
-            let mut fee_state = FeeState::from_bytes(&input.pre_data);
+            let mut fee_state = FeeState::from_bytes(&input.pre_state);
             assert_eq!(
                 fee_state.apply_block(&summary),
                 payout,
@@ -88,7 +88,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, Balance, ShardData},
+        account::{AccountId, ActorState, Balance},
         program::Transition,
     };
 
@@ -125,7 +125,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -160,8 +160,8 @@ mod tests {
 
         let transition = distribute_at(&state, block, payout);
         assert_eq!(
-            transition.post_data,
-            Some(ShardData::try_from(expected.to_bytes()).unwrap())
+            transition.post_state,
+            Some(ActorState::try_from(expected.to_bytes()).unwrap())
         );
     }
 

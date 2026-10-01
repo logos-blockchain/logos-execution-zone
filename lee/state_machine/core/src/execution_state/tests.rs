@@ -79,7 +79,7 @@ impl Keys {
 #[derive(Default)]
 struct Script {
     handlers: HashMap<Actor, Handler>,
-    shards: HashMap<Actor, ShardData>,
+    shards: HashMap<Actor, ActorState>,
     log: Vec<ReceiveInput>,
 }
 
@@ -89,7 +89,9 @@ impl Script {
         receiver: Actor,
         handler: impl FnMut(&ReceiveInput) -> Transition + 'static,
     ) -> Self {
-        self.shards.entry(receiver).or_insert_with(ShardData::empty);
+        self.shards
+            .entry(receiver)
+            .or_insert_with(ActorState::empty);
         self.handlers.insert(receiver, Box::new(handler));
         self
     }
@@ -116,7 +118,7 @@ impl Backend for Script {
         Ok(handler(input))
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ShardData, ExecutionError> {
+    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, ExecutionError> {
         self.shards
             .get(&actor)
             .cloned()
@@ -136,7 +138,7 @@ fn holder(keys: &Keys) -> Actor {
     Actor::new(keys.regular_id(), id(8))
 }
 
-fn data(bytes: &[u8]) -> ShardData {
+fn data(bytes: &[u8]) -> ActorState {
     bytes.to_vec().try_into().unwrap()
 }
 
@@ -444,7 +446,7 @@ fn a_transition_that_forges_its_input_is_rejected() {
 fn a_revisited_actor_sees_its_staged_write() {
     let looping = actor(1, 9);
     let mut script = Script::default().on(looping, move |input| {
-        if input.pre_data.is_empty() {
+        if input.pre_state.is_empty() {
             echo(input, Response::write(b"x".to_vec()).send(send_to(looping)))
         } else {
             echo(input, Response::keep())
@@ -456,11 +458,11 @@ fn a_revisited_actor_sees_its_staged_write() {
     let seen: Vec<_> = script
         .log
         .iter()
-        .map(|input| (input.pre_data.clone(), input.receiver))
+        .map(|input| (input.pre_state.clone(), input.receiver))
         .collect();
     assert_eq!(
         seen,
-        vec![(ShardData::empty(), looping), (data(b"x"), looping)]
+        vec![(ActorState::empty(), looping), (data(b"x"), looping)]
     );
 }
 
@@ -591,7 +593,7 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
     let mut script = Script::default()
         .shard(clearing, b"orig")
         .on(clearing, move |input| {
-            if input.pre_data.is_empty() {
+            if input.pre_state.is_empty() {
                 echo(input, Response::keep())
             } else {
                 echo(input, Response::write(Vec::new()).send(send_to(clearing)))
@@ -604,16 +606,16 @@ fn a_public_shard_is_fetched_once_and_a_cleared_shard_is_reported_empty() {
     let seen: Vec<_> = script
         .log
         .iter()
-        .map(|input| input.pre_data.clone())
+        .map(|input| input.pre_state.clone())
         .collect();
-    assert_eq!(seen, vec![data(b"orig"), ShardData::empty()]);
+    assert_eq!(seen, vec![data(b"orig"), ActorState::empty()]);
     assert_eq!(script.shards[&clearing], data(b"orig"));
     assert_eq!(
         public,
         vec![(
             clearing.account_id,
             AccountData {
-                shards: [(clearing.program_account_id, ShardData::empty())].into(),
+                shards: [(clearing.program_account_id, ActorState::empty())].into(),
             }
         )]
     );
@@ -1410,7 +1412,7 @@ fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_n
             receiver: vault,
             origin: Origin::Program(id(5)),
             is_authorized: false,
-            pre_data: ShardData::empty(),
+            pre_state: ActorState::empty(),
             message: b"stored".to_vec(),
         }]
     );

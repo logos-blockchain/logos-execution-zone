@@ -165,7 +165,7 @@ async fn stake_shard(
     wallet: &WalletCore,
     ownership_account: AccountId,
     sequencer_stake_program_id: AccountId,
-) -> Result<lee::ShardData> {
+) -> Result<lee::ActorState> {
     let account = wallet
         .get_account_view(Actor::new(ownership_account, sequencer_stake_program_id))
         .await

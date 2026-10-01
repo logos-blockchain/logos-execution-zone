@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
-    account::{AccountId, Actor, Balance, ShardData},
+    account::{AccountId, Actor, ActorState, Balance},
     program::{Call, Cast, PdaSeed, ReceiveInput, Response, Transition},
 };
 
@@ -51,11 +51,12 @@ pub enum TransferError {
 pub struct InvalidBalanceEncoding;
 
 #[must_use]
-pub fn encode_balance(balance: Balance) -> ShardData {
+pub fn encode_balance(balance: Balance) -> ActorState {
     if balance == 0 {
-        ShardData::empty()
+        ActorState::empty()
     } else {
-        ShardData::try_from(balance.to_le_bytes().to_vec()).expect("an encoded balance is 16 bytes")
+        ActorState::try_from(balance.to_le_bytes().to_vec())
+            .expect("an encoded balance is 16 bytes")
     }
 }
 
@@ -94,7 +95,7 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
             if !input.from_own_program() {
                 return Err(TransferError::ForeignCredit { account_id });
             }
-            let post = decode_balance(&input.pre_data)?
+            let post = decode_balance(&input.pre_state)?
                 .checked_add(amount)
                 .ok_or(TransferError::BalanceOverflow { account_id })?;
             Response::write(encode_balance(post))
@@ -116,7 +117,7 @@ fn debit(
     if !input.is_authorized {
         return Err(TransferError::UnauthorizedSender { account_id });
     }
-    let balance = decode_balance(&input.pre_data)?;
+    let balance = decode_balance(&input.pre_state)?;
     if let Some(expected) = expect_balance
         && balance != expected
     {
@@ -160,7 +161,7 @@ mod tests {
             receiver: native(self_account),
             origin: Origin::Root,
             is_authorized: authorized,
-            pre_data: encode_balance(pre),
+            pre_state: encode_balance(pre),
             message: borsh::to_vec(message).unwrap(),
         }
     }
@@ -193,13 +194,13 @@ mod tests {
             assert_eq!(decode_balance(&encode_balance(balance)), Ok(balance));
         }
         assert!(encode_balance(0).is_empty());
-        assert_eq!(decode_balance(&ShardData::empty()), Ok(0));
+        assert_eq!(decode_balance(&ActorState::empty()), Ok(0));
     }
 
     #[test]
     fn non_canonical_encodings_are_rejected() {
         for bytes in [vec![0; 16], vec![1], vec![1; 15], vec![1; 17], vec![0; 32]] {
-            let data = ShardData::try_from(bytes.clone()).expect("fits the shard limit");
+            let data = ActorState::try_from(bytes.clone()).expect("fits the shard limit");
             assert_eq!(
                 decode_balance(&data),
                 Err(InvalidBalanceEncoding),
@@ -212,7 +213,7 @@ mod tests {
     fn a_transfer_debits_the_sender_and_credits_the_recipient() {
         let transition = receive(&input(1, true, 100, &transfer(30, None))).unwrap();
 
-        assert_eq!(transition.post_data, Some(encode_balance(70)));
+        assert_eq!(transition.post_state, Some(encode_balance(70)));
         assert_eq!(
             transition.sends,
             vec![Call::new(native(2), &Message::Credit(30)).into()]
@@ -247,7 +248,7 @@ mod tests {
     fn a_cast_transfer_debits_now_and_casts_the_credit() {
         let transition = receive(&input(1, true, 100, &cast_transfer(30))).unwrap();
 
-        assert_eq!(transition.post_data, Some(encode_balance(70)));
+        assert_eq!(transition.post_state, Some(encode_balance(70)));
         assert_eq!(
             transition.sends,
             vec![Cast::new(native(2), &Message::Credit(30)).into()]
@@ -272,7 +273,7 @@ mod tests {
         };
 
         assert_eq!(
-            receive(&from_public(true)).unwrap().post_data,
+            receive(&from_public(true)).unwrap().post_state,
             Some(encode_balance(70))
         );
         assert_eq!(
@@ -310,7 +311,7 @@ mod tests {
     fn a_credit_adds_to_the_balance_unless_it_overflows() {
         let from_native = Origin::Program(NATIVE_TOKEN_PROGRAM_ID);
         assert_eq!(
-            credit(5, 100, from_native).unwrap().post_data,
+            credit(5, 100, from_native).unwrap().post_state,
             Some(encode_balance(105))
         );
         assert_eq!(

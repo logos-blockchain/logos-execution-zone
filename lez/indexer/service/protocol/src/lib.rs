@@ -106,13 +106,13 @@ pub struct Account {
 /// An account's balance and program shards.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ShardData>,
+    pub shards: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
     pub fn balance(&self) -> Option<u128> {
-        let Some(ShardData(data)) = self.shards.get(&AccountId::native_token_program()) else {
+        let Some(ActorState(data)) = self.shards.get(&AccountId::native_token_program()) else {
             return Some(0);
         };
         if data.is_empty() {
@@ -457,7 +457,7 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardData(
+pub struct ActorState(
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded account data")]
     pub Vec<u8>,

@@ -42,7 +42,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 amount <= MAX_MINT_AMOUNT,
                 "mint amount exceeds the per-mint cap"
             );
-            let mut cfg = decode_config(&input.pre_data);
+            let mut cfg = decode_config(&input.pre_state);
             mint_source(&mut cfg, deliverer, &src_zone, src_account_id, amount);
             Response::write(cfg.to_bytes()).send(Call::new(
                 Actor::new(holding_account_id(program, &recipient), program),
@@ -57,7 +57,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             Response::write(
                 balance_bytes(
-                    read_balance(&input.pre_data)
+                    read_balance(&input.pre_state)
                         .checked_add(amount)
                         .expect("wrapped-token balance overflow"),
                 )
@@ -75,7 +75,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             // A written shard must already hold exactly this configuration rather than being
             // refused.
-            Response::write(write_once(&input.pre_data, config.to_bytes()))
+            Response::write(write_once(&input.pre_state, config.to_bytes()))
         }
         Message::RenounceAuthority { authority, via } => {
             if !at_config(input) {
@@ -88,7 +88,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     "the configured authority must authorize renouncing it",
                 );
             }
-            let mut cfg = decode_config(&input.pre_data);
+            let mut cfg = decode_config(&input.pre_state);
             assert_authority(
                 input,
                 &cfg,
@@ -115,7 +115,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     "the configured authority must authorize a source change",
                 );
             }
-            let mut cfg = decode_config(&input.pre_data);
+            let mut cfg = decode_config(&input.pre_state);
             assert_authority(
                 input,
                 &cfg,
@@ -199,8 +199,8 @@ fn at_config(input: &ReceiveInput) -> bool {
     input.receiver.account_id == config_account_id(input.receiver.program_account_id)
 }
 
-fn decode_config(pre_data: &[u8]) -> WrappedTokenConfig {
-    WrappedTokenConfig::from_bytes(pre_data).expect("config account holds a wrapped-token config")
+fn decode_config(pre_state: &[u8]) -> WrappedTokenConfig {
+    WrappedTokenConfig::from_bytes(pre_state).expect("config account holds a wrapped-token config")
 }
 
 fn assert_authority(
@@ -278,7 +278,7 @@ fn mint_source(
 mod tests {
     use borsh::BorshSerialize;
     use lee_core::{
-        account::ShardData,
+        account::ActorState,
         program::{Action, Transition},
     };
     use wrapped_token_core::SourcePolicy;
@@ -362,7 +362,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(message).unwrap(),
         };
         receive(&input).into_transition(input)
@@ -394,7 +394,7 @@ mod tests {
     fn written_config(transition: &Transition) -> WrappedTokenConfig {
         WrappedTokenConfig::from_bytes(
             transition
-                .post_data
+                .post_state
                 .as_ref()
                 .expect("a wrapped-token config is written"),
         )
@@ -461,7 +461,7 @@ mod tests {
             &delivery,
         );
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![to_config(&mint_from(MINTER, ZONE_A, PEER_A, 10)).into()],
@@ -554,9 +554,9 @@ mod tests {
     #[test]
     fn a_credit_adds_to_the_recipients_balance() {
         let written =
-            |pre, amount| credit_at_holding(Origin::Program(WRAPPED_ID), pre, amount).post_data;
+            |pre, amount| credit_at_holding(Origin::Program(WRAPPED_ID), pre, amount).post_state;
         let balance =
-            |amount: u128| Some(ShardData::try_from(balance_bytes(amount).to_vec()).unwrap());
+            |amount: u128| Some(ActorState::try_from(balance_bytes(amount).to_vec()).unwrap());
         assert_eq!(written(40, 2), balance(42));
         assert_eq!(written(0, 42), balance(42));
     }

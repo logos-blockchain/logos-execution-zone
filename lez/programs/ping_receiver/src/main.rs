@@ -33,7 +33,7 @@ fn receive(input: &ReceiveInput) -> Response {
                 input.from_own_program(),
                 "Record is only callable by the authorized deliverer (the cross-zone inbox)"
             );
-            let cfg = decode_config(&input.pre_data);
+            let cfg = decode_config(&input.pre_state);
             assert_eq!(
                 deliverer, cfg.deliverer,
                 "Record is only callable by the authorized deliverer (the cross-zone inbox)"
@@ -68,7 +68,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     },
                 );
             }
-            let mut cfg = decode_config(&input.pre_data);
+            let mut cfg = decode_config(&input.pre_state);
             assert_authority(
                 input,
                 &cfg,
@@ -94,7 +94,7 @@ fn receive(input: &ReceiveInput) -> Response {
                     },
                 );
             }
-            let mut cfg = decode_config(&input.pre_data);
+            let mut cfg = decode_config(&input.pre_state);
             assert_authority(
                 input,
                 &cfg,
@@ -116,7 +116,7 @@ fn receive(input: &ReceiveInput) -> Response {
             );
             // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
             // a written config must already hold exactly this.
-            Response::write(write_once(&input.pre_data, config.to_bytes()))
+            Response::write(write_once(&input.pre_state, config.to_bytes()))
         }
     }
 }
@@ -165,8 +165,8 @@ fn at_config(input: &ReceiveInput) -> bool {
     input.receiver.account_id == receiver_config_account_id(input.receiver.program_account_id)
 }
 
-fn decode_config(pre_data: &[u8]) -> ReceiverConfig {
-    ReceiverConfig::from_bytes(pre_data).expect("config account holds a receiver config")
+fn decode_config(pre_state: &[u8]) -> ReceiverConfig {
+    ReceiverConfig::from_bytes(pre_state).expect("config account holds a receiver config")
 }
 
 fn assert_authority(
@@ -201,7 +201,7 @@ fn assert_authority(
 mod tests {
     use borsh::BorshSerialize;
     use lee_core::{
-        account::ShardData,
+        account::ActorState,
         program::{Action, Transition},
     };
     use ping_core::ZoneId;
@@ -243,7 +243,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(message).unwrap(),
         };
         receive(&input).into_transition(input)
@@ -307,7 +307,7 @@ mod tests {
     fn written_config(transition: &Transition) -> ReceiverConfig {
         ReceiverConfig::from_bytes(
             transition
-                .post_data
+                .post_state
                 .as_ref()
                 .expect("the config is written"),
         )
@@ -332,7 +332,7 @@ mod tests {
             &delivery,
         );
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![to_config(&record_from(INBOX, SOURCE)).into()]
@@ -361,7 +361,7 @@ mod tests {
             &record_from(INBOX, SOURCE),
         );
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![

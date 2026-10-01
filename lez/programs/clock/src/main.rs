@@ -31,7 +31,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 input.receiver.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID,
                 "Tick is addressed to the every-block clock account"
             );
-            let previous = ClockAccountData::from_bytes(&input.pre_data);
+            let previous = ClockAccountData::from_bytes(&input.pre_state);
             assert_eq!(
                 previous.block_id.checked_add(1),
                 Some(block_id),
@@ -67,7 +67,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
             Response::write(data.to_bytes())
         }
         Message::AssertTimestamp { at_least, at_most } => {
-            let ClockAccountData { timestamp, .. } = ClockAccountData::from_bytes(&input.pre_data);
+            let ClockAccountData { timestamp, .. } = ClockAccountData::from_bytes(&input.pre_state);
             assert!(
                 at_least <= timestamp && timestamp <= at_most,
                 "Clock timestamp {timestamp} is outside [{at_least}, {at_most}]"
@@ -80,7 +80,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, ShardData},
+        account::{AccountId, ActorState},
         program::{Origin, Transition},
     };
 
@@ -113,14 +113,14 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre.to_bytes()).unwrap(),
+            pre_state: ActorState::try_from(pre.to_bytes()).unwrap(),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
     }
 
-    fn written(data: ClockAccountData) -> Option<ShardData> {
-        Some(ShardData::try_from(data.to_bytes()).unwrap())
+    fn written(data: ClockAccountData) -> Option<ActorState> {
+        Some(ActorState::try_from(data.to_bytes()).unwrap())
     }
 
     fn record_to(account_id: AccountId, data: ClockAccountData) -> Call {
@@ -131,7 +131,7 @@ mod tests {
     fn the_every_block_account_advances_by_one() {
         let transition = run(CLOCK_01_PROGRAM_ACCOUNT_ID, Origin::Root, data(7), tick(8));
 
-        assert_eq!(transition.post_data, written(data(8)));
+        assert_eq!(transition.post_state, written(data(8)));
         assert!(transition.sends.is_empty());
     }
 
@@ -187,7 +187,7 @@ mod tests {
             Message::Record(data(50)),
         );
 
-        assert_eq!(transition.post_data, written(data(50)));
+        assert_eq!(transition.post_state, written(data(50)));
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
             },
         );
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert!(transition.sends.is_empty());
     }
 

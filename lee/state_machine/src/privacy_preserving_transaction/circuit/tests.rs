@@ -4,7 +4,7 @@ use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
     Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
     SharedSecretKey, WitnessKind,
-    account::{Account, AccountId, Nonce, ShardData},
+    account::{Account, AccountId, ActorState, Nonce},
     execution_state::{Boundary, Declared, ExecutionError, Output},
     native_token::encode_balance,
     program::{Call, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
@@ -350,9 +350,11 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     let keys = test_private_account_keys_1();
     let identifier = Identifier::new([7; 32]);
     let account_id = regular_id(&keys, identifier);
-    let account =
-        Account::default().with_shard(scripted_id(), ShardData::try_from(vec![9_u8; 200]).unwrap());
-    let expected_post_data = account.data.clone();
+    let account = Account::default().with_shard(
+        scripted_id(),
+        ActorState::try_from(vec![9_u8; 200]).unwrap(),
+    );
+    let expected_post_state = account.data.clone();
     let commitment = Commitment::new(&account_id, &account);
     let mut commitment_set = CommitmentSet::with_capacity(1);
     commitment_set.extend(std::slice::from_ref(&commitment));
@@ -398,7 +400,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     )
     .unwrap();
     assert_eq!(kind, PrivateAccountKind::Regular(identifier));
-    assert_eq!(post.data, expected_post_data);
+    assert_eq!(post.data, expected_post_state);
 }
 
 #[test]
@@ -1044,7 +1046,7 @@ fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
         receiver: Actor::new(regular_id(&keys, Identifier::ZERO), scripted_id()),
         origin: Origin::Root,
         is_authorized,
-        pre_data: ShardData::empty(),
+        pre_state: ActorState::empty(),
         message: borsh::to_vec(script).unwrap(),
     }
 }

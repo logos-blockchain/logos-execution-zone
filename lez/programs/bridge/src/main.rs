@@ -34,7 +34,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         "the receiver must be the deposit-receipt PDA"
     );
     assert!(
-        input.pre_data.is_empty(),
+        input.pre_state.is_empty(),
         "Deposit was already processed: its receipt is written"
     );
 
@@ -59,7 +59,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, Actor, ShardData},
+        account::{AccountId, Actor, ActorState},
         program::Transition,
     };
 
@@ -86,7 +86,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre.to_vec()).unwrap(),
+            pre_state: ActorState::try_from(pre.to_vec()).unwrap(),
             message: borsh::to_vec(&deposit()).unwrap(),
         };
         receive(&input, deposit()).into_transition(input)
@@ -97,8 +97,8 @@ mod tests {
         let transition = run(Origin::Root, &[]);
 
         assert_eq!(
-            transition.post_data,
-            Some(ShardData::try_from(RECEIPT_MARKER.to_vec()).unwrap())
+            transition.post_state,
+            Some(ActorState::try_from(RECEIPT_MARKER.to_vec()).unwrap())
         );
         assert_eq!(
             transition.sends,

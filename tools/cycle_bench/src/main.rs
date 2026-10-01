@@ -41,7 +41,7 @@ use cycle_bench::{ppe, stats::Stats};
 use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     execution_state::{Backend, Declared, ExecutionState, Mode, TransactionEntry},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -205,7 +205,7 @@ impl Calibration {
 struct Fixture {
     actor: Actor,
     is_authorized: bool,
-    data: ShardData,
+    data: ActorState,
 }
 
 impl Fixture {
@@ -213,7 +213,7 @@ impl Fixture {
         account_id: AccountId,
         is_authorized: bool,
         program_account_id: AccountId,
-        data: ShardData,
+        data: ActorState,
     ) -> Self {
         Self {
             actor: Actor::new(account_id, program_account_id),
@@ -281,7 +281,7 @@ impl Case {
 
 struct Meter {
     label: &'static str,
-    shards: HashMap<Actor, ShardData>,
+    shards: HashMap<Actor, ActorState>,
     prove: bool,
     exec_iters: usize,
     rows: Vec<BenchResult>,
@@ -310,7 +310,7 @@ impl Backend for Meter {
         Ok(borsh::from_slice(payload)?)
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ShardData> {
+    fn public_shard(&mut self, actor: Actor) -> Result<ActorState> {
         Ok(self.shards.get(&actor).cloned().unwrap_or_default())
     }
 }
@@ -415,7 +415,7 @@ fn token_holding(
         account_id,
         is_authorized,
         programs::token_account_id(),
-        ShardData::from(&TokenHolding::Fungible {
+        ActorState::from(&TokenHolding::Fungible {
             definition_id,
             balance,
         }),
@@ -427,7 +427,7 @@ fn token_definition(account_id: AccountId, total_supply: u128, is_authorized: bo
         account_id,
         is_authorized,
         programs::token_account_id(),
-        ShardData::from(&TokenDefinition::Fungible {
+        ActorState::from(&TokenDefinition::Fungible {
             name: String::from("test"),
             total_supply,
             metadata_id: None,
@@ -532,7 +532,7 @@ fn amm_pool_account() -> Fixture {
         amm_pool_id(),
         false,
         programs::amm_account_id(),
-        ShardData::from(&PoolDefinition {
+        ActorState::from(&PoolDefinition {
             token_program_id: programs::token_account_id(),
             definition_token_a_id: amm_token_a_def_id(),
             definition_token_b_id: amm_token_b_def_id(),
@@ -585,14 +585,14 @@ fn ata_create_accounts() -> Vec<Fixture> {
             owner_id,
             true,
             programs::ata_account_id(),
-            ShardData::empty(),
+            ActorState::empty(),
         ),
         token_definition(definition_id, 100_000, false),
         Fixture::new(
             ata_id,
             false,
             programs::token_account_id(),
-            ShardData::empty(),
+            ActorState::empty(),
         ),
     ]
 }

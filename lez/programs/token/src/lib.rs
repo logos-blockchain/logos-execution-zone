@@ -1,7 +1,7 @@
 //! The Token Program implementation.
 
 use lee_core::{
-    account::ShardData,
+    account::ActorState,
     program::{ReceiveInput, Response},
 };
 pub use token_core as core;
@@ -24,26 +24,26 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
             descriptor, amount, ..
         } => {
             assert!(input.is_authorized, "Sender authorization is missing");
-            Some(transfer::withdraw(&input.pre_data, &descriptor, amount))
+            Some(transfer::withdraw(&input.pre_state, &descriptor, amount))
         }
         Message::Credit {
             descriptor, amount, ..
         } => {
             assert!(from_token, "A credit must come from the token program");
-            Some(transfer::deposit(&input.pre_data, &descriptor, amount))
+            Some(transfer::deposit(&input.pre_state, &descriptor, amount))
         }
         Message::EnsureHolding { descriptor } => {
-            initialize::ensure_holding(&input.pre_data, &descriptor, input.is_authorized)
+            initialize::ensure_holding(&input.pre_state, &descriptor, input.is_authorized)
         }
         Message::Burn {
             descriptor, amount, ..
         } => {
             assert!(input.is_authorized, "Authorization is missing");
-            Some(burn::burn_holding(&input.pre_data, &descriptor, amount))
+            Some(burn::burn_holding(&input.pre_state, &descriptor, amount))
         }
         Message::PrintNft { definition_id, .. } => {
             assert!(input.is_authorized, "Master NFT Account must be authorized");
-            Some(print_nft::print_copy(&input.pre_data, definition_id))
+            Some(print_nft::print_copy(&input.pre_state, definition_id))
         }
         // TODO(cross-zone): nothing here checks the caller, so the cross-zone inbox
         // can deliver into this program on a peer's word, letting the peer drive
@@ -55,17 +55,17 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
             ..
         } => {
             assert!(
-                input.pre_data.is_empty(),
+                input.pre_state.is_empty(),
                 "Target account must not already hold data"
             );
-            Some(ShardData::from(&new_definition::definition(
+            Some(ActorState::from(&new_definition::definition(
                 definition,
                 metadata.map(|(metadata_id, _)| metadata_id),
             )))
         }
         Message::Mint { amount, .. } => {
             assert!(input.is_authorized, "Definition authorization is missing");
-            Some(mint::mint_supply(&input.pre_data, amount))
+            Some(mint::mint_supply(&input.pre_state, amount))
         }
         Message::BurnSupply {
             definition_id,
@@ -77,16 +77,16 @@ pub fn receive(input: &ReceiveInput, message: Message) -> Response {
                 input.receiver.account_id, definition_id,
                 "A supply burn names another definition"
             );
-            Some(burn::burn_supply(&input.pre_data, kind, amount))
+            Some(burn::burn_supply(&input.pre_state, kind, amount))
         }
         Message::AssertKind { kind } => {
-            initialize::check_holding_kind(&input.pre_data, kind);
+            initialize::check_holding_kind(&input.pre_state, kind);
             None
         }
         Message::Create(data) => {
             assert!(from_token, "A creation must come from the token program");
             assert!(
-                input.pre_data.is_empty(),
+                input.pre_state.is_empty(),
                 "Target account must not already hold data"
             );
             Some(data)

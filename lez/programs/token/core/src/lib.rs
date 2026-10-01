@@ -2,7 +2,7 @@
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::{Action, Call, Cast},
 };
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,7 @@ pub enum Message {
     AssertKind {
         kind: TokenKind,
     },
-    Create(ShardData),
+    Create(ActorState),
     Notification(Notification),
 }
 
@@ -104,15 +104,15 @@ pub enum TokenDefinition {
     },
 }
 
-impl TryFrom<&ShardData> for TokenDefinition {
+impl TryFrom<&ActorState> for TokenDefinition {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenDefinition> for ShardData {
+impl From<&TokenDefinition> for ActorState {
     fn from(definition: &TokenDefinition) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(definition));
@@ -120,7 +120,7 @@ impl From<&TokenDefinition> for ShardData {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token definition encoded data should fit into ShardData")
+        Self::try_from(data).expect("Token definition encoded data should fit into ActorState")
     }
 }
 
@@ -205,15 +205,15 @@ impl TokenHolding {
     }
 }
 
-impl TryFrom<&ShardData> for TokenHolding {
+impl TryFrom<&ActorState> for TokenHolding {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenHolding> for ShardData {
+impl From<&TokenHolding> for ActorState {
     fn from(holding: &TokenHolding) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(holding));
@@ -221,7 +221,7 @@ impl From<&TokenHolding> for ShardData {
         BorshSerialize::serialize(holding, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token holding encoded data should fit into ShardData")
+        Self::try_from(data).expect("Token holding encoded data should fit into ActorState")
     }
 }
 
@@ -256,15 +256,15 @@ pub enum MetadataStandard {
     Expanded,
 }
 
-impl TryFrom<&ShardData> for TokenMetadata {
+impl TryFrom<&ActorState> for TokenMetadata {
     type Error = std::io::Error;
 
-    fn try_from(data: &ShardData) -> Result<Self, Self::Error> {
+    fn try_from(data: &ActorState) -> Result<Self, Self::Error> {
         Self::try_from_slice(data.as_ref())
     }
 }
 
-impl From<&TokenMetadata> for ShardData {
+impl From<&TokenMetadata> for ActorState {
     fn from(metadata: &TokenMetadata) -> Self {
         // Using size_of_val as size hint for Vec allocation
         let mut data = Vec::with_capacity(std::mem::size_of_val(metadata));
@@ -272,14 +272,14 @@ impl From<&TokenMetadata> for ShardData {
         BorshSerialize::serialize(metadata, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Self::try_from(data).expect("Token metadata encoded data should fit into ShardData")
+        Self::try_from(data).expect("Token metadata encoded data should fit into ActorState")
     }
 }
 
 #[must_use]
 pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
     let own = |account_id: AccountId| Actor::new(account_id, receiver.program_account_id);
-    let create = |to: AccountId, data: ShardData| -> Action {
+    let create = |to: AccountId, data: ActorState| -> Action {
         Call::new(own(to), &Message::Create(data)).into()
     };
     match message {
@@ -339,7 +339,7 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
             definition_id,
         } => vec![create(
             *printed,
-            ShardData::from(&TokenHolding::NftPrintedCopy {
+            ActorState::from(&TokenHolding::NftPrintedCopy {
                 definition_id: *definition_id,
                 owned: true,
             }),
@@ -361,11 +361,11 @@ pub fn expected_sends(receiver: Actor, message: &Message) -> Vec<Action> {
                     print_balance: *printable_supply,
                 },
             };
-            std::iter::once(create(*holding, ShardData::from(&created)))
+            std::iter::once(create(*holding, ActorState::from(&created)))
                 .chain(metadata.iter().map(|(metadata_id, new_metadata)| {
                     create(
                         *metadata_id,
-                        ShardData::from(&TokenMetadata {
+                        ActorState::from(&TokenMetadata {
                             definition_id: receiver.account_id,
                             standard: new_metadata.standard.clone(),
                             uri: new_metadata.uri.clone(),

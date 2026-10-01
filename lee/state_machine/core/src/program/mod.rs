@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Commitment, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, Actor, ShardData},
+    account::{Account, AccountId, Actor, ActorState},
     encryption::ViewingPublicKey,
 };
 
@@ -380,7 +380,7 @@ pub struct ReceiveInput {
     pub receiver: Actor,
     pub origin: Origin,
     pub is_authorized: bool,
-    pub pre_data: ShardData,
+    pub pre_state: ActorState,
     pub message: MessageData,
 }
 
@@ -406,7 +406,7 @@ impl ReceiveInput {
 #[must_use = "a Transition does nothing unless written"]
 pub struct Transition {
     pub input: ReceiveInput,
-    pub post_data: Option<ShardData>,
+    pub post_state: Option<ActorState>,
     pub sends: Vec<Action>,
     pub events: Vec<ProgramEvent>,
     pub block_validity_window: BlockValidityWindow,
@@ -422,7 +422,7 @@ impl Transition {
 /// What a handler returns. `None` keeps the shard, empty data clears it, other data replaces it.
 #[must_use]
 pub struct Response {
-    post_data: Option<ShardData>,
+    post_state: Option<ActorState>,
     sends: Vec<Action>,
     events: Vec<ProgramEvent>,
     block_validity_window: BlockValidityWindow,
@@ -432,7 +432,7 @@ pub struct Response {
 impl Response {
     pub const fn keep() -> Self {
         Self {
-            post_data: None,
+            post_state: None,
             sends: Vec::new(),
             events: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
@@ -442,10 +442,10 @@ impl Response {
 
     pub fn write<D>(data: D) -> Self
     where
-        D: TryInto<ShardData, Error: std::fmt::Debug>,
+        D: TryInto<ActorState, Error: std::fmt::Debug>,
     {
         Self {
-            post_data: Some(
+            post_state: Some(
                 data.try_into()
                     .expect("a written shard fits within the data limit"),
             ),
@@ -492,7 +492,7 @@ impl Response {
     pub fn into_transition(self, input: ReceiveInput) -> Transition {
         Transition {
             input,
-            post_data: self.post_data,
+            post_state: self.post_state,
             sends: self.sends,
             events: self.events,
             block_validity_window: self.block_validity_window,
@@ -724,9 +724,9 @@ pub fn run_actor_with(receive: impl FnOnce(&ReceiveInput) -> Response) -> ! {
 }
 
 #[must_use]
-pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
+pub fn write_once(pre_state: &[u8], data: Vec<u8>) -> Vec<u8> {
     assert!(
-        pre_data.is_empty() || *pre_data == *data,
+        pre_state.is_empty() || *pre_state == *data,
         "shard already holds different data"
     );
     data
@@ -735,7 +735,7 @@ pub fn write_once(pre_data: &[u8], data: Vec<u8>) -> Vec<u8> {
 #[must_use]
 pub fn get_program_via<'state>(
     account_id: AccountId,
-    loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
+    loader_shard: impl Fn(AccountId) -> Option<&'state ActorState>,
 ) -> Option<(ProgramId, Vec<u8>)> {
     let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
 
@@ -765,7 +765,7 @@ pub fn immutable_mirror_commitment(
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
     let mirrored_account = Account::default().with_shard(
         PROGRAM_LOADER_ACCOUNT_ID,
-        ShardData::try_from(program_header.to_bytes())
+        ActorState::try_from(program_header.to_bytes())
             .expect("program header must fit under DATA_MAX_LENGTH"),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)

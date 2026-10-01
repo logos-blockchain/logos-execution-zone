@@ -2,7 +2,7 @@
 //! on-chain programs.
 
 use lee::{AccountId, Actor};
-use lee_core::account::ShardData;
+use lee_core::account::ActorState;
 use token_core::TokenHolding;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
@@ -19,7 +19,7 @@ pub(crate) async fn shard(
     wallet: &WalletCore,
     account: &AccountIdentity,
     program_account_id: AccountId,
-) -> Result<ShardData, ExecutionFailureKind> {
+) -> Result<ActorState, ExecutionFailureKind> {
     let account_id = account.account_id();
     if account.is_public() {
         Ok(wallet

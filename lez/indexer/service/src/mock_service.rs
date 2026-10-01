@@ -13,13 +13,13 @@ use std::{
 };
 
 use indexer_service_protocol::{
-    Account, AccountData, AccountId, AccountSummary, Actor, BedrockStatus, Block, BlockBody,
-    BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
+    Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
+    BlockBody, BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
     EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
     IndexerStatus, IndexerSyncState, Origin, Output, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, PublicKey, PublicMessage, PublicTransaction,
-    ScheduleOp, Selector, ShardData, ShardSummary, Signature, Transaction, TransactionEntry,
-    ValidityWindow, WitnessSet,
+    ScheduleOp, Selector, ShardSummary, Signature, Transaction, TransactionEntry, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -121,7 +121,7 @@ impl MockIndexerService {
                             AccountId {
                                 value: [i as u8; 32],
                             },
-                            ShardData(vec![0xaa, 0xbb, 0xcc]),
+                            ActorState(vec![0xaa, 0xbb, 0xcc]),
                         )]),
                     },
                 },
@@ -482,7 +482,7 @@ fn project_account(account: Option<&Account>, actor: Actor) -> Account {
             .shards
             .get(&program)
             .cloned()
-            .unwrap_or(ShardData(Vec::new())),
+            .unwrap_or(ActorState(Vec::new())),
     )]);
     Account {
         nonce: account.nonce,

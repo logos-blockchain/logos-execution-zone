@@ -1,10 +1,10 @@
-use lee_core::account::{AccountId, ShardData};
+use lee_core::account::{AccountId, ActorState};
 use token_core::TokenHolding;
 
 #[must_use]
-pub fn print_copy(pre_data: &ShardData, definition_id: AccountId) -> ShardData {
+pub fn print_copy(pre_state: &ActorState, definition_id: AccountId) -> ActorState {
     let mut master_account_data =
-        TokenHolding::try_from(pre_data).expect("Invalid Token Holding data");
+        TokenHolding::try_from(pre_state).expect("Invalid Token Holding data");
 
     let TokenHolding::NftMaster {
         definition_id: master_definition_id,
@@ -25,5 +25,5 @@ pub fn print_copy(pre_data: &ShardData, definition_id: AccountId) -> ShardData {
     );
     *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
-    ShardData::from(&master_account_data)
+    ActorState::from(&master_account_data)
 }

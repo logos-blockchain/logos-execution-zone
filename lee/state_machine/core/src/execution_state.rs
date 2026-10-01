@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
-    account::{AccountData, AccountId, Actor, ShardData},
+    account::{AccountData, AccountId, Actor, ActorState},
     program::{
         Action, BlockValidityWindow, Call, ExecutionValidationError, InvalidWindow, MessageBody,
         MessageData, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput,
@@ -120,7 +120,7 @@ pub trait Backend {
     ) -> Result<Transition, Self::Error>;
 
     /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
-    fn public_shard(&mut self, actor: Actor) -> Result<ShardData, Self::Error> {
+    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, Self::Error> {
         Err(ExecutionError::PublicShardUnavailable { actor }.into())
     }
 }
@@ -748,7 +748,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             receiver: actor,
             origin: delivery.origin,
             is_authorized,
-            pre_data: entry.data.shard(actor.program_account_id).clone(),
+            pre_state: entry.data.shard(actor.program_account_id).clone(),
             message: delivery.message,
         };
 
@@ -771,7 +771,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         self.block_validity_window = block;
         self.timestamp_validity_window = timestamp;
 
-        if let Some(data) = transition.post_data {
+        if let Some(data) = transition.post_state {
             self.accounts
                 .get_mut(&actor.account_id)
                 .expect("an authorized actor has an entry")
@@ -870,7 +870,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         &self,
         account_id: AccountId,
         program_account_id: AccountId,
-    ) -> Option<&ShardData> {
+    ) -> Option<&ActorState> {
         let entry = self.accounts.get(&account_id)?;
         match &entry.visibility {
             Visibility::Public { observed, .. } if !observed.contains(&program_account_id) => None,

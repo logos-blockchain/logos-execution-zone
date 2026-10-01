@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use data::ShardData;
+pub use data::ActorState;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -109,7 +109,7 @@ pub struct Account {
 
 impl Account {
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
+    pub fn with_shard(mut self, program: AccountId, data: ActorState) -> Self {
         self.data.set_shard(program, data);
         self
     }
@@ -139,17 +139,17 @@ impl Account {
 )]
 #[serde(deny_unknown_fields)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ShardData>,
+    pub shards: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
-    pub fn shard(&self, program: AccountId) -> &ShardData {
-        const EMPTY: &ShardData = &ShardData::empty();
+    pub fn shard(&self, program: AccountId) -> &ActorState {
+        const EMPTY: &ActorState = &ActorState::empty();
         self.shards.get(&program).unwrap_or(EMPTY)
     }
 
-    pub fn set_shard(&mut self, program: AccountId, data: ShardData) {
+    pub fn set_shard(&mut self, program: AccountId, data: ActorState) {
         if data.is_empty() {
             self.shards.remove(&program);
         } else {
@@ -158,7 +158,7 @@ impl AccountData {
     }
 
     #[must_use]
-    pub fn with_shard(mut self, program: AccountId, data: ShardData) -> Self {
+    pub fn with_shard(mut self, program: AccountId, data: ActorState) -> Self {
         self.set_shard(program, data);
         self
     }
@@ -425,7 +425,7 @@ mod tests {
         let mut account =
             Account::funded(10).with_shard(program, b"record".to_vec().try_into().unwrap());
 
-        account.data.set_shard(program, ShardData::empty());
+        account.data.set_shard(program, ActorState::empty());
 
         assert!(!account.data.shards.contains_key(&program));
         assert_eq!(account, Account::funded(10));
@@ -442,7 +442,7 @@ mod tests {
         let projection = data.project([held, absent]);
 
         assert_eq!(projection.native_balance(), Ok(0));
-        assert_eq!(projection.shards.get(&absent), Some(&ShardData::empty()));
+        assert_eq!(projection.shards.get(&absent), Some(&ActorState::empty()));
         assert_eq!(projection.shards.len(), 2);
     }
 
@@ -455,7 +455,7 @@ mod tests {
         };
 
         account.data.update(&AccountData {
-            shards: [(program, ShardData::empty())].into(),
+            shards: [(program, ActorState::empty())].into(),
         });
 
         assert_eq!(account.nonce, Nonce(7));

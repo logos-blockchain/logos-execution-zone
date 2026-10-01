@@ -24,7 +24,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
         } => {
             // The outbox actor is transaction-chosen; the config is what pins its program.
             let pinned =
-                read_outbox(&input.pre_data).expect("config account holds an outbox program id");
+                read_outbox(&input.pre_state).expect("config account holds an outbox program id");
             assert_eq!(
                 pinned, outbox.program_account_id,
                 "the emission names a program the ping-sender config does not pin as its outbox"
@@ -43,7 +43,7 @@ fn receive(input: &ReceiveInput, message: SenderMessage) -> Response {
         // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
         // a written config must already pin exactly this outbox.
         SenderMessage::InitConfig { outbox_account_id } => Response::write(write_once(
-            &input.pre_data,
+            &input.pre_state,
             outbox_bytes(outbox_account_id).to_vec(),
         )),
     }
@@ -62,7 +62,7 @@ fn assert_config_account(input: &ReceiveInput) {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, Actor, ShardData},
+        account::{AccountId, Actor, ActorState},
         program::Transition,
     };
 
@@ -77,7 +77,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre.to_vec()).unwrap(),
+            pre_state: ActorState::try_from(pre.to_vec()).unwrap(),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -94,15 +94,15 @@ mod tests {
         }
     }
 
-    fn config(outbox: AccountId) -> ShardData {
-        ShardData::try_from(outbox_bytes(outbox).to_vec()).unwrap()
+    fn config(outbox: AccountId) -> ActorState {
+        ActorState::try_from(outbox_bytes(outbox).to_vec()).unwrap()
     }
 
     #[test]
     fn the_pinned_outbox_is_accepted() {
         let transition = run(Origin::Root, &outbox_bytes(OUTBOX), send_through(OUTBOX));
 
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![
@@ -138,7 +138,10 @@ mod tests {
         let init = SenderMessage::InitConfig {
             outbox_account_id: OUTBOX,
         };
-        assert_eq!(run(Origin::Root, &[], init).post_data, Some(config(OUTBOX)));
+        assert_eq!(
+            run(Origin::Root, &[], init).post_state,
+            Some(config(OUTBOX))
+        );
     }
 
     #[test]
@@ -147,7 +150,7 @@ mod tests {
             outbox_account_id: OUTBOX,
         };
         assert_eq!(
-            run(Origin::Root, &outbox_bytes(OUTBOX), init).post_data,
+            run(Origin::Root, &outbox_bytes(OUTBOX), init).post_state,
             Some(config(OUTBOX))
         );
     }

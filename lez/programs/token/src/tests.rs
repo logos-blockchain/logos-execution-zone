@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
-    account::{AccountId, Actor, ShardData},
+    account::{AccountId, Actor, ActorState},
     program::{Action, Call, Cast, Origin, ReceiveInput, Transition},
 };
 use token_core::{
@@ -140,32 +140,32 @@ fn turn(
     account: AccountId,
     is_authorized: bool,
     origin: Origin,
-    pre_data: &ShardData,
+    pre_state: &ActorState,
     message: &Message,
 ) -> Transition {
     let input = ReceiveInput {
         receiver: token_actor(account),
         origin,
         is_authorized,
-        pre_data: pre_data.clone(),
+        pre_state: pre_state.clone(),
         message: borsh::to_vec(message).expect("the message serializes"),
     };
     crate::receive(&input, message.clone()).into_transition(input)
 }
 
 // Every permission is granted, so only the shard contents can refuse the message.
-fn written(message: &Message, pre_data: &ShardData) -> Option<ShardData> {
+fn written(message: &Message, pre_state: &ActorState) -> Option<ActorState> {
     // A supply burn runs at the definition it names.
     let receiver = if let Message::BurnSupply { definition_id, .. } = message {
         *definition_id
     } else {
         HOLDING_ID
     };
-    turn(receiver, true, TOKEN_ORIGIN, pre_data, message).post_data
+    turn(receiver, true, TOKEN_ORIGIN, pre_state, message).post_state
 }
 
-fn rejection(message: &Message, pre_data: &ShardData) -> String {
-    let payload = std::panic::catch_unwind(|| written(message, pre_data))
+fn rejection(message: &Message, pre_state: &ActorState) -> String {
+    let payload = std::panic::catch_unwind(|| written(message, pre_state))
         .expect_err("the message was accepted");
     payload
         .downcast_ref::<String>()
@@ -178,13 +178,13 @@ fn rejection(message: &Message, pre_data: &ShardData) -> String {
         .expect("a panic carries its message")
 }
 
-fn holding_at(message: &Message, pre_data: &ShardData) -> TokenHolding {
-    TokenHolding::try_from(&written(message, pre_data).expect("the message writes its shard"))
+fn holding_at(message: &Message, pre_state: &ActorState) -> TokenHolding {
+    TokenHolding::try_from(&written(message, pre_state).expect("the message writes its shard"))
         .expect("the turn wrote a holding")
 }
 
-fn definition_at(message: &Message, pre_data: &ShardData) -> TokenDefinition {
-    TokenDefinition::try_from(&written(message, pre_data).expect("the message writes its shard"))
+fn definition_at(message: &Message, pre_state: &ActorState) -> TokenDefinition {
+    TokenDefinition::try_from(&written(message, pre_state).expect("the message writes its shard"))
         .expect("the turn wrote a definition")
 }
 
@@ -192,22 +192,22 @@ fn settle(
     root_account: AccountId,
     root_message: &Message,
     authorized: &[AccountId],
-    initial: &[(AccountId, ShardData)],
-) -> HashMap<AccountId, ShardData> {
-    let mut state: HashMap<AccountId, ShardData> = initial.iter().cloned().collect();
+    initial: &[(AccountId, ActorState)],
+) -> HashMap<AccountId, ActorState> {
+    let mut state: HashMap<AccountId, ActorState> = initial.iter().cloned().collect();
     let mut pending = VecDeque::from([(root_account, Origin::Root, root_message.clone())]);
 
     while let Some((account, origin, message)) = pending.pop_front() {
-        let pre_data = state.get(&account).cloned().unwrap_or_default();
+        let pre_state = state.get(&account).cloned().unwrap_or_default();
         let transition = turn(
             account,
             authorized.contains(&account),
             origin,
-            &pre_data,
+            &pre_state,
             &message,
         );
-        if let Some(post_data) = transition.post_data {
-            state.insert(account, post_data);
+        if let Some(post_state) = transition.post_state {
+            state.insert(account, post_state);
         }
         let sender = Origin::Program(token_actor(account).program_account_id);
         for action in transition.sends.into_iter().rev() {
@@ -225,13 +225,13 @@ fn settle(
     state
 }
 
-fn settled_holding(state: &HashMap<AccountId, ShardData>, account_id: AccountId) -> TokenHolding {
+fn settled_holding(state: &HashMap<AccountId, ActorState>, account_id: AccountId) -> TokenHolding {
     TokenHolding::try_from(state.get(&account_id).expect("the account was settled"))
         .expect("the turn wrote a holding")
 }
 
 fn settled_definition(
-    state: &HashMap<AccountId, ShardData>,
+    state: &HashMap<AccountId, ActorState>,
     account_id: AccountId,
 ) -> TokenDefinition {
     TokenDefinition::try_from(state.get(&account_id).expect("the account was settled"))
@@ -282,7 +282,10 @@ fn new_definition_with_metadata_creates_a_master_copy_for_a_non_fungible() {
     let holding = settled_holding(&state, HOLDING_ID);
     assert_eq!(definition, non_fungible_definition(PRINTABLE_COPIES));
     assert_eq!(holding, master(PRINTABLE_COPIES));
-    assert_eq!(state.get(&METADATA_ID), Some(&ShardData::from(&metadata())));
+    assert_eq!(
+        state.get(&METADATA_ID),
+        Some(&ActorState::from(&metadata()))
+    );
 }
 
 #[test]
@@ -365,12 +368,12 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
                 unreachable!("only creations were kept");
             };
             assert_eq!(
-                written(&create, &ShardData::empty()).as_ref(),
+                written(&create, &ActorState::empty()).as_ref(),
                 Some(data),
                 "{operation} wrote something other than it sent into {account_id}"
             );
             // Even the very data it would write: a creation never lands twice.
-            for occupant in [data.clone(), ShardData::from(&fungible(1))] {
+            for occupant in [data.clone(), ActorState::from(&fungible(1))] {
                 assert!(
                     rejection(&create, &occupant)
                         .contains("Target account must not already hold data"),
@@ -383,7 +386,7 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
     assert!(
         rejection(
             &new_definition(fungible_definition_message(), None),
-            &ShardData::from(&fungible_definition(INIT_SUPPLY))
+            &ActorState::from(&fungible_definition(INIT_SUPPLY))
         )
         .contains("Target account must not already hold data"),
         "NewDefinition overwrote an occupied definition"
@@ -399,7 +402,7 @@ fn transfer_without_sender_authorization_should_fail() {
         HOLDING_ID,
         false,
         Origin::Root,
-        &ShardData::from(&fungible(INIT_SUPPLY)),
+        &ActorState::from(&fungible(INIT_SUPPLY)),
         &transfer(FUNGIBLE, TRANSFER_AMOUNT),
     );
 }
@@ -413,7 +416,7 @@ fn transfer_with_different_definition_ids_should_fail() {
     };
     let _written = written(
         &credit(FUNGIBLE, TRANSFER_AMOUNT),
-        &ShardData::from(&recipient),
+        &ActorState::from(&recipient),
     );
 }
 
@@ -422,7 +425,7 @@ fn transfer_with_different_definition_ids_should_fail() {
 fn transfer_with_mismatched_holding_kinds_should_fail() {
     let _written = written(
         &transfer(FUNGIBLE, PRINTABLE_COPIES),
-        &ShardData::from(&master(PRINTABLE_COPIES)),
+        &ActorState::from(&master(PRINTABLE_COPIES)),
     );
 }
 
@@ -431,7 +434,7 @@ fn transfer_with_mismatched_holding_kinds_should_fail() {
 fn transfer_with_insufficient_balance_should_fail() {
     let _written = written(
         &transfer(FUNGIBLE, BURN_INSUFFICIENT),
-        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &ActorState::from(&fungible(HOLDING_BALANCE)),
     );
 }
 
@@ -442,8 +445,8 @@ fn transfer_with_valid_inputs_succeeds() {
         &transfer(FUNGIBLE, TRANSFER_AMOUNT),
         &[HOLDING_ID],
         &[
-            (HOLDING_ID, ShardData::from(&fungible(INIT_SUPPLY))),
-            (HOLDING_ID_2, ShardData::from(&fungible(INIT_SUPPLY))),
+            (HOLDING_ID, ActorState::from(&fungible(INIT_SUPPLY))),
+            (HOLDING_ID_2, ActorState::from(&fungible(INIT_SUPPLY))),
         ],
     );
 
@@ -456,7 +459,7 @@ fn transfer_with_valid_inputs_succeeds() {
 #[test]
 fn transfer_into_an_empty_recipient_uses_the_bound_descriptor() {
     assert_eq!(
-        holding_at(&credit(FUNGIBLE, TRANSFER_AMOUNT), &ShardData::empty()),
+        holding_at(&credit(FUNGIBLE, TRANSFER_AMOUNT), &ActorState::empty()),
         fungible(TRANSFER_AMOUNT)
     );
 }
@@ -476,7 +479,7 @@ fn transfer_with_master_nft_invalid_balance() {
         assert!(
             rejection(
                 &transfer(MASTER, claimed),
-                &ShardData::from(&master(PRINTABLE_COPIES)),
+                &ActorState::from(&master(PRINTABLE_COPIES)),
             )
             .contains("Invalid balance for NFT Master transfer"),
             "Transfer accepted a claimed print balance of {claimed}"
@@ -489,7 +492,7 @@ fn transfer_with_master_nft_invalid_balance() {
 fn transfer_with_master_nft_invalid_recipient_balance() {
     let _written = written(
         &credit(MASTER, PRINTABLE_COPIES),
-        &ShardData::from(&master(PRINTABLE_COPIES)),
+        &ActorState::from(&master(PRINTABLE_COPIES)),
     );
 }
 
@@ -498,12 +501,12 @@ fn transfer_with_master_nft_success() {
     assert_eq!(
         holding_at(
             &transfer(MASTER, PRINTABLE_COPIES),
-            &ShardData::from(&master(PRINTABLE_COPIES)),
+            &ActorState::from(&master(PRINTABLE_COPIES)),
         ),
         master(0)
     );
     assert_eq!(
-        holding_at(&credit(MASTER, PRINTABLE_COPIES), &ShardData::empty()),
+        holding_at(&credit(MASTER, PRINTABLE_COPIES), &ActorState::empty()),
         master(PRINTABLE_COPIES)
     );
 }
@@ -511,11 +514,11 @@ fn transfer_with_master_nft_success() {
 #[test]
 fn transfer_of_a_printed_copy_moves_ownership() {
     assert_eq!(
-        holding_at(&transfer(PRINTED, 1), &ShardData::from(&printed(true))),
+        holding_at(&transfer(PRINTED, 1), &ActorState::from(&printed(true))),
         printed(false)
     );
     assert_eq!(
-        holding_at(&credit(PRINTED, 1), &ShardData::from(&printed(false))),
+        holding_at(&credit(PRINTED, 1), &ActorState::from(&printed(false))),
         printed(true)
     );
 }
@@ -523,13 +526,13 @@ fn transfer_of_a_printed_copy_moves_ownership() {
 #[should_panic(expected = "Sender does not own the NFT Printed Copy")]
 #[test]
 fn transfer_of_an_unowned_printed_copy_should_fail() {
-    let _written = written(&transfer(PRINTED, 1), &ShardData::from(&printed(false)));
+    let _written = written(&transfer(PRINTED, 1), &ActorState::from(&printed(false)));
 }
 
 #[test]
 fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() {
     let requester = Origin::Program(OTHER_DEFINITION_ID);
-    let sender = ShardData::from(&fungible(INIT_SUPPLY));
+    let sender = ActorState::from(&fungible(INIT_SUPPLY));
     let request = |is_authorized| {
         turn(
             HOLDING_ID,
@@ -541,10 +544,10 @@ fn a_transfer_requested_by_another_actor_needs_only_the_senders_authorization() 
     };
 
     assert_eq!(
-        request(true).post_data,
-        Some(ShardData::from(&fungible(SENDER_POST_TRANSFER)))
+        request(true).post_state,
+        Some(ActorState::from(&fungible(SENDER_POST_TRANSFER)))
     );
-    let refusal = std::panic::catch_unwind(|| request(false).post_data)
+    let refusal = std::panic::catch_unwind(|| request(false).post_state)
         .expect_err("an unauthorized transfer was accepted");
     assert_eq!(
         refusal.downcast_ref::<&str>(),
@@ -559,7 +562,7 @@ fn a_credit_from_the_root_is_rejected() {
         HOLDING_ID,
         true,
         Origin::Root,
-        &ShardData::empty(),
+        &ActorState::empty(),
         &credit(FUNGIBLE, TRANSFER_AMOUNT),
     );
 }
@@ -571,8 +574,8 @@ fn a_creation_from_another_program_is_rejected() {
         HOLDING_ID,
         true,
         Origin::Program(OTHER_DEFINITION_ID),
-        &ShardData::empty(),
-        &Message::Create(ShardData::from(&fungible(INIT_SUPPLY))),
+        &ActorState::empty(),
+        &Message::Create(ActorState::from(&fungible(INIT_SUPPLY))),
     );
 }
 
@@ -583,7 +586,7 @@ fn a_credit_with_notify_sends_one_notification() {
         HOLDING_ID,
         false,
         TOKEN_ORIGIN,
-        &ShardData::empty(),
+        &ActorState::empty(),
         &Message::Credit {
             descriptor: FUNGIBLE,
             amount: TRANSFER_AMOUNT,
@@ -618,7 +621,7 @@ fn a_notification_from_a_token_origin_is_refused() {
         HOLDING_ID,
         true,
         TOKEN_ORIGIN,
-        &ShardData::empty(),
+        &ActorState::empty(),
         &Message::Notification(Notification {
             credited_account: HOLDING_ID,
             descriptor: FUNGIBLE,
@@ -647,14 +650,14 @@ fn expected_sends_for_a_transfer_is_one_credit_to_the_recipient() {
 
 #[test]
 fn a_cast_transfer_writes_the_sender_like_a_call_and_sends_one_cast_credit() {
-    let sender = ShardData::from(&fungible(INIT_SUPPLY));
+    let sender = ActorState::from(&fungible(INIT_SUPPLY));
     let run = |message: &Message| turn(HOLDING_ID, true, Origin::Root, &sender, message);
 
     let cast = run(&cast_transfer(FUNGIBLE, TRANSFER_AMOUNT));
 
     assert_eq!(
-        cast.post_data,
-        run(&transfer(FUNGIBLE, TRANSFER_AMOUNT)).post_data
+        cast.post_state,
+        run(&transfer(FUNGIBLE, TRANSFER_AMOUNT)).post_state
     );
     assert_eq!(
         cast.sends,
@@ -675,7 +678,7 @@ fn a_cast_transfer_without_sender_authorization_is_rejected() {
         HOLDING_ID,
         false,
         Origin::Root,
-        &ShardData::from(&fungible(INIT_SUPPLY)),
+        &ActorState::from(&fungible(INIT_SUPPLY)),
         &cast_transfer(FUNGIBLE, TRANSFER_AMOUNT),
     );
 }
@@ -706,9 +709,9 @@ fn ensure_holding_zeroizes_an_empty_or_mismatched_authorized_target() {
         balance: HOLDING_BALANCE,
     };
     let targets = [
-        ShardData::empty(),
-        ShardData::from(&other_definition),
-        ShardData::try_from(vec![0xFF; 4]).expect("fits the shard limit"),
+        ActorState::empty(),
+        ActorState::from(&other_definition),
+        ActorState::try_from(vec![0xFF; 4]).expect("fits the shard limit"),
     ];
 
     for target in targets {
@@ -735,7 +738,7 @@ fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
         HOLDING_ID,
         false,
         Origin::Root,
-        &ShardData::from(&other_definition),
+        &ActorState::from(&other_definition),
         &Message::EnsureHolding {
             descriptor: FUNGIBLE,
         },
@@ -745,7 +748,7 @@ fn ensure_holding_rejects_a_mismatched_unauthorized_target() {
 #[test]
 fn another_actor_replaces_a_funded_holding_only_with_authorization() {
     let requester = Origin::Program(OTHER_DEFINITION_ID);
-    let funded = ShardData::from(&TokenHolding::Fungible {
+    let funded = ActorState::from(&TokenHolding::Fungible {
         definition_id: OTHER_DEFINITION_ID,
         balance: HOLDING_BALANCE,
     });
@@ -761,8 +764,11 @@ fn another_actor_replaces_a_funded_holding_only_with_authorization() {
         )
     };
 
-    assert_eq!(request(true).post_data, Some(ShardData::from(&fungible(0))));
-    let refusal = std::panic::catch_unwind(|| request(false).post_data)
+    assert_eq!(
+        request(true).post_state,
+        Some(ActorState::from(&fungible(0)))
+    );
+    let refusal = std::panic::catch_unwind(|| request(false).post_state)
         .expect_err("an unauthorized reset was accepted");
     assert_eq!(
         refusal.downcast_ref::<&str>(),
@@ -778,12 +784,12 @@ fn ensure_holding_keeps_a_matching_funded_holding() {
                 HOLDING_ID,
                 is_authorized,
                 Origin::Root,
-                &ShardData::from(&fungible(HOLDING_BALANCE)),
+                &ActorState::from(&fungible(HOLDING_BALANCE)),
                 &Message::EnsureHolding {
                     descriptor: FUNGIBLE,
                 },
             )
-            .post_data,
+            .post_state,
             None
         );
     }
@@ -796,12 +802,12 @@ fn ensure_holding_keeps_a_funded_master_for_a_printed_copy_descriptor() {
             HOLDING_ID,
             false,
             Origin::Root,
-            &ShardData::from(&master(PRINTABLE_COPIES)),
+            &ActorState::from(&master(PRINTABLE_COPIES)),
             &Message::EnsureHolding {
                 descriptor: PRINTED,
             },
         )
-        .post_data,
+        .post_state,
         None
     );
 }
@@ -813,7 +819,7 @@ fn assert_kind_keeps_the_definition_it_checked() {
             &Message::AssertKind {
                 kind: TokenKind::Fungible
             },
-            &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            &ActorState::from(&fungible_definition(INIT_SUPPLY)),
         ),
         None
     );
@@ -822,7 +828,7 @@ fn assert_kind_keeps_the_definition_it_checked() {
             &Message::AssertKind {
                 kind: TokenKind::NftPrintedCopy
             },
-            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            &ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
         ),
         None
     );
@@ -835,19 +841,19 @@ fn assert_kind_rejects_a_forged_token_kind() {
     // between a claimed kind and a holding that carries it.
     let cases = [
         (
-            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ActorState::from(&fungible_definition(INIT_SUPPLY)),
             TokenKind::NftMaster,
         ),
         (
-            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ActorState::from(&fungible_definition(INIT_SUPPLY)),
             TokenKind::NftPrintedCopy,
         ),
         (
-            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
             TokenKind::Fungible,
         ),
         (
-            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
             TokenKind::NftMaster,
         ),
     ];
@@ -870,7 +876,7 @@ fn mint_missing_authorization() {
         DEFINITION_ID,
         false,
         Origin::Root,
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
         &Message::Mint {
             to: HOLDING_ID,
             amount: MINT_SUCCESS,
@@ -883,7 +889,7 @@ fn mint_missing_authorization() {
 fn mint_not_valid_holding_account() {
     let _written = written(
         &credit(FUNGIBLE, MINT_SUCCESS),
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
     );
 }
 
@@ -895,7 +901,7 @@ fn mint_not_valid_definition_account() {
             to: HOLDING_ID,
             amount: MINT_SUCCESS,
         },
-        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &ActorState::from(&fungible(HOLDING_BALANCE)),
     );
 }
 
@@ -911,9 +917,9 @@ fn mint_success() {
         &[
             (
                 DEFINITION_ID,
-                ShardData::from(&fungible_definition(INIT_SUPPLY)),
+                ActorState::from(&fungible_definition(INIT_SUPPLY)),
             ),
-            (HOLDING_ID, ShardData::from(&fungible(HOLDING_BALANCE))),
+            (HOLDING_ID, ActorState::from(&fungible(HOLDING_BALANCE))),
         ],
     );
 
@@ -934,7 +940,7 @@ fn mint_uninit_holding_success() {
         &[DEFINITION_ID],
         &[(
             DEFINITION_ID,
-            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ActorState::from(&fungible_definition(INIT_SUPPLY)),
         )],
     );
 
@@ -953,7 +959,7 @@ fn mint_total_supply_overflow() {
             to: HOLDING_ID,
             amount: MINT_OVERFLOW,
         },
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
     );
 }
 
@@ -962,7 +968,7 @@ fn mint_total_supply_overflow() {
 fn mint_holding_account_overflow() {
     let _written = written(
         &credit(FUNGIBLE, MINT_OVERFLOW),
-        &ShardData::from(&fungible(INIT_SUPPLY)),
+        &ActorState::from(&fungible(INIT_SUPPLY)),
     );
 }
 
@@ -974,7 +980,7 @@ fn mint_cannot_mint_unmintable_tokens() {
             to: HOLDING_ID,
             amount: MINT_SUCCESS,
         },
-        &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+        &ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
     );
 }
 
@@ -983,7 +989,7 @@ fn mint_cannot_mint_unmintable_tokens() {
 fn mint_into_a_non_fungible_holding_is_rejected() {
     let _written = written(
         &credit(FUNGIBLE, MINT_SUCCESS),
-        &ShardData::from(&master(PRINTABLE_COPIES)),
+        &ActorState::from(&master(PRINTABLE_COPIES)),
     );
 }
 
@@ -996,7 +1002,7 @@ fn burn_missing_authorization() {
         HOLDING_ID,
         false,
         Origin::Root,
-        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &ActorState::from(&fungible(HOLDING_BALANCE)),
         &Message::Burn {
             descriptor: FUNGIBLE,
             amount: BURN_SUCCESS,
@@ -1018,7 +1024,7 @@ fn burn_mismatch_def() {
             amount: BURN_SUCCESS,
             definition: DEFINITION_ID,
         },
-        &ShardData::from(&other_definition),
+        &ActorState::from(&other_definition),
     );
 }
 
@@ -1031,7 +1037,7 @@ fn burn_insufficient_balance() {
             amount: BURN_INSUFFICIENT,
             definition: DEFINITION_ID,
         },
-        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &ActorState::from(&fungible(HOLDING_BALANCE)),
     );
 }
 
@@ -1044,7 +1050,7 @@ fn burn_total_supply_underflow() {
             kind: TokenKind::Fungible,
             amount: MINT_OVERFLOW,
         },
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
     );
 }
 
@@ -1061,9 +1067,9 @@ fn burn_success() {
         &[
             (
                 DEFINITION_ID,
-                ShardData::from(&fungible_definition(INIT_SUPPLY)),
+                ActorState::from(&fungible_definition(INIT_SUPPLY)),
             ),
-            (HOLDING_ID, ShardData::from(&fungible(HOLDING_BALANCE))),
+            (HOLDING_ID, ActorState::from(&fungible(HOLDING_BALANCE))),
         ],
     );
 
@@ -1082,7 +1088,7 @@ fn burn_of_an_nft_master_drops_both_supplies() {
                 kind: TokenKind::NftMaster,
                 amount: 1,
             },
-            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            &ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
         ),
         non_fungible_definition(PRINTABLE_COPIES_AFTER_PRINT)
     );
@@ -1093,7 +1099,7 @@ fn burn_of_an_nft_master_drops_both_supplies() {
                 amount: 1,
                 definition: DEFINITION_ID,
             },
-            &ShardData::from(&master(PRINTABLE_COPIES)),
+            &ActorState::from(&master(PRINTABLE_COPIES)),
         ),
         master(PRINTABLE_COPIES_AFTER_PRINT)
     );
@@ -1108,7 +1114,7 @@ fn burn_of_a_printed_copy_drops_ownership() {
                 kind: TokenKind::NftPrintedCopy,
                 amount: 1,
             },
-            &ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            &ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
         ),
         non_fungible_definition(PRINTABLE_COPIES_AFTER_PRINT)
     );
@@ -1119,7 +1125,7 @@ fn burn_of_a_printed_copy_drops_ownership() {
                 amount: 1,
                 definition: DEFINITION_ID,
             },
-            &ShardData::from(&printed(true)),
+            &ActorState::from(&printed(true)),
         ),
         printed(false)
     );
@@ -1134,7 +1140,7 @@ fn burn_of_an_unowned_printed_copy_is_rejected() {
             amount: 1,
             definition: DEFINITION_ID,
         },
-        &ShardData::from(&printed(false)),
+        &ActorState::from(&printed(false)),
     );
 }
 
@@ -1145,15 +1151,15 @@ fn burn_rejects_a_forged_holding_kind() {
     // their own contents.
     let definitions = [
         (
-            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ActorState::from(&fungible_definition(INIT_SUPPLY)),
             TokenKind::NftMaster,
         ),
         (
-            ShardData::from(&fungible_definition(INIT_SUPPLY)),
+            ActorState::from(&fungible_definition(INIT_SUPPLY)),
             TokenKind::NftPrintedCopy,
         ),
         (
-            ShardData::from(&non_fungible_definition(PRINTABLE_COPIES)),
+            ActorState::from(&non_fungible_definition(PRINTABLE_COPIES)),
             TokenKind::Fungible,
         ),
     ];
@@ -1173,9 +1179,9 @@ fn burn_rejects_a_forged_holding_kind() {
     }
 
     let holdings = [
-        (ShardData::from(&fungible(HOLDING_BALANCE)), MASTER),
-        (ShardData::from(&master(PRINTABLE_COPIES)), FUNGIBLE),
-        (ShardData::from(&printed(true)), MASTER),
+        (ActorState::from(&fungible(HOLDING_BALANCE)), MASTER),
+        (ActorState::from(&master(PRINTABLE_COPIES)), FUNGIBLE),
+        (ActorState::from(&printed(true)), MASTER),
     ];
     for (holding, claimed) in holdings {
         assert!(
@@ -1200,7 +1206,7 @@ fn a_burn_sends_the_supply_burn_to_the_definition_it_names() {
         HOLDING_ID,
         true,
         Origin::Root,
-        &ShardData::from(&fungible(HOLDING_BALANCE)),
+        &ActorState::from(&fungible(HOLDING_BALANCE)),
         &Message::Burn {
             descriptor: FUNGIBLE,
             amount: BURN_SUCCESS,
@@ -1231,7 +1237,7 @@ fn a_supply_burn_received_by_another_definition_is_rejected() {
         OTHER_DEFINITION_ID,
         true,
         TOKEN_ORIGIN,
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
         &Message::BurnSupply {
             definition_id: DEFINITION_ID,
             kind: TokenKind::Fungible,
@@ -1256,7 +1262,7 @@ fn print_nft_master_account_must_be_authorized() {
         HOLDING_ID,
         false,
         Origin::Root,
-        &ShardData::from(&master(PRINTABLE_COPIES)),
+        &ActorState::from(&master(PRINTABLE_COPIES)),
         &print_nft(DEFINITION_ID),
     );
 }
@@ -1266,7 +1272,7 @@ fn print_nft_master_account_must_be_authorized() {
 fn print_nft_master_nft_invalid_token_holding() {
     let _written = written(
         &print_nft(DEFINITION_ID),
-        &ShardData::from(&fungible_definition(INIT_SUPPLY)),
+        &ActorState::from(&fungible_definition(INIT_SUPPLY)),
     );
 }
 
@@ -1275,14 +1281,14 @@ fn print_nft_master_nft_invalid_token_holding() {
 fn print_nft_master_nft_not_nft_master_account() {
     let _written = written(
         &print_nft(DEFINITION_ID),
-        &ShardData::from(&fungible(INIT_SUPPLY)),
+        &ActorState::from(&fungible(INIT_SUPPLY)),
     );
 }
 
 #[should_panic(expected = "Insufficient balance to print another NFT copy")]
 #[test]
 fn print_nft_master_nft_insufficient_balance() {
-    let _written = written(&print_nft(DEFINITION_ID), &ShardData::from(&master(1)));
+    let _written = written(&print_nft(DEFINITION_ID), &ActorState::from(&master(1)));
 }
 
 #[should_panic(expected = "Printed copy does not belong to the master's Token Definition")]
@@ -1293,7 +1299,7 @@ fn print_nft_rejects_a_forged_definition_id() {
     // of a more valuable one.
     let _written = written(
         &print_nft(OTHER_DEFINITION_ID),
-        &ShardData::from(&master(PRINTABLE_COPIES)),
+        &ActorState::from(&master(PRINTABLE_COPIES)),
     );
 }
 
@@ -1303,7 +1309,7 @@ fn print_nft_success() {
         HOLDING_ID,
         &print_nft(DEFINITION_ID),
         &[HOLDING_ID],
-        &[(HOLDING_ID, ShardData::from(&master(PRINTABLE_COPIES)))],
+        &[(HOLDING_ID, ActorState::from(&master(PRINTABLE_COPIES)))],
     );
 
     let master_holding = settled_holding(&state, HOLDING_ID);

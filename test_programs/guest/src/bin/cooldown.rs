@@ -42,7 +42,7 @@ fn main() {
 }
 
 fn receive(input: &ReceiveInput, proposed: Timestamp) -> Response {
-    let state = CooldownState::from_bytes(&input.pre_data);
+    let state = CooldownState::from_bytes(&input.pre_state);
     let elapsed = proposed.saturating_sub(state.last_run_timestamp);
     assert!(
         elapsed >= state.cooldown_ms,

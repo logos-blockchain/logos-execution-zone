@@ -1,6 +1,6 @@
 use lee_core::{
     Commitment,
-    account::{Actor, Cycles, ShardData},
+    account::{Actor, ActorState, Cycles},
     execution_state::{Backend, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
@@ -52,7 +52,7 @@ impl Backend for PublicBackend<'_> {
         debug!("Program {program_account_id:?} input: {input:?}");
         let transition = if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             // `program_loader` runs as Rust, not a guest ELF, so there is no session to charge.
-            const ABSENT: &ShardData = &ShardData::empty();
+            const ABSENT: &ActorState = &ActorState::empty();
             let (transition, new_commitment) = catch_program_loader_panic(|| {
                 program_loader_core::receive(input, |account_id| {
                     loader_shard(execution, state, account_id).unwrap_or(ABSENT)
@@ -79,11 +79,11 @@ impl Backend for PublicBackend<'_> {
         Ok(transition)
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ShardData, LeeError> {
+    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
             .state
             .get_account_by_id_ref(actor.account_id)
-            .map_or_else(ShardData::empty, |account| {
+            .map_or_else(ActorState::empty, |account| {
                 account.data.shard(actor.program_account_id).clone()
             }))
     }

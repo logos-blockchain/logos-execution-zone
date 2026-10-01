@@ -32,7 +32,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
         Message::Write(data) => append(input, &data),
         Message::MoveData { data, to } => {
             assert_eq!(
-                input.pre_data.as_ref(),
+                input.pre_state.as_ref(),
                 data.as_slice(),
                 "the source account does not hold the bytes the instruction moves out of it"
             );
@@ -52,5 +52,5 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 }
 
 fn append(input: &ReceiveInput, data: &[u8]) -> Response {
-    Response::write([input.pre_data.as_ref(), data].concat())
+    Response::write([input.pre_state.as_ref(), data].concat())
 }

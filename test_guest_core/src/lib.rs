@@ -52,6 +52,6 @@ pub enum ForgeField {
     Receiver,
     Origin,
     IsAuthorized,
-    PreData,
+    PreState,
     Message,
 }

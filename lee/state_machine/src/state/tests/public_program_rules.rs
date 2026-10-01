@@ -139,14 +139,14 @@ fn program_should_fail_if_it_references_an_undeclared_account() {
 }
 
 #[test]
-fn program_should_fail_if_it_forges_its_pre_data() {
+fn program_should_fail_if_it_forges_its_pre_state() {
     let account_id = AccountId::new([1; 32]);
     let program_id = AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 0)])
         .with_programs([crate::test_methods::forges_echo()]);
     let forger = Actor::new(account_id, program_id);
-    let tx = public_tx(forger, vec![forger], vec![], ForgeField::PreData, &[]);
+    let tx = public_tx(forger, vec![forger], vec![], ForgeField::PreState, &[]);
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
@@ -159,8 +159,8 @@ fn program_should_fail_if_it_forges_its_pre_data() {
                     source: ExecutionValidationError::TransitionInputMismatch { expected, actual },
                 }
             ))) if *err_program_id == program_id
-                && expected.pre_data.is_empty()
-                && actual.pre_data.as_ref() == b"forged"
+                && expected.pre_state.is_empty()
+                && actual.pre_state.as_ref() == b"forged"
         ),
         "expected a transition input mismatch for the forged pre-data, got {result:?}"
     );
@@ -207,8 +207,8 @@ fn insufficient_balance_transfer_leaves_state_untouched() {
 fn a_sent_turn_on_another_shard_of_the_root_account_keeps_its_other_shards() {
     let account_id = AccountId::new([1; 32]);
     let stranger = AccountId::new([9; 32]);
-    let on_chain: ShardData = b"on-chain".to_vec().try_into().unwrap();
-    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let on_chain: ActorState = b"on-chain".to_vec().try_into().unwrap();
+    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let mut state = V03State::new()
         .with_public_accounts([(

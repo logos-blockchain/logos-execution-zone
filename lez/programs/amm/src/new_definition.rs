@@ -33,9 +33,9 @@ pub fn new_pool(
         "Pool Definition Account ID does not match PDA"
     );
 
-    let pool_was_empty = input.pre_data.is_empty();
+    let pool_was_empty = input.pre_state.is_empty();
     if !pool_was_empty {
-        let existing = PoolDefinition::try_from(&input.pre_data)
+        let existing = PoolDefinition::try_from(&input.pre_state)
             .expect("AMM program expects a valid Pool account");
         assert!(
             !existing.active,

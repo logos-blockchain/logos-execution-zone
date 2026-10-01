@@ -3,14 +3,14 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, Actor, Assumption, BedrockStatus, Block, BlockBody,
-    BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment, CommitmentSetDigest,
-    CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    HashType, IndexerStatus, IndexerSyncState, MessageBody, MessageId, Nullifier, Origin, Output,
-    PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, Proof, PublicIdentity, PublicKey, PublicMessage, PublicTransaction, ScheduleOp,
-    Selector, ShardData, Signature, StallReason, Transaction, TransactionEntry, ValidityWindow,
-    WitnessSet,
+    Account, AccountData, AccountId, Actor, ActorState, Assumption, BedrockStatus, Block,
+    BlockBody, BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment,
+    CommitmentSetDigest, CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey,
+    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageBody, MessageId,
+    Nullifier, Origin, Output, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicIdentity, PublicKey, PublicMessage,
+    PublicTransaction, ScheduleOp, Selector, Signature, StallReason, Transaction, TransactionEntry,
+    ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -112,16 +112,16 @@ impl From<Actor> for lee_core::account::Actor {
     }
 }
 
-impl From<lee_core::account::ShardData> for ShardData {
-    fn from(value: lee_core::account::ShardData) -> Self {
+impl From<lee_core::account::ActorState> for ActorState {
+    fn from(value: lee_core::account::ActorState) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl TryFrom<ShardData> for lee_core::account::ShardData {
+impl TryFrom<ActorState> for lee_core::account::ActorState {
     type Error = lee_core::account::data::DataTooBigError;
 
-    fn try_from(value: ShardData) -> Result<Self, Self::Error> {
+    fn try_from(value: ActorState) -> Result<Self, Self::Error> {
         Self::try_from(value.0)
     }
 }

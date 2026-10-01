@@ -1,9 +1,9 @@
-use lee_core::account::ShardData;
+use lee_core::account::ActorState;
 use token_core::{TokenDescriptor, TokenHolding};
 
 #[must_use]
-pub fn withdraw(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128) -> ShardData {
-    let mut holding = TokenHolding::try_from(pre_data).expect("Invalid sender data");
+pub fn withdraw(pre_state: &ActorState, descriptor: &TokenDescriptor, amount: u128) -> ActorState {
+    let mut holding = TokenHolding::try_from(pre_state).expect("Invalid sender data");
     assert_kind(&holding, descriptor);
 
     match &mut holding {
@@ -24,15 +24,15 @@ pub fn withdraw(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128
         }
     }
 
-    ShardData::from(&holding)
+    ActorState::from(&holding)
 }
 
 #[must_use]
-pub fn deposit(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128) -> ShardData {
-    let mut holding = if pre_data.is_empty() {
+pub fn deposit(pre_state: &ActorState, descriptor: &TokenDescriptor, amount: u128) -> ActorState {
+    let mut holding = if pre_state.is_empty() {
         descriptor.zeroized()
     } else {
-        TokenHolding::try_from(pre_data).expect("Invalid recipient data")
+        TokenHolding::try_from(pre_state).expect("Invalid recipient data")
     };
     assert_kind(&holding, descriptor);
 
@@ -56,7 +56,7 @@ pub fn deposit(pre_data: &ShardData, descriptor: &TokenDescriptor, amount: u128)
         }
     }
 
-    ShardData::from(&holding)
+    ActorState::from(&holding)
 }
 
 pub(crate) fn assert_kind(holding: &TokenHolding, descriptor: &TokenDescriptor) {

@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId, ShardData},
+    account::{Account, AccountId, ActorState},
     program::{
         MessageId, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment,
         StoredMessage, TransactionEvent, get_program_via, immutable_mirror_commitment,
@@ -258,7 +258,7 @@ impl V03State {
         for (i, chunk) in chunks.iter().enumerate() {
             let segment = Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ShardData::try_from(
+                ActorState::try_from(
                     ProgramSegment {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
@@ -277,7 +277,7 @@ impl V03State {
         };
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(program_header.to_bytes())
+            ActorState::try_from(program_header.to_bytes())
                 .expect("program header fits under DATA_MAX_LENGTH"),
         );
         self.public_state.insert(header_account_id, header);
@@ -423,7 +423,7 @@ impl V03State {
         get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
     }
 
-    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ShardData> {
+    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ActorState> {
         self.get_account_by_id_ref(account_id)
             .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
     }

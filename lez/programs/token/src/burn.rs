@@ -1,10 +1,10 @@
-use lee_core::account::ShardData;
+use lee_core::account::ActorState;
 use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind};
 
 #[must_use]
-pub fn burn_supply(pre_data: &ShardData, kind: TokenKind, amount_to_burn: u128) -> ShardData {
+pub fn burn_supply(pre_state: &ActorState, kind: TokenKind, amount_to_burn: u128) -> ActorState {
     let mut definition =
-        TokenDefinition::try_from(pre_data).expect("Token Definition account must be valid");
+        TokenDefinition::try_from(pre_state).expect("Token Definition account must be valid");
 
     match (&mut definition, kind) {
         (TokenDefinition::Fungible { total_supply, .. }, TokenKind::Fungible) => {
@@ -39,17 +39,17 @@ pub fn burn_supply(pre_data: &ShardData, kind: TokenKind, amount_to_burn: u128) 
         _ => panic!("Mismatched Token Definition and Token Holding types"),
     }
 
-    ShardData::from(&definition)
+    ActorState::from(&definition)
 }
 
 #[must_use]
 pub fn burn_holding(
-    pre_data: &ShardData,
+    pre_state: &ActorState,
     descriptor: &TokenDescriptor,
     amount_to_burn: u128,
-) -> ShardData {
+) -> ActorState {
     let mut holding =
-        TokenHolding::try_from(pre_data).expect("Token Holding account must be valid");
+        TokenHolding::try_from(pre_state).expect("Token Holding account must be valid");
     crate::transfer::assert_kind(&holding, descriptor);
 
     match &mut holding {
@@ -73,5 +73,5 @@ pub fn burn_holding(
         }
     }
 
-    ShardData::from(&holding)
+    ActorState::from(&holding)
 }

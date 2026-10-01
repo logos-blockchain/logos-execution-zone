@@ -14,7 +14,7 @@ use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey,
     NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
     WitnessKind,
-    account::{Account, AccountId, Actor, ShardData},
+    account::{Account, AccountId, Actor, ActorState},
     encryption::ViewingPublicKey,
     execution_state::TransactionEntry,
     native_token,
@@ -170,7 +170,7 @@ fn private_sender() -> (AccountId, PrivateWitness) {
         3,
         Some(Account::default().with_shard(
             token_program_id(),
-            ShardData::from(&TokenHolding::Fungible {
+            ActorState::from(&TokenHolding::Fungible {
                 definition_id: TOKEN_DEFINITION_ID,
                 balance: SENDER_BALANCE,
             }),

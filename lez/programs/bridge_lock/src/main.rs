@@ -111,7 +111,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 input.from_own_program(),
                 "the route is only checked for a lock of bridge_lock's own"
             );
-            let (outbox, target) = read_config(&input.pre_data)
+            let (outbox, target) = read_config(&input.pre_state)
                 .expect("config account holds an outbox and a mint target");
             assert_eq!(
                 outbox, outbox_account_id,
@@ -136,7 +136,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
                 "the receiver must be the bridge-lock config PDA"
             );
             Response::write(write_once(
-                &input.pre_data,
+                &input.pre_state,
                 config_bytes(outbox_account_id, target_account_id).to_vec(),
             ))
         }
@@ -158,7 +158,7 @@ fn decode_mint(payload: &[u8]) -> WrappedMessage {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, ShardData},
+        account::{AccountId, ActorState},
         program::Transition,
     };
 
@@ -202,7 +202,7 @@ mod tests {
             receiver,
             origin,
             is_authorized,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(&message).unwrap(),
         };
         receive(&input, message).into_transition(input)
@@ -284,7 +284,7 @@ mod tests {
         );
 
         let holder = HOLDER.into_value();
-        assert_eq!(transition.post_data, None);
+        assert_eq!(transition.post_state, None);
         assert_eq!(
             transition.sends,
             vec![
@@ -331,7 +331,10 @@ mod tests {
 
     #[test]
     fn the_route_genesis_pinned_is_accepted() {
-        assert_eq!(check_route(OUTBOX_ID, WRAPPED_ID, config()).post_data, None);
+        assert_eq!(
+            check_route(OUTBOX_ID, WRAPPED_ID, config()).post_state,
+            None
+        );
     }
 
     #[test]
@@ -372,16 +375,16 @@ mod tests {
     #[test]
     fn a_first_init_writes_the_route() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, Vec::new()).post_data,
-            Some(ShardData::try_from(config()).unwrap())
+            init(Origin::Root, WRAPPED_ID, Vec::new()).post_state,
+            Some(ActorState::try_from(config()).unwrap())
         );
     }
 
     #[test]
     fn replaying_the_same_init_is_a_no_op() {
         assert_eq!(
-            init(Origin::Root, WRAPPED_ID, config()).post_data,
-            Some(ShardData::try_from(config()).unwrap())
+            init(Origin::Root, WRAPPED_ID, config()).post_state,
+            Some(ActorState::try_from(config()).unwrap())
         );
     }
 

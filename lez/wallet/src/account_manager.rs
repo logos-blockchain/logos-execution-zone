@@ -11,7 +11,7 @@ use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, SharedSecretKey, WitnessKind,
-    account::{Account, Actor, Nonce, ShardData},
+    account::{Account, Actor, ActorState, Nonce},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
@@ -228,13 +228,13 @@ impl AccountMention {
 pub struct SelectedShard {
     pub selector: Actor,
     pub is_authorized: bool,
-    pub data: ShardData,
+    pub data: ActorState,
 }
 
 impl SelectedShard {
     /// Returns the shard data. Panics unless this row selects `program`'s shard.
     #[must_use]
-    pub fn shard_of(&self, program: AccountId) -> &ShardData {
+    pub fn shard_of(&self, program: AccountId) -> &ActorState {
         assert_eq!(
             self.selector.program_account_id, program,
             "SelectedShard carries another program's shard"
@@ -430,7 +430,7 @@ impl AccountManager {
     }
 
     // The declared public actors' shards as read, from which the prover derives the boundary.
-    pub fn public_shards(&self) -> HashMap<Actor, ShardData> {
+    pub fn public_shards(&self) -> HashMap<Actor, ActorState> {
         self.rows
             .iter()
             .filter(|row| !matches!(self.states[row.account], State::Private(_)))

@@ -1,8 +1,9 @@
-use lee_core::account::ShardData;
+use lee_core::account::ActorState;
 use token_core::{TokenDefinition, TokenDescriptor, TokenHolding, TokenKind, same_asset};
 
-pub fn check_holding_kind(pre_data: &ShardData, kind: TokenKind) {
-    let definition = TokenDefinition::try_from(pre_data).expect("Definition account must be valid");
+pub fn check_holding_kind(pre_state: &ActorState, kind: TokenKind) {
+    let definition =
+        TokenDefinition::try_from(pre_state).expect("Definition account must be valid");
 
     assert_eq!(
         TokenKind::from_definition(&definition),
@@ -13,12 +14,12 @@ pub fn check_holding_kind(pre_data: &ShardData, kind: TokenKind) {
 
 #[must_use]
 pub fn ensure_holding(
-    pre_data: &ShardData,
+    pre_state: &ActorState,
     descriptor: &TokenDescriptor,
     is_authorized: bool,
-) -> Option<ShardData> {
-    if !pre_data.is_empty() {
-        if TokenHolding::try_from(pre_data).is_ok_and(|holding| {
+) -> Option<ActorState> {
+    if !pre_state.is_empty() {
+        if TokenHolding::try_from(pre_state).is_ok_and(|holding| {
             holding.definition_id() == descriptor.definition_id
                 && same_asset(holding.kind(), descriptor.kind)
         }) {
@@ -30,5 +31,5 @@ pub fn ensure_holding(
         );
     }
 
-    Some(ShardData::from(&descriptor.zeroized()))
+    Some(ActorState::from(&descriptor.zeroized()))
 }

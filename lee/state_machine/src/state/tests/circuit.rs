@@ -30,8 +30,8 @@ fn authorized() -> Script {
 fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
-    let replaced: ShardData = b"replaced".to_vec().try_into().unwrap();
+    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
+    let replaced: ActorState = b"replaced".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let keys = test_private_account_keys_1();
     let account_id = regular_id(&keys, Identifier::ZERO);
@@ -96,7 +96,7 @@ fn a_private_account_keeps_a_stranger_shard_through_an_own_shard_write() {
 fn a_private_account_may_act_under_two_shards_in_one_transaction() {
     let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_data: ShardData = b"stranger".to_vec().try_into().unwrap();
+    let stranger_data: ActorState = b"stranger".to_vec().try_into().unwrap();
     let written = vec![7; 4];
     let amount: u128 = 30;
     let keys = test_private_account_keys_1();
@@ -1003,7 +1003,7 @@ fn a_forged_echo_is_caught_before_proving() {
         ForgeField::Receiver,
         ForgeField::Origin,
         ForgeField::IsAuthorized,
-        ForgeField::PreData,
+        ForgeField::PreState,
         ForgeField::Message,
     ] {
         let result = execute_and_prove(

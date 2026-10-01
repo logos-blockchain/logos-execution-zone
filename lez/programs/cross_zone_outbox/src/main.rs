@@ -42,7 +42,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
     );
     // A slot holds one message for ever.
     assert!(
-        input.pre_data.is_empty(),
+        input.pre_state.is_empty(),
         "Outbox slot already written: one Emit per (emitter, target_zone, ordinal)"
     );
 
@@ -62,7 +62,7 @@ fn receive(input: &ReceiveInput, message: Message) -> Response {
 #[cfg(test)]
 mod tests {
     use lee_core::{
-        account::{AccountId, Actor, ShardData},
+        account::{AccountId, Actor, ActorState},
         program::{Origin, Transition},
     };
 
@@ -98,7 +98,7 @@ mod tests {
             receiver,
             origin,
             is_authorized: false,
-            pre_data: ShardData::try_from(pre).unwrap(),
+            pre_state: ActorState::try_from(pre).unwrap(),
             message: borsh::to_vec(&emit()).unwrap(),
         };
         receive(&input, emit()).into_transition(input)
@@ -111,8 +111,8 @@ mod tests {
     #[test]
     fn an_empty_slot_takes_the_record() {
         assert_eq!(
-            run(from_emitter(), Vec::new()).post_data,
-            Some(ShardData::try_from(record().to_bytes()).unwrap())
+            run(from_emitter(), Vec::new()).post_state,
+            Some(ActorState::try_from(record().to_bytes()).unwrap())
         );
     }
 

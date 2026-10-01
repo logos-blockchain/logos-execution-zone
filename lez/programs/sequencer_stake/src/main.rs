@@ -81,12 +81,12 @@ fn stake(
     // The stake shard remains after a full exit, so presence is what distinguishes a
     // new stake from a top-up.
     assert_eq!(
-        !input.pre_data.is_empty(),
+        !input.pre_state.is_empty(),
         has_record,
         "stake claims an ownership record this account does not match"
     );
     if has_record {
-        let record = decode_record(&input.pre_data);
+        let record = decode_record(&input.pre_state);
         assert_eq!(
             record.sequencer_key, sequencer_key,
             "ownership account backs a different sequencer key"
@@ -127,7 +127,7 @@ fn unstake_request(
         "UnstakeRequest is only invoked as a top-level user transaction",
     );
     assert!(input.is_authorized, "must sign for the ownership account");
-    let record = decode_record(&input.pre_data);
+    let record = decode_record(&input.pre_state);
     assert_eq!(
         record.sequencer_key, sequencer_key,
         "ownership account backs a different sequencer key"
@@ -156,7 +156,7 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
         "FinalizeUnstake is only invoked as a top-level user transaction",
     );
     assert_config_account(input);
-    let mut config = decode_config(&input.pre_data);
+    let mut config = decode_config(&input.pre_state);
     let exit_delay = channel_params(&config).exit_delay;
     let entry = config
         .entries
@@ -201,7 +201,7 @@ fn slash(
         "Slash is only invoked as a top-level user transaction",
     );
     assert_config_account(input);
-    let mut config = decode_config(&input.pre_data);
+    let mut config = decode_config(&input.pre_state);
     // The approvals are the whole authorization, and accreditation is this config's
     // own answer.
     verify_approvals(&config, sequencer_key, inscription, approvals);
@@ -248,7 +248,7 @@ fn init_channel_params(
     );
     assert!(params.exit_delay > 0, "exit_delay must be non-zero");
 
-    let mut config = decode_config(&input.pre_data);
+    let mut config = decode_config(&input.pre_state);
     assert!(
         config.channel_params.is_none(),
         "channel params are already set and cannot be changed"
@@ -266,7 +266,7 @@ fn record_stake(
     has_record: bool,
 ) -> Response {
     assert_bookkeeping(input);
-    let mut config = decode_config(&input.pre_data);
+    let mut config = decode_config(&input.pre_state);
     assert!(
         amount >= channel_params(&config).minimum_sequencer_stake,
         "a stake or top-up must add at least the minimum"
@@ -309,7 +309,7 @@ fn track_unstake_request(
     pending: PendingUnstake,
 ) -> Response {
     assert_bookkeeping(input);
-    let mut config = decode_config(&input.pre_data);
+    let mut config = decode_config(&input.pre_state);
     let minimum_sequencer_stake = channel_params(&config).minimum_sequencer_stake;
     let entry = entry_of(&mut config, sequencer_key, ownership);
     assert!(
@@ -356,13 +356,13 @@ fn to_config(program: AccountId, message: &Message) -> Call {
     )
 }
 
-fn decode_config(pre_data: &[u8]) -> SequencerStakeConfig {
-    SequencerStakeConfig::from_bytes(pre_data)
+fn decode_config(pre_state: &[u8]) -> SequencerStakeConfig {
+    SequencerStakeConfig::from_bytes(pre_state)
         .expect("config account data should decode as SequencerStakeConfig")
 }
 
-fn decode_record(pre_data: &[u8]) -> StakeRecord {
-    StakeRecord::from_bytes(pre_data).expect("ownership account should decode as StakeRecord")
+fn decode_record(pre_state: &[u8]) -> StakeRecord {
+    StakeRecord::from_bytes(pre_state).expect("ownership account should decode as StakeRecord")
 }
 
 fn entry_of(
@@ -442,7 +442,7 @@ fn request_window(requested_at: BlockId) -> BlockValidityWindow {
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::{account::ShardData, program::Transition};
+    use lee_core::{account::ActorState, program::Transition};
     use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
@@ -527,14 +527,14 @@ mod tests {
         program: AccountId,
         is_authorized: bool,
         origin: Origin,
-        pre_data: &[u8],
+        pre_state: &[u8],
         message: &Message,
     ) -> ReceiveInput {
         ReceiveInput {
             receiver: Actor::new(account, program),
             origin,
             is_authorized,
-            pre_data: ShardData::try_from(pre_data.to_vec()).unwrap(),
+            pre_state: ActorState::try_from(pre_state.to_vec()).unwrap(),
             message: borsh::to_vec(message).unwrap(),
         }
     }
@@ -543,30 +543,30 @@ mod tests {
         account: AccountId,
         is_authorized: bool,
         origin: Origin,
-        pre_data: &[u8],
+        pre_state: &[u8],
         message: Message,
     ) -> Transition {
-        let input = input(account, PROGRAM, is_authorized, origin, pre_data, &message);
+        let input = input(account, PROGRAM, is_authorized, origin, pre_state, &message);
         receive(&input, message).into_transition(input)
     }
 
-    fn at_owner(is_authorized: bool, pre_data: &[u8], message: Message) -> Transition {
-        run(OWNER, is_authorized, Origin::Root, pre_data, message)
+    fn at_owner(is_authorized: bool, pre_state: &[u8], message: Message) -> Transition {
+        run(OWNER, is_authorized, Origin::Root, pre_state, message)
     }
 
-    fn at_config(origin: Origin, pre_data: &[u8], message: Message) -> Transition {
+    fn at_config(origin: Origin, pre_state: &[u8], message: Message) -> Transition {
         run(
             sequencer_stake_config_account_id(PROGRAM),
             false,
             origin,
-            pre_data,
+            pre_state,
             message,
         )
     }
 
     fn written(transition: &Transition) -> Vec<u8> {
         transition
-            .post_data
+            .post_state
             .as_ref()
             .expect("the shard is written")
             .to_vec()
@@ -711,7 +711,7 @@ mod tests {
     fn a_request_records_the_amount_and_destination() {
         let transition = at_owner(true, &record(key(1)), request(key(1), 500));
 
-        assert!(transition.post_data.is_none());
+        assert!(transition.post_state.is_none());
         assert_eq!(transition.block_validity_window.start(), Some(0));
         assert_eq!(
             transition.block_validity_window.end(),

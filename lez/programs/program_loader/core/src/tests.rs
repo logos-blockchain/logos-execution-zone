@@ -16,10 +16,10 @@ use super::*;
 
 /// The live loader shards the planner reads through, standing in for pending/committed state.
 #[derive(Default)]
-struct Shards(HashMap<AccountId, ShardData>);
+struct Shards(HashMap<AccountId, ActorState>);
 
 impl Shards {
-    fn with(mut self, account_id: AccountId, data: ShardData) -> Self {
+    fn with(mut self, account_id: AccountId, data: ActorState) -> Self {
         self.0.insert(account_id, data);
         self
     }
@@ -27,7 +27,7 @@ impl Shards {
     fn segment(self, account_id: AccountId, bytecode: Vec<u8>, next: Option<AccountId>) -> Self {
         self.with(
             account_id,
-            ShardData::try_from(
+            ActorState::try_from(
                 ProgramSegment {
                     bytecode,
                     next_segment: next,
@@ -39,11 +39,11 @@ impl Shards {
     }
 
     fn header(self, account_id: AccountId, header: &ProgramHeader) -> Self {
-        self.with(account_id, ShardData::try_from(header.to_bytes()).unwrap())
+        self.with(account_id, ActorState::try_from(header.to_bytes()).unwrap())
     }
 
-    fn read<'shards>(&'shards self) -> impl Fn(AccountId) -> &'shards ShardData + 'shards {
-        const ABSENT: &ShardData = &ShardData::empty();
+    fn read<'shards>(&'shards self) -> impl Fn(AccountId) -> &'shards ActorState + 'shards {
+        const ABSENT: &ActorState = &ActorState::empty();
         move |account_id| self.0.get(&account_id).unwrap_or(ABSENT)
     }
 }
@@ -51,7 +51,7 @@ impl Shards {
 fn input(
     target: AccountId,
     is_authorized: bool,
-    pre_data: ShardData,
+    pre_state: ActorState,
     message: &Message,
 ) -> ReceiveInput {
     let receiver = Actor::new(target, PROGRAM_LOADER_ACCOUNT_ID);
@@ -59,7 +59,7 @@ fn input(
         receiver,
         origin: Origin::Root,
         is_authorized,
-        pre_data,
+        pre_state,
         message: borsh::to_vec(message).expect("borsh serialization is infallible"),
     }
 }
@@ -74,12 +74,12 @@ fn write_segment_writes_the_loader_shard() {
     };
 
     let (transition, new_commitment) = receive(
-        &input(target_id, false, ShardData::empty(), &message),
+        &input(target_id, false, ActorState::empty(), &message),
         shards.read(),
     );
 
-    let post_data = transition.post_data.expect("a segment was written");
-    let segment = ProgramSegment::from_bytes(&post_data).expect("valid segment");
+    let post_state = transition.post_state.expect("a segment was written");
+    let segment = ProgramSegment::from_bytes(&post_state).expect("valid segment");
     assert_eq!(segment.bytecode, vec![1, 2, 3]);
     assert_eq!(segment.next_segment, None);
     assert!(transition.sends.is_empty());
@@ -91,13 +91,13 @@ fn write_segment_writes_the_loader_shard() {
 fn write_segment_rejects_an_occupied_loader_shard() {
     let target_id = AccountId::new([1; 32]);
     let shards = Shards::default().segment(target_id, vec![9], None);
-    let pre_data = shards.read()(target_id).clone();
+    let pre_state = shards.read()(target_id).clone();
     let message = Message::WriteSegment {
         bytecode: vec![1],
         next_segment: None,
     };
 
-    let _transition = receive(&input(target_id, false, pre_data, &message), shards.read());
+    let _transition = receive(&input(target_id, false, pre_state, &message), shards.read());
 }
 
 #[test]
@@ -105,14 +105,14 @@ fn write_segment_rejects_an_occupied_loader_shard() {
 fn write_segment_rejects_a_next_segment_with_malformed_data() {
     let target_id = AccountId::new([1; 32]);
     let next_id = AccountId::new([2; 32]);
-    let shards = Shards::default().with(next_id, ShardData::try_from(vec![0xff, 0xff]).unwrap());
+    let shards = Shards::default().with(next_id, ActorState::try_from(vec![0xff, 0xff]).unwrap());
     let message = Message::WriteSegment {
         bytecode: vec![1],
         next_segment: Some(next_id),
     };
 
     let _transition = receive(
-        &input(target_id, false, ShardData::empty(), &message),
+        &input(target_id, false, ActorState::empty(), &message),
         shards.read(),
     );
 }
@@ -129,13 +129,13 @@ fn create_header_rejects_an_occupied_loader_shard() {
             immutable: false,
         },
     );
-    let pre_data = shards.read()(target_id).clone();
+    let pre_state = shards.read()(target_id).clone();
     let message = Message::CreateHeader {
         first_segment: AccountId::new([2; 32]),
         immutable: false,
     };
 
-    let _transition = receive(&input(target_id, false, pre_data, &message), shards.read());
+    let _transition = receive(&input(target_id, false, pre_state, &message), shards.read());
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn create_header_rejects_a_chain_that_does_not_end() {
     };
 
     let _transition = receive(
-        &input(target_id, true, ShardData::empty(), &message),
+        &input(target_id, true, ActorState::empty(), &message),
         shards.read(),
     );
 }
@@ -169,7 +169,7 @@ fn update_header_rejects_a_target_with_no_existing_header() {
     };
 
     let _transition = receive(
-        &input(target_id, true, ShardData::empty(), &message),
+        &input(target_id, true, ActorState::empty(), &message),
         Shards::default().read(),
     );
 }
@@ -187,13 +187,13 @@ fn update_header_rejects_an_immutable_header() {
             immutable: true,
         },
     );
-    let pre_data = shards.read()(target_id).clone();
+    let pre_state = shards.read()(target_id).clone();
     let message = Message::UpdateHeader {
         first_segment,
         immutable: false,
     };
 
-    let _transition = receive(&input(target_id, true, pre_data, &message), shards.read());
+    let _transition = receive(&input(target_id, true, pre_state, &message), shards.read());
 }
 
 #[test]
@@ -209,13 +209,13 @@ fn update_header_rejects_an_unauthorized_caller() {
             immutable: false,
         },
     );
-    let pre_data = shards.read()(target_id).clone();
+    let pre_state = shards.read()(target_id).clone();
     let message = Message::UpdateHeader {
         first_segment,
         immutable: false,
     };
 
-    let _transition = receive(&input(target_id, false, pre_data, &message), shards.read());
+    let _transition = receive(&input(target_id, false, pre_state, &message), shards.read());
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn a_header_may_not_be_created_for_the_native_token_program() {
     };
 
     let _transition = receive(
-        &input(NATIVE_TOKEN_PROGRAM_ID, true, ShardData::empty(), &message),
+        &input(NATIVE_TOKEN_PROGRAM_ID, true, ActorState::empty(), &message),
         Shards::default().read(),
     );
 }
@@ -245,7 +245,7 @@ fn a_segment_cannot_be_written_at_the_loader_address() {
         &input(
             PROGRAM_LOADER_ACCOUNT_ID,
             true,
-            ShardData::empty(),
+            ActorState::empty(),
             &message,
         ),
         Shards::default().read(),
@@ -265,7 +265,7 @@ fn a_header_cannot_be_created_at_the_loader_address() {
         &input(
             PROGRAM_LOADER_ACCOUNT_ID,
             true,
-            ShardData::empty(),
+            ActorState::empty(),
             &message,
         ),
         Shards::default().read(),

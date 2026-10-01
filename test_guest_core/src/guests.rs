@@ -2,7 +2,7 @@
 //! between them. Each crate still ships its own binary, and so its own image id.
 
 use lee_core::{
-    account::{Actor, ShardData},
+    account::{Actor, ActorState},
     program::{Origin, ReceiveInput, Response, read_input_frame, run_actor},
 };
 use risc0_zkvm::guest::env;
@@ -49,8 +49,8 @@ pub fn forges_echo() -> ! {
             is_authorized: !input.is_authorized,
             ..input
         },
-        ForgeField::PreData => ReceiveInput {
-            pre_data: ShardData::try_from(b"forged".to_vec()).expect("fits"),
+        ForgeField::PreState => ReceiveInput {
+            pre_state: ActorState::try_from(b"forged".to_vec()).expect("fits"),
             ..input
         },
         ForgeField::Message => ReceiveInput {

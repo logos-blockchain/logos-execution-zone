@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     ProgramImageWitness, ProvingInput, ShadowProgramWitness,
-    account::{AccountId, Actor, Cycles, ShardData},
+    account::{AccountId, Actor, ActorState, Cycles},
     execution_state::{Assumption, Backend, ExecutionResult, ExecutionState, Mode},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
@@ -139,7 +139,7 @@ impl ProgramCatalog {
 
 #[derive(Default)]
 pub struct Simulation {
-    pub public_shards: HashMap<Actor, ShardData>,
+    pub public_shards: HashMap<Actor, ActorState>,
     /// Accounts settlement accepts as proven public identities: identity evidence and designated
     /// accounts.
     pub proven_public_accounts: HashSet<AccountId>,
@@ -147,7 +147,7 @@ pub struct Simulation {
 
 struct Simulator<'input> {
     programs: &'input HashMap<AccountId, Dependency>,
-    public_shards: &'input HashMap<Actor, ShardData>,
+    public_shards: &'input HashMap<Actor, ActorState>,
 }
 
 impl Backend for Simulator<'_> {
@@ -169,11 +169,11 @@ impl Backend for Simulator<'_> {
         })
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ShardData, LeeError> {
+    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
             .public_shards
             .get(&actor)
-            .map_or_else(ShardData::empty, Clone::clone))
+            .map_or_else(ActorState::empty, Clone::clone))
     }
 }
 

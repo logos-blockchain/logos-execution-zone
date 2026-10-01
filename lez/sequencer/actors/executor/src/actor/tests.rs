@@ -191,7 +191,7 @@ fn prepare_mock_storage_with_stake(
             }
             .to_bytes()
             .try_into()
-            .expect("Sequencer stake config must fit into ShardData"),
+            .expect("Sequencer stake config must fit into ActorState"),
         ),
     )]);
     state
