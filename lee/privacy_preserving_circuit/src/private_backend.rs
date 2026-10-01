@@ -7,27 +7,27 @@ use lee_core::{
     account::AccountId,
     execution_state::{Backend, ExecutionError, ExecutionState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{ProgramId, ReceiveInput, Transition},
+    program::{ProgramId, ReceiveInput, Response, Transition},
 };
 use risc0_zkvm::guest::env;
 
 pub struct PrivateBackend {
     image_ids: HashMap<AccountId, ProgramId>,
-    turns: vec::IntoIter<Transition>,
+    responses: vec::IntoIter<Response>,
 }
 
 impl PrivateBackend {
-    pub fn new(image_ids: HashMap<AccountId, ProgramId>, turns: Vec<Transition>) -> Self {
+    pub fn new(image_ids: HashMap<AccountId, ProgramId>, responses: Vec<Response>) -> Self {
         Self {
             image_ids,
-            turns: turns.into_iter(),
+            responses: responses.into_iter(),
         }
     }
 
     pub fn finish(mut self) {
         assert!(
-            self.turns.next().is_none(),
-            "A transition was supplied for a turn nothing scheduled"
+            self.responses.next().is_none(),
+            "A response was supplied for a turn nothing scheduled"
         );
     }
 }
@@ -49,9 +49,10 @@ impl Backend for PrivateBackend {
             .get(&program)
             .expect("no image_id claim supplied for invoked program account");
         let transition = self
-            .turns
+            .responses
             .next()
-            .expect("a scheduled turn must carry its transition");
+            .expect("a scheduled turn must carry its response")
+            .into_transition(input.clone());
         env::verify(image_id, &lee_core::to_borsh_frame(&transition))
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
         Ok(transition)

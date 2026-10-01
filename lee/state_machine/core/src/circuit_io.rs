@@ -8,8 +8,8 @@ use crate::{
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     execution_state::{Assumption, Boundary, Declared, TransactionEntry},
     program::{
-        BlockValidityWindow, MessageId, PdaSeed, ProgramHeader, ProgramId, StoredMessage,
-        TimestampValidityWindow, Transition, immutable_mirror_commitment,
+        BlockValidityWindow, MessageId, PdaSeed, ProgramHeader, ProgramId, Response, StoredMessage,
+        TimestampValidityWindow, immutable_mirror_commitment,
     },
 };
 
@@ -121,7 +121,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub program_image_witnesses: Vec<ProgramImageWitness>,
     /// Identities of every shadow program invoked in the call graph.
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
-    pub turns: Vec<Transition>,
+    pub responses: Vec<Response>,
     pub assumed: Vec<Vec<Assumption>>,
 }
 

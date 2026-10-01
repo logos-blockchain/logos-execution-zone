@@ -8,7 +8,7 @@ use lee_core::{
     execution_state::{Assumption, Backend, ExecutionResult, ExecutionState, Mode},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{ProgramHeader, ReceiveInput, Transition},
+    program::{ProgramHeader, ReceiveInput, Response, Transition},
     to_frame,
 };
 use risc0_zkvm::{
@@ -180,7 +180,7 @@ impl Backend for Simulator<'_> {
 struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
-    turns: Vec<Transition>,
+    responses: Vec<Response>,
 }
 
 impl Backend for Prover<'_> {
@@ -195,7 +195,7 @@ impl Backend for Prover<'_> {
             let receipt = prove_session(program, |env| Program::write_receive_input(input, env))?;
             let transition = transition_journal(&receipt.journal.bytes)?;
             self.env_builder.add_assumption(receipt);
-            self.turns.push(transition.clone());
+            self.responses.push(transition.response.clone());
             Ok(transition)
         })
     }
@@ -260,7 +260,7 @@ pub fn execute_and_prove_assuming(
     let mut backend = Prover {
         programs,
         env_builder: ExecutorEnv::builder(),
-        turns: Vec::new(),
+        responses: Vec::new(),
     };
     ExecutionState::initialize(
         input.declared.clone(),
@@ -273,7 +273,7 @@ pub fn execute_and_prove_assuming(
     .run(&mut backend)?;
     let Prover {
         mut env_builder,
-        turns,
+        responses,
         ..
     } = backend;
 
@@ -313,7 +313,7 @@ pub fn execute_and_prove_assuming(
         input,
         program_image_witnesses,
         shadow_program_witnesses,
-        turns,
+        responses,
         assumed,
     };
 

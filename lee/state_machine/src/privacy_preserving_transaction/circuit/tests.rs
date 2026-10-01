@@ -993,10 +993,10 @@ fn prove_circuit_directly(
     Ok(borsh::from_slice(from_frame(&prove_info.receipt.journal.bytes).unwrap()).unwrap())
 }
 
-fn receive_receipt(program: &Program, input: &ReceiveInput) -> (Receipt, Transition) {
+fn receive_receipt(program: &Program, input: &ReceiveInput) -> (Receipt, Response) {
     let receipt = prove_session(program, |env| Program::write_receive_input(input, env)).unwrap();
-    let transition = transition_journal(&receipt.journal.bytes).unwrap();
-    (receipt, transition)
+    let response = transition_journal(&receipt.journal.bytes).unwrap().response;
+    (receipt, response)
 }
 
 fn claims_for(programs: &[&Program]) -> Vec<ProgramImageWitness> {
@@ -1010,12 +1010,12 @@ fn claims_for(programs: &[&Program]) -> Vec<ProgramImageWitness> {
 }
 
 // A circuit input whose root delivers `script` to the `program_account_id` actor of a fresh
-// private account, with the supplied transitions standing in for its turns.
+// private account, with the supplied responses standing in for its turns.
 fn direct_input(
     program_account_id: AccountId,
     script: &Script,
     claims: &[&Program],
-    turns: Vec<Transition>,
+    responses: Vec<Response>,
 ) -> PrivacyPreservingCircuitInput {
     let keys = test_private_account_keys_1();
     PrivacyPreservingCircuitInput {
@@ -1031,7 +1031,7 @@ fn direct_input(
         },
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
-        turns,
+        responses,
         assumed: Vec::new(),
     }
 }
@@ -1058,9 +1058,14 @@ fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
 #[test]
 fn a_hand_built_input_with_a_matching_receipt_proves() {
     let scripted = crate::test_methods::scripted();
-    let (receipt, turn) =
+    let (receipt, response) =
         receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
-    let input = direct_input(scripted_id(), &Script::default(), &[&scripted], vec![turn]);
+    let input = direct_input(
+        scripted_id(),
+        &Script::default(),
+        &[&scripted],
+        vec![response],
+    );
 
     let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
 
@@ -1072,9 +1077,14 @@ fn a_hand_built_input_with_a_matching_receipt_proves() {
 fn a_guest_image_claim_for_the_reserved_id_is_refused() {
     let scripted = crate::test_methods::scripted();
     for reserved in [NATIVE_TOKEN_PROGRAM_ID, PROGRAM_LOADER_ACCOUNT_ID] {
-        let (receipt, turn) =
+        let (receipt, response) =
             receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
-        let mut input = direct_input(scripted_id(), &Script::default(), &[&scripted], vec![turn]);
+        let mut input = direct_input(
+            scripted_id(),
+            &Script::default(),
+            &[&scripted],
+            vec![response],
+        );
         input
             .program_image_witnesses
             .push(ProgramImageWitness::Disclosed {
@@ -1110,21 +1120,26 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     let scripted = crate::test_methods::scripted();
     // Proven against an unauthorized receiver, offered where the circuit schedules an authorized
     // one.
-    let (receipt, turn) =
+    let (receipt, response) =
         receive_receipt(&scripted, &scripted_root_input(&Script::default(), false));
-    let input = direct_input(scripted_id(), &Script::default(), &[&scripted], vec![turn]);
+    let input = direct_input(
+        scripted_id(),
+        &Script::default(),
+        &[&scripted],
+        vec![response],
+    );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
-    assert_circuit_rejects(&result, "echoed an input it was not given");
+    assert_circuit_rejects(&result, "no receipt found to resolve assumption");
 }
 
 #[test]
 fn an_undeclared_actor_is_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();
     let script = Script::default().send(Call::new(Actor::native_balance(BOB), &Script::default()));
-    let (receipt, turn) = receive_receipt(&scripted, &scripted_root_input(&script, true));
-    let input = direct_input(scripted_id(), &script, &[&scripted], vec![turn]);
+    let (receipt, response) = receive_receipt(&scripted, &scripted_root_input(&script, true));
+    let input = direct_input(scripted_id(), &script, &[&scripted], vec![response]);
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
@@ -1135,31 +1150,31 @@ fn an_undeclared_actor_is_rejected_by_the_circuit() {
 }
 
 #[test]
-fn missing_turns_are_rejected_by_the_circuit() {
+fn missing_responses_are_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();
     let input = direct_input(scripted_id(), &Script::default(), &[&scripted], Vec::new());
 
     let result = prove_circuit_directly(&input, Vec::new());
 
-    assert_circuit_rejects(&result, "a scheduled turn must carry its transition");
+    assert_circuit_rejects(&result, "a scheduled turn must carry its response");
 }
 
 #[test]
-fn surplus_turns_are_rejected_by_the_circuit() {
+fn surplus_responses_are_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();
-    let (receipt, turn) =
+    let (receipt, response) =
         receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
     let input = direct_input(
         scripted_id(),
         &Script::default(),
         &[&scripted],
-        vec![turn.clone(), turn],
+        vec![response.clone(), response],
     );
 
     let result = prove_circuit_directly(&input, vec![receipt]);
 
     assert_circuit_rejects(
         &result,
-        "A transition was supplied for a turn nothing scheduled",
+        "A response was supplied for a turn nothing scheduled",
     );
 }

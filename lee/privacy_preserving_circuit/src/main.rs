@@ -25,7 +25,7 @@ fn main() {
             },
         program_image_witnesses,
         shadow_program_witnesses,
-        turns,
+        responses,
         assumed,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
@@ -59,7 +59,7 @@ fn main() {
         Mode::Record { root, assumed },
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    let mut backend = PrivateBackend::new(image_id_by_account_id, turns);
+    let mut backend = PrivateBackend::new(image_id_by_account_id, responses);
     let outcome = state.run(&mut backend).unwrap_or_else(|e| panic!("{e}"));
     backend.finish();
 
