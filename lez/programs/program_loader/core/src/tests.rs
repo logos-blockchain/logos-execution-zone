@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, data::DATA_MAX_LENGTH};
 
 use super::*;
 
@@ -339,5 +339,82 @@ fn a_header_cannot_be_created_at_the_loader_address() {
         shards.read(),
         first_segment,
         true,
+    );
+}
+
+/// Genesis chunks every seeded program by `MAX_SEGMENT_DATA_LEN`, so a full segment must still
+/// fit in one shard, or seeding panics.
+#[test]
+fn a_full_segment_fits_a_shard() {
+    // Empty bytecode, so every encoded byte is overhead. `Some` is the worst case: a segment that
+    // links onward carries the next id. Built field by field on purpose: a new field fails to
+    // compile here instead of being silently defaulted. Set a new field to its largest encoding:
+    // an empty `Vec` would count only its length prefix, and hide any overflow.
+    let overhead = ProgramSegment {
+        bytecode: Vec::new(),
+        next_segment: Some(AccountId::default()),
+    }
+    .to_bytes()
+    .len();
+
+    let full = MAX_SEGMENT_DATA_LEN
+        .checked_add(overhead)
+        .expect("segment size fits in usize");
+    assert!(
+        u64::try_from(full).expect("usize fits in u64") <= DATA_MAX_LENGTH.as_u64(),
+        "a full segment ({full} bytes) must fit under DATA_MAX_LENGTH"
+    );
+}
+
+#[test]
+fn build_segments_links_each_chunk_to_the_next_id() {
+    let user_elf: Vec<u8> = (0..=u8::MAX)
+        .cycle()
+        .take(MAX_SEGMENT_DATA_LEN * 2 + 5)
+        .collect();
+    let ids = [
+        AccountId::new([1; 32]),
+        AccountId::new([2; 32]),
+        AccountId::new([3; 32]),
+    ];
+
+    let segments = build_segments(&user_elf, &ids).expect("valid chain");
+
+    let next: Vec<_> = segments
+        .iter()
+        .map(|segment| segment.next_segment)
+        .collect();
+    assert_eq!(next, vec![Some(ids[1]), Some(ids[2]), None]);
+    let rejoined: Vec<u8> = segments
+        .into_iter()
+        .flat_map(|segment| segment.bytecode)
+        .collect();
+    assert_eq!(rejoined, user_elf);
+}
+
+#[test]
+fn build_segments_rejects_a_segment_count_mismatch() {
+    let user_elf = vec![0; MAX_SEGMENT_DATA_LEN + 1];
+    assert_eq!(
+        build_segments(&user_elf, &[AccountId::new([1; 32])]),
+        Err(SegmentChainError::CountMismatch {
+            expected: 2,
+            actual: 1
+        })
+    );
+}
+
+/// Caught before upload: the loader itself would only notice at `CreateHeader`, after every
+/// segment was paid for.
+#[test]
+fn build_segments_rejects_a_chain_over_the_segment_cap() {
+    let count = MAX_PROGRAM_SEGMENTS + 1;
+    let user_elf = vec![0; MAX_SEGMENT_DATA_LEN * count];
+    let ids: Vec<_> = (0..count)
+        .map(|i| AccountId::new([u8::try_from(i).unwrap(); 32]))
+        .collect();
+    assert_eq!(
+        build_segments(&user_elf, &ids),
+        Err(SegmentChainError::TooManySegments { count })
     );
 }

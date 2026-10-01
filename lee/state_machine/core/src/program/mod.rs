@@ -411,6 +411,9 @@ impl ProgramHeader {
 
 /// One link in a program's bytecode chain: a chunk of the ELF plus where the next chunk lives,
 /// tail-to-head — the account itself carries no notion of "first" or "last".
+///
+/// A new field must be fixed-size or capped: `program_loader_core`'s `a_full_segment_fits_a_shard`
+/// measures the encoding overhead, and a capped field must be set to its maximum there.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramSegment {
     pub bytecode: Vec<u8>,
