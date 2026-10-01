@@ -1,0 +1,283 @@
+//! Chain access shared by the stake lifecycle steps: account and config
+//! queries, submission bookkeeping and the inclusion/non-inclusion waits.
+
+use std::time::Duration;
+
+use common::HashType;
+use futures::future::try_join_all;
+use lee::{Account, AccountId, PublicKey};
+use lee_core::program::{InstructionData, ProgramId};
+use sequencer_service_rpc::RpcClient as _;
+use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
+use wallet::AccountIdentity;
+
+use super::super::wait_until;
+use crate::cucumber::{
+    context::LezScenarioContext,
+    error::{StepError, StepResult},
+    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction, transfer_instruction},
+    world::CucumberWorld,
+};
+
+/// Cadence of the inclusion and non-inclusion polls.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Amount the non-inclusion canary moves between the two genesis supply
+/// accounts; only its inclusion matters, not its size.
+const CANARY_AMOUNT: u128 = 1;
+
+/// Reads one account from the sequencer; an untouched account comes back with
+/// default values.
+pub(super) async fn get_account(
+    context: &LezScenarioContext,
+    account_id: AccountId,
+) -> Result<Account, StepError> {
+    context
+        .sequencer_client()
+        .get_account(account_id)
+        .await
+        .map_err(StepError::query_failed)
+}
+
+/// Reads and decodes the `sequencer_stake` config account.
+pub(super) async fn stake_config(
+    context: &LezScenarioContext,
+) -> Result<SequencerStakeConfig, StepError> {
+    let account = get_account(
+        context,
+        system_accounts::sequencer_stake_config_account_id(),
+    )
+    .await?;
+    SequencerStakeConfig::from_bytes(account.data.as_ref()).ok_or_else(|| StepError::LogicalError {
+        message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
+    })
+}
+
+/// Returns the config entry backing `sequencer_key`, if any.
+pub(super) async fn config_entry(
+    context: &LezScenarioContext,
+    sequencer_key: SequencerKey,
+) -> Result<Option<SequencerEntry>, StepError> {
+    Ok(stake_config(context)
+        .await?
+        .entries
+        .get(&sequencer_key)
+        .copied())
+}
+
+/// Returns the genesis-funded public accounts configured into the scenario
+/// wallet, in fixture order, identified by their fixture-derived ids so the
+/// choice does not depend on the wallet's account iteration order.
+async fn configured_public_accounts(
+    context: &LezScenarioContext,
+) -> Result<Vec<AccountId>, StepError> {
+    let existing = context.existing_public_accounts().await?;
+    Ok(crate::config::default_public_accounts_for_wallet()
+        .iter()
+        .map(|(private_key, _balance)| {
+            AccountId::from(&PublicKey::new_from_private_key(private_key))
+        })
+        .filter(|account_id| existing.contains(account_id))
+        .collect())
+}
+
+/// Returns the first genesis-funded public account configured into the
+/// scenario wallet: the supply every scenario funds from and signs its plain
+/// transfers with.
+pub(super) async fn first_configured_public_account(
+    context: &LezScenarioContext,
+) -> Result<AccountId, StepError> {
+    configured_public_accounts(context)
+        .await?
+        .first()
+        .copied()
+        .ok_or(StepError::MissingSelectedAccount)
+}
+
+/// Returns the sequencer's current tip.
+pub(super) async fn last_block(context: &LezScenarioContext) -> Result<u64, StepError> {
+    context
+        .sequencer_client()
+        .get_last_block_id()
+        .await
+        .map_err(StepError::query_failed)
+}
+
+/// Snapshots the config account plus every scenario account introduced so
+/// far, including the stake funds PDA of the ownership account, immediately
+/// before a submission. The assertion step names which of these it compares.
+pub(super) async fn scenario_snapshot(
+    world: &CucumberWorld,
+) -> Result<AccountsSnapshot, StepError> {
+    let scenario = world.stake()?;
+    let context = world.lez()?;
+    let mut account_ids = vec![system_accounts::sequencer_stake_config_account_id()];
+    account_ids.extend(scenario.funding_id().ok());
+    account_ids.extend(scenario.ownership_id().ok());
+    account_ids.extend(scenario.funds_id().ok());
+    account_ids.extend(scenario.second_ownership_id().ok());
+
+    let accounts = try_join_all(account_ids.into_iter().map(|account_id| async move {
+        Ok::<_, StepError>((account_id, get_account(context, account_id).await?))
+    }))
+    .await?;
+    Ok(AccountsSnapshot::new(accounts))
+}
+
+/// Snapshots the touchable accounts, submits one transaction through the
+/// scenario wallet and records it for the inclusion/non-inclusion assertions.
+pub(super) async fn submit_and_record(
+    world: &mut CucumberWorld,
+    accounts: Vec<AccountIdentity>,
+    instruction_data: InstructionData,
+    program_id: ProgramId,
+    amount: u128,
+) -> StepResult {
+    let snapshot = scenario_snapshot(world).await?;
+    let context = world.lez()?;
+    let hash = context
+        .send_program_transaction(accounts, instruction_data, program_id)
+        .await?;
+    // Mempool admission is synchronous with the send reply, so a tip read
+    // here is at or past the admission point and the non-inclusion window is
+    // guaranteed to cover a post-admission mempool pull.
+    let submitted_at_block = last_block(context).await?;
+
+    let scenario = world.stake_mut()?;
+    scenario.set_snapshot(snapshot);
+    scenario.record_submission(SubmissionRecord {
+        hash,
+        amount,
+        submitted_at_block,
+    });
+    Ok(())
+}
+
+/// Waits until `hash` appears in a block and returns that block's id, giving
+/// up after `timeout`.
+pub(super) async fn wait_for_inclusion(
+    context: &LezScenarioContext,
+    hash: HashType,
+    timeout: Duration,
+) -> Result<u64, StepError> {
+    wait_until(
+        POLL_INTERVAL,
+        timeout,
+        format!("transaction {hash} to be included"),
+        || async move {
+            Ok(context
+                .sequencer_client()
+                .get_transaction(hash)
+                .await
+                .map_err(StepError::query_failed)?
+                .map(|(_transaction, block_id)| block_id))
+        },
+    )
+    .await
+}
+
+/// Submits the canary a non-inclusion assertion is judged against: a plain
+/// transfer signed by the second genesis supply account, which no scenario
+/// submission signs with, so a rejected submission cannot leave a nonce gap
+/// in front of it. The recipient is the first supply account, which no
+/// scenario snapshots.
+async fn submit_canary(context: &LezScenarioContext) -> Result<HashType, StepError> {
+    let supply = configured_public_accounts(context).await?;
+    let [recipient, donor] = supply[..] else {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "the non-inclusion canary needs both genesis supply accounts, found {}",
+                supply.len()
+            ),
+        });
+    };
+    context
+        .send_program_transaction(
+            vec![
+                AccountIdentity::Public(donor),
+                AccountIdentity::PublicNoSign(recipient),
+            ],
+            transfer_instruction(CANARY_AMOUNT)?,
+            programs::authenticated_transfer().id(),
+        )
+        .await
+}
+
+/// Asserts the submission was dropped by the block builder, giving up after
+/// `timeout`. The RPC API cannot tell a builder rejection from a transaction
+/// the builder accepted into a candidate block whose publish then failed:
+/// both leave `get_transaction` empty for ever while later turns move the
+/// chain on, and the failed turn does not requeue what it popped. The
+/// evidence is therefore a canary admitted right behind the submission: the
+/// builder pulls the whole mempool each turn in admission order, so the turn
+/// that pulls the canary has pulled the submission, and the canary landing in
+/// a block proves that turn published. The canary must land within `blocks`
+/// of the post-admission tip, the window the scenario names; a canary that
+/// lands later or never fails the step rather than letting a stalled or
+/// failed turn pass as a rejection. See the feature file for the one gap this
+/// leaves open.
+pub(super) async fn assert_not_included(
+    context: &LezScenarioContext,
+    submission: &SubmissionRecord,
+    blocks: u64,
+    timeout: Duration,
+) -> StepResult {
+    let target = submission.submitted_at_block.saturating_add(blocks);
+    let canary = submit_canary(context).await?;
+    let canary_block = wait_for_inclusion(context, canary, timeout).await?;
+    if canary_block > target {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "canary transaction {canary} landed in block {canary_block}, past the \
+                 {blocks}-block window ending at block {target}: a production turn in \
+                 the window did not publish, or the canary was admitted more than a \
+                 block after transaction {}, so its non-inclusion proves nothing",
+                submission.hash
+            ),
+        });
+    }
+
+    let included = context
+        .sequencer_client()
+        .get_transaction(submission.hash)
+        .await
+        .map_err(StepError::query_failed)?;
+    if let Some((_transaction, block_id)) = included {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "transaction {} was included in block {block_id}, expected it to be dropped",
+                submission.hash
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Submits a fully signed, well-formed `Stake` and waits for its inclusion,
+/// giving up after `timeout`. Used by setup steps whose registrations must
+/// succeed; the submission is not recorded as the one under test.
+pub(super) async fn submit_accepted_stake(
+    context: &LezScenarioContext,
+    funding_id: AccountId,
+    ownership_id: AccountId,
+    sequencer_key: SequencerKey,
+    amount: u128,
+    timeout: Duration,
+) -> StepResult {
+    let hash = context
+        .send_program_transaction(
+            vec![
+                AccountIdentity::Public(funding_id),
+                AccountIdentity::Public(ownership_id),
+                AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(
+                    &ownership_id,
+                )),
+                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id()),
+            ],
+            stake_instruction(sequencer_key, amount)?,
+            programs::sequencer_stake().id(),
+        )
+        .await?;
+    wait_for_inclusion(context, hash, timeout).await?;
+    Ok(())
+}
