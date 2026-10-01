@@ -31,7 +31,7 @@ use wallet::WalletCore;
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().await.unwrap();
+    let mut wallet_core = WalletCore::from_env().unwrap();
 
     // Parse arguments
     // First argument is the path to the caller (`simple_tail_call`) program binary
@@ -82,7 +82,7 @@ async fn main() {
 
     // Submit the transaction
     let _response = wallet_core
-        .helm_owned()
+        .client_owned()
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();

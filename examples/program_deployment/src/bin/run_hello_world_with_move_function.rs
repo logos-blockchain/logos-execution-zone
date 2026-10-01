@@ -89,7 +89,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().await.unwrap();
+    let mut wallet_core = WalletCore::from_env().unwrap();
 
     // Deploy the program through `program_loader`; `program` is also needed directly below, as
     // the local proving bundle for the private-tx arms.
@@ -121,7 +121,7 @@ async fn main() {
 
             // Submit the transaction
             let _response = wallet_core
-                .helm_owned()
+                .client_owned()
                 .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();
@@ -166,7 +166,7 @@ async fn main() {
 
             // Submit the transaction
             let _response = wallet_core
-                .helm_owned()
+                .client_owned()
                 .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();

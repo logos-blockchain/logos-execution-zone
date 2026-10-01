@@ -69,12 +69,11 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
-        &[sequencer_handle.addr()],
+        &sequencer_handle.addr(),
         &initial_public_accounts,
         &initial_private_accounts,
         WalletConfigOverrides::default(),
     )
-    .await
     .context("Failed to setup wallet for fixture generation")?;
 
     fund_private_accounts(
