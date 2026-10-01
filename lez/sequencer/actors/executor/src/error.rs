@@ -8,6 +8,9 @@ pub enum Error {
     #[error("The mempool is full")]
     MempoolIsFull,
 
+    #[error("The private transaction already failed settlement recently")]
+    PreviouslyFailedSettlement,
+
     #[error("Failed to start the sequencer")]
     SequencerStartFailed(#[source] anyhow::Error),
 
