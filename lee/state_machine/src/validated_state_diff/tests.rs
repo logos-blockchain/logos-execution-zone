@@ -469,3 +469,80 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
 }
+
+/// A signed `WriteSegment` linking to an existing segment of `next_len` bytecode bytes, and the
+/// size of that segment's stored loader shard, the only non-empty shard the loader reads for it.
+fn loader_write_fixture(next_len: usize) -> (V03State, crate::PublicTransaction, u64) {
+    use lee_core::{
+        account::{Account, ShardData},
+        program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramSegment},
+    };
+
+    let next = AccountId::new([9; 32]);
+    let next_shard = ProgramSegment {
+        bytecode: vec![7; next_len],
+        next_segment: None,
+    }
+    .to_loader_shard();
+    let next_shard_len = u64::try_from(next_shard.len()).unwrap();
+    let state = V03State::new().with_public_accounts([(
+        next,
+        Account::default().with_shard(
+            PROGRAM_LOADER_ACCOUNT_ID,
+            ShardData::try_from(next_shard).unwrap(),
+        ),
+    )]);
+
+    let key = PrivateKey::try_new([3; 32]).unwrap();
+    let target = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let message = Message::try_new(
+        PROGRAM_LOADER_ACCOUNT_ID,
+        vec![
+            ProgramShardSelector::new(target, PROGRAM_LOADER_ACCOUNT_ID),
+            ProgramShardSelector::new(next, PROGRAM_LOADER_ACCOUNT_ID),
+        ],
+        vec![Nonce(0)],
+        program_loader_core::Instruction::WriteSegment {
+            bytecode: vec![1, 2, 3],
+            next_segment: Some(next),
+        },
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[&key]);
+    (
+        state,
+        crate::PublicTransaction::new(message, witness_set),
+        next_shard_len,
+    )
+}
+
+/// The loader runs as native Rust, so it is charged for the loader shard bytes it reads.
+#[test]
+fn loader_is_charged_for_the_shard_bytes_it_reads() {
+    let (state, tx, next_shard_len) = loader_write_fixture(10_000);
+
+    let (_diff, charge) = ValidatedStateDiff::from_public_transaction_with_cycle_budget(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    )
+    .expect("a signed segment write validates");
+
+    assert_eq!(
+        charge.cycles,
+        next_shard_len * super::LOADER_CYCLES_PER_BYTE
+    );
+}
+
+#[test]
+fn loader_reads_beyond_the_budget_are_out_of_gas() {
+    let (state, tx, next_shard_len) = loader_write_fixture(10_000);
+    let budget = next_shard_len * super::LOADER_CYCLES_PER_BYTE - 1;
+
+    let result =
+        ValidatedStateDiff::from_public_transaction_with_cycle_budget(&tx, &state, 1, 0, budget);
+
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: b }) if b == budget));
+}
