@@ -67,8 +67,7 @@ impl Backend for PublicBackend<'_> {
             input.accounts, input.instruction_data
         );
         let (plan, applier) = if self_account_id == PROGRAM_LOADER_ACCOUNT_ID {
-            // `program_loader` runs as Rust, not a guest ELF, so it is charged for the loader shard
-            // bytes it reads instead of for executor cycles.
+            // The native loader records no guest cycles, so it is charged per shard byte read.
             const ABSENT: &ShardData = &ShardData::empty();
             let (plan, new_commitment, call_cycles) = plan_program_loader(input, |account_id| {
                 loader_shard(execution, state, account_id).unwrap_or(ABSENT)

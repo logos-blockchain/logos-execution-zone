@@ -34,13 +34,8 @@ use crate::{
 
 mod public_backend;
 
-/// Cycles charged per byte of loader shard the program loader reads while planning.
-///
-/// The loader runs as native Rust, so it records no guest cycles, yet `CreateHeader` and
-/// `UpdateHeader` read and hash a whole segment chain (up to ~1.9 MiB) to recompute its image id.
-/// Hashing measured at ~55 ns per byte; one cycle per byte matches that if the executor runs at
-/// ~20 MHz, which has not been measured. A full chain then costs ~2M cycles, about 6% of
-/// [`crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET`].
+/// Cycles charged per loader shard byte read: the loader runs natively and records no guest
+/// cycles. Unmeasured: ~55 ns/byte of hashing against an assumed ~20 MHz executor.
 const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 pub struct StateDiff {
@@ -528,9 +523,6 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
 /// Produces the same [`PlanOutput`] shape a guest call would, so the rest of the dispatch loop
 /// treats it identically either way. Its plan reads live loader shards through `shard` because it
 /// is trusted, public-only protocol code, not a guest planning from state-free metadata.
-///
-/// Also returns the cycles to charge for that work: every byte read through `shard`, priced at
-/// [`LOADER_CYCLES_PER_BYTE`].
 fn plan_program_loader<'state>(
     input: &PlanInput,
     shard: impl Fn(AccountId) -> &'state ShardData,

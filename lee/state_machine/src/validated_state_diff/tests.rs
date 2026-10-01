@@ -470,8 +470,7 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     assert_eq!(state.get_account_by_id(to).nonce.0, 1);
 }
 
-/// A signed `WriteSegment` linking to an existing segment of `next_len` bytecode bytes, and the
-/// size of that segment's stored loader shard, the only non-empty shard the loader reads for it.
+/// A signed `WriteSegment` linking to a `next_len`-byte segment, and that segment's stored size.
 fn loader_write_fixture(next_len: usize) -> (V03State, crate::PublicTransaction, u64) {
     use lee_core::{
         account::{Account, ShardData},
@@ -516,7 +515,6 @@ fn loader_write_fixture(next_len: usize) -> (V03State, crate::PublicTransaction,
     )
 }
 
-/// The loader runs as native Rust, so it is charged for the loader shard bytes it reads.
 #[test]
 fn loader_is_charged_for_the_shard_bytes_it_reads() {
     let (state, tx, next_shard_len) = loader_write_fixture(10_000);
