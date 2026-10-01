@@ -63,7 +63,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
                 target_account_id: receiver_id,
                 mint_cap: None,
             }],
-            expected_block_signing_pubkeys: Vec::new(),
             min_committee_size: 0,
         }],
         source_authority: None,
