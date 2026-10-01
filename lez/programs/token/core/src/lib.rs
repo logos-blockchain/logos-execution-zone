@@ -56,6 +56,8 @@ pub enum Message {
     Notification(Notification),
 }
 
+/// The target is called from the credit and inherits its grants: a transfer delivered as a Call
+/// passes any custody grant it holds into the target's subtree.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Notify {
     pub to: Actor,

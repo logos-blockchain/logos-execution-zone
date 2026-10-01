@@ -242,7 +242,7 @@ pub struct PrivacyPreservingCircuitOutput {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
-    /// Unchanged echo of [`PrivacyPreservingCircuitInput::program_image_claims`] — what the
+    /// Claims derived from [`PrivacyPreservingCircuitInput::program_image_witnesses`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
 }
