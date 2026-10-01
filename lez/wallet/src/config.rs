@@ -94,10 +94,10 @@ impl Default for WalletConfig {
 
 impl WalletConfig {
     pub fn from_path_or_initialize_default(config_path: &Path) -> Result<Self> {
-        match std::fs::File::open(config_path) {
+        let mut config = match std::fs::File::open(config_path) {
             Ok(file) => {
                 let reader = std::io::BufReader::new(file);
-                Ok(serde_json::from_reader(reader)?)
+                serde_json::from_reader(reader)?
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 println!("Config not found, setting up default config");
@@ -124,10 +124,27 @@ impl WalletConfig {
                 file.write_all(&default_config_serialized)?;
 
                 println!("Configs set up");
-                Ok(config)
+                config
             }
-            Err(err) => Err(err).context("IO error"),
+            Err(err) => return Err(err).context("IO error"),
+        };
+
+        // `LEZ_SEQUENCER_URL` replaces the configured sequencer list so
+        // integration tests and CI can point the wallet at a standalone
+        // sequencer without writing a config file — the same pattern as
+        // `INDEXER_RPC_URL` on the explorer service and `LEE_WALLET_HOME_DIR`
+        // here.
+        if let Ok(url) = std::env::var("LEZ_SEQUENCER_URL") {
+            let sequencer_addr =
+                Url::parse(&url).context("LEZ_SEQUENCER_URL must be a valid URL")?;
+            warn!("Overriding wallet config 'sequencers' from LEZ_SEQUENCER_URL={url}");
+            config.sequencers = vec![SequencerConnectionData {
+                sequencer_addr,
+                basic_auth: None,
+            }];
         }
+
+        Ok(config)
     }
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
