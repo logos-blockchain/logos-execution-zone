@@ -10,12 +10,11 @@ use common::{
 use cross_zone::{
     CommitteeFloorState, EmissionSource, FloorVerdict, Link, StallState, alerts_at,
     build_dispatch_from_emission, equivocation_report, extract_emission, is_sequencer_only_program,
-    link_to_tip, pinned_keys, screen_peer_block,
+    link_to_tip, screen_peer_block,
 };
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
 use kameo::actor::ActorRef;
-use lee::PublicKey;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -40,7 +39,6 @@ use crate::{
 struct PeerContext {
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
-    expected_pubkeys: Vec<PublicKey>,
     /// Below this live committee size the watcher suspends; 0 disables the
     /// floor and skips the committee read entirely.
     min_committee_size: u32,
@@ -222,7 +220,6 @@ pub fn spawn_watchers<S: StorageActorTrait>(
             CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
             bedrock_config.node_url.clone(),
         );
-        let expected_pubkeys = pinned_keys(&peer);
         // The indexer consumes `node` for its message stream; this clone is the
         // watcher's own handle for the committee-floor read.
         let floor_node = node.clone();
@@ -236,7 +233,6 @@ pub fn spawn_watchers<S: StorageActorTrait>(
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
-                expected_pubkeys,
                 min_committee_size: peer.min_committee_size,
                 node: floor_node,
             },
@@ -501,7 +497,7 @@ where
                 // block this watcher cannot place is read past rather than
                 // treated as the end of the chain: the peer's own next honest
                 // block still links to the tip.
-                let link = match screen_peer_block(&block, &peer.expected_pubkeys) {
+                let link = match screen_peer_block(&block) {
                     Ok(recomputed) => link_to_tip(tip.as_ref(), &block, recomputed),
                     Err(refusal) => {
                         skipped = skipped.saturating_add(1);
@@ -769,7 +765,6 @@ mod tests {
         PeerContext {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
-            expected_pubkeys: Vec::new(),
             min_committee_size: 0,
             node: NodeHttpClient::new(
                 CommonHttpClient::new(None),
@@ -1538,70 +1533,6 @@ mod tests {
             "the fork is passed over and the peer's own chain continues"
         );
         assert_eq!(tip, Some(tip_at(2)));
-    }
-
-    #[tokio::test]
-    async fn watcher_delivers_from_a_block_signed_by_any_pinned_key() {
-        // The multi-sequencer peer shape: the block's signer is one configured
-        // key among several, not the first one listed.
-        let (_dir, storage_ref) = store().await;
-        let mut cursor = None;
-        let mut tip = None;
-        let signer =
-            PublicKey::new_from_private_key(&lee::PrivateKey::try_new([37; 32]).expect("test key"));
-        let peer = PeerContext {
-            expected_pubkeys: vec![PublicKey::try_new([42; 32]).expect("test key"), signer],
-            ..peer_context()
-        };
-
-        let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0)]),
-            &peer,
-            &storage_ref,
-            &mut cursor,
-            &mut tip,
-        )
-        .await;
-
-        assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(
-            recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)],
-            "any listed key admits the block, whatever its position"
-        );
-        assert_eq!(tip, Some(tip_at(1)));
-    }
-
-    #[tokio::test]
-    async fn watcher_skips_a_block_signed_by_no_pinned_key() {
-        let (_dir, storage_ref) = store().await;
-        let mut cursor = None;
-        let mut tip = None;
-        let peer = PeerContext {
-            expected_pubkeys: vec![
-                PublicKey::try_new([42; 32]).expect("test key"),
-                PublicKey::new_from_private_key(
-                    &lee::PrivateKey::try_new([99; 32]).expect("test key"),
-                ),
-            ],
-            ..peer_context()
-        };
-
-        let outcome = consume_peer_stream(
-            stream::iter(vec![peer_block_msg(1, 0)]),
-            &peer,
-            &storage_ref,
-            &mut cursor,
-            &mut tip,
-        )
-        .await;
-
-        assert_eq!(outcome, PassOutcome::Stranded);
-        assert!(
-            recorded_keys(&storage_ref).await.is_empty(),
-            "a block signed by none of the pinned keys is never delivered from"
-        );
-        assert_eq!(tip, None, "a screened-out block does not advance the tip");
     }
 
     #[tokio::test]

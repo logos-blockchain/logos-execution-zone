@@ -56,7 +56,7 @@ pub struct BlockHeader {
     pub hash: BlockHash,
     pub timestamp: Timestamp,
     /// The block producer's signing key. Covered by `hash` and verified
-    /// against `signature`; fee payouts credit its account.
+    /// against `signature`.
     pub producer: lee::PublicKey,
     pub signature: lee::Signature,
 }
@@ -106,16 +106,6 @@ impl Block {
         self.header
             .signature
             .is_valid_for(&self.header.hash.0, &self.header.producer)
-    }
-
-    /// Recomputes the signed hash from the block contents and checks the header
-    /// signature against `expected_pubkey`. Used to pin a peer zone's
-    /// block-signing key, so a block inscribed by anyone other than that zone's
-    /// sequencer is rejected even if it reached the channel.
-    #[must_use]
-    pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
-        let hash = HashableBlockData::from(self.clone()).compute_hash(&self.header.producer);
-        self.header.signature.is_valid_for(&hash.0, expected_pubkey)
     }
 }
 
