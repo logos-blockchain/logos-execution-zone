@@ -221,10 +221,15 @@ impl V03State {
         program: &Program,
         immutable: bool,
     ) {
-        let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
-            .expect("builtin program must be a valid ProgramBinary")
-            .user_elf
-            .to_vec();
+        let binary = risc0_binfmt::ProgramBinary::decode(program.elf())
+            .expect("builtin program must be a valid ProgramBinary");
+        // Only `user_elf` is stored, and dispatch re-attaches the default kernel to it. A builtin
+        // built against any other kernel would run a different binary than its header's image id.
+        assert!(
+            binary.kernel_elf == risc0_zkos_v1compat::V1COMPAT_ELF,
+            "builtin program must be built with the protocol's default kernel"
+        );
+        let user_elf = binary.user_elf.to_vec();
 
         let segment_account_ids: Vec<AccountId> =
             (0..program_loader_core::segment_count(&user_elf))
