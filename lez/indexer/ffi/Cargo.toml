@@ -18,6 +18,10 @@ serde_json.workspace = true
 [build-dependencies]
 cbindgen.workspace = true
 
+[features]
+default = ["prove"]            # `prove` is needed to link the in-process r0vm executor
+prove = ["indexer_core/prove"]
+
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
 name = "indexer_ffi"
