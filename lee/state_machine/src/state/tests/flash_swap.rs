@@ -76,24 +76,10 @@ impl FlashSwap {
     }
 }
 
-fn assert_vault_pin_failed(
-    result: &Result<Vec<TransactionEvent>, LeeError>,
-    vault_id: AccountId,
-    expected: u128,
-    actual: u128,
-) {
+fn assert_initiator_refused(result: &Result<Vec<TransactionEvent>, LeeError>, reason: &str) {
     assert!(
-        matches!(
-            result,
-            Err(LeeError::InvalidProgramBehavior(
-                InvalidProgramBehaviorError::NativeTransferFailed(TransferError::BalanceMismatch {
-                    account_id,
-                    expected: pinned,
-                    actual: held,
-                })
-            )) if *account_id == vault_id && *pinned == expected && *held == actual
-        ),
-        "expected the vault pin {expected} to fail against {actual}, got {result:?}"
+        matches!(result, Err(LeeError::ProgramExecutionFailed(message)) if message.contains(reason)),
+        "expected the initiator to refuse with {reason:?}, got {result:?}"
     );
 }
 
@@ -115,13 +101,8 @@ fn flash_swap_callback_keeps_funds_rollback(returned: Option<u128>) {
 
     let result = swap.initiate(returned, AMOUNT_OUT, INITIAL_BALANCE);
 
-    // The invariant's exact pin fails → entire tx rolls back.
-    assert_vault_pin_failed(
-        &result,
-        swap.vault_id,
-        INITIAL_BALANCE,
-        INITIAL_BALANCE - AMOUNT_OUT + returned.unwrap_or_default(),
-    );
+    // The second vault read finds the loan unpaid → entire tx rolls back.
+    assert_initiator_refused(&result, "the vault must end where it started");
     swap.assert_balances(INITIAL_BALANCE, 0);
 }
 
@@ -132,8 +113,8 @@ fn flash_swap_stale_vault_balance_proposal_rejected() {
     // Callback returns funds correctly — only the proposed vault balance is wrong.
     let result = swap.initiate(Some(AMOUNT_OUT), AMOUNT_OUT, INITIAL_BALANCE + 1);
 
-    // The guard rejects the mismatched proposal → entire tx rolls back.
-    assert_vault_pin_failed(&result, swap.vault_id, INITIAL_BALANCE + 1, INITIAL_BALANCE);
+    // The first vault read rejects the mismatched proposal → entire tx rolls back.
+    assert_initiator_refused(&result, "the vault must hold the proposed balance");
     swap.assert_balances(INITIAL_BALANCE, 0);
 }
 
@@ -152,35 +133,26 @@ fn flash_swap_self_call_targets_correct_program() {
 }
 
 #[test]
-fn flash_swap_standalone_invariant_check_rejected() {
-    // Sending InvariantCheck directly (not as a self-send) should fail because its origin is
-    // the root, not the initiator itself.
+fn flash_swap_unsolicited_reply_rejected() {
+    // A genuine native reply that no pending read asked for must not drive the initiator.
     let mut swap = FlashSwap::new();
     let initiator = Actor::new(
         swap.vault_id,
         AccountId::from_builtin_program(crate::test_methods::flash_swap_initiator().id()),
     );
+    let vault = Actor::native_balance(swap.vault_id);
     let tx = public_tx(
-        initiator,
-        vec![
-            initiator,
-            Actor::native_balance(swap.vault_id),
-            Actor::native_balance(swap.receiver_id),
-        ],
+        vault,
+        vec![vault, initiator],
         vec![],
-        FlashSwapMessage::InvariantCheck {
-            vault: swap.vault_id,
-            receiver: swap.receiver_id,
-            vault_balance: INITIAL_BALANCE,
-        },
+        NativeMessage::ReadState(ReadState {
+            reply_to: initiator,
+        }),
         &[],
     );
 
     let result = swap.state.transition_from_public_transaction(&tx, 1, 0);
-    assert!(
-        matches!(result, Err(LeeError::ProgramExecutionFailed(_))),
-        "standalone InvariantCheck should be rejected (origin is the root): {result:?}"
-    );
+    assert_initiator_refused(&result, "a reply must answer a pending read");
 }
 
 fn forged_echo_result(field: ForgeField) -> Result<Vec<TransactionEvent>, LeeError> {

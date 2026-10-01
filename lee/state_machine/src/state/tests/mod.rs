@@ -19,8 +19,8 @@ use lee_core::{
     },
     program::{
         BlockValidityWindow, Call, ExecutionValidationError, MessageEnvelope, Origin,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId, ProgramSegment, StoredMessage,
-        TimestampValidityWindow, TransactionEvent,
+        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId, ProgramSegment, ReadState,
+        StoredMessage, TimestampValidityWindow, TransactionEvent,
     },
 };
 use test_guest_core::{ForgeField, Script};
@@ -126,11 +126,6 @@ enum FlashSwapMessage {
         amount_out: u128,
         vault_balance: u128,
         callback_message: Vec<u8>,
-    },
-    InvariantCheck {
-        vault: AccountId,
-        receiver: AccountId,
-        vault_balance: u128,
     },
 }
 
