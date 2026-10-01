@@ -403,6 +403,26 @@ impl ReceiveInput {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ReadState {
+    pub reply_to: Actor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct StateReply {
+    pub subject: Actor,
+    pub state: ActorState,
+}
+
+impl From<&ReceiveInput> for StateReply {
+    fn from(input: &ReceiveInput) -> Self {
+        Self {
+            subject: input.receiver,
+            state: input.pre_state.clone(),
+        }
+    }
+}
+
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "a Transition does nothing unless written"]

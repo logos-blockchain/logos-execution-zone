@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use crate::{
     account::{AccountId, Actor, ActorState, Balance},
-    program::{Call, Cast, PdaSeed, ReceiveInput, Response, Transition},
+    program::{Call, Cast, PdaSeed, ReadState, ReceiveInput, Response, StateReply, Transition},
 };
 
 /// Hardcoded native token shard address.
@@ -20,6 +20,8 @@ pub enum Message {
         to: AccountId,
         amount: Balance,
     },
+    ReadState(ReadState),
+    StateReply(StateReply),
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub enum TransferError {
     InsufficientBalance { account_id: AccountId },
     #[error("recipient {account_id} balance overflows")]
     BalanceOverflow { account_id: AccountId },
+    #[error("native balance {account_id} consumes no state replies")]
+    UnexpectedReply { account_id: AccountId },
 }
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +104,11 @@ pub fn receive(input: &ReceiveInput) -> Result<Transition, TransferError> {
                 .ok_or(TransferError::BalanceOverflow { account_id })?;
             Response::write(encode_balance(post))
         }
+        Message::ReadState(read) => Response::keep().send(Call::new(
+            read.reply_to,
+            &Message::StateReply(StateReply::from(input)),
+        )),
+        Message::StateReply(_) => return Err(TransferError::UnexpectedReply { account_id }),
     };
     Ok(response.into_transition(input.clone()))
 }
