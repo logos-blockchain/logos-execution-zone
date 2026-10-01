@@ -6,7 +6,7 @@ use lee::{
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
 };
 use lee_core::{
-    Commitment, Nullifier, PrivateAction, ProgramImageClaim,
+    Commitment, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction, ProgramImageClaim,
     encryption::Ciphertext,
     program::{PdaSeed, ValidityWindow},
 };
@@ -413,42 +413,46 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
-                declared: value.message.declared.into(),
-                boundary: value.message.boundary.into(),
-                consumed_message: value
-                    .message
-                    .has_consumed_message
-                    .then(|| ffi_to_message_id(value.message.consumed_message)),
+                execution: PrivacyPreservingCircuitOutput {
+                    declared: value.message.declared.into(),
+                    boundary: value.message.boundary.into(),
+                    consumed_message: value
+                        .message
+                        .has_consumed_message
+                        .then(|| ffi_to_message_id(value.message.consumed_message)),
+                    private_actions: {
+                        let std_vec: Vec<_> = value.message.private_actions.into();
+                        std_vec
+                            .into_iter()
+                            .map(|ffi_val| PrivateAction {
+                                nullifier: Nullifier::from_byte_array(ffi_val.nullifier.data),
+                                root: ffi_val.root.data,
+                                commitment: Commitment::from_byte_array(ffi_val.commitment.data),
+                                encrypted_post_state: EncryptedAccountData {
+                                    ciphertext: Ciphertext::from_inner(
+                                        ffi_val.encrypted_post_state.ciphertext.into(),
+                                    ),
+                                    epk: EphemeralPublicKey(
+                                        ffi_val.encrypted_post_state.epk.into(),
+                                    ),
+                                    view_tag: ffi_val.encrypted_post_state.view_tag,
+                                },
+                            })
+                            .collect()
+                    },
+                    block_validity_window: cast_ffi_validity_window(
+                        value.message.block_validity_window,
+                    )?,
+                    timestamp_validity_window: cast_ffi_validity_window(
+                        value.message.timestamp_validity_window,
+                    )?,
+                    program_image_claims: {
+                        let std_vec: Vec<_> = value.message.program_image_claims.into();
+                        std_vec.into_iter().map(Into::into).collect()
+                    },
+                },
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
-                    std_vec.into_iter().map(Into::into).collect()
-                },
-                private_actions: {
-                    let std_vec: Vec<_> = value.message.private_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PrivateAction {
-                            nullifier: Nullifier::from_byte_array(ffi_val.nullifier.data),
-                            root: ffi_val.root.data,
-                            commitment: Commitment::from_byte_array(ffi_val.commitment.data),
-                            encrypted_post_state: EncryptedAccountData {
-                                ciphertext: Ciphertext::from_inner(
-                                    ffi_val.encrypted_post_state.ciphertext.into(),
-                                ),
-                                epk: EphemeralPublicKey(ffi_val.encrypted_post_state.epk.into()),
-                                view_tag: ffi_val.encrypted_post_state.view_tag,
-                            },
-                        })
-                        .collect()
-                },
-                block_validity_window: cast_ffi_validity_window(
-                    value.message.block_validity_window,
-                )?,
-                timestamp_validity_window: cast_ffi_validity_window(
-                    value.message.timestamp_validity_window,
-                )?,
-                program_image_claims: {
-                    let std_vec: Vec<_> = value.message.program_image_claims.into();
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 identities: {
@@ -821,14 +825,17 @@ pub struct FfiPrivacyPreservingMessage {
 impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::Message) -> Self {
         let lee::privacy_preserving_transaction::Message {
-            declared,
-            boundary,
-            consumed_message,
+            execution:
+                PrivacyPreservingCircuitOutput {
+                    declared,
+                    boundary,
+                    consumed_message,
+                    private_actions,
+                    block_validity_window,
+                    timestamp_validity_window,
+                    program_image_claims,
+                },
             nonces,
-            private_actions,
-            block_validity_window,
-            timestamp_validity_window,
-            program_image_claims,
             identities,
         } = value;
 
@@ -1243,46 +1250,48 @@ mod tests {
     fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
         let original = PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
-                declared: Declared::default(),
-                boundary: Boundary {
-                    outputs: vec![
-                        Output {
-                            to: actor(4, 5),
-                            message: vec![6],
-                            origin: Origin::Root,
-                            issuer: None,
+                execution: PrivacyPreservingCircuitOutput {
+                    declared: Declared::default(),
+                    boundary: Boundary {
+                        outputs: vec![
+                            Output {
+                                to: actor(4, 5),
+                                message: vec![6],
+                                origin: Origin::Root,
+                                issuer: None,
+                                grants: vec![],
+                                pda_seeds: vec![],
+                            },
+                            Output {
+                                to: actor(8, 9),
+                                message: vec![10],
+                                origin: Origin::Program(account_id(11)),
+                                issuer: Some(account_id(12)),
+                                grants: vec![account_id(14)],
+                                pda_seeds: vec![PdaSeed::new([15; 32])],
+                            },
+                        ],
+                        assumptions: vec![Assumption {
+                            from: actor(16, 17),
+                            to: actor(18, 19),
+                            message: vec![20],
                             grants: vec![],
                             pda_seeds: vec![],
-                        },
-                        Output {
-                            to: actor(8, 9),
-                            message: vec![10],
-                            origin: Origin::Program(account_id(11)),
-                            issuer: Some(account_id(12)),
-                            grants: vec![account_id(14)],
-                            pda_seeds: vec![PdaSeed::new([15; 32])],
-                        },
-                    ],
-                    assumptions: vec![Assumption {
-                        from: actor(16, 17),
-                        to: actor(18, 19),
-                        message: vec![20],
-                        grants: vec![],
-                        pda_seeds: vec![],
-                    }],
-                    casts: vec![MessageBody {
-                        origin_program: account_id(22),
-                        to: actor(23, 24),
-                        message: vec![25],
-                    }],
-                    schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Cast],
+                        }],
+                        casts: vec![MessageBody {
+                            origin_program: account_id(22),
+                            to: actor(23, 24),
+                            message: vec![25],
+                        }],
+                        schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Cast],
+                    },
+                    consumed_message: Some(MessageId::new([26; 32])),
+                    private_actions: vec![],
+                    block_validity_window: ValidityWindow::new_unbounded(),
+                    timestamp_validity_window: ValidityWindow::new_unbounded(),
+                    program_image_claims: vec![],
                 },
-                consumed_message: Some(MessageId::new([26; 32])),
                 nonces: vec![],
-                private_actions: vec![],
-                block_validity_window: ValidityWindow::new_unbounded(),
-                timestamp_validity_window: ValidityWindow::new_unbounded(),
-                program_image_claims: vec![],
                 identities: identities(),
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(

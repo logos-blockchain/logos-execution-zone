@@ -390,7 +390,7 @@ impl UserKeyChain {
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
         let mut handled = HashSet::new();
-        for (i, action) in message.private_actions.iter().enumerate() {
+        for (i, action) in message.execution.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
             let Some(account_id) = index.account_for(&action.nullifier) else {
                 continue;
@@ -416,7 +416,7 @@ impl UserKeyChain {
         message: &Message,
         i: usize,
     ) -> Option<Nullifier> {
-        let encrypted = &message.private_actions[i].encrypted_post_state;
+        let encrypted = &message.execution.private_actions[i].encrypted_post_state;
 
         let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
         {
@@ -474,7 +474,7 @@ impl UserKeyChain {
     pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
         let init = Nullifier::for_account_initialization(&account_id);
         let update = self.next_update_nullifier(account_id);
-        message.private_actions.iter().position(|action| {
+        message.execution.private_actions.iter().position(|action| {
             action.nullifier == init || Some(&action.nullifier) == update.as_ref()
         })
     }
@@ -890,7 +890,10 @@ impl Default for UserKeyChain {
 #[cfg(test)]
 mod tests {
 
-    use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
+    use lee_core::{
+        EncryptionScheme, PrivacyPreservingCircuitOutput, PrivateAction,
+        encryption::EncryptedAccountData,
+    };
 
     use super::*;
 
@@ -933,12 +936,15 @@ mod tests {
         );
 
         let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: old_nullifier,
-                commitment: new_commitment,
-                encrypted_post_state: note,
+            execution: PrivacyPreservingCircuitOutput {
+                private_actions: vec![PrivateAction {
+                    nullifier: old_nullifier,
+                    commitment: new_commitment,
+                    encrypted_post_state: note,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
             ..Default::default()
         };
 
@@ -998,12 +1004,15 @@ mod tests {
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: old_nullifier,
-                commitment: new_commitment,
-                encrypted_post_state: note,
+            execution: PrivacyPreservingCircuitOutput {
+                private_actions: vec![PrivateAction {
+                    nullifier: old_nullifier,
+                    commitment: new_commitment,
+                    encrypted_post_state: note,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
             ..Default::default()
         };
 
@@ -1064,12 +1073,15 @@ mod tests {
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {
-                private_actions: vec![PrivateAction {
-                    nullifier: spent,
-                    commitment,
-                    encrypted_post_state: note,
+                execution: PrivacyPreservingCircuitOutput {
+                    private_actions: vec![PrivateAction {
+                        nullifier: spent,
+                        commitment,
+                        encrypted_post_state: note,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
+                },
                 ..Default::default()
             }
         };
@@ -1124,10 +1136,13 @@ mod tests {
             &[9; 32],
         );
         let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: unindexed,
+            execution: PrivacyPreservingCircuitOutput {
+                private_actions: vec![PrivateAction {
+                    nullifier: unindexed,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
             ..Default::default()
         };
 

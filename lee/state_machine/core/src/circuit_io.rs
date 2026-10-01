@@ -231,7 +231,10 @@ pub struct PrivateAction {
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, PartialEq, Eq, Default)
+)]
 pub struct PrivacyPreservingCircuitOutput {
     pub declared: Declared,
     pub boundary: Boundary,

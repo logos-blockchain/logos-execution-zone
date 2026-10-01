@@ -779,7 +779,7 @@ impl WalletCore {
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
-        let note_count = tx.message.private_actions.len();
+        let note_count = tx.message.execution.private_actions.len();
         anyhow::ensure!(
             note_count >= acc_decode_mask.len(),
             "Decode mask has {} entries but the transaction has {note_count} notes",
@@ -1283,6 +1283,7 @@ impl WalletCore {
                     &key_chain.viewing_public_key,
                 );
                 message
+                    .execution
                     .private_actions
                     .iter()
                     .enumerate()
@@ -1352,7 +1353,7 @@ impl WalletCore {
         for (account_id, npk, vpk, vsk, nsk) in shared_keys {
             let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
-            for (ciph_id, action) in message.private_actions.iter().enumerate() {
+            for (ciph_id, action) in message.execution.private_actions.iter().enumerate() {
                 // If already decrypted or the tag does not match, skip.
                 if handled.contains(&ciph_id) || action.encrypted_post_state.view_tag != view_tag {
                     continue;
@@ -1434,9 +1435,11 @@ fn decrypt_note_at(
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
-        &message.private_actions[i].encrypted_post_state.ciphertext,
+        &message.execution.private_actions[i]
+            .encrypted_post_state
+            .ciphertext,
         secret,
-        &message.private_actions[i].nullifier,
+        &message.execution.private_actions[i].nullifier,
     )
 }
 

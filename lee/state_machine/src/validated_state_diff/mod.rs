@@ -16,9 +16,7 @@ use public_backend::PublicBackend;
 use crate::{
     PublicIdentity, V03State, ensure,
     error::LeeError,
-    privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::Proof, message::Message,
-    },
+    privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
     program::Program,
     public_transaction::PublicTransaction,
 };
@@ -305,13 +303,14 @@ impl ValidatedStateDiff {
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
         let message = &tx.message;
+        let execution = &message.execution;
         let witness_set = &tx.witness_set;
-        let commitments = message.commitments();
-        let nullifiers = message.nullifiers();
+        let commitments = execution.commitments();
+        let nullifiers = execution.nullifiers();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
-            !message.private_actions.is_empty(),
+            !execution.private_actions.is_empty(),
             LeeError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
             )
@@ -363,19 +362,19 @@ impl ValidatedStateDiff {
         }
 
         ensure!(
-            sorted(signer_account_ids.iter().copied()) == message.declared.authorized_accounts,
+            sorted(signer_account_ids.iter().copied()) == execution.declared.authorized_accounts,
             LeeError::InvalidInput("Authorized accounts do not match the signers".into())
         );
 
         // Verify validity window
         ensure!(
-            message.block_validity_window.is_valid_for(block_id)
-                && message.timestamp_validity_window.is_valid_for(timestamp),
+            execution.block_validity_window.is_valid_for(block_id)
+                && execution.timestamp_validity_window.is_valid_for(timestamp),
             LeeError::OutOfValidityWindow
         );
 
         // 4. Proof verification
-        check_privacy_preserving_circuit_proof_is_valid(state, &witness_set.proof, message)?;
+        check_privacy_preserving_circuit_proof_is_valid(state, &witness_set.proof, execution)?;
 
         // 5. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
@@ -384,12 +383,12 @@ impl ValidatedStateDiff {
         state.check_nullifiers_are_valid(&nullifiers)?;
 
         // 7. Pending receipt
-        if let Some(id) = message.consumed_message {
+        if let Some(id) = execution.consumed_message {
             let record = state.pending_message(id).ok_or_else(|| {
                 LeeError::InvalidInput("A consumed message is not pending".into())
             })?;
             let identities = identity_account_ids(&message.identities);
-            admit_public_receipt(record, &message.declared, |account_id| {
+            admit_public_receipt(record, &execution.declared, |account_id| {
                 identities.contains(&account_id) || state.is_designated_public_account(account_id)
             })?;
         }
@@ -397,8 +396,8 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0;
         let settled = settle(
             state,
-            message.declared.clone(),
-            Mode::Check(message.boundary.clone()),
+            execution.declared.clone(),
+            Mode::Check(execution.boundary.clone()),
             block_id,
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
@@ -413,7 +412,7 @@ impl ValidatedStateDiff {
                 .chain(settled.new_commitments)
                 .collect(),
             new_nullifiers,
-            consumed: message.consumed_message.into_iter().collect(),
+            consumed: execution.consumed_message.into_iter().collect(),
             ..settled
         }))
     }
@@ -603,14 +602,14 @@ fn authenticate_public_transaction_signers(
 fn check_privacy_preserving_circuit_proof_is_valid(
     state: &V03State,
     proof: &Proof,
-    message: &Message,
+    execution: &PrivacyPreservingCircuitOutput,
 ) -> Result<(), LeeError> {
     // Anchor each `Disclosed` claim to real chain state, reconstructing it independently rather
     // than trusting the message's own claim — a wrong claim means the reconstructed journal won't
     // match what the receipt actually committed to, so `proof.is_valid_for` fails below.
     // `Undisclosed`'s membership check already happened in-circuit; the one thing left to check
     // here is that its `root` is one the commitment tree has actually had.
-    let program_image_claims = message
+    let program_image_claims = execution
         .program_image_claims
         .iter()
         .map(|claim| match claim {
@@ -634,13 +633,8 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .collect::<Result<Vec<_>, LeeError>>()?;
 
     let output = PrivacyPreservingCircuitOutput {
-        declared: message.declared.clone(),
-        boundary: message.boundary.clone(),
-        consumed_message: message.consumed_message,
-        private_actions: message.private_actions.clone(),
-        block_validity_window: message.block_validity_window,
-        timestamp_validity_window: message.timestamp_validity_window,
         program_image_claims,
+        ..execution.clone()
     };
     proof
         .is_valid_for(&output)

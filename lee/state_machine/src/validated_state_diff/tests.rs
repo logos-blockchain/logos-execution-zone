@@ -53,7 +53,7 @@ fn public_diff_reflects_a_successful_transfer() {
 #[test]
 fn privacy_garbage_proof_is_rejected() {
     use lee_core::{
-        Commitment, EncryptedAccountData, Nullifier, PrivateAction,
+        Commitment, EncryptedAccountData, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
         account::Account,
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{Boundary, Declared},
@@ -78,23 +78,25 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        declared: Declared::default(),
-        boundary: Boundary::default(),
-        consumed_message: None,
+        execution: PrivacyPreservingCircuitOutput {
+            declared: Declared::default(),
+            boundary: Boundary::default(),
+            consumed_message: None,
+            private_actions: vec![PrivateAction {
+                nullifier: Nullifier::for_account_initialization(&account_id),
+                root: [0; 32],
+                commitment,
+                encrypted_post_state: EncryptedAccountData {
+                    ciphertext: Ciphertext::from_inner(vec![]),
+                    epk: EphemeralPublicKey(vec![]),
+                    view_tag: 0,
+                },
+            }],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
+        },
         nonces: vec![],
-        private_actions: vec![PrivateAction {
-            nullifier: Nullifier::for_account_initialization(&account_id),
-            root: [0; 32],
-            commitment,
-            encrypted_post_state: EncryptedAccountData {
-                ciphertext: Ciphertext::from_inner(vec![]),
-                epk: EphemeralPublicKey(vec![]),
-                view_tag: 0,
-            },
-        }],
-        block_validity_window: BlockValidityWindow::new_unbounded(),
-        timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-        program_image_claims: vec![],
         identities: vec![],
     };
 

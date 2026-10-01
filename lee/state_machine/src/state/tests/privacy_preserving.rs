@@ -127,7 +127,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         this
     };
 
-    let [expected_new_commitment] = tx.message().commitments().try_into().unwrap();
+    let [expected_new_commitment] = tx.message().execution.commitments().try_into().unwrap();
     assert!(!state.private_state.0.contains(&expected_new_commitment));
 
     state
@@ -263,7 +263,10 @@ fn privacy_tampered_epk_is_rejected() {
     );
 
     // Flip a byte of the first note's epk
-    tx.message.private_actions[0].encrypted_post_state.epk.0[0] ^= 0xFF;
+    tx.message.execution.private_actions[0]
+        .encrypted_post_state
+        .epk
+        .0[0] ^= 0xFF;
 
     assert!(
         matches!(
@@ -289,7 +292,9 @@ fn privacy_tampered_view_tag_is_rejected() {
     );
 
     // Flip the first note's view_tag
-    tx.message.private_actions[0].encrypted_post_state.view_tag ^= 0xFF;
+    tx.message.execution.private_actions[0]
+        .encrypted_post_state
+        .view_tag ^= 0xFF;
 
     assert!(
         matches!(
@@ -330,7 +335,7 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
     ));
 
     // Dropping the claim to match the missing signature detaches the statement from its proof.
-    message.declared.authorized_accounts.clear();
+    message.execution.declared.authorized_accounts.clear();
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
         WitnessSet::for_message(&message, witness_set.proof, &[]),
@@ -367,7 +372,7 @@ fn a_tampered_boundary_output_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    tx.message.boundary.outputs[0].message[0] ^= 0xFF;
+    tx.message.execution.boundary.outputs[0].message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
@@ -749,7 +754,7 @@ fn a_nested_boundary_settles_both_public_writes() {
     let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
 
     assert_eq!(
-        nested.tx.message.boundary.schedule,
+        nested.tx.message.execution.boundary.schedule,
         vec![
             ScheduleOp::CallPublic,
             ScheduleOp::EnterPrivate,
@@ -789,7 +794,7 @@ fn a_tampered_assumption_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    nested.tx.message.boundary.assumptions[0].message[0] ^= 0xFF;
+    nested.tx.message.execution.boundary.assumptions[0].message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),
@@ -818,7 +823,7 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected() {
     assert!(
         nested
             .state
-            .get_proof_for_commitment(&nested.tx.message.commitments()[0])
+            .get_proof_for_commitment(&nested.tx.message.execution.commitments()[0])
             .is_none()
     );
 }

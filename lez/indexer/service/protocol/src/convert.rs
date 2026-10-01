@@ -655,17 +655,20 @@ impl From<lee_core::PrivateAction> for PrivateAction {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            declared,
-            boundary,
-            consumed_message,
+            execution:
+                lee_core::PrivacyPreservingCircuitOutput {
+                    declared,
+                    boundary,
+                    consumed_message,
+                    private_actions,
+                    block_validity_window,
+                    timestamp_validity_window,
+                    // Not yet part of this wire protocol; see the `program_image_claims` field doc
+                    // on `lee_core::PrivacyPreservingCircuitOutput`. FFI/wallet plumbing for
+                    // address-flexible program dispatch is tracked separately.
+                    program_image_claims: _,
+                },
             nonces,
-            private_actions,
-            block_validity_window,
-            timestamp_validity_window,
-            // Not yet part of this wire protocol; see the `program_image_claims` field doc on
-            // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
-            // address-flexible program dispatch is tracked separately.
-            program_image_claims: _,
             identities,
         } = value;
         Self {
@@ -710,24 +713,26 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            declared: declared.into(),
-            boundary: boundary.into(),
-            consumed_message: consumed_message.map(Into::into),
+            execution: lee_core::PrivacyPreservingCircuitOutput {
+                declared: declared.into(),
+                boundary: boundary.into(),
+                consumed_message: consumed_message.map(Into::into),
+                private_actions,
+                block_validity_window: block_validity_window
+                    .try_into()
+                    .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                timestamp_validity_window: timestamp_validity_window
+                    .try_into()
+                    .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                // Not yet part of this wire protocol; see the corresponding destructure above.
+                // A privacy-preserving tx submitted through this protocol will fail proof
+                // verification for any program not at its bijection address until this is wired.
+                program_image_claims: Vec::new(),
+            },
             nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
-            private_actions,
-            block_validity_window: block_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            timestamp_validity_window: timestamp_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            // Not yet part of this wire protocol; see the corresponding destructure above.
-            // A privacy-preserving tx submitted through this protocol will fail proof
-            // verification for any program not at its bijection address until this is wired.
-            program_image_claims: Vec::new(),
             identities: identities
                 .into_iter()
                 .map(TryInto::try_into)
@@ -1452,49 +1457,52 @@ mod tests {
     #[test]
     fn a_private_message_with_a_consumed_message_round_trips_through_the_mirror() {
         let message = lee::privacy_preserving_transaction::message::Message {
-            declared: lee_core::execution_state::Declared::default(),
-            boundary: lee_core::execution_state::Boundary {
-                outputs: vec![
-                    lee_core::execution_state::Output {
-                        to: actor(4, 5),
-                        message: vec![6],
-                        origin: lee_core::program::Origin::Root,
-                        issuer: None,
+            execution: lee_core::PrivacyPreservingCircuitOutput {
+                declared: lee_core::execution_state::Declared::default(),
+                boundary: lee_core::execution_state::Boundary {
+                    outputs: vec![
+                        lee_core::execution_state::Output {
+                            to: actor(4, 5),
+                            message: vec![6],
+                            origin: lee_core::program::Origin::Root,
+                            issuer: None,
+                            grants: vec![],
+                            pda_seeds: vec![],
+                        },
+                        lee_core::execution_state::Output {
+                            to: actor(8, 9),
+                            message: vec![10],
+                            origin: lee_core::program::Origin::Program(account_id(11)),
+                            issuer: Some(account_id(12)),
+                            grants: vec![account_id(14)],
+                            pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
+                        },
+                    ],
+                    assumptions: vec![lee_core::execution_state::Assumption {
+                        from: actor(16, 17),
+                        to: actor(18, 19),
+                        message: vec![20],
                         grants: vec![],
                         pda_seeds: vec![],
-                    },
-                    lee_core::execution_state::Output {
-                        to: actor(8, 9),
-                        message: vec![10],
-                        origin: lee_core::program::Origin::Program(account_id(11)),
-                        issuer: Some(account_id(12)),
-                        grants: vec![account_id(14)],
-                        pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
-                    },
-                ],
-                assumptions: vec![lee_core::execution_state::Assumption {
-                    from: actor(16, 17),
-                    to: actor(18, 19),
-                    message: vec![20],
-                    grants: vec![],
-                    pda_seeds: vec![],
-                }],
-                casts: vec![lee_core::program::MessageBody {
-                    origin_program: account_id(22),
-                    to: actor(23, 24),
-                    message: vec![25],
-                }],
-                schedule: vec![
-                    lee_core::execution_state::ScheduleOp::CallPublic,
-                    lee_core::execution_state::ScheduleOp::Cast,
-                ],
+                    }],
+                    casts: vec![lee_core::program::MessageBody {
+                        origin_program: account_id(22),
+                        to: actor(23, 24),
+                        message: vec![25],
+                    }],
+                    schedule: vec![
+                        lee_core::execution_state::ScheduleOp::CallPublic,
+                        lee_core::execution_state::ScheduleOp::Cast,
+                    ],
+                },
+                consumed_message: Some(message_id(26)),
+                private_actions: vec![],
+                block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window:
+                    lee_core::program::TimestampValidityWindow::new_unbounded(),
+                program_image_claims: vec![],
             },
-            consumed_message: Some(message_id(26)),
             nonces: vec![],
-            private_actions: vec![],
-            block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
-            timestamp_validity_window: lee_core::program::TimestampValidityWindow::new_unbounded(),
-            program_image_claims: vec![],
             identities: identities(),
         };
 

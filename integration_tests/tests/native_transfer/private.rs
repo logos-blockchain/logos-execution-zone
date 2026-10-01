@@ -79,9 +79,14 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         .context("Failed to get private account commitment for sender")?;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
-    assert!(tx.message.commitments().contains(&new_commitment1));
+    assert!(
+        tx.message
+            .execution
+            .commitments()
+            .contains(&new_commitment1)
+    );
 
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -300,9 +305,14 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert!(tx.message.commitments().contains(&sender_commitment));
+    assert!(
+        tx.message
+            .execution
+            .commitments()
+            .contains(&sender_commitment)
+    );
 
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -380,7 +390,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let acc_1_balance = account_balance(&ctx, from).await?;
 
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -437,7 +447,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify commitments are in state
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 

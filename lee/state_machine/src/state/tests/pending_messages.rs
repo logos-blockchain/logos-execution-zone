@@ -280,7 +280,7 @@ fn a_private_account_receives_a_cast_by_proof() {
         .transition_from_privacy_preserving_transaction(&tx, 2, 0)
         .unwrap();
 
-    assert_eq!(tx.message.consumed_message, Some(id));
+    assert_eq!(tx.message.execution.consumed_message, Some(id));
     assert!(state.pending_message(id).is_none());
 }
 
