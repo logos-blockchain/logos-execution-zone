@@ -1,13 +1,15 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards, and every write target must be `is_authorized`: a
-//! 65-byte segment also decodes as a header, so an unauthorized write could hijack an address.
+//! Instructions only change loader shards, and every write target must be `is_authorized`.
+//! Every shard is a tagged [`LoaderEntry`], so a segment can never be read as a header or a
+//! header as a segment: only `CreateHeader`/`UpdateHeader` store a header, and a stored
+//! `image_id` is always the one recomputed from the chain it points at.
 //!
 //! The public-only native loader reads staged shards during planning.
 //! [`apply`] executes the resulting [`ShardEffect`]s.
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+    LoaderEntry, MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
 };
 use lee_core::{
     Commitment,
@@ -108,7 +110,7 @@ pub fn build_segments(
                 bytecode: chunk.to_vec(),
                 next_segment: segment_ids.get(index.saturating_add(1)).copied(),
             };
-            ShardData::try_from(segment.to_bytes())
+            ShardData::try_from(segment.clone().to_loader_shard())
                 .map(|_| segment)
                 .map_err(|_too_big| SegmentChainError::SegmentTooLarge { index })
         })
@@ -167,7 +169,7 @@ pub fn write_segment<'state>(
             "second account must be the segment `next_segment` points to"
         );
         assert!(
-            ProgramSegment::from_bytes(shard(referenced.account_id)).is_some(),
+            ProgramSegment::from_loader_shard(shard(referenced.account_id)).is_some(),
             "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
     }
@@ -178,7 +180,7 @@ pub fn write_segment<'state>(
             bytecode,
             next_segment,
         }
-        .to_bytes(),
+        .to_loader_shard(),
     )]
 }
 
@@ -221,7 +223,10 @@ pub fn create_header<'state>(
 
     let header = build_header(accounts, shard, first_segment, immutable);
     let new_commitment = immutable.then(|| immutable_mirror_commitment(target.account_id, &header));
-    (vec![write(target, header.to_bytes())], new_commitment)
+    (
+        vec![write(target, header.to_loader_shard())],
+        new_commitment,
+    )
 }
 
 /// Executes `UpdateHeader`. Returns a private [`Commitment`] alongside the effect when this call
@@ -238,7 +243,7 @@ pub fn update_header<'state>(
         .first()
         .expect("UpdateHeader requires at least the header target account");
     reject_reserved_target(target.account_id);
-    let old_header = ProgramHeader::from_bytes(shard(target.account_id)).expect(
+    let old_header = ProgramHeader::from_loader_shard(shard(target.account_id)).expect(
         "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
     );
     assert!(
@@ -252,7 +257,10 @@ pub fn update_header<'state>(
 
     let header = build_header(accounts, shard, first_segment, immutable);
     let new_commitment = immutable.then(|| immutable_mirror_commitment(target.account_id, &header));
-    (vec![write(target, header.to_bytes())], new_commitment)
+    (
+        vec![write(target, header.to_loader_shard())],
+        new_commitment,
+    )
 }
 
 fn build_header<'state>(
@@ -311,7 +319,7 @@ fn compute_image_id<'state>(
             supplied.account_id, account_id,
             "segment accounts must be supplied in exact chain order"
         );
-        let segment = ProgramSegment::from_bytes(shard(supplied.account_id))
+        let segment = ProgramSegment::from_loader_shard(shard(supplied.account_id))
             .expect("every supplied segment account must decode as a valid ProgramSegment");
         elf.extend_from_slice(&segment.bytecode);
         expected_next = segment.next_segment;

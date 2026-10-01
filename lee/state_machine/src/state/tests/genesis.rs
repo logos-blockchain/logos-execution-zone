@@ -69,7 +69,7 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
     let state = V03State::new().with_programs([crate::test_methods::noop()]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::noop().id());
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let program_header = lee_core::program::ProgramHeader::from_loader_shard(
         state.public_state[&header_account_id]
             .data
             .shard(PROGRAM_LOADER_ACCOUNT_ID),
@@ -89,7 +89,7 @@ fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
     let header_account_id = lee_core::account::AccountId::from_builtin_program(
         crate::test_methods::shard_forwarder().id(),
     );
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let program_header = lee_core::program::ProgramHeader::from_loader_shard(
         state.public_state[&header_account_id]
             .data
             .shard(PROGRAM_LOADER_ACCOUNT_ID),

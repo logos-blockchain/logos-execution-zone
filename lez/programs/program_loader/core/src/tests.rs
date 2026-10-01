@@ -29,14 +29,17 @@ impl Shards {
                     bytecode,
                     next_segment: next,
                 }
-                .to_bytes(),
+                .to_loader_shard(),
             )
             .unwrap(),
         )
     }
 
     fn header(self, account_id: AccountId, header: &ProgramHeader) -> Self {
-        self.with(account_id, ShardData::try_from(header.to_bytes()).unwrap())
+        self.with(
+            account_id,
+            ShardData::try_from(header.to_loader_shard()).unwrap(),
+        )
     }
 
     fn read<'shards>(&'shards self) -> impl Fn(AccountId) -> &'shards ShardData + 'shards {
@@ -76,7 +79,7 @@ fn write_segment_writes_the_loader_shard() {
         effect.selector.program_account_id,
         PROGRAM_LOADER_ACCOUNT_ID
     );
-    let segment = ProgramSegment::from_bytes(&written(&effect)).expect("valid segment");
+    let segment = ProgramSegment::from_loader_shard(&written(&effect)).expect("valid segment");
     assert_eq!(segment.bytecode, vec![1, 2, 3]);
     assert_eq!(segment.next_segment, None);
 }
@@ -98,7 +101,7 @@ fn write_segment_linking_to_an_existing_segment_leaves_it_unchanged() {
     // can be applied to it.
     let [effect] = <[_; 1]>::try_from(effects).expect("only the target is written");
     assert_eq!(effect.selector.account_id, target_id);
-    let segment = ProgramSegment::from_bytes(&written(&effect)).expect("valid segment");
+    let segment = ProgramSegment::from_loader_shard(&written(&effect)).expect("valid segment");
     assert_eq!(segment.next_segment, Some(next_id));
 }
 
@@ -108,6 +111,30 @@ fn write_segment_rejects_an_unauthorized_target() {
     let target_id = AccountId::new([1; 32]);
     let shards = Shards::default();
     let _effects = write_segment(&[handle(target_id, false)], shards.read(), vec![1], None);
+}
+
+/// Issue 181's payloads: bytecode whose untagged segment encoding is exactly a header's. Tagged,
+/// they are stored as segments and never read back as headers.
+#[test]
+fn write_segment_stores_header_sized_bytecode_as_a_segment() {
+    let next_id = AccountId::new([1; 32]);
+    let shards = Shards::default().segment(next_id, vec![9], None);
+    for (bytecode_len, next_segment) in [(60, None), (28, Some(next_id))] {
+        let target_id = AccountId::new([2; 32]);
+        let mut accounts = vec![handle(target_id, true)];
+        accounts.extend(next_segment.map(|id| handle(id, false)));
+
+        let effects = write_segment(
+            &accounts,
+            shards.read(),
+            vec![0; bytecode_len],
+            next_segment,
+        );
+
+        let stored = written(&effects[0]);
+        assert!(ProgramSegment::from_loader_shard(&stored).is_some());
+        assert_eq!(ProgramHeader::from_loader_shard(&stored), None);
+    }
 }
 
 #[test]
@@ -349,12 +376,13 @@ fn a_full_segment_fits_a_shard() {
     // Empty bytecode, so every encoded byte is overhead. `Some` is the worst case: a segment that
     // links onward carries the next id. Built field by field on purpose: a new field fails to
     // compile here instead of being silently defaulted. Set a new field to its largest encoding:
-    // an empty `Vec` would count only its length prefix, and hide any overflow.
+    // an empty `Vec` would count only its length prefix, and hide any overflow. Measured through
+    // the stored encoding, so the `LoaderEntry` tag byte is counted too.
     let overhead = ProgramSegment {
         bytecode: Vec::new(),
         next_segment: Some(AccountId::default()),
     }
-    .to_bytes()
+    .to_loader_shard()
     .len();
 
     let full = MAX_SEGMENT_DATA_LEN
@@ -416,5 +444,49 @@ fn build_segments_rejects_a_chain_over_the_segment_cap() {
     assert_eq!(
         build_segments(&user_elf, &ids),
         Err(SegmentChainError::TooManySegments { count })
+    );
+}
+
+/// Finding 1: a chain may not end in a header. A mutable header linked as a segment would let its
+/// owner change an immutable program's code by updating that header.
+#[test]
+#[should_panic(expected = "every supplied segment account must decode as a valid ProgramSegment")]
+fn create_header_rejects_a_chain_linking_to_a_header() {
+    let target_id = AccountId::new([1; 32]);
+    let linked_header_id = AccountId::new([2; 32]);
+    let shards = Shards::default().header(
+        linked_header_id,
+        &ProgramHeader {
+            image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+            program_first_segment: AccountId::new([3; 32]),
+            immutable: false,
+        },
+    );
+    let _effects = create_header(
+        &[handle(target_id, true), handle(linked_header_id, false)],
+        shards.read(),
+        linked_header_id,
+        true,
+    );
+}
+
+#[test]
+#[should_panic(expected = "`next_segment` must already hold a valid segment")]
+fn write_segment_rejects_linking_to_a_header() {
+    let target_id = AccountId::new([1; 32]);
+    let linked_header_id = AccountId::new([2; 32]);
+    let shards = Shards::default().header(
+        linked_header_id,
+        &ProgramHeader {
+            image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+            program_first_segment: AccountId::new([3; 32]),
+            immutable: false,
+        },
+    );
+    let _effects = write_segment(
+        &[handle(target_id, true), handle(linked_header_id, false)],
+        shards.read(),
+        vec![1],
+        Some(linked_header_id),
     );
 }

@@ -398,14 +398,19 @@ pub struct ProgramHeader {
 }
 
 impl ProgramHeader {
+    /// Encodes this header as loader-shard contents, tagged as a [`LoaderEntry::Header`].
     #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("program header serializes")
+    pub fn to_loader_shard(self) -> Vec<u8> {
+        LoaderEntry::Header(self).to_bytes()
     }
 
+    /// Decodes a loader shard holding a header; `None` for a segment or anything malformed.
     #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        borsh::from_slice(bytes).ok()
+    pub fn from_loader_shard(bytes: &[u8]) -> Option<Self> {
+        match LoaderEntry::from_bytes(bytes)? {
+            LoaderEntry::Header(header) => Some(header),
+            LoaderEntry::Segment(_) => None,
+        }
     }
 }
 
@@ -423,9 +428,37 @@ pub struct ProgramSegment {
 }
 
 impl ProgramSegment {
+    /// Encodes this segment as loader-shard contents, tagged as a [`LoaderEntry::Segment`].
+    #[must_use]
+    pub fn to_loader_shard(self) -> Vec<u8> {
+        LoaderEntry::Segment(self).to_bytes()
+    }
+
+    /// Decodes a loader shard holding a segment; `None` for a header or anything malformed.
+    #[must_use]
+    pub fn from_loader_shard(bytes: &[u8]) -> Option<Self> {
+        match LoaderEntry::from_bytes(bytes)? {
+            LoaderEntry::Segment(segment) => Some(segment),
+            LoaderEntry::Header(_) => None,
+        }
+    }
+}
+
+/// What a `PROGRAM_LOADER_ACCOUNT_ID` shard holds.
+///
+/// Borsh writes the variant as the first stored byte, and only the loader writes these shards, so
+/// no header or segment content can make one decode as the other. Variants are append-only:
+/// reordering them changes every stored encoding.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum LoaderEntry {
+    Header(ProgramHeader),
+    Segment(ProgramSegment),
+}
+
+impl LoaderEntry {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        borsh::to_vec(self).expect("program segment serializes")
+        borsh::to_vec(self).expect("loader entry serializes")
     }
 
     #[must_use]
@@ -867,7 +900,7 @@ pub fn get_program_via<'state>(
     account_id: AccountId,
     loader_shard: impl Fn(AccountId) -> Option<&'state ShardData>,
 ) -> Option<(ProgramId, Vec<u8>)> {
-    let header = ProgramHeader::from_bytes(loader_shard(account_id)?)?;
+    let header = ProgramHeader::from_loader_shard(loader_shard(account_id)?)?;
 
     let mut elf = Vec::new();
     let mut next = Some(header.program_first_segment);
@@ -877,7 +910,7 @@ pub fn get_program_via<'state>(
         if segment_count > MAX_PROGRAM_SEGMENTS {
             return None;
         }
-        let segment = ProgramSegment::from_bytes(loader_shard(segment_id)?)?;
+        let segment = ProgramSegment::from_loader_shard(loader_shard(segment_id)?)?;
         elf.extend_from_slice(&segment.bytecode);
         next = segment.next_segment;
     }
@@ -922,9 +955,11 @@ pub fn immutable_mirror_commitment(
     program_header: &ProgramHeader,
 ) -> Commitment {
     let mirror_account_id = AccountId::for_immutable_mirror(header_account_id);
+    // Untagged, unlike the public loader shard: the mirror is only ever hashed, never decoded as
+    // a loader entry, and the privacy circuit recomputes it, so its encoding is fixed.
     let mirrored_account = Account::default().with_shard(
         PROGRAM_LOADER_ACCOUNT_ID,
-        ShardData::try_from(program_header.to_bytes())
+        ShardData::try_from(borsh::to_vec(program_header).expect("program header serializes"))
             .expect("program header must fit under DATA_MAX_LENGTH"),
     );
     Commitment::new(&mirror_account_id, &mirrored_account)

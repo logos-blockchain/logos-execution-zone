@@ -236,7 +236,7 @@ impl V03State {
         for (segment_account_id, segment) in segment_account_ids.iter().zip(segments) {
             let segment = Account::default().with_shard(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ShardData::try_from(segment.to_bytes())
+                ShardData::try_from(segment.to_loader_shard())
                     .expect("build_segments checked the segment fits"),
             );
             self.public_state.insert(*segment_account_id, segment);
@@ -249,7 +249,7 @@ impl V03State {
         };
         let header = Account::default().with_shard(
             PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(program_header.to_bytes())
+            ShardData::try_from(program_header.to_loader_shard())
                 .expect("program header fits under DATA_MAX_LENGTH"),
         );
         self.public_state.insert(header_account_id, header);
