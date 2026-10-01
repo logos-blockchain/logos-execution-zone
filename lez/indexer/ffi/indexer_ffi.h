@@ -33,7 +33,7 @@ typedef enum FfiScheduleOp {
   EnterPrivate,
   LeavePrivate,
   ReturnPublic,
-  Publish,
+  Cast,
 } FfiScheduleOp;
 
 typedef enum FfiTransactionKind {
@@ -345,7 +345,7 @@ typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
 typedef struct FfiBoundary {
   FfiOutputList outputs;
   FfiAssumptionList assumptions;
-  FfiMessageBodyList publications;
+  FfiMessageBodyList casts;
   FfiScheduleOpList schedule;
 } FfiBoundary;
 

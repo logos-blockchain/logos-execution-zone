@@ -97,7 +97,7 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Publish,
+    Cast,
 }
 
 #[derive(
@@ -106,7 +106,7 @@ pub enum ScheduleOp {
 pub struct Boundary {
     pub outputs: Vec<Output>,
     pub assumptions: Vec<Assumption>,
-    pub publications: Vec<MessageBody>,
+    pub casts: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 
@@ -231,7 +231,7 @@ struct AccountEntry {
 
 enum Item {
     Deliver(Box<Delivery>),
-    Publish(MessageBody),
+    Cast(MessageBody),
     ClosePublic,
     ClosePrivate,
     Continue { root: bool },
@@ -296,7 +296,7 @@ enum ModeState {
         cursor: usize,
         outputs_consumed: usize,
         assumptions_consumed: usize,
-        publications_consumed: usize,
+        casts_consumed: usize,
     },
 }
 
@@ -312,7 +312,7 @@ pub struct ExecutionState<'witnesses> {
     mode: ModeState,
     at_root: bool,
     events: Vec<(Actor, ProgramEvent)>,
-    published: Vec<MessageBody>,
+    casts: Vec<MessageBody>,
 }
 
 impl<'witnesses> ExecutionState<'witnesses> {
@@ -417,7 +417,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     cursor: 0,
                     outputs_consumed: 0,
                     assumptions_consumed: 0,
-                    publications_consumed: 0,
+                    casts_consumed: 0,
                 },
             ),
         };
@@ -453,7 +453,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             mode,
             at_root: false,
             events: Vec::new(),
-            published: Vec::new(),
+            casts: Vec::new(),
         })
     }
 
@@ -461,7 +461,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         while let Some(item) = self.pending.pop_front() {
             match item {
                 Item::Deliver(delivery) => self.deliver(*delivery, backend)?,
-                Item::Publish(body) => self.publish(body),
+                Item::Cast(body) => self.cast(body),
                 Item::ClosePublic => self.close(ScheduleOp::ReturnPublic)?,
                 Item::ClosePrivate => self.close(ScheduleOp::LeavePrivate)?,
                 Item::Continue { root } => self.resume(root)?,
@@ -479,12 +479,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 cursor,
                 outputs_consumed,
                 assumptions_consumed,
-                publications_consumed,
+                casts_consumed,
             } => {
                 if *cursor != boundary.schedule.len()
                     || *outputs_consumed != boundary.outputs.len()
                     || *assumptions_consumed != boundary.assumptions.len()
-                    || *publications_consumed != boundary.publications.len()
+                    || *casts_consumed != boundary.casts.len()
                 {
                     return Err(ExecutionError::IncompleteBoundary.into());
                 }
@@ -515,7 +515,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             boundary,
             cursor,
             outputs_consumed,
-            publications_consumed,
+            casts_consumed,
             ..
         } = &mut self.mode
         else {
@@ -545,17 +545,17 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 })));
                 Ok(())
             }
-            (Some(ScheduleOp::Publish), _) => {
-                let publication = boundary
-                    .publications
-                    .get(*publications_consumed)
+            (Some(ScheduleOp::Cast), _) => {
+                let cast = boundary
+                    .casts
+                    .get(*casts_consumed)
                     .ok_or(ExecutionError::IncompleteBoundary)?
                     .clone();
-                expect_op(&boundary.schedule, cursor, ScheduleOp::Publish)?;
-                *publications_consumed = publications_consumed
+                expect_op(&boundary.schedule, cursor, ScheduleOp::Cast)?;
+                *casts_consumed = casts_consumed
                     .checked_add(1)
-                    .expect("bounded by the publication count");
-                self.published.push(publication);
+                    .expect("bounded by the cast count");
+                self.casts.push(cast);
                 self.pending.push_front(Item::Continue { root });
                 Ok(())
             }
@@ -573,12 +573,12 @@ impl<'witnesses> ExecutionState<'witnesses> {
         }
     }
 
-    fn publish(&mut self, body: MessageBody) {
+    fn cast(&mut self, body: MessageBody) {
         match &mut self.mode {
-            ModeState::Live | ModeState::Check { .. } => self.published.push(body),
+            ModeState::Live | ModeState::Check { .. } => self.casts.push(body),
             ModeState::Record { boundary, .. } => {
-                boundary.schedule.push(ScheduleOp::Publish);
-                boundary.publications.push(body);
+                boundary.schedule.push(ScheduleOp::Cast);
+                boundary.casts.push(body);
             }
             ModeState::Derive { .. } => {}
         }
@@ -795,7 +795,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     grants.clone(),
                     pda_seeds,
                 ))),
-                Action::Cast(cast) => Item::Publish(MessageBody {
+                Action::Cast(cast) => Item::Cast(MessageBody {
                     origin_program: actor.program_account_id,
                     to: cast.to,
                     message: cast.message,
@@ -888,7 +888,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
             timestamp_validity_window,
             mode,
             events,
-            published,
+            casts,
             ..
         } = self;
 
@@ -921,7 +921,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 ExecutionResult::Settled {
                     public,
                     events,
-                    casts: published,
+                    casts,
                 }
             }
         };

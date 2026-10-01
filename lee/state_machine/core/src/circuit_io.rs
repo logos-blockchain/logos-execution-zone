@@ -308,7 +308,7 @@ mod tests {
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
-                publications: Vec::new(),
+                casts: Vec::new(),
                 schedule: vec![
                     ScheduleOp::CallPublic,
                     ScheduleOp::EnterPrivate,
@@ -359,7 +359,7 @@ mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[0, 0, 0, 0], // boundary.publications: none
+            &[0, 0, 0, 0], // boundary.casts: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
             &[0],          // consumed_message: None
@@ -391,7 +391,7 @@ mod tests {
                     pda_seeds: Vec::new(),
                 }],
                 assumptions: Vec::new(),
-                publications: vec![MessageBody {
+                casts: vec![MessageBody {
                     origin_program: AccountId::new([8; 32]),
                     to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                     message: b"p".to_vec(),
@@ -399,7 +399,7 @@ mod tests {
                 schedule: vec![
                     ScheduleOp::CallPublic,
                     ScheduleOp::ReturnPublic,
-                    ScheduleOp::Publish,
+                    ScheduleOp::Cast,
                 ],
             },
             consumed_message: Some(MessageId::new([7; 32])),
@@ -426,7 +426,7 @@ mod tests {
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[0, 0, 0, 0], // boundary.assumptions: none
-            &[1, 0, 0, 0], // boundary.publications: one message
+            &[1, 0, 0, 0], // boundary.casts: one message
             &[8; 32],      // origin_program
             &[3; 32],      // to
             &[4; 32],
@@ -453,7 +453,7 @@ mod tests {
             (ScheduleOp::EnterPrivate, 1),
             (ScheduleOp::LeavePrivate, 2),
             (ScheduleOp::ReturnPublic, 3),
-            (ScheduleOp::Publish, 4),
+            (ScheduleOp::Cast, 4),
         ] {
             assert_eq!(borsh::to_vec(&op).unwrap(), [tag]);
         }

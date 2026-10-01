@@ -1,5 +1,5 @@
 use super::{
-    ScheduleOp::{CallPublic, EnterPrivate, LeavePrivate, Publish, ReturnPublic},
+    ScheduleOp::{CallPublic, EnterPrivate, LeavePrivate, ReturnPublic},
     *,
 };
 use crate::{
@@ -698,7 +698,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
                 ..output(vault, Origin::Program(id(8)))
             }],
             assumptions: vec![reply],
-            publications: Vec::new(),
+            casts: Vec::new(),
             schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
         }
     );
@@ -1471,8 +1471,11 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
         .unwrap(),
     );
 
-    assert_eq!(boundary.schedule, vec![CallPublic, ReturnPublic, Publish]);
-    assert_eq!(boundary.publications, vec![private_cast.clone()]);
+    assert_eq!(
+        boundary.schedule,
+        vec![CallPublic, ReturnPublic, ScheduleOp::Cast]
+    );
+    assert_eq!(boundary.casts, vec![private_cast.clone()]);
 
     let mut checking = Script::default().on(ENTRY, move |input| {
         echo(
@@ -1507,9 +1510,9 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
 }
 
 #[test]
-fn a_check_rejects_a_publication_its_schedule_never_reaches() {
+fn a_check_rejects_a_cast_its_schedule_never_reaches() {
     let boundary = Boundary {
-        publications: vec![MessageBody {
+        casts: vec![MessageBody {
             origin_program: id(8),
             to: CALLEE,
             message: b"x".to_vec(),

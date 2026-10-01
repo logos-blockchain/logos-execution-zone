@@ -565,7 +565,7 @@ fn mock_privacy_preserving_tx(
                     pda_seeds: vec![],
                 }],
                 assumptions: vec![],
-                publications: vec![],
+                casts: vec![],
                 schedule: vec![ScheduleOp::CallPublic],
             },
             consumed_message: None,

@@ -541,7 +541,7 @@ pub enum FfiScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Publish,
+    Cast,
 }
 
 impl From<ScheduleOp> for FfiScheduleOp {
@@ -551,7 +551,7 @@ impl From<ScheduleOp> for FfiScheduleOp {
             ScheduleOp::EnterPrivate => Self::EnterPrivate,
             ScheduleOp::LeavePrivate => Self::LeavePrivate,
             ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            ScheduleOp::Publish => Self::Publish,
+            ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -563,7 +563,7 @@ impl From<FfiScheduleOp> for ScheduleOp {
             FfiScheduleOp::EnterPrivate => Self::EnterPrivate,
             FfiScheduleOp::LeavePrivate => Self::LeavePrivate,
             FfiScheduleOp::ReturnPublic => Self::ReturnPublic,
-            FfiScheduleOp::Publish => Self::Publish,
+            FfiScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -607,7 +607,7 @@ impl From<FfiMessageBody> for MessageBody {
 pub struct FfiBoundary {
     pub outputs: FfiOutputList,
     pub assumptions: FfiAssumptionList,
-    pub publications: FfiMessageBodyList,
+    pub casts: FfiMessageBodyList,
     pub schedule: FfiScheduleOpList,
 }
 
@@ -616,7 +616,7 @@ impl From<Boundary> for FfiBoundary {
         let Boundary {
             outputs,
             assumptions,
-            publications,
+            casts,
             schedule,
         } = value;
 
@@ -631,11 +631,7 @@ impl From<Boundary> for FfiBoundary {
                 .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
-            publications: publications
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
             schedule: schedule
                 .into_iter()
                 .map(Into::into)
@@ -649,13 +645,13 @@ impl From<FfiBoundary> for Boundary {
     fn from(value: FfiBoundary) -> Self {
         let outputs: Vec<FfiOutput> = value.outputs.into();
         let assumptions: Vec<FfiAssumption> = value.assumptions.into();
-        let publications: Vec<FfiMessageBody> = value.publications.into();
+        let casts: Vec<FfiMessageBody> = value.casts.into();
         let schedule: Vec<FfiScheduleOp> = value.schedule.into();
 
         Self {
             outputs: outputs.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            publications: publications.into_iter().map(Into::into).collect(),
+            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -1047,7 +1043,7 @@ mod tests {
                 boundary: Boundary {
                     outputs: vec![output(7), output(8), output(9), output(7)],
                     assumptions: vec![],
-                    publications: vec![],
+                    casts: vec![],
                     schedule: vec![
                         ScheduleOp::CallPublic,
                         ScheduleOp::CallPublic,
@@ -1196,12 +1192,12 @@ mod tests {
                         grants: vec![],
                         pda_seeds: vec![],
                     }],
-                    publications: vec![MessageBody {
+                    casts: vec![MessageBody {
                         origin_program: account_id(23),
                         to: actor(24, 25),
                         message: vec![26],
                     }],
-                    schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Publish],
+                    schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Cast],
                 },
                 consumed_message: Some(MessageId([27; 32])),
                 nonces: vec![],

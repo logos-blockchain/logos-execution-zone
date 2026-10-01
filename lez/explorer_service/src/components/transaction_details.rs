@@ -119,7 +119,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let Boundary {
         outputs,
         assumptions,
-        publications: _,
+        casts: _,
         schedule,
     } = boundary;
     let private_action_count = private_actions.len();

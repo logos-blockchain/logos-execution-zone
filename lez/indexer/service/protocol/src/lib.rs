@@ -313,7 +313,7 @@ pub enum ScheduleOp {
     EnterPrivate,
     LeavePrivate,
     ReturnPublic,
-    Publish,
+    Cast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -339,7 +339,7 @@ pub struct Assumption {
 pub struct Boundary {
     pub outputs: Vec<Output>,
     pub assumptions: Vec<Assumption>,
-    pub publications: Vec<MessageBody>,
+    pub casts: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
 }
 

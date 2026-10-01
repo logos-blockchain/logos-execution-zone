@@ -213,7 +213,7 @@ pub mod tests {
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
-                publications: Vec::new(),
+                casts: Vec::new(),
                 schedule: vec![
                     ScheduleOp::CallPublic,
                     ScheduleOp::EnterPrivate,
@@ -256,7 +256,7 @@ pub mod tests {
             b"a",
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
-            &[0, 0, 0, 0], // boundary.publications: none
+            &[0, 0, 0, 0], // boundary.casts: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
             &[0],          // consumed_message: None

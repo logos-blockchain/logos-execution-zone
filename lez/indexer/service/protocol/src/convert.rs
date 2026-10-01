@@ -484,7 +484,7 @@ impl From<lee_core::execution_state::ScheduleOp> for ScheduleOp {
             lee_core::execution_state::ScheduleOp::EnterPrivate => Self::EnterPrivate,
             lee_core::execution_state::ScheduleOp::LeavePrivate => Self::LeavePrivate,
             lee_core::execution_state::ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            lee_core::execution_state::ScheduleOp::Publish => Self::Publish,
+            lee_core::execution_state::ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -496,7 +496,7 @@ impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
             ScheduleOp::EnterPrivate => Self::EnterPrivate,
             ScheduleOp::LeavePrivate => Self::LeavePrivate,
             ScheduleOp::ReturnPublic => Self::ReturnPublic,
-            ScheduleOp::Publish => Self::Publish,
+            ScheduleOp::Cast => Self::Cast,
         }
     }
 }
@@ -586,13 +586,13 @@ impl From<lee_core::execution_state::Boundary> for Boundary {
         let lee_core::execution_state::Boundary {
             outputs,
             assumptions,
-            publications,
+            casts,
             schedule,
         } = value;
         Self {
             outputs: outputs.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            publications: publications.into_iter().map(Into::into).collect(),
+            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -603,13 +603,13 @@ impl From<Boundary> for lee_core::execution_state::Boundary {
         let Boundary {
             outputs,
             assumptions,
-            publications,
+            casts,
             schedule,
         } = value;
         Self {
             outputs: outputs.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
-            publications: publications.into_iter().map(Into::into).collect(),
+            casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
         }
     }
@@ -1306,7 +1306,7 @@ mod tests {
         let boundary = lee_core::execution_state::Boundary {
             outputs: vec![output(7), output(8), output(9), output(7)],
             assumptions: vec![],
-            publications: vec![],
+            casts: vec![],
             schedule: vec![],
         };
 
@@ -1479,14 +1479,14 @@ mod tests {
                     grants: vec![],
                     pda_seeds: vec![],
                 }],
-                publications: vec![lee_core::program::MessageBody {
+                casts: vec![lee_core::program::MessageBody {
                     origin_program: account_id(22),
                     to: actor(23, 24),
                     message: vec![25],
                 }],
                 schedule: vec![
                     lee_core::execution_state::ScheduleOp::CallPublic,
-                    lee_core::execution_state::ScheduleOp::Publish,
+                    lee_core::execution_state::ScheduleOp::Cast,
                 ],
             },
             consumed_message: Some(message_id(26)),
