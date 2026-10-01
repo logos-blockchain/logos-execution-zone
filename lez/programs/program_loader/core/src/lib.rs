@@ -1,9 +1,7 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards, and every write target must be `is_authorized`.
-//! Every shard is a tagged [`LoaderEntry`], so a segment can never be read as a header or a
-//! header as a segment: only `CreateHeader`/`UpdateHeader` store a header, and a stored
-//! `image_id` is always the one recomputed from the chain it points at.
+//! Every write target must be `is_authorized`, and every shard is a tagged [`LoaderEntry`], so a
+//! segment and a header can never be read as each other.
 //!
 //! The public-only native loader reads staged shards during planning.
 //! [`apply`] executes the resulting [`ShardEffect`]s.
