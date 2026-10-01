@@ -13,7 +13,7 @@ use std::{collections::BTreeSet, future::Future, time::Duration};
 use anyhow::{Context as _, Result, ensure};
 use common::{block::Block, transaction::LeeTransaction};
 use integration_tests::{assert_same_chain, committee, get_account, init_logger, wait_until};
-use lee::{AccountId, CallInput};
+use lee::{AccountId, TransactionEntry};
 use log::info;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::{CheckIsOurTurn, PublishRawInscription};
@@ -62,7 +62,7 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
         let LeeTransaction::Public(public) = tx else {
             return None;
         };
-        let CallInput::Inline { to, message } = &public.message().root else {
+        let TransactionEntry::Call { to, message } = &public.message().root else {
             return None;
         };
         if to.program_account_id != programs::sequencer_stake_account_id() {

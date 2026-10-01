@@ -18,7 +18,7 @@ use fee_core::{
     state::FeeState,
     validity::{accumulate_exec_gas, accumulate_stor_gas, validate_static_tx},
 };
-use lee::{CallInput, GENESIS_BLOCK_ID, V03State};
+use lee::{GENESIS_BLOCK_ID, TransactionEntry, V03State};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 
 use crate::{
@@ -425,7 +425,7 @@ fn settle_charged_transaction(
     // This does NOT advance the nonce, invalidates the tx if the payer cannot afford it.
     let reserved = fee_reserve(view, opening);
     let reserve_msg = fee_reserve_invocation(payer, reserved);
-    let CallInput::Inline {
+    let TransactionEntry::Call {
         to: reserve_to,
         message: reserve_message,
     } = &reserve_msg.root
@@ -502,7 +502,7 @@ fn settle_charged_transaction(
         .expect("the reserve prices gas_limit, which bounds the actual fee");
     if refund > 0 {
         let refund_msg = fee_refund_invocation(payer, refund);
-        let CallInput::Inline {
+        let TransactionEntry::Call {
             to: refund_to,
             message: refund_message,
         } = &refund_msg.root
@@ -878,7 +878,7 @@ mod tests {
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
         // inbox, which the apply-path guard must reject.
-        let CallInput::Inline { to: fee_state, .. } =
+        let TransactionEntry::Call { to: fee_state, .. } =
             fee_invocation(BlockFeeSummary::default(), 0, attacker)
                 .message()
                 .root

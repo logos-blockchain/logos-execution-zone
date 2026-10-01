@@ -149,7 +149,7 @@ pub fn custody_transfer(from: AccountId, seed: PdaSeed, to: AccountId, amount: B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::{CallInput, Origin};
+    use crate::program::Origin;
 
     fn native(tag: u8) -> Actor {
         Actor::native_balance(AccountId::new([tag; 32]))
@@ -340,10 +340,8 @@ mod tests {
         assert_eq!(
             custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
             Call {
-                input: CallInput::Inline {
-                    to: native(1),
-                    message: borsh::to_vec(&transfer(7, None)).unwrap(),
-                },
+                to: native(1),
+                message: borsh::to_vec(&transfer(7, None)).unwrap(),
                 pda_seeds: vec![seed],
             }
         );

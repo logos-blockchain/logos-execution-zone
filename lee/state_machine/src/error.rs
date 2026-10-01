@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{AccountId, Cycles},
+    account::{AccountId, Actor, Cycles},
     execution_state::ExecutionError,
     native_token::TransferError,
 };
@@ -88,6 +88,9 @@ pub enum LeeError {
         /// after executing; therefore, the failure is charged.
         chained: bool,
     },
+
+    #[error("A receipt reached {actor:?}, whose public identity is neither authorized nor proven")]
+    UnprovenPublicIdentity { actor: Actor },
 }
 
 impl LeeError {
@@ -103,7 +106,9 @@ impl LeeError {
     pub const fn is_chargeable(&self) -> bool {
         !matches!(
             self,
-            Self::InvalidInput(_) | Self::UnknownProgram { chained: false }
+            Self::InvalidInput(_)
+                | Self::UnknownProgram { chained: false }
+                | Self::UnprovenPublicIdentity { .. }
         )
     }
 }
@@ -140,13 +145,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::UndeclaredAssumedSender { .. }
             | ExecutionError::ScheduleMismatch { .. }
             | ExecutionError::AssumptionMismatch { .. }
-            | ExecutionError::IncompleteBoundary
-            | ExecutionError::UnknownMessage { .. }
-            | ExecutionError::MismatchedMessage { .. }
-            | ExecutionError::DuplicateConsumption { .. }
-            | ExecutionError::UnprovenPublicIdentity { .. } => {
-                Self::InvalidProgramBehavior(error.into())
-            }
+            | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
         }
     }
 }

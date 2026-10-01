@@ -5,7 +5,7 @@ use lee_core::{
     account::AccountId,
     execution_state::{ExecutionState, Mode},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, read_input_frame},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, StoredMessage, read_input_frame},
 };
 use private_backend::PrivateBackend;
 use risc0_zkvm::guest::env;
@@ -24,7 +24,6 @@ fn main() {
         shadow_program_witnesses,
         turns,
         assumed,
-        messages,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
 
     // The sequencer checks disclosed images against chain state.
@@ -50,13 +49,14 @@ fn main() {
         );
     }
 
+    let consumed_message = root.receipt().map(StoredMessage::id);
     let state = ExecutionState::initialize(
         declared.clone(),
         &private_witnesses,
         Mode::Record { root, assumed },
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    let mut backend = PrivateBackend::new(image_id_by_account_id, turns, messages);
+    let mut backend = PrivateBackend::new(image_id_by_account_id, turns);
     let outcome = state.run(&mut backend).unwrap_or_else(|e| panic!("{e}"));
     backend.finish();
 
@@ -69,6 +69,7 @@ fn main() {
     let output = output::compute_circuit_output(
         outcome,
         declared,
+        consumed_message,
         &private_witnesses,
         dummy_inputs,
         ciphertext_padding,

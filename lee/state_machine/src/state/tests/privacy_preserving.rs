@@ -79,7 +79,6 @@ impl NestedBoundary {
                     from: outer,
                     to: nested_private(),
                     message: borsh::to_vec(&inner_turn()).unwrap(),
-                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],

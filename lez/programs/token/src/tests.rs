@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Action, Call, CallInput, Cast, Origin, ReceiveInput, Transition},
+    program::{Action, Call, Cast, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, Message, MetadataStandard, NewTokenDefinition, NewTokenMetadata, Notification,
@@ -212,8 +212,7 @@ fn settle(
         let sender = Origin::Program(token_actor(account).program_account_id);
         for action in transition.sends.into_iter().rev() {
             let Action::Call(Call {
-                input: CallInput::Inline { to, message: data },
-                ..
+                to, message: data, ..
             }) = action
             else {
                 panic!("a token send is an inline call");
@@ -342,8 +341,7 @@ fn every_sent_creation_writes_only_into_an_empty_target() {
                 .into_iter()
                 .filter_map(|action| {
                     let Action::Call(Call {
-                        input: CallInput::Inline { to, message: data },
-                        ..
+                        to, message: data, ..
                     }) = action
                     else {
                         panic!("a token send is an inline call");

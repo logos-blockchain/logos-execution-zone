@@ -42,10 +42,10 @@ use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ShardData},
-    execution_state::{Backend, Declared, ExecutionState, Mode},
+    execution_state::{Backend, Declared, ExecutionState, Mode, TransactionEntry},
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{CallInput, MessageData, ReceiveInput, Transition},
+    program::{MessageData, ReceiveInput, Transition},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -272,7 +272,7 @@ impl Case {
         ExecutionState::initialize(
             declared,
             &[],
-            Mode::Live(CallInput::Inline { to: root, message }),
+            Mode::Live(TransactionEntry::Call { to: root, message }),
         )?
         .run(&mut meter)?;
         Ok(meter.rows)

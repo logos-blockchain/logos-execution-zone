@@ -19,8 +19,9 @@ use lee_core::{
     WitnessKind,
     account::{Account, AccountId, Actor, ShardData},
     encryption::ViewingPublicKey,
+    execution_state::TransactionEntry,
     native_token,
-    program::{Call, CallInput},
+    program::{Call, StoredMessage},
 };
 use test_guest_core::Script;
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind};
@@ -88,7 +89,7 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
 }
 
 fn proving_input(
-    root: CallInput,
+    root: TransactionEntry<StoredMessage>,
     public_actors: Vec<Actor>,
     signers: HashSet<AccountId>,
     private_witnesses: Vec<PrivateWitness>,
@@ -103,7 +104,6 @@ fn proving_input(
         public_shards,
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
-        messages: Vec::new(),
     }
 }
 
@@ -122,7 +122,7 @@ pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircui
 
     Ok(execute_and_prove(
         proving_input(
-            CallInput::Inline {
+            TransactionEntry::Call {
                 to: sender,
                 message: to_vec(&native_token::Message::Transfer {
                     to: recipient_id,
@@ -189,7 +189,7 @@ fn prove_token_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutp
 
     Ok(execute_and_prove(
         proving_input(
-            CallInput::Inline {
+            TransactionEntry::Call {
                 to: Actor::new(sender_id, token_id),
                 message: to_vec(&token_transfer_message())?,
             },
@@ -226,7 +226,7 @@ fn prove_scripted_transfers(
 
     Ok(execute_and_prove(
         proving_input(
-            CallInput::Inline {
+            TransactionEntry::Call {
                 to: Actor::new(sender_id, scripted_id),
                 message: to_vec(&script)?,
             },

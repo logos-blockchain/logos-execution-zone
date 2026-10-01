@@ -12,8 +12,8 @@ use common::{
 };
 use kameo::actor::Spawn as _;
 use lee::{
-    Account, AccountId, Actor, CallInput, PrivateKey, PublicKey, PublicTransaction, V03State,
-    program::Program,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, TransactionEntry,
+    V03State, program::Program,
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce, program::Call};
 use logos_blockchain_core::{
@@ -390,7 +390,7 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     let LeeTransaction::Public(fee_tx) = fee_tx else {
         panic!("fee tx must be public");
     };
-    let CallInput::Inline { to, .. } = &fee_tx.message().root else {
+    let TransactionEntry::Call { to, .. } = &fee_tx.message().root else {
         panic!("fee tx must be an inline call");
     };
     assert_eq!(to.program_account_id, programs::fee_account_id());
@@ -447,7 +447,7 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    let CallInput::Inline { to, message } = &public_tx.message.root else {
+    let TransactionEntry::Call { to, message } = &public_tx.message.root else {
         return false;
     };
     if to.program_account_id != programs::bridge_account_id() {
@@ -1096,7 +1096,7 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
     let LeeTransaction::Public(public) = &injected else {
         unreachable!("a dispatch is a public transaction")
     };
-    let CallInput::Inline {
+    let TransactionEntry::Call {
         to,
         message: dispatch,
     } = &public.message().root
@@ -4081,7 +4081,7 @@ fn receive_payout(state: &mut V03State, recipient: (AccountId, &PrivateKey), blo
         panic!("exactly one payout should be pending for the recipient");
     };
     let message = lee::public_transaction::Message::new(
-        CallInput::InFlight(payout),
+        TransactionEntry::Receive(payout),
         vec![Actor::native_balance(recipient_id)],
         vec![state.get_account_by_id(recipient_id).nonce],
         None,
@@ -5247,10 +5247,9 @@ fn update_witness(
 
 fn prove_and_settle(
     state: &mut V03State,
-    root: CallInput,
+    root: TransactionEntry<lee::StoredMessage>,
     public_actors: Vec<Actor>,
     private_witnesses: Vec<lee_core::PrivateWitness>,
-    messages: Vec<lee::StoredMessage>,
     block_id: u64,
 ) {
     let public_shards = public_actors
@@ -5276,7 +5275,6 @@ fn prove_and_settle(
             public_shards,
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages,
         },
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::from([(
             programs::sequencer_stake_account_id(),
@@ -5316,7 +5314,7 @@ fn privately_staked_state(
     ];
     prove_and_settle(
         &mut state,
-        CallInput::Inline {
+        TransactionEntry::Call {
             to: Actor::new(ownership.account_id, program_id),
             message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
                 sequencer_key,
@@ -5336,7 +5334,6 @@ fn privately_staked_state(
             ),
         ],
         private_witnesses,
-        Vec::new(),
         3,
     );
     (state, ownership)
@@ -5401,7 +5398,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     let private_witnesses = vec![update_witness(&state, &ownership, staked_ownership)];
     prove_and_settle(
         &mut state,
-        CallInput::Inline {
+        TransactionEntry::Call {
             to: Actor::new(ownership.account_id, program_id),
             message: borsh::to_vec(&sequencer_stake_core::Message::UnstakeRequest {
                 sequencer_key,
@@ -5416,7 +5413,6 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
             program_id,
         )],
         private_witnesses,
-        Vec::new(),
         requested_at,
     );
 
@@ -5455,7 +5451,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
 
     // No key, signature or seed proves a private destination publicly.
     let receipt = lee::public_transaction::Message::new(
-        CallInput::InFlight(payout),
+        TransactionEntry::Receive(payout),
         vec![Actor::native_balance(destination.account_id)],
         vec![],
         None,
@@ -5471,20 +5467,16 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     );
     assert!(matches!(
         result,
-        Err(lee::error::LeeError::InvalidProgramBehavior(
-            lee::error::InvalidProgramBehaviorError::Execution(
-                lee_core::execution_state::ExecutionError::UnprovenPublicIdentity { actor }
-            )
-        )) if actor == Actor::native_balance(destination.account_id)
+        Err(lee::error::LeeError::UnprovenPublicIdentity { actor })
+            if actor == Actor::native_balance(destination.account_id)
     ));
     assert_eq!(state.pending_message(payout), Some(&record));
 
     prove_and_settle(
         &mut state,
-        CallInput::InFlight(payout),
+        TransactionEntry::Receive(record),
         Vec::new(),
         vec![init_witness(&destination, false)],
-        vec![record],
         released_at.saturating_add(2),
     );
     assert!(state.pending_message(payout).is_none());
@@ -5580,7 +5572,7 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
         let LeeTransaction::Public(tx) = tx else {
             return None;
         };
-        let CallInput::Inline { to, message } = &tx.message().root else {
+        let TransactionEntry::Call { to, message } = &tx.message().root else {
             return None;
         };
         (to.program_account_id == stake_program_id)
@@ -5879,8 +5871,8 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
         LeeTransaction::Public(public) => match &public.message().root {
-            CallInput::Inline { to, .. } => to.program_account_id,
-            CallInput::InFlight(_) => unreachable!("genesis holds only inline calls"),
+            TransactionEntry::Call { to, .. } => to.program_account_id,
+            TransactionEntry::Receive(_) => unreachable!("genesis holds only calls"),
         },
         LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")

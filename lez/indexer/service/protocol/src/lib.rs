@@ -244,7 +244,7 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub root: CallInput,
+    pub root: TransactionEntry,
     pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -290,9 +290,9 @@ pub struct MessageBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum CallInput {
-    Inline { to: Actor, message: MessageData },
-    InFlight(MessageId),
+pub enum TransactionEntry {
+    Call { to: Actor, message: MessageData },
+    Receive(MessageId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -322,7 +322,6 @@ pub struct Output {
     pub message: MessageData,
     pub origin: Origin,
     pub issuer: Option<AccountId>,
-    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -332,7 +331,6 @@ pub struct Assumption {
     pub from: Actor,
     pub to: Actor,
     pub message: MessageData,
-    pub in_flight: Option<MessageId>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -366,7 +364,7 @@ pub struct PrivateAction {
 pub struct PrivacyPreservingMessage {
     pub declared: Declared,
     pub boundary: Boundary,
-    pub consumed: Vec<MessageId>,
+    pub consumed_message: Option<MessageId>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,

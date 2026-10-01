@@ -319,32 +319,17 @@ impl StoredMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub enum CallInput {
-    Inline { to: Actor, message: MessageData },
-    InFlight(MessageId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Call {
-    pub input: CallInput,
+    pub to: Actor,
+    pub message: MessageData,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
 impl Call {
     pub fn new<M: BorshSerialize>(to: Actor, message: &M) -> Self {
         Self {
-            input: CallInput::Inline {
-                to,
-                message: borsh::to_vec(message).expect("borsh serialization is infallible"),
-            },
-            pda_seeds: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub const fn in_flight(id: MessageId) -> Self {
-        Self {
-            input: CallInput::InFlight(id),
+            to,
+            message: borsh::to_vec(message).expect("borsh serialization is infallible"),
             pda_seeds: Vec::new(),
         }
     }

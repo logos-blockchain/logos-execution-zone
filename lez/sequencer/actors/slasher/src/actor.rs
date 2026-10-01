@@ -422,7 +422,7 @@ pub fn build_slash_tx(
 #[cfg(test)]
 mod tests {
     use kameo::actor::Spawn as _;
-    use lee::CallInput;
+    use lee::TransactionEntry;
     use sequencer_stake_core::{PendingUnstake, SequencerEntry, SequencerStakeConfig};
     use sequencer_storage_actor::mock::MockStorageActor;
 
@@ -608,7 +608,7 @@ mod tests {
         let [LeeTransaction::Public(tx)] = txs else {
             panic!("expected exactly one public slash transaction");
         };
-        let CallInput::Inline { message, .. } = &tx.message().root else {
+        let TransactionEntry::Call { message, .. } = &tx.message().root else {
             panic!("expected an inline slash call");
         };
         let sequencer_stake_core::Message::Slash { approvals, .. } =

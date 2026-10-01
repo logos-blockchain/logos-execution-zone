@@ -6,10 +6,10 @@ use crate::{
     account::{Account, AccountId},
     compute_digest_for_path,
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    execution_state::{Assumption, Boundary, Declared},
+    execution_state::{Assumption, Boundary, Declared, TransactionEntry},
     program::{
-        BlockValidityWindow, CallInput, MessageId, PdaSeed, ProgramHeader, ProgramId,
-        StoredMessage, TimestampValidityWindow, Transition, immutable_mirror_commitment,
+        BlockValidityWindow, MessageId, PdaSeed, ProgramHeader, ProgramId, StoredMessage,
+        TimestampValidityWindow, Transition, immutable_mirror_commitment,
     },
 };
 
@@ -102,7 +102,7 @@ pub struct ShadowProgramWitness {
 
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
-    pub root: CallInput,
+    pub root: TransactionEntry<StoredMessage>,
     pub declared: Declared,
     /// One witness for each private account used by the transaction.
     pub private_witnesses: Vec<PrivateWitness>,
@@ -117,7 +117,6 @@ pub struct PrivacyPreservingCircuitInput {
     pub shadow_program_witnesses: Vec<ShadowProgramWitness>,
     pub turns: Vec<Transition>,
     pub assumed: Vec<Vec<Assumption>>,
-    pub messages: Vec<StoredMessage>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -230,7 +229,7 @@ pub struct PrivateAction {
 pub struct PrivacyPreservingCircuitOutput {
     pub declared: Declared,
     pub boundary: Boundary,
-    pub consumed: Vec<MessageId>,
+    pub consumed_message: Option<MessageId>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -293,7 +292,6 @@ mod tests {
                     message: b"o".to_vec(),
                     origin: Origin::Program(private.program_account_id),
                     issuer: Some(private.program_account_id),
-                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -301,7 +299,6 @@ mod tests {
                     from: public,
                     to: private,
                     message: b"a".to_vec(),
-                    in_flight: None,
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -322,7 +319,7 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             declared,
             boundary,
-            consumed: Vec::new(),
+            consumed_message: None,
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -330,7 +327,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[170, 1, 0, 0][..], // frame length: the 426 bytes below
+            &[165, 1, 0, 0][..], // frame length: the 421 bytes below
             &[1, 0, 0, 0],       // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
@@ -345,7 +342,6 @@ mod tests {
             &[8; 32],
             &[1], // issuer: Some
             &[8; 32],
-            &[0],          // in_flight: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[1, 0, 0, 0], // boundary.assumptions: one assumption
@@ -355,13 +351,12 @@ mod tests {
             &[8; 32],
             &[1, 0, 0, 0], // message
             b"a",
-            &[0],          // in_flight: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[0, 0, 0, 0], // boundary.publications: none
             &[4, 0, 0, 0], // boundary.schedule: four ops
             &[0, 1, 2, 3],
-            &[0, 0, 0, 0], // consumed: none
+            &[0],          // consumed_message: None
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
             &[0, 0],       // timestamp_validity_window: from None, to None
@@ -373,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn a_circuit_output_journal_with_in_flight_messages_has_a_pinned_layout() {
+    fn a_circuit_output_journal_with_a_consumed_message_has_a_pinned_layout() {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let output = PrivacyPreservingCircuitOutput {
             declared: Declared {
@@ -386,7 +381,6 @@ mod tests {
                     message: b"o".to_vec(),
                     origin: Origin::Program(AccountId::new([8; 32])),
                     issuer: None,
-                    in_flight: Some(MessageId::new([7; 32])),
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -402,7 +396,7 @@ mod tests {
                     ScheduleOp::Publish,
                 ],
             },
-            consumed: vec![MessageId::new([7; 32])],
+            consumed_message: Some(MessageId::new([7; 32])),
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -410,8 +404,8 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[128, 1, 0, 0][..], // frame length: the 384 bytes below
-            &[1, 0, 0, 0],       // declared.public_actors: one actor
+            &[92, 1, 0, 0][..], // frame length: the 348 bytes below
+            &[1, 0, 0, 0],      // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
             &[0, 0, 0, 0], // declared.authorized_accounts: none
@@ -422,9 +416,7 @@ mod tests {
             b"o",
             &[1], // origin: Origin::Program
             &[8; 32],
-            &[0], // issuer: None
-            &[1], // in_flight: Some
-            &[7; 32],
+            &[0],          // issuer: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[0, 0, 0, 0], // boundary.assumptions: none
@@ -436,7 +428,7 @@ mod tests {
             b"p",
             &[3, 0, 0, 0], // boundary.schedule: three ops
             &[0, 3, 4],
-            &[1, 0, 0, 0], // consumed: one message
+            &[1], // consumed_message: Some
             &[7; 32],
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
@@ -466,7 +458,7 @@ mod tests {
         let output = PrivacyPreservingCircuitOutput {
             declared: Declared::default(),
             boundary: Boundary::default(),
-            consumed: Vec::new(),
+            consumed_message: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(
                     &Commitment::new(&AccountId::new([2; 32]), &Account::default()),

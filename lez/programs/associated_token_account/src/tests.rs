@@ -5,7 +5,7 @@ use associated_token_account_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Action, Call, CallInput, Origin, PdaSeed, ReceiveInput, Transition},
+    program::{Action, Call, Origin, PdaSeed, ReceiveInput, Transition},
 };
 use token_core::{Delivery, TokenDescriptor, TokenKind};
 
@@ -168,11 +168,7 @@ fn create_naming_a_stranger_program_cannot_reach_the_real_ata() {
         transfer(STRANGER_PROGRAM_ID),
         burn(STRANGER_PROGRAM_ID),
     ] {
-        let Some(Action::Call(Call {
-            input: CallInput::Inline { to: target, .. },
-            ..
-        })) = turn(true, message).sends.pop()
-        else {
+        let Some(Action::Call(Call { to: target, .. })) = turn(true, message).sends.pop() else {
             panic!("every message sends to the ATA");
         };
         assert_eq!(target, stranger_ata);

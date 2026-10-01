@@ -10,7 +10,7 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use lee::CallInput;
+use lee::TransactionEntry;
 use log::{error, warn};
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::PublishTransaction;
@@ -84,7 +84,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
             if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && let CallInput::Inline { to, .. } = &public_tx.message().root
+                && let TransactionEntry::Call { to, .. } = &public_tx.message().root
                 && sequencer_core::is_sequencer_only_program(to.program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(

@@ -75,8 +75,6 @@ impl Keys {
 struct Script {
     handlers: HashMap<Actor, Handler>,
     shards: HashMap<Actor, ShardData>,
-    records: HashMap<MessageId, StoredMessage>,
-    identities: HashSet<AccountId>,
     log: Vec<ReceiveInput>,
 }
 
@@ -119,17 +117,6 @@ impl Backend for Script {
             .cloned()
             .ok_or(ExecutionError::PublicShardUnavailable { actor })
     }
-
-    fn pending_message(&mut self, id: MessageId) -> Result<StoredMessage, ExecutionError> {
-        self.records
-            .get(&id)
-            .cloned()
-            .ok_or(ExecutionError::UnknownMessage { id })
-    }
-
-    fn proves_public_identity(&self, account_id: AccountId) -> bool {
-        self.identities.contains(&account_id)
-    }
 }
 
 fn id(tag: u8) -> AccountId {
@@ -150,10 +137,8 @@ fn data(bytes: &[u8]) -> ShardData {
 
 fn send_to(receiver: Actor) -> Call {
     Call {
-        input: CallInput::Inline {
-            to: receiver,
-            message: Vec::new(),
-        },
+        to: receiver,
+        message: Vec::new(),
         pda_seeds: Vec::new(),
     }
 }
@@ -161,10 +146,8 @@ fn send_to(receiver: Actor) -> Call {
 // The private holder of `Keys::new(1)`, entered from a public turn.
 fn enter(message: &[u8]) -> Call {
     Call {
-        input: CallInput::Inline {
-            to: holder(&Keys::new(1)),
-            message: message.to_vec(),
-        },
+        to: holder(&Keys::new(1)),
+        message: message.to_vec(),
         pda_seeds: Vec::new(),
     }
 }
@@ -178,7 +161,6 @@ fn output(to: Actor, origin: Origin) -> Output {
             Origin::Root => None,
             Origin::Program(program) => Some(program),
         },
-        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     }
@@ -208,8 +190,8 @@ fn sending_when(origin: Origin, calls: Vec<Call>) -> impl Fn(&ReceiveInput) -> T
     }
 }
 
-fn root(to: Actor) -> CallInput {
-    CallInput::Inline {
+fn root(to: Actor) -> TransactionEntry<StoredMessage> {
+    TransactionEntry::Call {
         to,
         message: Vec::new(),
     }
@@ -273,13 +255,6 @@ fn stored(origin_program: AccountId, to: Actor, message: &[u8]) -> StoredMessage
     }
 }
 
-fn holding(record: &StoredMessage) -> Script {
-    Script {
-        records: HashMap::from([(record.id(), record.clone())]),
-        ..Script::default()
-    }
-}
-
 // A statement whose only public call is the root delivery to `ENTRY`.
 fn root_statement() -> Boundary {
     Boundary {
@@ -296,7 +271,6 @@ fn nested_assumed() -> Vec<Vec<Assumption>> {
             from: ENTRY,
             to: holder(&Keys::new(1)),
             message: ENTER.to_vec(),
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }],
@@ -639,17 +613,14 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     let owner = holder(&keys);
     let vault = actor(2, 9);
     let credit = Call {
-        input: CallInput::Inline {
-            to: vault,
-            message: b"credit".to_vec(),
-        },
+        to: vault,
+        message: b"credit".to_vec(),
         pda_seeds: Vec::new(),
     };
     let reply = Assumption {
         from: vault,
         to: owner,
         message: b"credit".to_vec(),
-        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
@@ -755,7 +726,6 @@ fn assumed_deliveries_must_match_the_recorded_outputs() {
         from: stranger,
         to: holder(&keys),
         message: Vec::new(),
-        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
@@ -789,7 +759,6 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
             from: vault,
             to: owner,
             message: Vec::new(),
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         },
@@ -797,7 +766,6 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
             from: vault,
             to: custody,
             message: Vec::new(),
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: vec![seed],
         },
@@ -976,7 +944,6 @@ fn relayed_grant(
                     from: vault,
                     to: relay,
                     message: ENTER.to_vec(),
-                    in_flight: None,
                     grants: assumed_grants,
                     pda_seeds: Vec::new(),
                 }],
@@ -1067,7 +1034,6 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
                 from: peer,
                 to: custody,
                 message: Vec::new(),
-                in_flight: None,
                 grants: vec![custody.account_id],
                 pda_seeds: Vec::new(),
             }]],
@@ -1191,7 +1157,6 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                             expect_balance: None,
                         })
                         .unwrap(),
-                        in_flight: None,
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],
@@ -1403,18 +1368,15 @@ fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
 }
 
 #[test]
-fn an_in_flight_root_delivers_its_stored_origin_and_message_and_is_consumed() {
-    let record = stored(id(5), ENTRY, b"stored");
-    let mut script = Script {
-        identities: HashSet::from([ENTRY.account_id]),
-        ..holding(&record)
-    }
-    .on(ENTRY, sending(Vec::new()));
+fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_nothing() {
+    let vault = public_pda(id(5), PdaSeed::new([5; 32]));
+    let record = stored(id(5), vault, b"stored");
+    let mut script = Script::default().on(vault, sending(Vec::new()));
 
-    let outcome = run(
-        declared(vec![ENTRY]),
+    run(
+        declared(vec![vault]),
         &[],
-        Mode::Live(CallInput::InFlight(record.id())),
+        Mode::Live(TransactionEntry::Receive(record)),
         &mut script,
     )
     .unwrap();
@@ -1422,170 +1384,26 @@ fn an_in_flight_root_delivers_its_stored_origin_and_message_and_is_consumed() {
     assert_eq!(
         script.log,
         vec![ReceiveInput {
-            receiver: ENTRY,
+            receiver: vault,
             origin: Origin::Program(id(5)),
             is_authorized: false,
             pre_data: ShardData::empty(),
             message: b"stored".to_vec(),
         }]
     );
-    assert_eq!(outcome.consumed, vec![record.id()]);
 }
 
 #[test]
-fn an_in_flight_delivery_to_a_public_actor_needs_identity_evidence_or_authority() {
-    let record = stored(id(5), ENTRY, b"stored");
-    let execute = |authorized_accounts: Vec<AccountId>| {
-        let mut script = holding(&record).on(ENTRY, sending(Vec::new()));
-        let result = run(
-            Declared {
-                public_actors: vec![ENTRY],
-                authorized_accounts,
-            },
-            &[],
-            Mode::Live(CallInput::InFlight(record.id())),
-            &mut script,
-        );
-        (result, script)
-    };
-
-    assert!(matches!(
-        execute(Vec::new()).0,
-        Err(ExecutionError::UnprovenPublicIdentity { actor }) if actor == ENTRY
-    ));
-    let (result, script) = execute(vec![ENTRY.account_id]);
-    assert!(result.is_ok());
-    assert_eq!(authorized(&script), vec![(ENTRY, true)]);
-}
-
-#[test]
-fn an_in_flight_call_carries_its_stored_origin_and_the_requesters_seed_grant() {
-    let controller = actor(10, 20);
-    let seed = PdaSeed::new([5; 32]);
-    let vault = Actor::new(AccountId::for_public_pda(&id(20), &seed), id(21));
-    let record = stored(id(30), vault, b"stored");
-    let mut script = holding(&record)
-        .on(
-            controller,
-            sending(vec![
-                Call::in_flight(record.id()).with_pda_seeds(vec![seed]),
-            ]),
-        )
-        .on(vault, sending(Vec::new()));
-
-    run(
-        declared(vec![controller, vault]),
-        &[],
-        live(controller),
-        &mut script,
-    )
-    .unwrap();
-
-    assert_eq!(
-        order(&script),
-        vec![(controller, Origin::Root), (vault, Origin::Program(id(30))),]
-    );
-    assert_eq!(
-        authorized(&script),
-        vec![(controller, false), (vault, true)]
-    );
-}
-
-#[test]
-fn a_stored_origin_never_issues_a_seed_grant() {
-    let controller = actor(10, 20);
-    let seed = PdaSeed::new([5; 32]);
-    let vault = Actor::new(AccountId::for_public_pda(&id(30), &seed), id(21));
-    let record = stored(id(30), vault, b"stored");
-    let mut script = holding(&record)
-        .on(
-            controller,
-            sending(vec![
-                Call::in_flight(record.id()).with_pda_seeds(vec![seed]),
-            ]),
-        )
-        .on(vault, sending(Vec::new()));
-
-    let result = run(
-        declared(vec![controller, vault]),
-        &[],
-        live(controller),
-        &mut script,
-    );
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::UnprovenPublicIdentity { actor }) if actor == vault
-    ));
-}
-
-#[test]
-fn a_message_consumed_twice_in_one_execution_is_rejected() {
-    let record = stored(id(5), CALLEE, b"stored");
-    let mut script = Script {
-        identities: HashSet::from([CALLEE.account_id]),
-        ..holding(&record)
-    }
-    .on(ENTRY, sending(vec![Call::in_flight(record.id()); 2]))
-    .on(CALLEE, sending(Vec::new()));
-
-    let result = run(declared(vec![ENTRY, CALLEE]), &[], live(ENTRY), &mut script);
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::DuplicateConsumption { id: repeated }) if repeated == record.id()
-    ));
-}
-
-#[test]
-fn an_unknown_in_flight_message_is_rejected() {
-    let unknown = MessageId::new([7; 32]);
-
-    let result = run(
-        Declared::default(),
-        &[],
-        Mode::Live(CallInput::InFlight(unknown)),
-        &mut Script::default(),
-    );
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::UnknownMessage { id: missing }) if missing == unknown
-    ));
-}
-
-#[test]
-fn a_pending_message_whose_id_differs_from_the_requested_one_is_rejected() {
-    let requested = MessageId::new([7; 32]);
-    let mut script = Script {
-        records: HashMap::from([(requested, stored(id(5), ENTRY, b"stored"))]),
-        ..Script::default()
-    };
-
-    let result = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Live(CallInput::InFlight(requested)),
-        &mut script,
-    );
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::MismatchedMessage { id: mismatched }) if mismatched == requested
-    ));
-}
-
-#[test]
-fn a_recorded_in_flight_delivery_to_a_private_actor_is_claimed() {
+fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_origin() {
     let keys = Keys::new(1);
     let record = stored(id(5), holder(&keys), b"stored");
-    let mut script = holding(&record).on(holder(&keys), sending(Vec::new()));
+    let mut script = Script::default().on(holder(&keys), sending(Vec::new()));
 
     let outcome = run(
         Declared::default(),
         &[keys.regular(false)],
         Mode::Record {
-            root: CallInput::InFlight(record.id()),
+            root: TransactionEntry::Receive(record),
             assumed: Vec::new(),
         },
         &mut script,
@@ -1596,71 +1414,7 @@ fn a_recorded_in_flight_delivery_to_a_private_actor_is_claimed() {
         order(&script),
         vec![(holder(&keys), Origin::Program(id(5)))]
     );
-    assert_eq!(outcome.consumed, vec![record.id()]);
     assert_eq!(outcome.boundary, Boundary::default());
-}
-
-#[test]
-fn a_private_request_for_a_public_in_flight_delivery_is_an_output_not_a_claim() {
-    let keys = Keys::new(1);
-    let record = stored(id(5), ENTRY, b"stored");
-    let mut script =
-        holding(&record).on(holder(&keys), sending(vec![Call::in_flight(record.id())]));
-
-    let outcome = run(
-        declared(vec![ENTRY]),
-        &[keys.regular(false)],
-        Mode::Record {
-            root: root(holder(&keys)),
-            assumed: vec![Vec::new()],
-        },
-        &mut script,
-    )
-    .unwrap();
-
-    assert_eq!(
-        outcome.boundary.outputs,
-        vec![Output {
-            message: b"stored".to_vec(),
-            issuer: Some(id(8)),
-            in_flight: Some(record.id()),
-            ..output(ENTRY, Origin::Program(id(5)))
-        }]
-    );
-    assert!(outcome.consumed.is_empty());
-}
-
-#[test]
-fn a_public_request_for_a_private_in_flight_delivery_is_an_assumption_not_a_claim() {
-    let keys = Keys::new(1);
-    let record = stored(id(5), holder(&keys), b"stored");
-    let assumption = Assumption {
-        from: ENTRY,
-        to: holder(&keys),
-        message: b"stored".to_vec(),
-        in_flight: Some(record.id()),
-        grants: Vec::new(),
-        pda_seeds: Vec::new(),
-    };
-    let mut script = holding(&record).on(holder(&keys), sending(Vec::new()));
-
-    let outcome = run(
-        declared(vec![ENTRY]),
-        &[keys.regular(false)],
-        Mode::Record {
-            root: root(ENTRY),
-            assumed: vec![vec![assumption.clone()]],
-        },
-        &mut script,
-    )
-    .unwrap();
-
-    assert_eq!(
-        order(&script),
-        vec![(holder(&keys), Origin::Program(id(5)))]
-    );
-    assert_eq!(outcome.boundary.assumptions, vec![assumption]);
-    assert!(outcome.consumed.is_empty());
 }
 
 #[test]
@@ -1726,66 +1480,6 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
             private_cast,
         ]
     );
-}
-
-#[test]
-fn a_check_rejects_an_in_flight_output_that_differs_from_its_record() {
-    let record = stored(id(5), ENTRY, b"stored");
-    let boundary = Boundary {
-        outputs: vec![Output {
-            message: b"forged".to_vec(),
-            issuer: Some(id(8)),
-            in_flight: Some(record.id()),
-            ..output(ENTRY, Origin::Program(id(5)))
-        }],
-        schedule: vec![CallPublic, ReturnPublic],
-        ..Boundary::default()
-    };
-    let mut script = holding(&record).on(ENTRY, sending(Vec::new()));
-
-    let result = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Check(boundary),
-        &mut script,
-    );
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::MismatchedMessage { id: mismatched }) if mismatched == record.id()
-    ));
-}
-
-#[test]
-fn a_check_rejects_an_assumption_whose_in_flight_id_differs_from_the_live_delivery() {
-    let keys = Keys::new(1);
-    let record = stored(id(5), holder(&keys), b"stored");
-    let boundary = Boundary {
-        outputs: vec![output(ENTRY, Origin::Root)],
-        assumptions: vec![Assumption {
-            from: ENTRY,
-            to: holder(&keys),
-            message: b"stored".to_vec(),
-            in_flight: None,
-            grants: Vec::new(),
-            pda_seeds: Vec::new(),
-        }],
-        publications: Vec::new(),
-        schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
-    };
-    let mut script = holding(&record).on(ENTRY, sending(vec![Call::in_flight(record.id())]));
-
-    let result = run(
-        declared(vec![ENTRY]),
-        &[],
-        Mode::Check(boundary),
-        &mut script,
-    );
-
-    assert!(matches!(
-        result,
-        Err(ExecutionError::AssumptionMismatch { index: 0 })
-    ));
 }
 
 #[test]

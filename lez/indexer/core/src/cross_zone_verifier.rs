@@ -25,7 +25,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{CallInput, GENESIS_BLOCK_ID, PublicKey};
+use lee::{GENESIS_BLOCK_ID, PublicKey, TransactionEntry};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -835,7 +835,7 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        let CallInput::Inline { to, message } = &public_tx.message().root else {
+        let TransactionEntry::Call { to, message } = &public_tx.message().root else {
             return None;
         };
         if to.program_account_id != programs::cross_zone_inbox_account_id() {
@@ -898,7 +898,7 @@ impl CrossZoneVerifier {
                 "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
             )
         };
-        let CallInput::Inline { to, message } = &emission_tx.message().root else {
+        let TransactionEntry::Call { to, message } = &emission_tx.message().root else {
             return Err(not_an_emitter());
         };
         let emission =

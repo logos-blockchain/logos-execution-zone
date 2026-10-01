@@ -1,7 +1,7 @@
 use lee_core::{
     account::{AccountId, Actor, Nonce},
     execution_state::ExecutionError,
-    program::{Call, CallInput},
+    program::Call,
 };
 use test_guest_core::Script;
 
@@ -80,7 +80,7 @@ fn privacy_garbage_proof_is_rejected() {
     let message = Message {
         declared: Declared::default(),
         boundary: Boundary::default(),
-        consumed: vec![],
+        consumed_message: None,
         nonces: vec![],
         private_actions: vec![PrivateAction {
             nullifier: Nullifier::for_account_initialization(&account_id),
@@ -286,10 +286,8 @@ fn a_sent_turns_nonzero_exit_adds_its_cycles_to_its_senders() {
     let run = |sends: usize| {
         let script = (0..sends).fold(Script::default(), |script, _| {
             script.send(Call {
-                input: CallInput::Inline {
-                    to: exiting,
-                    message: Vec::new(),
-                },
+                to: exiting,
+                message: Vec::new(),
                 pda_seeds: Vec::new(),
             })
         });

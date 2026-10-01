@@ -22,7 +22,7 @@ use lee::{
     },
     program::Program,
 };
-use lee_core::{NullifierWitness, PrivateWitness, WitnessKind, program::CallInput};
+use lee_core::{NullifierWitness, PrivateWitness, WitnessKind, execution_state::TransactionEntry};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind};
 use tokio::test;
@@ -111,7 +111,7 @@ async fn prepare_swap(
 
     let (output, proof) = execute_and_prove_assuming(
         ProvingInput {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to: Actor::new(trader.input, token_program_id()),
                 message: swap_message(pool, trader, min_amount_out)?,
             },
@@ -139,7 +139,6 @@ async fn prepare_swap(
             public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
         },
         vec![Vec::new()],
         &ProgramCatalog::from([

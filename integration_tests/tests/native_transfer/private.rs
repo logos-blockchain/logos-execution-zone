@@ -13,7 +13,8 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateWitness, WitnessKind, encryption::ViewingPublicKey, native_token, program::CallInput,
+    PrivateWitness, WitnessKind, encryption::ViewingPublicKey, execution_state::TransactionEntry,
+    native_token,
 };
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -605,7 +606,7 @@ fn prove_init_with_commitment_root(
     let sender = Actor::native_balance(sender_id);
     let (output, _) = execute_and_prove(
         ProvingInput {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to: sender,
                 message: Program::serialize_message(native_token::Message::Transfer {
                     to: recipient_account_id,
@@ -631,7 +632,6 @@ fn prove_init_with_commitment_root(
             public_shards: [(sender, native_token::encode_balance(1))].into(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
         },
         &ProgramCatalog::default(),
     )?;

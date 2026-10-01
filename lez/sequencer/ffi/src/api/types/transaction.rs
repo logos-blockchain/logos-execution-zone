@@ -1,8 +1,8 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, Assumption, Boundary, CallInput, Declared, EphemeralPublicKey,
-    FeeDeclaration, MessageBody, MessageId, Origin, Output, PrivacyPreservingTransaction,
-    PublicIdentity, PublicKey, PublicTransaction, ScheduleOp, Signature,
+    AccountId, Actor, Assumption, Boundary, Declared, EphemeralPublicKey, FeeDeclaration,
+    MessageBody, MessageId, Origin, Output, PrivacyPreservingTransaction, PublicIdentity,
+    PublicKey, PublicTransaction, ScheduleOp, Signature, TransactionEntry,
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
 };
 use lee_core::{
@@ -19,9 +19,8 @@ use crate::{
         FfiVec,
         vectors::{
             FfiAccountIdList, FfiActorList, FfiAssumptionList, FfiMessageBodyList,
-            FfiMessageDataList, FfiMessageIdList, FfiNonceList, FfiOutputList, FfiPdaSeedList,
-            FfiPrivateActionList, FfiProof, FfiPublicIdentityList, FfiScheduleOpList,
-            FfiSignaturePubKeyList, FfiVecU8,
+            FfiMessageDataList, FfiNonceList, FfiOutputList, FfiPdaSeedList, FfiPrivateActionList,
+            FfiProof, FfiPublicIdentityList, FfiScheduleOpList, FfiSignaturePubKeyList, FfiVecU8,
         },
     },
 };
@@ -176,30 +175,30 @@ impl From<FfiActor> for Actor {
 }
 
 #[repr(C)]
-pub enum FfiCallInputKind {
-    Inline = 0x0,
-    InFlight,
+pub enum FfiTransactionEntryKind {
+    Call = 0x0,
+    Receive,
 }
 
 #[repr(C)]
-pub struct FfiCallInput {
-    pub kind: FfiCallInputKind,
+pub struct FfiTransactionEntry {
+    pub kind: FfiTransactionEntryKind,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
     pub message_id: FfiBytes32,
 }
 
-impl From<CallInput> for FfiCallInput {
-    fn from(value: CallInput) -> Self {
+impl From<TransactionEntry<MessageId>> for FfiTransactionEntry {
+    fn from(value: TransactionEntry<MessageId>) -> Self {
         match value {
-            CallInput::Inline { to, message } => Self {
-                kind: FfiCallInputKind::Inline,
+            TransactionEntry::Call { to, message } => Self {
+                kind: FfiTransactionEntryKind::Call,
                 to: to.into(),
                 message: message.into(),
                 message_id: FfiBytes32::default(),
             },
-            CallInput::InFlight(id) => Self {
-                kind: FfiCallInputKind::InFlight,
+            TransactionEntry::Receive(id) => Self {
+                kind: FfiTransactionEntryKind::Receive,
                 to: FfiActor::default(),
                 message: Vec::new().into(),
                 message_id: message_id_to_ffi(id),
@@ -208,16 +207,16 @@ impl From<CallInput> for FfiCallInput {
     }
 }
 
-impl From<FfiCallInput> for CallInput {
-    fn from(value: FfiCallInput) -> Self {
+impl From<FfiTransactionEntry> for TransactionEntry<MessageId> {
+    fn from(value: FfiTransactionEntry) -> Self {
         let message: Vec<u8> = value.message.into();
 
         match value.kind {
-            FfiCallInputKind::Inline => Self::Inline {
+            FfiTransactionEntryKind::Call => Self::Call {
                 to: value.to.into(),
                 message,
             },
-            FfiCallInputKind::InFlight => Self::InFlight(ffi_to_message_id(value.message_id)),
+            FfiTransactionEntryKind::Receive => Self::Receive(ffi_to_message_id(value.message_id)),
         }
     }
 }
@@ -276,7 +275,7 @@ impl TryFrom<FfiPublicIdentity> for PublicIdentity {
 
 #[repr(C)]
 pub struct FfiPublicMessage {
-    pub root: FfiCallInput,
+    pub root: FfiTransactionEntry,
     pub public_actors: FfiActorList,
     pub nonces: FfiNonceList,
     pub has_fee: bool,
@@ -416,10 +415,10 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
                 declared: value.message.declared.into(),
                 boundary: value.message.boundary.into(),
-                consumed: {
-                    let std_vec: Vec<_> = value.message.consumed.into();
-                    std_vec.into_iter().map(ffi_to_message_id).collect()
-                },
+                consumed_message: value
+                    .message
+                    .has_consumed_message
+                    .then(|| ffi_to_message_id(value.message.consumed_message)),
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -526,8 +525,6 @@ pub struct FfiOutput {
     pub origin: FfiOrigin,
     pub has_issuer: bool,
     pub issuer: FfiAccountId,
-    pub has_in_flight: bool,
-    pub in_flight: FfiBytes32,
     pub grants: FfiAccountIdList,
     pub pda_seeds: FfiPdaSeedList,
 }
@@ -539,7 +536,6 @@ impl From<Output> for FfiOutput {
             message,
             origin,
             issuer,
-            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -550,8 +546,6 @@ impl From<Output> for FfiOutput {
             origin: origin.into(),
             has_issuer: issuer.is_some(),
             issuer: issuer.map(Into::into).unwrap_or_default(),
-            has_in_flight: in_flight.is_some(),
-            in_flight: in_flight.map(message_id_to_ffi).unwrap_or_default(),
             grants: grants_to_ffi(grants),
             pda_seeds: pda_seeds
                 .into_iter()
@@ -569,9 +563,6 @@ impl From<FfiOutput> for Output {
             message: value.message.into(),
             origin: value.origin.into(),
             issuer: value.has_issuer.then(|| value.issuer.into()),
-            in_flight: value
-                .has_in_flight
-                .then(|| ffi_to_message_id(value.in_flight)),
             grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
@@ -586,8 +577,6 @@ pub struct FfiAssumption {
     pub from: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub has_in_flight: bool,
-    pub in_flight: FfiBytes32,
     pub grants: FfiAccountIdList,
     pub pda_seeds: FfiPdaSeedList,
 }
@@ -598,7 +587,6 @@ impl From<Assumption> for FfiAssumption {
             from,
             to,
             message,
-            in_flight,
             grants,
             pda_seeds,
         } = value;
@@ -607,8 +595,6 @@ impl From<Assumption> for FfiAssumption {
             from: from.into(),
             to: to.into(),
             message: message.into(),
-            has_in_flight: in_flight.is_some(),
-            in_flight: in_flight.map(message_id_to_ffi).unwrap_or_default(),
             grants: grants_to_ffi(grants),
             pda_seeds: pda_seeds
                 .into_iter()
@@ -625,9 +611,6 @@ impl From<FfiAssumption> for Assumption {
             from: value.from.into(),
             to: value.to.into(),
             message: value.message.into(),
-            in_flight: value
-                .has_in_flight
-                .then(|| ffi_to_message_id(value.in_flight)),
             grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
@@ -829,7 +812,8 @@ impl From<PrivateAction> for FfiPrivateAction {
 pub struct FfiPrivacyPreservingMessage {
     pub declared: FfiDeclared,
     pub boundary: FfiBoundary,
-    pub consumed: FfiMessageIdList,
+    pub has_consumed_message: bool,
+    pub consumed_message: FfiBytes32,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
@@ -843,7 +827,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
         let lee::privacy_preserving_transaction::Message {
             declared,
             boundary,
-            consumed,
+            consumed_message,
             nonces,
             private_actions,
             block_validity_window,
@@ -855,11 +839,8 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
         Self {
             declared: declared.into(),
             boundary: boundary.into(),
-            consumed: consumed
-                .into_iter()
-                .map(message_id_to_ffi)
-                .collect::<Vec<_>>()
-                .into(),
+            has_consumed_message: consumed_message.is_some(),
+            consumed_message: consumed_message.map(message_id_to_ffi).unwrap_or_default(),
             nonces: nonces
                 .into_iter()
                 .map(Into::into)
@@ -1179,7 +1160,7 @@ mod tests {
         };
         let tx = |fee| PublicTransaction {
             message: lee::public_transaction::Message {
-                root: CallInput::Inline {
+                root: TransactionEntry::Call {
                     to,
                     message: vec![9, 9],
                 },
@@ -1244,10 +1225,10 @@ mod tests {
     }
 
     #[test]
-    fn public_transaction_in_flight_root_and_identities_roundtrip_over_the_ffi() {
+    fn public_transaction_receipt_root_and_identities_roundtrip_over_the_ffi() {
         let original = PublicTransaction {
             message: lee::public_transaction::Message {
-                root: CallInput::InFlight(MessageId::new([4; 32])),
+                root: TransactionEntry::Receive(MessageId::new([4; 32])),
                 public_actors: vec![actor(5, 6)],
                 nonces: vec![],
                 fee: None,
@@ -1263,7 +1244,7 @@ mod tests {
     }
 
     #[test]
-    fn private_transaction_in_flight_boundary_claims_and_identities_roundtrip_over_the_ffi() {
+    fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
         let original = PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
                 declared: Declared::default(),
@@ -1274,7 +1255,6 @@ mod tests {
                             message: vec![6],
                             origin: Origin::Root,
                             issuer: None,
-                            in_flight: Some(MessageId::new([7; 32])),
                             grants: vec![],
                             pda_seeds: vec![],
                         },
@@ -1283,7 +1263,6 @@ mod tests {
                             message: vec![10],
                             origin: Origin::Program(account_id(11)),
                             issuer: Some(account_id(12)),
-                            in_flight: Some(MessageId::new([13; 32])),
                             grants: vec![account_id(14)],
                             pda_seeds: vec![PdaSeed::new([15; 32])],
                         },
@@ -1292,7 +1271,6 @@ mod tests {
                         from: actor(16, 17),
                         to: actor(18, 19),
                         message: vec![20],
-                        in_flight: Some(MessageId::new([21; 32])),
                         grants: vec![],
                         pda_seeds: vec![],
                     }],
@@ -1303,7 +1281,7 @@ mod tests {
                     }],
                     schedule: vec![ScheduleOp::CallPublic, ScheduleOp::Publish],
                 },
-                consumed: vec![MessageId::new([26; 32]), MessageId::new([27; 32])],
+                consumed_message: Some(MessageId::new([26; 32])),
                 nonces: vec![],
                 private_actions: vec![],
                 block_validity_window: ValidityWindow::new_unbounded(),

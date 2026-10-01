@@ -30,8 +30,6 @@ pub type FfiScheduleOpList = FfiVec<FfiScheduleOp>;
 
 pub type FfiMessageBodyList = FfiVec<FfiMessageBody>;
 
-pub type FfiMessageIdList = FfiVec<FfiBytes32>;
-
 pub type FfiPublicIdentityList = FfiVec<FfiPublicIdentity>;
 
 pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;

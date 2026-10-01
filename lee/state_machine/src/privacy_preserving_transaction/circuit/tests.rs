@@ -125,7 +125,6 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
             message: borsh::to_vec(&root_transfer).unwrap(),
             origin: Origin::Root,
             issuer: None,
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }]
@@ -936,7 +935,6 @@ fn the_prover_never_reads_a_public_shard() {
             message: borsh::to_vec(&script).unwrap(),
             origin: Origin::Root,
             issuer: None,
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }]
@@ -1017,7 +1015,6 @@ fn direct_input(
         shadow_program_witnesses: Vec::new(),
         turns,
         assumed: Vec::new(),
-        messages: Vec::new(),
     }
 }
 

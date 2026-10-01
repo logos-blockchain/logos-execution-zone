@@ -18,7 +18,7 @@ use lee::{
     Actor, execute_and_prove_assuming, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
-use lee_core::program::CallInput;
+use lee_core::execution_state::TransactionEntry;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
@@ -183,7 +183,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Proven without running the deposit, which settlement refuses.
     let (output, proof) = execute_and_prove_assuming(
         lee::ProvingInput {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to: receipt,
                 message: deposit,
             },
@@ -194,7 +194,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
         },
         // The receipt's own delivery is the one public output; it sends nothing private.
         vec![Vec::new()],

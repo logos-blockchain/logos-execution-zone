@@ -29,8 +29,9 @@ use lee::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey,
     account::{Actor, Nonce},
+    execution_state::TransactionEntry,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
-    program::{CallInput, MessageData, MessageId, StoredMessage},
+    program::{MessageData, MessageId, StoredMessage},
 };
 use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -893,20 +894,12 @@ impl WalletCore {
         programs: &ProgramCatalog,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let root = CallInput::Inline {
+        let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
             message,
         };
-        self.send_proven(
-            accounts,
-            root,
-            Vec::new(),
-            Vec::new(),
-            programs,
-            None,
-            tx_pre_check,
-        )
-        .await
+        self.send_proven(accounts, root, Vec::new(), programs, None, tx_pre_check)
+            .await
     }
 
     // Proves under `assumed` instead of deriving it from current public state: a conditional
@@ -919,31 +912,20 @@ impl WalletCore {
         assumed: Vec<Vec<Assumption>>,
         programs: &ProgramCatalog,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let root = CallInput::Inline {
+        let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
             message,
         };
-        self.send_proven(
-            accounts,
-            root,
-            Vec::new(),
-            Vec::new(),
-            programs,
-            Some(assumed),
-            |_| Ok(()),
-        )
+        self.send_proven(accounts, root, Vec::new(), programs, Some(assumed), |_| {
+            Ok(())
+        })
         .await
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the proving path takes every input of a privacy-preserving transaction"
-    )]
     async fn send_proven(
         &self,
         accounts: Vec<AccountMention>,
-        root: CallInput,
-        messages: Vec<StoredMessage>,
+        root: TransactionEntry<StoredMessage>,
         identities: Vec<PublicIdentity>,
         programs: &ProgramCatalog,
         assumed: Option<Vec<Vec<Assumption>>>,
@@ -970,7 +952,6 @@ impl WalletCore {
             public_shards: acc_manager.public_shards(),
             dummy_inputs: acc_manager.dummy_inputs_default(),
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
-            messages,
         };
 
         let programs = programs.clone();
@@ -1053,7 +1034,7 @@ impl WalletCore {
         payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let root = CallInput::Inline {
+        let root = TransactionEntry::Call {
             to: root_actor(&accounts, root)?,
             message,
         };
@@ -1064,7 +1045,7 @@ impl WalletCore {
     async fn send_public(
         &self,
         accounts: Vec<AccountMention>,
-        root: CallInput,
+        root: TransactionEntry<MessageId>,
         identities: Vec<PublicIdentity>,
         payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedShard]) -> Result<(), ExecutionFailureKind>,
@@ -1165,7 +1146,6 @@ impl WalletCore {
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         check_receivable(&record)?;
         let to = record.body.to;
-        let root = CallInput::InFlight(record.id());
         if let Some(identity) = self.resolve_private_account(to.account_id) {
             let accounts = vec![
                 identity
@@ -1175,8 +1155,7 @@ impl WalletCore {
             return self
                 .send_proven(
                     accounts,
-                    root,
-                    vec![record],
+                    TransactionEntry::Receive(record),
                     Vec::new(),
                     programs,
                     None,
@@ -1212,7 +1191,7 @@ impl WalletCore {
         };
         self.send_public(
             vec![identity.select_program_shard(to.program_account_id)],
-            root,
+            TransactionEntry::Receive(record.id()),
             evidence.into_iter().collect(),
             payer,
             |_| Ok(()),

@@ -21,7 +21,7 @@
 use lee_core::{
     account::{AccountId, Actor},
     native_token,
-    program::{Call, CallInput, PdaSeed, ReceiveInput, Response, run_actor},
+    program::{Call, PdaSeed, ReceiveInput, Response, run_actor},
 };
 
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -66,10 +66,8 @@ fn main() {
             } => Response::keep()
                 .send(pinned_transfer(vault, receiver, amount_out, vault_balance))
                 .send(Call {
-                    input: CallInput::Inline {
-                        to: callback,
-                        message: callback_message,
-                    },
+                    to: callback,
+                    message: callback_message,
                     pda_seeds: Vec::new(),
                 })
                 .send(Call::new(

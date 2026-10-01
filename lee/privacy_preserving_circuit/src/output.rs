@@ -7,11 +7,13 @@ use lee_core::{
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
     execution_state::{Declared, ExecutionOutcome},
+    program::MessageId,
 };
 
 pub fn compute_circuit_output(
     outcome: ExecutionOutcome,
     declared: Declared,
+    consumed_message: Option<MessageId>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
@@ -22,13 +24,12 @@ pub fn compute_circuit_output(
         timestamp_validity_window,
         mut private_accounts,
         boundary,
-        consumed,
         ..
     } = outcome;
     let mut output = PrivacyPreservingCircuitOutput {
         declared,
         boundary,
-        consumed,
+        consumed_message,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
@@ -304,10 +305,10 @@ mod tests {
                 boundary: Boundary::default(),
                 assumed: Vec::new(),
                 events: Vec::new(),
-                consumed: Vec::new(),
                 published: Vec::new(),
             },
             Declared::default(),
+            None,
             witnesses,
             Vec::new(),
             None,

@@ -24,7 +24,8 @@ use lee::{
 };
 use lee_core::{
     NullifierWitness, PrivateWitness, WitnessKind,
-    program::{Action, Call, CallInput},
+    execution_state::TransactionEntry,
+    program::{Action, Call},
 };
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
@@ -78,7 +79,8 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
             .into_iter()
             .map(|credit| {
                 let Action::Call(Call {
-                    input: CallInput::Inline { to, message },
+                    to,
+                    message,
                     pda_seeds,
                 }) = credit
                 else {
@@ -88,7 +90,6 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
                     from: vault_b,
                     to,
                     message,
-                    in_flight: None,
                     grants: vec![pool.vault_b],
                     pda_seeds,
                 }
@@ -148,7 +149,7 @@ async fn prepare_offer(
 
     let (output, proof) = execute_and_prove_assuming(
         ProvingInput {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to: Actor::new(trader.input, token_program_id()),
                 message: swap_message(pool, trader)?,
             },
@@ -188,7 +189,6 @@ async fn prepare_offer(
             public_shards: HashMap::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
         },
         payout_assumed(pool, trader),
         &ProgramCatalog::from([

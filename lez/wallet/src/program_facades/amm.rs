@@ -9,7 +9,7 @@ use lee::{
 };
 use lee_core::{
     SharedSecretKey,
-    program::{Action, Call, CallInput},
+    program::{Action, Call},
 };
 use token_core::{Delivery, TokenDescriptor, TokenHolding, TokenKind, expected_sends};
 
@@ -441,7 +441,8 @@ impl SwapTerms {
                 .into_iter()
                 .filter_map(|action| {
                     let Action::Call(Call {
-                        input: CallInput::Inline { to, message },
+                        to,
+                        message,
                         pda_seeds,
                     }) = action
                     else {
@@ -457,7 +458,6 @@ impl SwapTerms {
                             from: vault,
                             to,
                             message,
-                            in_flight: None,
                             grants: vec![self.output_vault_id],
                             pda_seeds,
                         })
@@ -902,10 +902,7 @@ mod tests {
                 .unwrap()
         };
         let vault = Actor::new(terms.output_vault_id, terms.token_program_id);
-        let Action::Call(Call {
-            input: CallInput::Inline { to, message },
-            ..
-        }) = expected_sends(
+        let Action::Call(Call { to, message, .. }) = expected_sends(
             vault,
             &token_core::Message::Transfer {
                 to: DESTINATION,
@@ -915,8 +912,7 @@ mod tests {
                 delivery: Delivery::Call,
             },
         )
-        .remove(0)
-        else {
+        .remove(0) else {
             panic!("the token program's payout is an inline call");
         };
 
@@ -926,7 +922,6 @@ mod tests {
                 from: vault,
                 to,
                 message,
-                in_flight: None,
                 grants: vec![terms.output_vault_id],
                 pda_seeds: Vec::new(),
             }]]

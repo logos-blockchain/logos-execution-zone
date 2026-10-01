@@ -24,8 +24,9 @@ use lee_core::{
     DUMMY_COMMITMENT_HASH, Identifier, NullifierPublicKey, NullifierWitness, PrivateAccountKind,
     PrivateWitness, WitnessKind,
     encryption::ViewingPublicKey,
+    execution_state::TransactionEntry,
     native_token::{Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID},
-    program::{Call, CallInput, PdaSeed},
+    program::{Call, PdaSeed},
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_guest_core::Script;
@@ -68,7 +69,7 @@ async fn fund_private_pda(
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to: sender_actor,
                 message: transfer,
             },
@@ -94,7 +95,6 @@ async fn fund_private_pda(
             .into(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
-            messages: Vec::new(),
         },
         &ProgramCatalog::default(),
     )

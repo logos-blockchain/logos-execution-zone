@@ -10,7 +10,7 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::{AccountId, Actor, CallInput, PrivateKey, PublicKey};
+use lee::{AccountId, Actor, PrivateKey, PublicKey, TransactionEntry};
 use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -239,7 +239,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
                 let LeeTransaction::Public(public_tx) = tx else {
                     return None;
                 };
-                let CallInput::Inline { to, message } = &public_tx.message.root else {
+                let TransactionEntry::Call { to, message } = &public_tx.message.root else {
                     return None;
                 };
                 if to.program_account_id != lee_core::program::PROGRAM_LOADER_ACCOUNT_ID {

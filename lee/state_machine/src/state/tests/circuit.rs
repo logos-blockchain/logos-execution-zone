@@ -166,7 +166,6 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
             message: credit,
             origin: Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
             issuer: Some(NATIVE_TOKEN_PROGRAM_ID),
-            in_flight: None,
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }]

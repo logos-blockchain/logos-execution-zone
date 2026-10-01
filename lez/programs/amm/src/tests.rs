@@ -12,7 +12,7 @@ use amm_core::{
 };
 use lee_core::{
     account::{AccountId, Actor, ShardData},
-    program::{Action, Call, CallInput, Origin, ReceiveInput, Transition},
+    program::{Action, Call, Origin, ReceiveInput, Transition},
 };
 use token_core::{
     Delivery, NewTokenDefinition, Notification, TokenDescriptor, TokenKind, expected_sends,
@@ -960,11 +960,7 @@ fn a_swap_is_a_notified_transfer_whose_payout_the_token_program_predicts() {
     );
 
     let inline = |action: Action| {
-        let Action::Call(Call {
-            input: CallInput::Inline { to, message },
-            ..
-        }) = action
-        else {
+        let Action::Call(Call { to, message, .. }) = action else {
             panic!("a token send is an inline call");
         };
         (to, message)

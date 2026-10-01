@@ -18,10 +18,10 @@ typedef enum OperationStatus {
   InvalidArgument = 4,
 } OperationStatus;
 
-typedef enum FfiCallInputKind {
-  Inline = 0,
-  InFlight,
-} FfiCallInputKind;
+typedef enum FfiTransactionEntryKind {
+  Call = 0,
+  Receive,
+} FfiTransactionEntryKind;
 
 typedef enum FfiPublicIdentityKind {
   Key = 0,
@@ -169,12 +169,12 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiMessageDataList;
 
-typedef struct FfiCallInput {
-  enum FfiCallInputKind kind;
+typedef struct FfiTransactionEntry {
+  enum FfiTransactionEntryKind kind;
   struct FfiActor to;
   FfiMessageDataList message;
   struct FfiBytes32 message_id;
-} FfiCallInput;
+} FfiTransactionEntry;
 
 typedef struct FfiVec_FfiActor {
   struct FfiActor *entries;
@@ -229,7 +229,7 @@ typedef struct FfiVec_FfiPublicIdentity {
 typedef struct FfiVec_FfiPublicIdentity FfiPublicIdentityList;
 
 typedef struct FfiPublicMessage {
-  struct FfiCallInput root;
+  struct FfiTransactionEntry root;
   FfiActorList public_actors;
   FfiNonceList nonces;
   bool has_fee;
@@ -292,8 +292,6 @@ typedef struct FfiOutput {
   struct FfiOrigin origin;
   bool has_issuer;
   FfiAccountId issuer;
-  bool has_in_flight;
-  struct FfiBytes32 in_flight;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
 } FfiOutput;
@@ -310,8 +308,6 @@ typedef struct FfiAssumption {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  bool has_in_flight;
-  struct FfiBytes32 in_flight;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
 } FfiAssumption;
@@ -353,8 +349,6 @@ typedef struct FfiBoundary {
   FfiScheduleOpList schedule;
 } FfiBoundary;
 
-typedef struct FfiVec_FfiBytes32 FfiMessageIdList;
-
 typedef struct FfiVec_u8 FfiVecU8;
 
 typedef struct FfiEncryptedAccountData {
@@ -381,7 +375,8 @@ typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiDeclared declared;
   struct FfiBoundary boundary;
-  FfiMessageIdList consumed;
+  bool has_consumed_message;
+  struct FfiBytes32 consumed_message;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];

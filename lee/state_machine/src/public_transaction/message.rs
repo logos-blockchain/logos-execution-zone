@@ -1,7 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{Actor, Nonce},
-    program::{CallInput, MessageData, PdaSeed},
+    execution_state::TransactionEntry,
+    program::{MessageData, MessageId, PdaSeed},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -27,7 +28,7 @@ impl PublicIdentity {
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub root: CallInput,
+    pub root: TransactionEntry<MessageId>,
     pub public_actors: Vec<Actor>,
     pub nonces: Vec<Nonce>,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
@@ -57,7 +58,7 @@ impl std::fmt::Debug for Message {
 impl Message {
     #[must_use]
     pub const fn new(
-        root: CallInput,
+        root: TransactionEntry<MessageId>,
         public_actors: Vec<Actor>,
         nonces: Vec<Nonce>,
         fee: Option<FeeDeclaration>,
@@ -115,7 +116,7 @@ impl Message {
         fee: Option<FeeDeclaration>,
     ) -> Self {
         Self::new(
-            CallInput::Inline { to, message },
+            TransactionEntry::Call { to, message },
             public_actors,
             nonces,
             fee,
@@ -161,7 +162,7 @@ mod tests {
         let message = Message::new_preserialized(to, vec![0], vec![to], vec![Nonce(1)], None);
 
         let expected: Vec<u8> = [
-            &[0][..],      // root: CallInput::Inline
+            &[0][..],      // root: TransactionEntry::Call
             &[42; 32],     // to.account_id
             &[0; 32],      // to.program_account_id: the native token program
             &[1, 0, 0, 0], // message

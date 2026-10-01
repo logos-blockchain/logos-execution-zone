@@ -14,12 +14,12 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, BedrockStatus, Block, BlockBody,
-    BlockHeader, BlockId, Boundary, CallInput, Commitment, CommitmentSetDigest, Declared,
+    BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
     EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
     IndexerStatus, IndexerSyncState, Origin, Output, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, PublicKey, PublicMessage, PublicTransaction,
-    ScheduleOp, Selector, ShardData, ShardSummary, Signature, Transaction, ValidityWindow,
-    WitnessSet,
+    ScheduleOp, Selector, ShardData, ShardSummary, Signature, Transaction, TransactionEntry,
+    ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -516,7 +516,7 @@ fn mock_public_tx(
     Transaction::Public(PublicTransaction {
         hash: tx_hash,
         message: PublicMessage {
-            root: CallInput::Inline {
+            root: TransactionEntry::Call {
                 to,
                 message: vec![1, 2, 3, 4],
             },
@@ -561,7 +561,6 @@ fn mock_privacy_preserving_tx(
                     message: vec![0xdd, 0xee],
                     origin: Origin::Root,
                     issuer: None,
-                    in_flight: None,
                     grants: vec![],
                     pda_seeds: vec![],
                 }],
@@ -569,7 +568,7 @@ fn mock_privacy_preserving_tx(
                 publications: vec![],
                 schedule: vec![ScheduleOp::CallPublic],
             },
-            consumed: vec![],
+            consumed_message: None,
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {
                 nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),

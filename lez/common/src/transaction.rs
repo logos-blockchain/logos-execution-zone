@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, CallInput, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, TransactionEntry, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -244,7 +244,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     {
         return false;
     }
-    let CallInput::Inline { to, message } = &public_tx.message().root else {
+    let TransactionEntry::Call { to, message } = &public_tx.message().root else {
         return false;
     };
     let program_account_id = to.program_account_id;
@@ -281,7 +281,7 @@ pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    let CallInput::Inline { to, message } = &public_tx.message().root else {
+    let TransactionEntry::Call { to, message } = &public_tx.message().root else {
         return false;
     };
     if to.program_account_id != programs::bridge_lock_account_id() {
@@ -304,7 +304,7 @@ pub fn is_sequencer_stake_operation(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    let CallInput::Inline { to, .. } = &public_tx.message().root else {
+    let TransactionEntry::Call { to, .. } = &public_tx.message().root else {
         return false;
     };
     to.program_account_id == programs::sequencer_stake_account_id()
@@ -353,7 +353,7 @@ pub fn fee_invocation(
 /// The producer account credited by [`fee_invocation`].
 #[must_use]
 pub fn fee_invocation_producer(fee_tx: &lee::PublicTransaction) -> Option<lee::AccountId> {
-    let CallInput::Inline { message, .. } = &fee_tx.message().root else {
+    let TransactionEntry::Call { message, .. } = &fee_tx.message().root else {
         return None;
     };
     let Ok(fee_core::Message::Distribute { producer, .. }) = borsh::from_slice(message) else {
@@ -503,8 +503,8 @@ pub fn validate_user_state_modification(
     let injected_program = match tx {
         LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
             match &public_tx.message().root {
-                CallInput::Inline { to, .. } => Some(to.program_account_id),
-                CallInput::InFlight(_) => None,
+                TransactionEntry::Call { to, .. } => Some(to.program_account_id),
+                TransactionEntry::Receive(_) => None,
             }
         }
         LeeTransaction::Public(_) | LeeTransaction::PrivacyPreserving(_) => None,

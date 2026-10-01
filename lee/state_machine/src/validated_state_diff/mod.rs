@@ -8,8 +8,8 @@ use std::{
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, Cycles, Nonce, ShardData},
-    execution_state::{Declared, ExecutionState, Mode},
-    program::{CallInput, MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, TransactionEvent},
+    execution_state::{Declared, ExecutionState, Mode, TransactionEntry},
+    program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
 use public_backend::PublicBackend;
 
@@ -198,7 +198,7 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
-            CallInput::Inline {
+            TransactionEntry::Call {
                 to,
                 message: message.to_vec(),
             },
@@ -249,7 +249,7 @@ impl ValidatedStateDiff {
         reason = "the execution core threads the full invocation context"
     )]
     fn execute_authorized(
-        root: CallInput,
+        root: TransactionEntry<MessageId>,
         public_actors: &[Actor],
         authorized: &HashSet<AccountId>,
         nonce_bearers: Vec<AccountId>,
@@ -260,28 +260,34 @@ impl ValidatedStateDiff {
         cycle_budget: u64,
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
-        let to = match &root {
-            CallInput::Inline { to, .. } => *to,
-            CallInput::InFlight(id) => {
-                state
-                    .pending_message(*id)
-                    .ok_or_else(|| LeeError::InvalidInput("Root message is not pending".into()))?
-                    .body
-                    .to
+        let (root, consumed_message) = match root {
+            TransactionEntry::Call { to, message } => {
+                (TransactionEntry::Call { to, message }, None)
+            }
+            TransactionEntry::Receive(id) => {
+                let record = state
+                    .pending_message(id)
+                    .ok_or_else(|| LeeError::InvalidInput("Root message is not pending".into()))?;
+                (TransactionEntry::Receive(record.clone()), Some(id))
             }
         };
+        let declared = Declared {
+            public_actors: public_actors.to_vec(),
+            authorized_accounts: sorted(authorized.iter().copied()),
+        };
         ensure!(
-            public_actors.contains(&to),
+            public_actors.contains(&root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
+        if let Some(record) = root.receipt() {
+            admit_public_receipt(record, &declared, |account_id| {
+                identities.contains(&account_id) || state.is_designated_public_account(account_id)
+            })?;
+        }
         let settled = settle(
             state,
-            Declared {
-                public_actors: public_actors.to_vec(),
-                authorized_accounts: sorted(authorized.iter().copied()),
-            },
+            declared,
             Mode::Live(root),
-            identities.clone(),
             block_id,
             timestamp,
             cycle_budget,
@@ -290,6 +296,7 @@ impl ValidatedStateDiff {
 
         Ok(Self(StateDiff {
             signer_account_ids: nonce_bearers,
+            consumed: consumed_message.into_iter().collect(),
             ..settled
         }))
     }
@@ -379,33 +386,27 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
+        // 7. Pending receipt
+        if let Some(id) = message.consumed_message {
+            let record = state.pending_message(id).ok_or_else(|| {
+                LeeError::InvalidInput("A consumed message is not pending".into())
+            })?;
+            let identities = identity_account_ids(&message.identities);
+            admit_public_receipt(record, &message.declared, |account_id| {
+                identities.contains(&account_id) || state.is_designated_public_account(account_id)
+            })?;
+        }
+
         let mut cycles_used = 0;
         let settled = settle(
             state,
             message.declared.clone(),
             Mode::Check(message.boundary.clone()),
-            identity_account_ids(&message.identities),
             block_id,
             timestamp,
             crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
             &mut cycles_used,
         )?;
-        let consumed: Vec<MessageId> = message
-            .consumed
-            .iter()
-            .copied()
-            .chain(settled.consumed)
-            .collect();
-        ensure!(
-            n_unique(&consumed) == consumed.len(),
-            LeeError::InvalidInput("A message is consumed twice".into())
-        );
-        ensure!(
-            consumed
-                .iter()
-                .all(|id| state.pending_message(*id).is_some()),
-            LeeError::InvalidInput("A consumed message is not pending".into())
-        );
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
@@ -415,7 +416,7 @@ impl ValidatedStateDiff {
                 .chain(settled.new_commitments)
                 .collect(),
             new_nullifiers,
-            consumed,
+            consumed: message.consumed_message.into_iter().collect(),
             ..settled
         }))
     }
@@ -479,15 +480,25 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the execution core threads the full invocation context"
-)]
+pub fn admit_public_receipt(
+    record: &StoredMessage,
+    declared: &Declared,
+    proves_identity: impl Fn(AccountId) -> bool,
+) -> Result<(), LeeError> {
+    let to = record.body.to;
+    ensure!(
+        !declared.public_actors.contains(&to)
+            || declared.authorized_accounts.contains(&to.account_id)
+            || proves_identity(to.account_id),
+        LeeError::UnprovenPublicIdentity { actor: to }
+    );
+    Ok(())
+}
+
 fn settle(
     state: &V03State,
     declared: Declared,
     mode: Mode,
-    identities: HashSet<AccountId>,
     block_id: BlockId,
     timestamp: Timestamp,
     cycle_budget: Cycles,
@@ -495,7 +506,7 @@ fn settle(
 ) -> Result<StateDiff, LeeError> {
     let execution = ExecutionState::initialize(declared, &[], mode)
         .map_err(|e| LeeError::InvalidInput(e.to_string()))?;
-    let mut backend = PublicBackend::new(state, identities, cycle_budget, cycles_used);
+    let mut backend = PublicBackend::new(state, cycle_budget, cycles_used);
     let outcome = execution.run(&mut backend)?;
     ensure!(
         outcome.block_validity_window.is_valid_for(block_id)
@@ -530,7 +541,7 @@ fn settle(
         new_commitments: backend.into_outputs(),
         new_nullifiers: Vec::new(),
         events,
-        consumed: outcome.consumed,
+        consumed: Vec::new(),
         published: outcome.published,
     })
 }
@@ -622,7 +633,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     let output = PrivacyPreservingCircuitOutput {
         declared: message.declared.clone(),
         boundary: message.boundary.clone(),
-        consumed: message.consumed.clone(),
+        consumed_message: message.consumed_message,
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,

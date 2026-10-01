@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
-    Boundary, CallInput, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PublicMessage, PublicTransaction, WitnessSet,
+    Boundary, Declared, PrivacyPreservingMessage, PrivacyPreservingTransaction, PublicMessage,
+    PublicTransaction, TransactionEntry, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -27,12 +27,12 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     } = witness_set;
 
     let (program_id_str, message_str, root_actors) = match root {
-        CallInput::Inline { to, message: data } => (
+        TransactionEntry::Call { to, message: data } => (
             to.program_account_id.to_string(),
             format!("{} bytes", data.len()),
             vec![to],
         ),
-        CallInput::InFlight(id) => ("None (in flight)".to_owned(), id.to_string(), Vec::new()),
+        TransactionEntry::Receive(id) => ("None (receipt)".to_owned(), id.to_string(), Vec::new()),
     };
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();
@@ -105,7 +105,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let PrivacyPreservingMessage {
         declared,
         boundary,
-        consumed: _,
+        consumed_message: _,
         nonces,
         private_actions,
         block_validity_window,

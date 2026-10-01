@@ -279,7 +279,7 @@ mod tests {
     use borsh::BorshSerialize;
     use lee_core::{
         account::ShardData,
-        program::{Action, CallInput, Transition},
+        program::{Action, Transition},
     };
     use wrapped_token_core::SourcePolicy;
 
@@ -421,8 +421,7 @@ mod tests {
         let entry = run(actor(AUTHORITY), origin, is_authorized, Vec::new(), message);
         let [forwarded] = <[Action; 1]>::try_from(entry.sends).expect("one forwarded change");
         let Action::Call(Call {
-            input: CallInput::Inline { to, message: data },
-            ..
+            to, message: data, ..
         }) = forwarded
         else {
             panic!("the forwarded change is an inline call");

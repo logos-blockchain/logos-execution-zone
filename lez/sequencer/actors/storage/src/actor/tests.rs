@@ -7,7 +7,7 @@ use common::{
     transaction::{TxEvents, clock_invocation},
 };
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{Account, AccountId, CallInput, V03State};
+use lee::{Account, AccountId, TransactionEntry, V03State};
 use lee_core::program::{ProgramEvent, TransactionEvent};
 
 use crate::{
@@ -542,7 +542,7 @@ async fn net_shortening_reorg_drops_acc_maps() {
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
     let block_1b_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
 
-    let CallInput::Inline { to: clock_1, .. } = &genesis_clock_tx.message.root else {
+    let TransactionEntry::Call { to: clock_1, .. } = &genesis_clock_tx.message.root else {
         unreachable!("the clock invocation is an inline call");
     };
     let clock_1_acc = clock_1.account_id;
@@ -1239,7 +1239,7 @@ async fn the_first_block_written_starts_the_chain() {
     let block_1_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
 
-    let CallInput::Inline { to: clock_1, .. } = &block_1_clock_tx.message.root else {
+    let TransactionEntry::Call { to: clock_1, .. } = &block_1_clock_tx.message.root else {
         unreachable!("the clock invocation is an inline call");
     };
     let clock_1_acc = clock_1.account_id;
@@ -1338,7 +1338,7 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_clock_tx = clock_invocation(3, 3_u64.saturating_mul(100));
     let block_4_clock_tx = clock_invocation(4, 4_u64.saturating_mul(100));
 
-    let CallInput::Inline { to: clock_1, .. } = &block_1_clock_tx.message.root else {
+    let TransactionEntry::Call { to: clock_1, .. } = &block_1_clock_tx.message.root else {
         unreachable!("the clock invocation is an inline call");
     };
     let clock_1_acc = clock_1.account_id;

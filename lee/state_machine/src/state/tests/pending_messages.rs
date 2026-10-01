@@ -45,7 +45,7 @@ fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessag
 
 fn receipt(id: MessageId, to: Actor, identities: Vec<PublicIdentity>) -> PublicTransaction {
     let message = public_transaction::Message::new(
-        CallInput::InFlight(id),
+        TransactionEntry::Receive(id),
         vec![to],
         vec![],
         None,
@@ -172,8 +172,8 @@ fn a_public_receipt_needs_identity_evidence_for_an_unauthorized_receiver() {
         state.transition_from_public_transaction(&receipt(record.id(), receiver(), vec![]), 2, 0);
 
     assert!(matches!(
-        execution_error(result),
-        ExecutionError::UnprovenPublicIdentity { actor } if actor == receiver()
+        result,
+        Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
     ));
     assert_eq!(state.pending_message(record.id()), Some(&record));
     state
@@ -187,37 +187,6 @@ fn a_public_receipt_needs_identity_evidence_for_an_unauthorized_receiver() {
             0,
         )
         .expect("the receiver's key must prove its identity");
-}
-
-#[test]
-fn a_cast_cannot_be_received_in_the_transaction_that_publishes_it() {
-    let mut state = V03State::new().with_test_programs();
-    let id = StoredMessage {
-        sequence: 0,
-        body: MessageBody {
-            origin_program: scripted_id(),
-            to: receiver(),
-            message: borsh::to_vec(&received()).unwrap(),
-        },
-    }
-    .id();
-    let tx = public_tx(
-        sender(),
-        vec![sender()],
-        vec![],
-        Script::default()
-            .send(Cast::new(receiver(), &received()))
-            .send(Call::in_flight(id)),
-        &[],
-    );
-
-    let result = state.transition_from_public_transaction(&tx, 1, 0);
-
-    assert!(matches!(
-        execution_error(result),
-        ExecutionError::UnknownMessage { id: unknown } if unknown == id
-    ));
-    assert!(state.pending_messages_from(0).next().is_none());
 }
 
 #[test]
@@ -241,8 +210,8 @@ fn a_cast_to_a_private_account_cannot_be_received_publicly() {
     );
 
     assert!(matches!(
-        execution_error(result),
-        ExecutionError::UnprovenPublicIdentity { actor } if actor == private_receiver
+        result,
+        Err(LeeError::UnprovenPublicIdentity { actor }) if actor == private_receiver
     ));
     assert_eq!(state.pending_message(record.id()), Some(&record));
 }
@@ -299,8 +268,7 @@ fn a_private_account_receives_a_cast_by_proof() {
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            messages: vec![record],
-            ..proving_input(CallInput::InFlight(id))
+            ..proving_input(TransactionEntry::Receive(record))
         },
         &scripted_programs(),
     )
@@ -311,7 +279,7 @@ fn a_private_account_receives_a_cast_by_proof() {
         .transition_from_privacy_preserving_transaction(&tx, 2, 0)
         .unwrap();
 
-    assert_eq!(tx.message.consumed, vec![id]);
+    assert_eq!(tx.message.consumed_message, Some(id));
     assert!(state.pending_message(id).is_none());
 }
 
@@ -329,12 +297,10 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
             message: borsh::to_vec(&received()).unwrap(),
         },
     };
-    let id = record.id();
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            messages: vec![record],
-            ..proving_input(CallInput::InFlight(id))
+            ..proving_input(TransactionEntry::Receive(record))
         },
         &scripted_programs(),
     )
@@ -402,8 +368,7 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
-            messages: vec![record],
-            ..proving_input(CallInput::InFlight(id))
+            ..proving_input(TransactionEntry::Receive(record))
         },
         &scripted_programs(),
     )
@@ -417,12 +382,8 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
 }
 
 #[test]
-fn a_prepared_in_flight_delivery_to_an_unproven_public_receiver_fails_before_proving() {
+fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
     let keys = test_private_account_keys_1();
-    let private_root = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
-    );
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let id = record.id();
@@ -432,19 +393,15 @@ fn a_prepared_in_flight_delivery_to_an_unproven_public_receiver_fails_before_pro
                 public_actors: vec![receiver()],
                 identities,
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-                messages: vec![record.clone()],
-                ..proving_input(root(
-                    private_root,
-                    &Script::default().send(Call::in_flight(id)),
-                ))
+                ..proving_input(TransactionEntry::Receive(record.clone()))
             },
             &scripted_programs(),
         )
     };
 
     assert!(matches!(
-        execution_error(prove(HashSet::new())),
-        ExecutionError::UnprovenPublicIdentity { actor } if actor == receiver()
+        prove(HashSet::new()),
+        Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
     ));
     let (output, proof) = prove([receiver().account_id].into()).unwrap();
     let message = Message {
@@ -469,42 +426,6 @@ fn a_prepared_in_flight_delivery_to_an_unproven_public_receiver_fails_before_pro
             .shard(scripted_id()),
         &ShardData::try_from(b"received".to_vec()).unwrap()
     );
-}
-
-#[test]
-fn a_granted_public_receiver_needs_no_identity_evidence_to_prove() {
-    let keys = test_private_account_keys_1();
-    let private_root = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
-    );
-    let seed = PdaSeed::new([42; 32]);
-    let pda = Actor::new(
-        AccountId::for_public_pda(&scripted_id(), &seed),
-        scripted_id(),
-    );
-    let mut state = V03State::new().with_test_programs();
-    let record = cast(&mut state, pda);
-    let id = record.id();
-    let proven = execute_and_prove(
-        ProvingInput {
-            public_actors: vec![pda],
-            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            messages: vec![record],
-            ..proving_input(root(
-                private_root,
-                &Script::default().send(Call::in_flight(id).with_pda_seeds(vec![seed])),
-            ))
-        },
-        &scripted_programs(),
-    )
-    .expect("the seed grant must authorize the receiver without identity evidence");
-
-    state
-        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 2, 0)
-        .expect("the seed grant must authorize the receiver at settlement");
-
-    assert!(state.pending_message(id).is_none());
 }
 
 #[test]
@@ -610,7 +531,7 @@ fn a_receipt_that_fails_after_casting_keeps_its_record_pending_and_publishes_not
 }
 
 #[test]
-fn an_in_flight_root_naming_an_unknown_program_is_rejected_not_charged() {
+fn a_receipt_root_naming_an_unknown_program_is_rejected_not_charged() {
     let unknown = Actor::new(receiver().account_id, AccountId::new([0xEE; 32]));
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, unknown);
@@ -628,7 +549,7 @@ fn an_in_flight_root_naming_an_unknown_program_is_rejected_not_charged() {
     );
 
     let Err(error) = result else {
-        panic!("an in-flight root naming an unknown program must reject the block");
+        panic!("a receipt root naming an unknown program must reject the block");
     };
     assert!(
         matches!(error, LeeError::UnknownProgram { chained: false }),

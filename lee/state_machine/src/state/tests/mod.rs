@@ -13,14 +13,14 @@ use lee_core::{
     PrivacyPreservingCircuitOutput, PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, Actor, Balance, Nonce, data::ShardData},
     encryption::ViewingPublicKey,
-    execution_state::{Assumption, ExecutionError},
+    execution_state::{Assumption, ExecutionError, TransactionEntry},
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
     },
     program::{
-        BlockValidityWindow, Call, CallInput, ExecutionValidationError, Origin,
-        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId, ProgramSegment,
-        TimestampValidityWindow, TransactionEvent,
+        BlockValidityWindow, Call, ExecutionValidationError, Origin, PROGRAM_LOADER_ACCOUNT_ID,
+        PdaSeed, ProgramEvent, ProgramId, ProgramSegment, StoredMessage, TimestampValidityWindow,
+        TransactionEvent,
     },
 };
 use test_guest_core::{ForgeField, Script};
@@ -162,20 +162,19 @@ pub fn credit(from: Actor, to: Actor, amount: Balance) -> Assumption {
         from,
         to,
         message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
-        in_flight: None,
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     }
 }
 
-pub fn root(to: Actor, message: &impl BorshSerialize) -> CallInput {
-    CallInput::Inline {
+pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<StoredMessage> {
+    TransactionEntry::Call {
         to,
         message: borsh::to_vec(message).unwrap(),
     }
 }
 
-pub fn proving_input(root: CallInput) -> ProvingInput {
+pub fn proving_input(root: TransactionEntry<StoredMessage>) -> ProvingInput {
     ProvingInput {
         root,
         public_actors: Vec::new(),
@@ -185,7 +184,6 @@ pub fn proving_input(root: CallInput) -> ProvingInput {
         public_shards: HashMap::new(),
         dummy_inputs: Vec::new(),
         ciphertext_padding: None,
-        messages: Vec::new(),
     }
 }
 
