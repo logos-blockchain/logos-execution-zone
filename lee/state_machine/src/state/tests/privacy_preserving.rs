@@ -77,9 +77,11 @@ impl NestedBoundary {
             },
             vec![
                 vec![Assumption {
-                    from: outer,
-                    to: nested_private(),
-                    message: borsh::to_vec(&inner_turn()).unwrap(),
+                    envelope: MessageEnvelope {
+                        source: outer,
+                        to: nested_private(),
+                        message: borsh::to_vec(&inner_turn()).unwrap(),
+                    },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -372,7 +374,9 @@ fn a_tampered_boundary_output_is_rejected() {
         "the unmodified transfer must verify"
     );
 
-    tx.message.execution.boundary.outputs[0].message[0] ^= 0xFF;
+    tx.message.execution.boundary.public_deliveries[0]
+        .envelope
+        .message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
@@ -794,7 +798,9 @@ fn a_tampered_assumption_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    nested.tx.message.execution.boundary.assumptions[0].message[0] ^= 0xFF;
+    nested.tx.message.execution.boundary.assumptions[0]
+        .envelope
+        .message[0] ^= 0xFF;
 
     assert!(matches!(
         ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),

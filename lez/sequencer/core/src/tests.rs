@@ -4063,7 +4063,7 @@ fn pending_payouts(
     state
         .pending_messages_from(0)
         .filter(|record| {
-            record.body.origin_program == lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID
+            record.body.source == lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID
                 && record.body.to == Actor::native_balance(destination)
         })
         .map(|record| {

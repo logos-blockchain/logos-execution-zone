@@ -8,10 +8,14 @@ pub use lee_core::{
     GENESIS_BLOCK_ID, ProvingInput, SharedSecretKey,
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
-    execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp, TransactionEntry},
+    execution_state::{
+        Assumption, Boundary, Declared, DeliverySource, PublicDelivery, ScheduleOp,
+        TransactionEntry,
+    },
     native_token,
     program::{
-        Action, Call, Cast, MessageBody, MessageData, MessageId, Origin, ProgramId, StoredMessage,
+        Action, Call, Cast, MessageBody, MessageData, MessageEnvelope, MessageId, Origin,
+        ProgramId, StoredMessage,
     },
 };
 pub use privacy_preserving_circuit::{

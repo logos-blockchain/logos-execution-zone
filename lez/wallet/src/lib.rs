@@ -1458,14 +1458,14 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
 fn check_receivable(record: &StoredMessage) -> Result<(), ExecutionFailureKind> {
     let body = &record.body;
     let token = programs::token_account_id();
-    let plain_credit = if body.to.program_account_id == token && body.origin_program == token {
+    let plain_credit = if body.to.program_account_id == token && body.source == token {
         matches!(
             borsh::from_slice::<token_core::Message>(&body.message),
             Ok(token_core::Message::Credit { notify: None, .. })
         )
     } else {
         body.to.program_account_id == NATIVE_TOKEN_PROGRAM_ID
-            && body.origin_program == NATIVE_TOKEN_PROGRAM_ID
+            && body.source == NATIVE_TOKEN_PROGRAM_ID
             && matches!(
                 borsh::from_slice::<native_token::Message>(&body.message),
                 Ok(native_token::Message::Credit(_))
@@ -1503,14 +1503,14 @@ mod tests {
     };
 
     fn record(
-        origin_program: AccountId,
+        source: AccountId,
         to_program: AccountId,
         message: &impl borsh::BorshSerialize,
     ) -> StoredMessage {
         StoredMessage {
             sequence: 0,
             body: MessageBody {
-                origin_program,
+                source,
                 to: Actor::new(AccountId::new([1; 32]), to_program),
                 message: borsh::to_vec(message).unwrap(),
             },

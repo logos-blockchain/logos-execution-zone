@@ -8,8 +8,8 @@ use crate::{
     account::{AccountData, AccountId, Actor, ActorState},
     program::{
         Action, BlockValidityWindow, Call, ExecutionValidationError, InvalidWindow, MessageBody,
-        MessageData, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput,
-        StoredMessage, TimestampValidityWindow, Transition, validate_transition,
+        MessageData, MessageEnvelope, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
+        ReceiveInput, StoredMessage, TimestampValidityWindow, Transition, validate_transition,
     },
 };
 
@@ -70,21 +70,43 @@ pub enum Mode {
     Check(Boundary),
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub enum DeliverySource {
+    Root,
+    Call(AccountId),
+    Cast(AccountId),
+}
+
+impl DeliverySource {
+    #[must_use]
+    pub const fn origin(self) -> Origin {
+        match self {
+            Self::Root => Origin::Root,
+            Self::Call(program) | Self::Cast(program) => Origin::Program(program),
+        }
+    }
+
+    #[must_use]
+    pub const fn issuer(self) -> Option<AccountId> {
+        match self {
+            Self::Call(program) => Some(program),
+            Self::Root | Self::Cast(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct Output {
-    pub to: Actor,
-    pub message: MessageData,
-    pub origin: Origin,
-    pub issuer: Option<AccountId>,
+pub struct PublicDelivery {
+    pub envelope: MessageEnvelope<DeliverySource>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Assumption {
-    pub from: Actor,
-    pub to: Actor,
-    pub message: MessageData,
+    pub envelope: MessageEnvelope<Actor>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -104,7 +126,7 @@ pub enum ScheduleOp {
     Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Boundary {
-    pub outputs: Vec<Output>,
+    pub public_deliveries: Vec<PublicDelivery>,
     pub assumptions: Vec<Assumption>,
     pub casts: Vec<MessageBody>,
     pub schedule: Vec<ScheduleOp>,
@@ -176,10 +198,10 @@ pub enum ExecutionError {
     #[error("Public actor {actor:?} is declared twice")]
     DuplicatePublicActor { actor: Actor },
 
-    #[error("No assumed deliveries were supplied for output {output}")]
-    MissingAssumedDeliveries { output: usize },
+    #[error("No assumed deliveries were supplied for public delivery {index}")]
+    MissingAssumedDeliveries { index: usize },
 
-    #[error("Assumed deliveries were supplied for outputs the execution never produced")]
+    #[error("Assumed deliveries were supplied for public deliveries the execution never produced")]
     UnusedAssumedDeliveries,
 
     #[error("Assumed delivery sender {actor:?} is not a declared public actor")]
@@ -237,26 +259,20 @@ enum Item {
     Continue { root: bool },
 }
 
-// The sender is the internal sending actor: `None` for the root and for a proven output, whose
-// origin publishes only the sending program.
+// The sender is the internal sending actor: `None` for the root and for a proven public delivery,
+// whose source publishes only the sending program.
 struct Delivery {
-    to: Actor,
-    message: MessageData,
+    envelope: MessageEnvelope<DeliverySource>,
     sender: Option<Actor>,
-    origin: Origin,
-    issuer: Option<AccountId>,
     grants: BTreeSet<AccountId>,
     pda_seeds: Vec<PdaSeed>,
 }
 
 impl Delivery {
-    const fn root(to: Actor, message: MessageData, origin: Origin) -> Self {
+    const fn entry(envelope: MessageEnvelope<DeliverySource>) -> Self {
         Self {
-            to,
-            message,
+            envelope,
             sender: None,
-            origin,
-            issuer: None,
             grants: BTreeSet::new(),
             pda_seeds: Vec::new(),
         }
@@ -270,11 +286,12 @@ impl Delivery {
         pda_seeds: Vec<PdaSeed>,
     ) -> Self {
         Self {
-            to,
-            message,
+            envelope: MessageEnvelope {
+                source: DeliverySource::Call(from.program_account_id),
+                to,
+                message,
+            },
             sender: Some(from),
-            origin: Origin::Program(from.program_account_id),
-            issuer: Some(from.program_account_id),
             grants,
             pda_seeds,
         }
@@ -294,7 +311,7 @@ enum ModeState {
     Check {
         boundary: Boundary,
         cursor: usize,
-        outputs_consumed: usize,
+        public_deliveries_consumed: usize,
         assumptions_consumed: usize,
         casts_consumed: usize,
     },
@@ -415,7 +432,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 ModeState::Check {
                     boundary,
                     cursor: 0,
-                    outputs_consumed: 0,
+                    public_deliveries_consumed: 0,
                     assumptions_consumed: 0,
                     casts_consumed: 0,
                 },
@@ -423,21 +440,25 @@ impl<'witnesses> ExecutionState<'witnesses> {
         };
         let first = match entry {
             Some(TransactionEntry::Call { to, message }) => {
-                Item::Deliver(Box::new(Delivery::root(to, message, Origin::Root)))
+                Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
+                    source: DeliverySource::Root,
+                    to,
+                    message,
+                })))
             }
             Some(TransactionEntry::Receive(StoredMessage {
                 body:
                     MessageBody {
-                        origin_program,
+                        source,
                         to,
                         message,
                     },
                 ..
-            })) => Item::Deliver(Box::new(Delivery::root(
+            })) => Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
+                source: DeliverySource::Cast(source),
                 to,
                 message,
-                Origin::Program(origin_program),
-            ))),
+            }))),
             None => Item::Continue { root: true },
         };
 
@@ -470,19 +491,19 @@ impl<'witnesses> ExecutionState<'witnesses> {
         match &self.mode {
             ModeState::Live | ModeState::Derive { .. } => {}
             ModeState::Record { assumed, boundary } => {
-                if assumed.len() > boundary.outputs.len() {
+                if assumed.len() > boundary.public_deliveries.len() {
                     return Err(ExecutionError::UnusedAssumedDeliveries.into());
                 }
             }
             ModeState::Check {
                 boundary,
                 cursor,
-                outputs_consumed,
+                public_deliveries_consumed,
                 assumptions_consumed,
                 casts_consumed,
             } => {
                 if *cursor != boundary.schedule.len()
-                    || *outputs_consumed != boundary.outputs.len()
+                    || *public_deliveries_consumed != boundary.public_deliveries.len()
                     || *assumptions_consumed != boundary.assumptions.len()
                     || *casts_consumed != boundary.casts.len()
                 {
@@ -514,7 +535,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         let ModeState::Check {
             boundary,
             cursor,
-            outputs_consumed,
+            public_deliveries_consumed,
             casts_consumed,
             ..
         } = &mut self.mode
@@ -523,25 +544,26 @@ impl<'witnesses> ExecutionState<'witnesses> {
         };
         match (boundary.schedule.get(*cursor), root) {
             (Some(ScheduleOp::CallPublic), _) => {
-                let output = boundary
-                    .outputs
-                    .get(*outputs_consumed)
+                let PublicDelivery {
+                    envelope,
+                    grants,
+                    pda_seeds,
+                } = boundary
+                    .public_deliveries
+                    .get(*public_deliveries_consumed)
                     .ok_or(ExecutionError::IncompleteBoundary)?
                     .clone();
                 expect_op(&boundary.schedule, cursor, ScheduleOp::CallPublic)?;
-                *outputs_consumed = outputs_consumed
+                *public_deliveries_consumed = public_deliveries_consumed
                     .checked_add(1)
-                    .expect("bounded by the output count");
+                    .expect("bounded by the public delivery count");
                 self.pending.push_front(Item::Continue { root });
                 self.pending.push_front(Item::ClosePublic);
                 self.pending.push_front(Item::Deliver(Box::new(Delivery {
-                    to: output.to,
-                    message: output.message,
+                    envelope,
                     sender: None,
-                    origin: output.origin,
-                    issuer: output.issuer,
-                    grants: output.grants.into_iter().collect(),
-                    pda_seeds: output.pda_seeds,
+                    grants: grants.into_iter().collect(),
+                    pda_seeds,
                 })));
                 Ok(())
             }
@@ -588,7 +610,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
     // runs privately, and while checking any other destination must be the next assumed
     // delivery.
     fn deliver<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
-        let to = delivery.to;
+        let to = delivery.envelope.to;
         // No code upgrade may land between a proof's image claims and the turns it covers.
         if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
             && !matches!(self.mode, ModeState::Live)
@@ -624,9 +646,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .filter(|sender| self.public_actors.contains(sender));
         if let Some(from) = crossing {
             let assumption = Assumption {
-                from,
-                to: delivery.to,
-                message: delivery.message.clone(),
+                envelope: MessageEnvelope {
+                    source: from,
+                    to: delivery.envelope.to,
+                    message: delivery.envelope.message.clone(),
+                },
                 grants: delivery.grants.iter().copied().collect(),
                 pda_seeds: delivery.pda_seeds.clone(),
             };
@@ -667,9 +691,9 @@ impl<'witnesses> ExecutionState<'witnesses> {
             .get(index)
             .ok_or(ExecutionError::IncompleteBoundary)?;
         // A proven turn ran under exactly the authority the live delivery carries.
-        if Some(assumed.from) != delivery.sender
-            || assumed.to != delivery.to
-            || assumed.message != delivery.message
+        if Some(assumed.envelope.source) != delivery.sender
+            || assumed.envelope.to != delivery.envelope.to
+            || assumed.envelope.message != delivery.envelope.message
             || assumed.pda_seeds != delivery.pda_seeds
             || assumed.grants.iter().copied().collect::<BTreeSet<_>>() != delivery.grants
         {
@@ -690,7 +714,8 @@ impl<'witnesses> ExecutionState<'witnesses> {
     ) -> Result<(), B::Error> {
         let (assumed, boundary) = match &mut self.mode {
             ModeState::Record { assumed, boundary } => (assumed, boundary),
-            // A call from the root or a private turn is what a record publishes as an output.
+            // A call from the root or a private turn is what a record publishes as a public
+            // delivery.
             ModeState::Derive { groups, open } => {
                 if delivery
                     .sender
@@ -704,34 +729,39 @@ impl<'witnesses> ExecutionState<'witnesses> {
             }
             ModeState::Live | ModeState::Check { .. } => return self.execute(delivery, backend),
         };
-        let output = boundary.outputs.len();
-        boundary.outputs.push(boundary_output(&delivery));
+        let index = boundary.public_deliveries.len();
+        boundary.public_deliveries.push(public_delivery(&delivery));
         boundary.schedule.push(ScheduleOp::CallPublic);
         let deliveries = assumed
-            .get(output)
-            .ok_or(ExecutionError::MissingAssumedDeliveries { output })?;
+            .get(index)
+            .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
         self.pending.push_front(Item::ClosePublic);
-        for assumption in deliveries.iter().rev() {
-            if !self.public_actors.contains(&assumption.from) {
+        for Assumption {
+            envelope,
+            grants,
+            pda_seeds,
+        } in deliveries.iter().rev()
+        {
+            if !self.public_actors.contains(&envelope.source) {
                 return Err(ExecutionError::UndeclaredAssumedSender {
-                    actor: assumption.from,
+                    actor: envelope.source,
                 }
                 .into());
             }
             self.pending
                 .push_front(Item::Deliver(Box::new(Delivery::sent(
-                    assumption.from,
-                    assumption.to,
-                    assumption.message.clone(),
-                    assumption.grants.iter().copied().collect(),
-                    assumption.pda_seeds.clone(),
+                    envelope.source,
+                    envelope.to,
+                    envelope.message.clone(),
+                    grants.iter().copied().collect(),
+                    pda_seeds.clone(),
                 ))));
         }
         Ok(())
     }
 
     fn execute<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
-        let actor = delivery.to;
+        let actor = delivery.envelope.to;
         let (is_authorized, grants) = self.authorize(&delivery, actor)?;
         let entry = self
             .accounts
@@ -746,13 +776,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
         }
         let input = ReceiveInput {
             receiver: actor,
-            origin: delivery.origin,
+            origin: delivery.envelope.source.origin(),
             is_authorized,
             pre_state: entry.data.shard(actor.program_account_id).clone(),
-            message: delivery.message,
+            message: delivery.envelope.message,
         };
 
-        self.at_root = delivery.issuer.is_none();
+        self.at_root = !matches!(delivery.envelope.source, DeliverySource::Call(_));
         let transition = backend.receive(&input, self)?;
         validate_transition(&input, &transition).map_err(|source| {
             ExecutionError::ExecutionValidation {
@@ -796,7 +826,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     pda_seeds,
                 ))),
                 Action::Cast(cast) => Item::Cast(MessageBody {
-                    origin_program: actor.program_account_id,
+                    source: actor.program_account_id,
                     to: cast.to,
                     message: cast.message,
                 }),
@@ -811,7 +841,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
         actor: Actor,
     ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
         let account_id = actor.account_id;
-        let caller_account_id = delivery.issuer;
+        let caller_account_id = delivery.envelope.source.issuer();
         let entry = self
             .accounts
             .get(&account_id)
@@ -951,12 +981,9 @@ fn expect_op(
     Ok(())
 }
 
-fn boundary_output(delivery: &Delivery) -> Output {
-    Output {
-        to: delivery.to,
-        message: delivery.message.clone(),
-        origin: delivery.origin,
-        issuer: delivery.issuer,
+fn public_delivery(delivery: &Delivery) -> PublicDelivery {
+    PublicDelivery {
+        envelope: delivery.envelope.clone(),
         grants: delivery.grants.iter().copied().collect(),
         pda_seeds: delivery.pda_seeds.clone(),
     }

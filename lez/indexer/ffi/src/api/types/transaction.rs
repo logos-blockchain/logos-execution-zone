@@ -1,16 +1,17 @@
 use indexer_service_protocol::{
     AccountId, Actor, Assumption, Boundary, Ciphertext, Commitment, CommitmentSetDigest, Declared,
-    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, MessageBody, MessageId,
-    Nullifier, Origin, Output, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, Proof, PublicIdentity, PublicKey, PublicMessage, PublicTransaction, ScheduleOp,
-    Signature, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
+    DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
+    MessageBody, MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicIdentity, PublicKey,
+    PublicMessage, PublicTransaction, ScheduleOp, Signature, Transaction, TransactionEntry,
+    ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiSignature, FfiU128, FfiVec,
     vectors::{
         FfiAccountIdList, FfiActorList, FfiAssumptionList, FfiMessageBodyList, FfiMessageDataList,
-        FfiNonceList, FfiOutputList, FfiPdaSeedList, FfiPrivateActionList, FfiProof,
+        FfiNonceList, FfiPdaSeedList, FfiPrivateActionList, FfiProof, FfiPublicDeliveryList,
         FfiPublicIdentityList, FfiScheduleOpList, FfiSignaturePubKeyList, FfiVecU8,
     },
 };
@@ -394,70 +395,79 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     }
 }
 
-/// Where a delivery came from: the root, or the program that sent it
-/// (`program_account_id`, meaningful when `is_root` is false).
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct FfiOrigin {
-    pub is_root: bool,
-    pub program_account_id: FfiAccountId,
+pub enum FfiDeliverySourceKind {
+    RootSource = 0x0,
+    CallSource,
+    CastSource,
 }
 
-impl From<Origin> for FfiOrigin {
-    fn from(value: Origin) -> Self {
+/// Where a delivery came from: the root, or the program that called or cast it
+/// (`program`, meaningful unless `kind` is `RootSource`).
+#[repr(C)]
+pub struct FfiDeliverySource {
+    pub kind: FfiDeliverySourceKind,
+    pub program: FfiAccountId,
+}
+
+impl From<DeliverySource> for FfiDeliverySource {
+    fn from(value: DeliverySource) -> Self {
         match value {
-            Origin::Root => Self {
-                is_root: true,
-                program_account_id: FfiAccountId::default(),
+            DeliverySource::Root => Self {
+                kind: FfiDeliverySourceKind::RootSource,
+                program: FfiAccountId::default(),
             },
-            Origin::Program(program) => Self {
-                is_root: false,
-                program_account_id: program.into(),
+            DeliverySource::Call(program) => Self {
+                kind: FfiDeliverySourceKind::CallSource,
+                program: program.into(),
+            },
+            DeliverySource::Cast(program) => Self {
+                kind: FfiDeliverySourceKind::CastSource,
+                program: program.into(),
             },
         }
     }
 }
 
-impl From<FfiOrigin> for Origin {
-    fn from(value: FfiOrigin) -> Self {
-        if value.is_root {
-            Self::Root
-        } else {
-            Self::Program(AccountId {
-                value: value.program_account_id.data,
-            })
+impl From<FfiDeliverySource> for DeliverySource {
+    fn from(value: FfiDeliverySource) -> Self {
+        let program = AccountId {
+            value: value.program.data,
+        };
+        match value.kind {
+            FfiDeliverySourceKind::RootSource => Self::Root,
+            FfiDeliverySourceKind::CallSource => Self::Call(program),
+            FfiDeliverySourceKind::CastSource => Self::Cast(program),
         }
     }
 }
 
 #[repr(C)]
-pub struct FfiOutput {
+pub struct FfiPublicDelivery {
+    pub source: FfiDeliverySource,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub origin: FfiOrigin,
-    pub has_issuer: bool,
-    pub issuer: FfiAccountId,
     pub grants: FfiAccountIdList,
     pub pda_seeds: FfiPdaSeedList,
 }
 
-impl From<Output> for FfiOutput {
-    fn from(value: Output) -> Self {
-        let Output {
-            to,
-            message,
-            origin,
-            issuer,
+impl From<PublicDelivery> for FfiPublicDelivery {
+    fn from(value: PublicDelivery) -> Self {
+        let PublicDelivery {
+            envelope:
+                MessageEnvelope {
+                    source,
+                    to,
+                    message,
+                },
             grants,
             pda_seeds,
         } = value;
 
         Self {
+            source: source.into(),
             to: to.into(),
             message: message.into(),
-            origin: origin.into(),
-            has_issuer: issuer.is_some(),
-            issuer: issuer.map(Into::into).unwrap_or_default(),
             grants: grants_to_ffi(grants),
             pda_seeds: pda_seeds
                 .into_iter()
@@ -468,15 +478,14 @@ impl From<Output> for FfiOutput {
     }
 }
 
-impl From<FfiOutput> for Output {
-    fn from(value: FfiOutput) -> Self {
+impl From<FfiPublicDelivery> for PublicDelivery {
+    fn from(value: FfiPublicDelivery) -> Self {
         Self {
-            to: value.to.into(),
-            message: value.message.into(),
-            origin: value.origin.into(),
-            issuer: value.has_issuer.then_some(AccountId {
-                value: value.issuer.data,
-            }),
+            envelope: MessageEnvelope {
+                source: value.source.into(),
+                to: value.to.into(),
+                message: value.message.into(),
+            },
             grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
@@ -488,7 +497,7 @@ impl From<FfiOutput> for Output {
 
 #[repr(C)]
 pub struct FfiAssumption {
-    pub from: FfiActor,
+    pub source: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
     pub grants: FfiAccountIdList,
@@ -498,15 +507,18 @@ pub struct FfiAssumption {
 impl From<Assumption> for FfiAssumption {
     fn from(value: Assumption) -> Self {
         let Assumption {
-            from,
-            to,
-            message,
+            envelope:
+                MessageEnvelope {
+                    source,
+                    to,
+                    message,
+                },
             grants,
             pda_seeds,
         } = value;
 
         Self {
-            from: from.into(),
+            source: source.into(),
             to: to.into(),
             message: message.into(),
             grants: grants_to_ffi(grants),
@@ -522,9 +534,11 @@ impl From<Assumption> for FfiAssumption {
 impl From<FfiAssumption> for Assumption {
     fn from(value: FfiAssumption) -> Self {
         Self {
-            from: value.from.into(),
-            to: value.to.into(),
-            message: value.message.into(),
+            envelope: MessageEnvelope {
+                source: value.source.into(),
+                to: value.to.into(),
+                message: value.message.into(),
+            },
             grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
@@ -570,7 +584,7 @@ impl From<FfiScheduleOp> for ScheduleOp {
 
 #[repr(C)]
 pub struct FfiMessageBody {
-    pub origin_program: FfiAccountId,
+    pub source: FfiAccountId,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
 }
@@ -578,13 +592,13 @@ pub struct FfiMessageBody {
 impl From<MessageBody> for FfiMessageBody {
     fn from(value: MessageBody) -> Self {
         let MessageBody {
-            origin_program,
+            source,
             to,
             message,
         } = value;
 
         Self {
-            origin_program: origin_program.into(),
+            source: source.into(),
             to: to.into(),
             message: message.into(),
         }
@@ -594,8 +608,8 @@ impl From<MessageBody> for FfiMessageBody {
 impl From<FfiMessageBody> for MessageBody {
     fn from(value: FfiMessageBody) -> Self {
         Self {
-            origin_program: AccountId {
-                value: value.origin_program.data,
+            source: AccountId {
+                value: value.source.data,
             },
             to: value.to.into(),
             message: value.message.into(),
@@ -605,7 +619,7 @@ impl From<FfiMessageBody> for MessageBody {
 
 #[repr(C)]
 pub struct FfiBoundary {
-    pub outputs: FfiOutputList,
+    pub public_deliveries: FfiPublicDeliveryList,
     pub assumptions: FfiAssumptionList,
     pub casts: FfiMessageBodyList,
     pub schedule: FfiScheduleOpList,
@@ -614,14 +628,14 @@ pub struct FfiBoundary {
 impl From<Boundary> for FfiBoundary {
     fn from(value: Boundary) -> Self {
         let Boundary {
-            outputs,
+            public_deliveries,
             assumptions,
             casts,
             schedule,
         } = value;
 
         Self {
-            outputs: outputs
+            public_deliveries: public_deliveries
                 .into_iter()
                 .map(Into::into)
                 .collect::<Vec<_>>()
@@ -643,13 +657,13 @@ impl From<Boundary> for FfiBoundary {
 
 impl From<FfiBoundary> for Boundary {
     fn from(value: FfiBoundary) -> Self {
-        let outputs: Vec<FfiOutput> = value.outputs.into();
+        let public_deliveries: Vec<FfiPublicDelivery> = value.public_deliveries.into();
         let assumptions: Vec<FfiAssumption> = value.assumptions.into();
         let casts: Vec<FfiMessageBody> = value.casts.into();
         let schedule: Vec<FfiScheduleOp> = value.schedule.into();
 
         Self {
-            outputs: outputs.into_iter().map(Into::into).collect(),
+            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
@@ -1022,17 +1036,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boundary_outputs_keep_their_order_over_the_ffi() {
+    fn boundary_public_deliveries_keep_their_order_over_the_ffi() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
-        let output = |data: u8| Output {
-            to: Actor {
-                account_id: AccountId { value: [1; 32] },
-                program_account_id: AccountId { value: [2; 32] },
+        let delivery = |data: u8| PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Root,
+                to: Actor {
+                    account_id: AccountId { value: [1; 32] },
+                    program_account_id: AccountId { value: [2; 32] },
+                },
+                message: vec![data],
             },
-            message: vec![data],
-            origin: Origin::Root,
-            issuer: None,
             grants: vec![],
             pda_seeds: vec![],
         };
@@ -1041,7 +1056,7 @@ mod tests {
             message: PrivacyPreservingMessage {
                 declared: Declared::default(),
                 boundary: Boundary {
-                    outputs: vec![output(7), output(8), output(9), output(7)],
+                    public_deliveries: vec![delivery(7), delivery(8), delivery(9), delivery(7)],
                     assumptions: vec![],
                     casts: vec![],
                     schedule: vec![
@@ -1068,8 +1083,8 @@ mod tests {
         let back: PrivacyPreservingTransaction = Box::new(ffi).into();
 
         assert_eq!(
-            back.message.boundary.outputs,
-            original.message.boundary.outputs
+            back.message.boundary.public_deliveries,
+            original.message.boundary.public_deliveries
         );
     }
 
@@ -1167,33 +1182,37 @@ mod tests {
             message: PrivacyPreservingMessage {
                 declared: Declared::default(),
                 boundary: Boundary {
-                    outputs: vec![
-                        Output {
-                            to: actor(5, 6),
-                            message: vec![7],
-                            origin: Origin::Root,
-                            issuer: None,
+                    public_deliveries: vec![
+                        PublicDelivery {
+                            envelope: MessageEnvelope {
+                                source: DeliverySource::Root,
+                                to: actor(5, 6),
+                                message: vec![7],
+                            },
                             grants: vec![],
                             pda_seeds: vec![],
                         },
-                        Output {
-                            to: actor(9, 10),
-                            message: vec![11],
-                            origin: Origin::Program(account_id(12)),
-                            issuer: Some(account_id(13)),
+                        PublicDelivery {
+                            envelope: MessageEnvelope {
+                                source: DeliverySource::Call(account_id(12)),
+                                to: actor(9, 10),
+                                message: vec![11],
+                            },
                             grants: vec![account_id(15)],
                             pda_seeds: vec![PdaSeed([16; 32])],
                         },
                     ],
                     assumptions: vec![Assumption {
-                        from: actor(17, 18),
-                        to: actor(19, 20),
-                        message: vec![21],
+                        envelope: MessageEnvelope {
+                            source: actor(17, 18),
+                            to: actor(19, 20),
+                            message: vec![21],
+                        },
                         grants: vec![],
                         pda_seeds: vec![],
                     }],
                     casts: vec![MessageBody {
-                        origin_program: account_id(23),
+                        source: account_id(23),
                         to: actor(24, 25),
                         message: vec![26],
                     }],

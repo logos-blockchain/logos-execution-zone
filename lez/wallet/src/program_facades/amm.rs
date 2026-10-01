@@ -4,8 +4,8 @@ use amm_core::{
 };
 use common::HashType;
 use lee::{
-    AccountId, Actor, Assumption, privacy_preserving_transaction::circuit::ProgramCatalog,
-    program::Program,
+    AccountId, Actor, Assumption, MessageEnvelope,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::{
     SharedSecretKey,
@@ -455,9 +455,11 @@ impl SwapTerms {
                                 && mention.identity.account_id() == to.account_id
                         })
                         .then(|| Assumption {
-                            from: vault,
-                            to,
-                            message,
+                            envelope: MessageEnvelope {
+                                source: vault,
+                                to,
+                                message,
+                            },
                             grants: vec![self.output_vault_id],
                             pda_seeds,
                         })
@@ -919,9 +921,11 @@ mod tests {
         assert_eq!(
             payout_to(AccountIdentity::PrivateOwned(DESTINATION)),
             vec![vec![Assumption {
-                from: vault,
-                to,
-                message,
+                envelope: MessageEnvelope {
+                    source: vault,
+                    to,
+                    message,
+                },
                 grants: vec![terms.output_vault_id],
                 pda_seeds: Vec::new(),
             }]]

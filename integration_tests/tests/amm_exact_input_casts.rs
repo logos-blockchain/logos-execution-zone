@@ -265,7 +265,7 @@ async fn exact_inputs_prepared_at_one_price_settle_at_the_live_quote_and_cast_th
     assert_eq!(pending.len(), 2, "the node holds exactly the two payouts");
     for (record, (index, amount)) in pending.iter().zip([(0, 90), (1, 75)]) {
         assert_eq!(
-            (record.body.origin_program, record.body.to),
+            (record.body.source, record.body.to),
             (
                 token_program_id(),
                 Actor::new(traders[index].output, token_program_id())

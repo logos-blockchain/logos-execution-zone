@@ -159,14 +159,12 @@ fn enter(message: &[u8]) -> Call {
     }
 }
 
-fn output(to: Actor, origin: Origin) -> Output {
-    Output {
-        to,
-        message: Vec::new(),
-        origin,
-        issuer: match origin {
-            Origin::Root => None,
-            Origin::Program(program) => Some(program),
+fn public(source: DeliverySource, to: Actor, message: &[u8]) -> PublicDelivery {
+    PublicDelivery {
+        envelope: MessageEnvelope {
+            source,
+            to,
+            message: message.to_vec(),
         },
         grants: Vec::new(),
         pda_seeds: Vec::new(),
@@ -251,11 +249,11 @@ fn public_pda(program: AccountId, seed: PdaSeed) -> Actor {
     Actor::new(AccountId::for_public_pda(&program, &seed), program)
 }
 
-fn stored(origin_program: AccountId, to: Actor, message: &[u8]) -> StoredMessage {
+fn stored(source: AccountId, to: Actor, message: &[u8]) -> StoredMessage {
     StoredMessage {
         sequence: 0,
         body: MessageBody {
-            origin_program,
+            source,
             to,
             message: message.to_vec(),
         },
@@ -265,7 +263,7 @@ fn stored(origin_program: AccountId, to: Actor, message: &[u8]) -> StoredMessage
 // A statement whose only public call is the root delivery to `ENTRY`.
 fn root_statement() -> Boundary {
     Boundary {
-        outputs: vec![output(ENTRY, Origin::Root)],
+        public_deliveries: vec![public(DeliverySource::Root, ENTRY, &[])],
         schedule: vec![CallPublic, ReturnPublic],
         ..Boundary::default()
     }
@@ -275,9 +273,11 @@ fn root_statement() -> Boundary {
 fn nested_assumed() -> Vec<Vec<Assumption>> {
     vec![
         vec![Assumption {
-            from: ENTRY,
-            to: holder(&Keys::new(1)),
-            message: ENTER.to_vec(),
+            envelope: MessageEnvelope {
+                source: ENTRY,
+                to: holder(&Keys::new(1)),
+                message: ENTER.to_vec(),
+            },
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }],
@@ -646,9 +646,11 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
         pda_seeds: Vec::new(),
     };
     let reply = Assumption {
-        from: vault,
-        to: owner,
-        message: b"credit".to_vec(),
+        envelope: MessageEnvelope {
+            source: vault,
+            to: owner,
+            message: b"credit".to_vec(),
+        },
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
@@ -695,10 +697,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     assert_eq!(
         boundary,
         Boundary {
-            outputs: vec![Output {
-                message: b"credit".to_vec(),
-                ..output(vault, Origin::Program(id(8)))
-            }],
+            public_deliveries: vec![public(DeliverySource::Call(id(8)), vault, b"credit")],
             assumptions: vec![reply],
             casts: Vec::new(),
             schedule: vec![CallPublic, EnterPrivate, LeavePrivate, ReturnPublic],
@@ -726,10 +725,10 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
         ]
     );
     assert_eq!(
-        boundary.outputs,
+        boundary.public_deliveries,
         vec![
-            output(ENTRY, Origin::Root),
-            output(CALLEE, Origin::Program(id(8))),
+            public(DeliverySource::Root, ENTRY, &[]),
+            public(DeliverySource::Call(id(8)), CALLEE, &[]),
         ]
     );
     assert_eq!(
@@ -739,7 +738,7 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
 }
 
 #[test]
-fn assumed_deliveries_must_match_the_recorded_outputs() {
+fn assumed_deliveries_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
@@ -756,16 +755,18 @@ fn assumed_deliveries_must_match_the_recorded_outputs() {
         )
     };
     let reply = Assumption {
-        from: stranger,
-        to: holder(&keys),
-        message: Vec::new(),
+        envelope: MessageEnvelope {
+            source: stranger,
+            to: holder(&keys),
+            message: Vec::new(),
+        },
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     };
 
     assert!(matches!(
         record(Vec::new()),
-        Err(ExecutionError::MissingAssumedDeliveries { output: 0 })
+        Err(ExecutionError::MissingAssumedDeliveries { index: 0 })
     ));
     assert!(matches!(
         record(vec![Vec::new(), Vec::new()]),
@@ -789,16 +790,20 @@ fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
         .on(custody, sending(Vec::new()));
     let assumed = vec![vec![
         Assumption {
-            from: vault,
-            to: owner,
-            message: Vec::new(),
+            envelope: MessageEnvelope {
+                source: vault,
+                to: owner,
+                message: Vec::new(),
+            },
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         },
         Assumption {
-            from: vault,
-            to: custody,
-            message: Vec::new(),
+            envelope: MessageEnvelope {
+                source: vault,
+                to: custody,
+                message: Vec::new(),
+            },
             grants: Vec::new(),
             pda_seeds: vec![seed],
         },
@@ -878,7 +883,7 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
 fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Origin::Program(id(8));
     let boundary = Boundary {
-        outputs: vec![output(ENTRY, origin)],
+        public_deliveries: vec![public(DeliverySource::Call(id(8)), ENTRY, &[])],
         schedule: vec![CallPublic, ReturnPublic],
         ..Boundary::default()
     };
@@ -974,9 +979,11 @@ fn relayed_grant(
             root: root(owner),
             assumed: vec![
                 vec![Assumption {
-                    from: vault,
-                    to: relay,
-                    message: ENTER.to_vec(),
+                    envelope: MessageEnvelope {
+                        source: vault,
+                        to: relay,
+                        message: ENTER.to_vec(),
+                    },
                     grants: assumed_grants,
                     pda_seeds: Vec::new(),
                 }],
@@ -1064,9 +1071,11 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         Mode::Record {
             root: root(owner),
             assumed: vec![vec![Assumption {
-                from: peer,
-                to: custody,
-                message: Vec::new(),
+                envelope: MessageEnvelope {
+                    source: peer,
+                    to: custody,
+                    message: Vec::new(),
+                },
                 grants: vec![custody.account_id],
                 pda_seeds: Vec::new(),
             }]],
@@ -1080,7 +1089,10 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = recorded_boundary(recorded);
-    assert_eq!(boundary.outputs[0].grants, vec![custody.account_id]);
+    assert_eq!(
+        boundary.public_deliveries[0].grants,
+        vec![custody.account_id]
+    );
 
     let mut checking = Script::default()
         .on(
@@ -1169,14 +1181,16 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
                 root: root(requester),
                 assumed: vec![
                     vec![Assumption {
-                        from: requester,
-                        to: payer,
-                        message: borsh::to_vec(&native_token::Message::Transfer {
-                            to: payee.account_id,
-                            amount: 0,
-                            expect_balance: None,
-                        })
-                        .unwrap(),
+                        envelope: MessageEnvelope {
+                            source: requester,
+                            to: payer,
+                            message: borsh::to_vec(&native_token::Message::Transfer {
+                                to: payee.account_id,
+                                amount: 0,
+                                expect_balance: None,
+                            })
+                            .unwrap(),
+                        },
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],
@@ -1188,14 +1202,12 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     };
 
     assert_eq!(
-        recorded_boundary(record(true).unwrap()).outputs[1],
-        Output {
-            message: borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
-            ..output(
-                payee,
-                Origin::Program(native_token::NATIVE_TOKEN_PROGRAM_ID)
-            )
-        }
+        recorded_boundary(record(true).unwrap()).public_deliveries[1],
+        public(
+            DeliverySource::Call(native_token::NATIVE_TOKEN_PROGRAM_ID),
+            payee,
+            &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
+        )
     );
     let Err(refused) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| record(false)))
     else {
@@ -1302,10 +1314,11 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
     .unwrap();
 
     assert_eq!(
-        recorded_boundary(recorded).outputs,
-        vec![output(
+        recorded_boundary(recorded).public_deliveries,
+        vec![public(
+            DeliverySource::Call(holder(&keys).program_account_id),
             ENTRY,
-            Origin::Program(holder(&keys).program_account_id)
+            &[]
         )]
     );
 }
@@ -1379,12 +1392,12 @@ fn a_cast_is_published_after_the_subtree_of_the_call_before_it() {
         casts,
         vec![
             MessageBody {
-                origin_program: id(9),
+                source: id(9),
                 to: inner_target,
                 message: b"y".to_vec(),
             },
             MessageBody {
-                origin_program: id(9),
+                source: id(9),
                 to: outer_target,
                 message: b"x".to_vec(),
             },
@@ -1447,7 +1460,7 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
     let keys = Keys::new(1);
     let (private_target, public_target) = (actor(6, 7), actor(7, 7));
     let private_cast = MessageBody {
-        origin_program: id(8),
+        source: id(8),
         to: private_target,
         message: b"x".to_vec(),
     };
@@ -1502,7 +1515,7 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
         casts,
         vec![
             MessageBody {
-                origin_program: id(9),
+                source: id(9),
                 to: public_target,
                 message: b"y".to_vec(),
             },
@@ -1515,7 +1528,7 @@ fn a_checked_private_cast_is_published_in_execution_order_with_the_live_casts() 
 fn a_check_rejects_a_cast_its_schedule_never_reaches() {
     let boundary = Boundary {
         casts: vec![MessageBody {
-            origin_program: id(8),
+            source: id(8),
             to: CALLEE,
             message: b"x".to_vec(),
         }],

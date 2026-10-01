@@ -283,8 +283,8 @@ mod tests {
         Commitment, Nullifier,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{Output, ScheduleOp},
-        program::{MessageBody, Origin},
+        execution_state::{DeliverySource, PublicDelivery, ScheduleOp},
+        program::{MessageBody, MessageEnvelope},
     };
 
     fn pinned_statement() -> (Declared, Boundary) {
@@ -296,18 +296,21 @@ mod tests {
                 authorized_accounts: vec![AccountId::new([7; 32])],
             },
             Boundary {
-                outputs: vec![Output {
-                    to: public,
-                    message: b"o".to_vec(),
-                    origin: Origin::Program(private.program_account_id),
-                    issuer: Some(private.program_account_id),
+                public_deliveries: vec![PublicDelivery {
+                    envelope: MessageEnvelope {
+                        source: DeliverySource::Call(private.program_account_id),
+                        to: public,
+                        message: b"o".to_vec(),
+                    },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
                 assumptions: vec![Assumption {
-                    from: public,
-                    to: private,
-                    message: b"a".to_vec(),
+                    envelope: MessageEnvelope {
+                        source: public,
+                        to: private,
+                        message: b"a".to_vec(),
+                    },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
@@ -336,21 +339,19 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[165, 1, 0, 0][..], // frame length: the 421 bytes below
+            &[132, 1, 0, 0][..], // frame length: the 388 bytes below
             &[1, 0, 0, 0],       // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
             &[1, 0, 0, 0], // declared.authorized_accounts: one account
             &[7; 32],
-            &[1, 0, 0, 0], // boundary.outputs: one output
-            &[5; 32],      // to
+            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[1],          // source: DeliverySource::Call
+            &[8; 32],
+            &[5; 32], // to
             &[6; 32],
             &[1, 0, 0, 0], // message
             b"o",
-            &[1], // origin: Origin::Program
-            &[8; 32],
-            &[1], // issuer: Some
-            &[8; 32],
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[1, 0, 0, 0], // boundary.assumptions: one assumption
@@ -385,17 +386,18 @@ mod tests {
                 authorized_accounts: Vec::new(),
             },
             boundary: Boundary {
-                outputs: vec![Output {
-                    to: public,
-                    message: b"o".to_vec(),
-                    origin: Origin::Program(AccountId::new([8; 32])),
-                    issuer: None,
+                public_deliveries: vec![PublicDelivery {
+                    envelope: MessageEnvelope {
+                        source: DeliverySource::Cast(AccountId::new([8; 32])),
+                        to: public,
+                        message: b"o".to_vec(),
+                    },
                     grants: Vec::new(),
                     pda_seeds: Vec::new(),
                 }],
                 assumptions: Vec::new(),
                 casts: vec![MessageBody {
-                    origin_program: AccountId::new([8; 32]),
+                    source: AccountId::new([8; 32]),
                     to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                     message: b"p".to_vec(),
                 }],
@@ -413,24 +415,23 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[92, 1, 0, 0][..], // frame length: the 348 bytes below
+            &[91, 1, 0, 0][..], // frame length: the 347 bytes below
             &[1, 0, 0, 0],      // declared.public_actors: one actor
             &[5; 32],
             &[6; 32],
             &[0, 0, 0, 0], // declared.authorized_accounts: none
-            &[1, 0, 0, 0], // boundary.outputs: one output
-            &[5; 32],      // to
+            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[2],          // source: DeliverySource::Cast
+            &[8; 32],
+            &[5; 32], // to
             &[6; 32],
             &[1, 0, 0, 0], // message
             b"o",
-            &[1], // origin: Origin::Program
-            &[8; 32],
-            &[0],          // issuer: None
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[0, 0, 0, 0], // boundary.assumptions: none
             &[1, 0, 0, 0], // boundary.casts: one message
-            &[8; 32],      // origin_program
+            &[8; 32],      // source
             &[3; 32],      // to
             &[4; 32],
             &[1, 0, 0, 0], // message

@@ -28,6 +28,12 @@ typedef enum FfiPublicIdentityKind {
   Pda,
 } FfiPublicIdentityKind;
 
+typedef enum FfiDeliverySourceKind {
+  RootSource = 0,
+  CallSource,
+  CastSource,
+} FfiDeliverySourceKind;
+
 typedef enum FfiScheduleOp {
   CallPublic = 0,
   EnterPrivate,
@@ -270,13 +276,13 @@ typedef struct FfiDeclared {
 } FfiDeclared;
 
 /**
- * Where a delivery came from: the root, or the program that sent it
- * (`program_account_id`, meaningful when `is_root` is false).
+ * Where a delivery came from: the root, or the program that called or cast it
+ * (`program`, meaningful unless `kind` is `RootSource`).
  */
-typedef struct FfiOrigin {
-  bool is_root;
-  FfiAccountId program_account_id;
-} FfiOrigin;
+typedef struct FfiDeliverySource {
+  enum FfiDeliverySourceKind kind;
+  FfiAccountId program;
+} FfiDeliverySource;
 
 typedef struct FfiVec_FfiBytes32 {
   struct FfiBytes32 *entries;
@@ -286,26 +292,24 @@ typedef struct FfiVec_FfiBytes32 {
 
 typedef struct FfiVec_FfiBytes32 FfiPdaSeedList;
 
-typedef struct FfiOutput {
+typedef struct FfiPublicDelivery {
+  struct FfiDeliverySource source;
   struct FfiActor to;
   FfiMessageDataList message;
-  struct FfiOrigin origin;
-  bool has_issuer;
-  FfiAccountId issuer;
   FfiAccountIdList grants;
   FfiPdaSeedList pda_seeds;
-} FfiOutput;
+} FfiPublicDelivery;
 
-typedef struct FfiVec_FfiOutput {
-  struct FfiOutput *entries;
+typedef struct FfiVec_FfiPublicDelivery {
+  struct FfiPublicDelivery *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiOutput;
+} FfiVec_FfiPublicDelivery;
 
-typedef struct FfiVec_FfiOutput FfiOutputList;
+typedef struct FfiVec_FfiPublicDelivery FfiPublicDeliveryList;
 
 typedef struct FfiAssumption {
-  struct FfiActor from;
+  struct FfiActor source;
   struct FfiActor to;
   FfiMessageDataList message;
   FfiAccountIdList grants;
@@ -321,7 +325,7 @@ typedef struct FfiVec_FfiAssumption {
 typedef struct FfiVec_FfiAssumption FfiAssumptionList;
 
 typedef struct FfiMessageBody {
-  FfiAccountId origin_program;
+  FfiAccountId source;
   struct FfiActor to;
   FfiMessageDataList message;
 } FfiMessageBody;
@@ -343,7 +347,7 @@ typedef struct FfiVec_FfiScheduleOp {
 typedef struct FfiVec_FfiScheduleOp FfiScheduleOpList;
 
 typedef struct FfiBoundary {
-  FfiOutputList outputs;
+  FfiPublicDeliveryList public_deliveries;
   FfiAssumptionList assumptions;
   FfiMessageBodyList casts;
   FfiScheduleOpList schedule;

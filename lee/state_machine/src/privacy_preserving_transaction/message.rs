@@ -103,8 +103,10 @@ pub mod tests {
         PrivateAction, SharedSecretKey,
         account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
-        execution_state::{Assumption, Boundary, Declared, Output, ScheduleOp},
-        program::{BlockValidityWindow, Origin, TimestampValidityWindow},
+        execution_state::{
+            Assumption, Boundary, Declared, DeliverySource, PublicDelivery, ScheduleOp,
+        },
+        program::{BlockValidityWindow, MessageEnvelope, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
@@ -174,18 +176,21 @@ pub mod tests {
                     authorized_accounts: vec![AccountId::new([7; 32])],
                 },
                 boundary: Boundary {
-                    outputs: vec![Output {
-                        to: public,
-                        message: b"o".to_vec(),
-                        origin: Origin::Program(private.program_account_id),
-                        issuer: Some(private.program_account_id),
+                    public_deliveries: vec![PublicDelivery {
+                        envelope: MessageEnvelope {
+                            source: DeliverySource::Call(private.program_account_id),
+                            to: public,
+                            message: b"o".to_vec(),
+                        },
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],
                     assumptions: vec![Assumption {
-                        from: public,
-                        to: private,
-                        message: b"a".to_vec(),
+                        envelope: MessageEnvelope {
+                            source: public,
+                            to: private,
+                            message: b"a".to_vec(),
+                        },
                         grants: Vec::new(),
                         pda_seeds: Vec::new(),
                     }],
@@ -213,15 +218,13 @@ pub mod tests {
             &[6; 32],
             &[1, 0, 0, 0], // declared.authorized_accounts: one account
             &[7; 32],
-            &[1, 0, 0, 0], // boundary.outputs: one output
-            &[5; 32],      // to
+            &[1, 0, 0, 0], // boundary.public_deliveries: one delivery
+            &[1],          // source: DeliverySource::Call
+            &[8; 32],
+            &[5; 32], // to
             &[6; 32],
             &[1, 0, 0, 0], // message
             b"o",
-            &[1], // origin: Origin::Program
-            &[8; 32],
-            &[1], // issuer: Some
-            &[8; 32],
             &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[1, 0, 0, 0], // boundary.assumptions: one assumption

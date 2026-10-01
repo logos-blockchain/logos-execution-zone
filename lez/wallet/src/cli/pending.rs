@@ -54,7 +54,7 @@ impl WalletSubcommand for PendingSubcommand {
                         record.sequence,
                         record.body.to.account_id,
                         record.body.to.program_account_id,
-                        record.body.origin_program,
+                        record.body.source,
                         record.body.message.len()
                     );
                 }

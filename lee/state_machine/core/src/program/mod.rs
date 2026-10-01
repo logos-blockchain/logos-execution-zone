@@ -284,11 +284,13 @@ impl MessageId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-pub struct MessageBody {
-    pub origin_program: AccountId,
+pub struct MessageEnvelope<S> {
+    pub source: S,
     pub to: Actor,
     pub message: MessageData,
 }
+
+pub type MessageBody = MessageEnvelope<AccountId>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct StoredMessage {

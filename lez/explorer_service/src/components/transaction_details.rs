@@ -117,7 +117,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         authorized_accounts,
     } = declared;
     let Boundary {
-        outputs,
+        public_deliveries,
         assumptions,
         casts: _,
         schedule,
@@ -131,10 +131,13 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         .collect::<Vec<_>>()
         .join(", ");
     // The public actors the private execution called, and those that called into it.
-    let output_receivers: Vec<_> = outputs.into_iter().map(|output| output.to).collect();
+    let delivery_receivers: Vec<_> = public_deliveries
+        .into_iter()
+        .map(|delivery| delivery.envelope.to)
+        .collect();
     let assumption_senders: Vec<_> = assumptions
         .into_iter()
-        .map(|assumption| assumption.from)
+        .map(|assumption| assumption.envelope.source)
         .collect();
     let signer_nonces_str = nonces
         .iter()
@@ -188,8 +191,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             <h3>"Declared Public Actors"</h3>
             <ActorList actors=public_actors />
 
-            <h3>"Boundary Outputs"</h3>
-            <ActorList actors=output_receivers />
+            <h3>"Boundary Public Deliveries"</h3>
+            <ActorList actors=delivery_receivers />
 
             <h3>"Boundary Assumptions"</h3>
             <ActorList actors=assumption_senders />

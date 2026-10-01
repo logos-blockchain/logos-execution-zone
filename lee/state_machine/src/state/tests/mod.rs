@@ -18,9 +18,9 @@ use lee_core::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
     },
     program::{
-        BlockValidityWindow, Call, ExecutionValidationError, Origin, PROGRAM_LOADER_ACCOUNT_ID,
-        PdaSeed, ProgramEvent, ProgramId, ProgramSegment, StoredMessage, TimestampValidityWindow,
-        TransactionEvent,
+        BlockValidityWindow, Call, ExecutionValidationError, MessageEnvelope, Origin,
+        PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId, ProgramSegment, StoredMessage,
+        TimestampValidityWindow, TransactionEvent,
     },
 };
 use test_guest_core::{ForgeField, Script};
@@ -159,9 +159,11 @@ pub const fn transfer(to: AccountId, amount: Balance) -> NativeMessage {
 
 pub fn credit(from: Actor, to: Actor, amount: Balance) -> Assumption {
     Assumption {
-        from,
-        to,
-        message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
+        envelope: MessageEnvelope {
+            source: from,
+            to,
+            message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
+        },
         grants: Vec::new(),
         pda_seeds: Vec::new(),
     }

@@ -507,7 +507,7 @@ fn stored_message_id_matches_pinned_value() {
     let record = StoredMessage {
         sequence: 7,
         body: MessageBody {
-            origin_program: AccountId::new([5; 32]),
+            source: AccountId::new([5; 32]),
             to: Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32])),
             message: b"m".to_vec(),
         },
@@ -524,7 +524,7 @@ fn stored_message_id_differs_for_different_sequence() {
     let record = |sequence| StoredMessage {
         sequence,
         body: MessageBody {
-            origin_program: AccountId::new([5; 32]),
+            source: AccountId::new([5; 32]),
             to: Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32])),
             message: b"m".to_vec(),
         },

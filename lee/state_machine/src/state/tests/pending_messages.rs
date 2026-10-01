@@ -66,7 +66,7 @@ fn a_cast_publishes_a_pending_record_that_a_later_transaction_receives() {
         vec![StoredMessage {
             sequence: 0,
             body: MessageBody {
-                origin_program: scripted_id(),
+                source: scripted_id(),
                 to: receiver(),
                 message: borsh::to_vec(&received()).unwrap(),
             },
@@ -109,7 +109,7 @@ fn pending_records_are_numbered_in_publication_order_across_transactions() {
         &[],
     );
     let body = MessageBody {
-        origin_program: scripted_id(),
+        source: scripted_id(),
         to: receiver(),
         message: borsh::to_vec(&received()).unwrap(),
     };
@@ -290,7 +290,7 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
     let record = StoredMessage {
         sequence: 0,
         body: MessageBody {
-            origin_program: scripted_id(),
+            source: scripted_id(),
             to: Actor::new(
                 AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
                 scripted_id(),
@@ -348,7 +348,7 @@ fn a_cast_from_a_private_root_is_published_at_settlement() {
         vec![StoredMessage {
             sequence: 0,
             body: MessageBody {
-                origin_program: scripted_id(),
+                source: scripted_id(),
                 to: receiver(),
                 message: borsh::to_vec(&received()).unwrap(),
             },
@@ -476,7 +476,7 @@ fn a_second_diff_receiving_an_already_received_record_is_refused_at_apply() {
         vec![StoredMessage {
             sequence: 1,
             body: MessageBody {
-                origin_program: scripted_id(),
+                source: scripted_id(),
                 to: sender(),
                 message: borsh::to_vec(&received()).unwrap(),
             },

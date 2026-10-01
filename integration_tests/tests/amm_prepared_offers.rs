@@ -86,9 +86,11 @@ fn payout_assumed(pool: &PoolFixture, trader: &Trader) -> Vec<Vec<lee::Assumptio
                     panic!("the token program's payout is an inline call");
                 };
                 lee::Assumption {
-                    from: vault_b,
-                    to,
-                    message,
+                    envelope: lee::MessageEnvelope {
+                        source: vault_b,
+                        to,
+                        message,
+                    },
                     grants: vec![pool.vault_b],
                     pda_seeds,
                 }

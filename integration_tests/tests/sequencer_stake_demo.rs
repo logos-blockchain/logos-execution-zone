@@ -322,7 +322,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .await?
         .into_iter()
         .filter(|pending| {
-            (pending.body.origin_program, pending.body.to)
+            (pending.body.source, pending.body.to)
                 == (
                     native_token::NATIVE_TOKEN_PROGRAM_ID,
                     Actor::native_balance(destination_id),

@@ -5,12 +5,12 @@ use lee_core::account::Nonce;
 use crate::{
     Account, AccountData, AccountId, Actor, ActorState, Assumption, BedrockStatus, Block,
     BlockBody, BlockHeader, BlockId, BlockIngestError, Boundary, Ciphertext, Commitment,
-    CommitmentSetDigest, CrossZoneHalt, Declared, EncryptedAccountData, EphemeralPublicKey,
-    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageBody, MessageId,
-    Nullifier, Origin, Output, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, PublicIdentity, PublicKey, PublicMessage,
-    PublicTransaction, ScheduleOp, Selector, Signature, StallReason, Transaction, TransactionEntry,
-    ValidityWindow, WitnessSet,
+    CommitmentSetDigest, CrossZoneHalt, Declared, DeliverySource, EncryptedAccountData,
+    EphemeralPublicKey, EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState,
+    MessageEnvelope, MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery,
+    PublicIdentity, PublicKey, PublicMessage, PublicTransaction, ScheduleOp, Selector, Signature,
+    StallReason, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -429,50 +429,52 @@ impl From<MessageId> for lee_core::program::MessageId {
     }
 }
 
-impl From<lee_core::program::MessageBody> for MessageBody {
-    fn from(value: lee_core::program::MessageBody) -> Self {
-        let lee_core::program::MessageBody {
-            origin_program,
+impl<S: Into<T>, T> From<lee_core::program::MessageEnvelope<S>> for MessageEnvelope<T> {
+    fn from(value: lee_core::program::MessageEnvelope<S>) -> Self {
+        let lee_core::program::MessageEnvelope {
+            source,
             to,
             message,
         } = value;
         Self {
-            origin_program: origin_program.into(),
+            source: source.into(),
             to: to.into(),
             message,
         }
     }
 }
 
-impl From<MessageBody> for lee_core::program::MessageBody {
-    fn from(value: MessageBody) -> Self {
-        let MessageBody {
-            origin_program,
+impl<S: Into<T>, T> From<MessageEnvelope<S>> for lee_core::program::MessageEnvelope<T> {
+    fn from(value: MessageEnvelope<S>) -> Self {
+        let MessageEnvelope {
+            source,
             to,
             message,
         } = value;
         Self {
-            origin_program: origin_program.into(),
+            source: source.into(),
             to: to.into(),
             message,
         }
     }
 }
 
-impl From<lee_core::program::Origin> for Origin {
-    fn from(value: lee_core::program::Origin) -> Self {
+impl From<lee_core::execution_state::DeliverySource> for DeliverySource {
+    fn from(value: lee_core::execution_state::DeliverySource) -> Self {
         match value {
-            lee_core::program::Origin::Root => Self::Root,
-            lee_core::program::Origin::Program(program) => Self::Program(program.into()),
+            lee_core::execution_state::DeliverySource::Root => Self::Root,
+            lee_core::execution_state::DeliverySource::Call(program) => Self::Call(program.into()),
+            lee_core::execution_state::DeliverySource::Cast(program) => Self::Cast(program.into()),
         }
     }
 }
 
-impl From<Origin> for lee_core::program::Origin {
-    fn from(value: Origin) -> Self {
+impl From<DeliverySource> for lee_core::execution_state::DeliverySource {
+    fn from(value: DeliverySource) -> Self {
         match value {
-            Origin::Root => Self::Root,
-            Origin::Program(program) => Self::Program(program.into()),
+            DeliverySource::Root => Self::Root,
+            DeliverySource::Call(program) => Self::Call(program.into()),
+            DeliverySource::Cast(program) => Self::Cast(program.into()),
         }
     }
 }
@@ -501,42 +503,30 @@ impl From<ScheduleOp> for lee_core::execution_state::ScheduleOp {
     }
 }
 
-impl From<lee_core::execution_state::Output> for Output {
-    fn from(value: lee_core::execution_state::Output) -> Self {
-        let lee_core::execution_state::Output {
-            to,
-            message,
-            origin,
-            issuer,
+impl From<lee_core::execution_state::PublicDelivery> for PublicDelivery {
+    fn from(value: lee_core::execution_state::PublicDelivery) -> Self {
+        let lee_core::execution_state::PublicDelivery {
+            envelope,
             grants,
             pda_seeds,
         } = value;
         Self {
-            to: to.into(),
-            message,
-            origin: origin.into(),
-            issuer: issuer.map(Into::into),
+            envelope: envelope.into(),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<Output> for lee_core::execution_state::Output {
-    fn from(value: Output) -> Self {
-        let Output {
-            to,
-            message,
-            origin,
-            issuer,
+impl From<PublicDelivery> for lee_core::execution_state::PublicDelivery {
+    fn from(value: PublicDelivery) -> Self {
+        let PublicDelivery {
+            envelope,
             grants,
             pda_seeds,
         } = value;
         Self {
-            to: to.into(),
-            message,
-            origin: origin.into(),
-            issuer: issuer.map(Into::into),
+            envelope: envelope.into(),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -546,16 +536,12 @@ impl From<Output> for lee_core::execution_state::Output {
 impl From<lee_core::execution_state::Assumption> for Assumption {
     fn from(value: lee_core::execution_state::Assumption) -> Self {
         let lee_core::execution_state::Assumption {
-            from,
-            to,
-            message,
+            envelope,
             grants,
             pda_seeds,
         } = value;
         Self {
-            from: from.into(),
-            to: to.into(),
-            message,
+            envelope: envelope.into(),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -565,16 +551,12 @@ impl From<lee_core::execution_state::Assumption> for Assumption {
 impl From<Assumption> for lee_core::execution_state::Assumption {
     fn from(value: Assumption) -> Self {
         let Assumption {
-            from,
-            to,
-            message,
+            envelope,
             grants,
             pda_seeds,
         } = value;
         Self {
-            from: from.into(),
-            to: to.into(),
-            message,
+            envelope: envelope.into(),
             grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
@@ -584,13 +566,13 @@ impl From<Assumption> for lee_core::execution_state::Assumption {
 impl From<lee_core::execution_state::Boundary> for Boundary {
     fn from(value: lee_core::execution_state::Boundary) -> Self {
         let lee_core::execution_state::Boundary {
-            outputs,
+            public_deliveries,
             assumptions,
             casts,
             schedule,
         } = value;
         Self {
-            outputs: outputs.into_iter().map(Into::into).collect(),
+            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
@@ -601,13 +583,13 @@ impl From<lee_core::execution_state::Boundary> for Boundary {
 impl From<Boundary> for lee_core::execution_state::Boundary {
     fn from(value: Boundary) -> Self {
         let Boundary {
-            outputs,
+            public_deliveries,
             assumptions,
             casts,
             schedule,
         } = value;
         Self {
-            outputs: outputs.into_iter().map(Into::into).collect(),
+            public_deliveries: public_deliveries.into_iter().map(Into::into).collect(),
             assumptions: assumptions.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
             schedule: schedule.into_iter().map(Into::into).collect(),
@@ -1294,22 +1276,23 @@ mod tests {
     }
 
     #[test]
-    fn boundary_outputs_keep_their_order_through_the_mirror() {
+    fn boundary_public_deliveries_keep_their_order_through_the_mirror() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
-        let output = |data: u8| lee_core::execution_state::Output {
-            to: lee_core::account::Actor::new(
-                lee_core::account::AccountId::new([1; 32]),
-                lee_core::account::AccountId::new([2; 32]),
-            ),
-            message: vec![data],
-            origin: lee_core::program::Origin::Root,
-            issuer: None,
+        let delivery = |data: u8| lee_core::execution_state::PublicDelivery {
+            envelope: lee_core::program::MessageEnvelope {
+                source: lee_core::execution_state::DeliverySource::Root,
+                to: lee_core::account::Actor::new(
+                    lee_core::account::AccountId::new([1; 32]),
+                    lee_core::account::AccountId::new([2; 32]),
+                ),
+                message: vec![data],
+            },
             grants: vec![],
             pda_seeds: vec![],
         };
         let boundary = lee_core::execution_state::Boundary {
-            outputs: vec![output(7), output(8), output(9), output(7)],
+            public_deliveries: vec![delivery(7), delivery(8), delivery(9), delivery(7)],
             assumptions: vec![],
             casts: vec![],
             schedule: vec![],
@@ -1460,33 +1443,39 @@ mod tests {
             execution: lee_core::PrivacyPreservingCircuitOutput {
                 declared: lee_core::execution_state::Declared::default(),
                 boundary: lee_core::execution_state::Boundary {
-                    outputs: vec![
-                        lee_core::execution_state::Output {
-                            to: actor(4, 5),
-                            message: vec![6],
-                            origin: lee_core::program::Origin::Root,
-                            issuer: None,
+                    public_deliveries: vec![
+                        lee_core::execution_state::PublicDelivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                source: lee_core::execution_state::DeliverySource::Root,
+                                to: actor(4, 5),
+                                message: vec![6],
+                            },
                             grants: vec![],
                             pda_seeds: vec![],
                         },
-                        lee_core::execution_state::Output {
-                            to: actor(8, 9),
-                            message: vec![10],
-                            origin: lee_core::program::Origin::Program(account_id(11)),
-                            issuer: Some(account_id(12)),
+                        lee_core::execution_state::PublicDelivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                source: lee_core::execution_state::DeliverySource::Call(
+                                    account_id(11),
+                                ),
+                                to: actor(8, 9),
+                                message: vec![10],
+                            },
                             grants: vec![account_id(14)],
                             pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
                         },
                     ],
                     assumptions: vec![lee_core::execution_state::Assumption {
-                        from: actor(16, 17),
-                        to: actor(18, 19),
-                        message: vec![20],
+                        envelope: lee_core::program::MessageEnvelope {
+                            source: actor(16, 17),
+                            to: actor(18, 19),
+                            message: vec![20],
+                        },
                         grants: vec![],
                         pda_seeds: vec![],
                     }],
                     casts: vec![lee_core::program::MessageBody {
-                        origin_program: account_id(22),
+                        source: account_id(22),
                         to: actor(23, 24),
                         message: vec![25],
                     }],

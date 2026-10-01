@@ -5,9 +5,11 @@ use lee_core::{
     Identifier, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateWitness,
     SharedSecretKey, WitnessKind,
     account::{Account, AccountId, ActorState, Nonce},
-    execution_state::{Boundary, Declared, ExecutionError, Output},
+    execution_state::{Boundary, Declared, DeliverySource, ExecutionError, PublicDelivery},
     native_token::encode_balance,
-    program::{Call, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
+    program::{
+        Call, MessageEnvelope, Origin, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind,
+    },
 };
 use test_guest_core::Script;
 
@@ -122,12 +124,13 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     // The journal carries the public call to settle and the delivery it assumes back, not a
     // claimed balance: the prover never read the sender's shard.
     assert_eq!(
-        output.boundary.outputs,
-        vec![Output {
-            to: sender,
-            message: borsh::to_vec(&root_transfer).unwrap(),
-            origin: Origin::Root,
-            issuer: None,
+        output.boundary.public_deliveries,
+        vec![PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Root,
+                to: sender,
+                message: borsh::to_vec(&root_transfer).unwrap(),
+            },
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }]
@@ -941,12 +944,13 @@ fn the_prover_never_reads_a_public_shard() {
 
     assert!(proof.is_valid_for(&output));
     assert_eq!(
-        output.boundary.outputs,
-        vec![Output {
-            to: root_actor,
-            message: borsh::to_vec(&script).unwrap(),
-            origin: Origin::Root,
-            issuer: None,
+        output.boundary.public_deliveries,
+        vec![PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Root,
+                to: root_actor,
+                message: borsh::to_vec(&script).unwrap(),
+            },
             grants: Vec::new(),
             pda_seeds: Vec::new(),
         }]

@@ -15,11 +15,11 @@ use std::{
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
     BlockBody, BlockHeader, BlockId, Boundary, Commitment, CommitmentSetDigest, Declared,
-    EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
-    IndexerStatus, IndexerSyncState, Origin, Output, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, PublicKey, PublicMessage, PublicTransaction,
-    ScheduleOp, Selector, ShardSummary, Signature, Transaction, TransactionEntry, ValidityWindow,
-    WitnessSet,
+    DeliverySource, EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter,
+    HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, PublicDelivery, PublicKey, PublicMessage,
+    PublicTransaction, ScheduleOp, Selector, ShardSummary, Signature, Transaction,
+    TransactionEntry, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -556,11 +556,12 @@ fn mock_privacy_preserving_tx(
                 authorized_accounts: vec![],
             },
             boundary: Boundary {
-                outputs: vec![Output {
-                    to,
-                    message: vec![0xdd, 0xee],
-                    origin: Origin::Root,
-                    issuer: None,
+                public_deliveries: vec![PublicDelivery {
+                    envelope: MessageEnvelope {
+                        source: DeliverySource::Root,
+                        to,
+                        message: vec![0xdd, 0xee],
+                    },
                     grants: vec![],
                     pda_seeds: vec![],
                 }],
