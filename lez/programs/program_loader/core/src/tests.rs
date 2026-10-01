@@ -113,8 +113,6 @@ fn write_segment_rejects_an_unauthorized_target() {
     let _effects = write_segment(&[handle(target_id, false)], shards.read(), vec![1], None);
 }
 
-/// Issue 181's payloads: bytecode whose untagged segment encoding is exactly a header's. Tagged,
-/// they are stored as segments and never read back as headers.
 #[test]
 fn write_segment_stores_header_sized_bytecode_as_a_segment() {
     let next_id = AccountId::new([1; 32]);
@@ -447,8 +445,6 @@ fn build_segments_rejects_a_chain_over_the_segment_cap() {
     );
 }
 
-/// Finding 1: a chain may not end in a header. A mutable header linked as a segment would let its
-/// owner change an immutable program's code by updating that header.
 #[test]
 #[should_panic(expected = "every supplied segment account must decode as a valid ProgramSegment")]
 fn create_header_rejects_a_chain_linking_to_a_header() {

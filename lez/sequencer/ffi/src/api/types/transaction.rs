@@ -239,8 +239,7 @@ impl From<ProgramImageClaim> for FfiProgramImageClaim {
 impl TryFrom<FfiProgramImageClaim> for ProgramImageClaim {
     type Error = OperationStatus;
 
-    /// Reclaims every non-null pointer before reading the tag, so a malformed claim leaks nothing,
-    /// and a pointer the tag needs but which is null is an error rather than a null dereference.
+    /// Frees every non-null pointer (unused ones must be null); a missing required one is an error.
     fn try_from(value: FfiProgramImageClaim) -> Result<Self, Self::Error> {
         let account_id = (!value.account_id.is_null())
             .then(|| unsafe { Box::from_raw(value.account_id.cast_mut()) });
@@ -309,8 +308,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     type Error = OperationStatus;
 
-    /// Reclaims every FFI allocation the body owns before validating any field, so a body that
-    /// fails to convert still frees all of it.
+    /// Reclaims every allocation before validating, so a failed conversion leaks nothing.
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
         let FfiPrivateTransactionBody {
             message,
@@ -369,7 +367,6 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         let witness_entries: Vec<FfiSignaturePubKeyEntry> = witness_set.into();
         let proof = Proof::from_inner(proof.into());
 
-        // Everything is owned by Rust now, so an early return below drops it rather than leaking.
         let block_validity_window = cast_ffi_validity_window(block_validity_window)?;
         let timestamp_validity_window = cast_ffi_validity_window(timestamp_validity_window)?;
         let program_image_claims = program_image_claims.into_iter().collect::<Result<_, _>>()?;
@@ -888,8 +885,6 @@ mod tests {
         );
     }
 
-    /// A body that fails validation is reported as a cast error, after every FFI allocation it
-    /// owns has been reclaimed rather than left behind by an early return.
     #[test]
     fn a_private_body_with_an_invalid_validity_window_is_a_cast_error() {
         let mut ffi = FfiPrivateTransactionBody::from(private_tx(claims().to_vec()));
@@ -919,8 +914,6 @@ mod tests {
         );
     }
 
-    /// Issue 186: freeing a private transaction carrying an Undisclosed claim used to dereference
-    /// null pointers.
     #[test]
     fn a_private_transaction_with_both_claim_kinds_roundtrips_and_frees() {
         let original = private_tx(claims().to_vec());

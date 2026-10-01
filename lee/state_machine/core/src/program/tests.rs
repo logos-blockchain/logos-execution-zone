@@ -455,9 +455,7 @@ fn get_program_via_reads_the_loader_shard() {
     assert_eq!(get_program_via(program_account, deleted_header), None);
 }
 
-/// Finding 1: a header whose untagged bytes would parse as a final segment (first `image_id` word
-/// 60, mutable) still doesn't resolve as a chain link, so updating it can't change another
-/// program's code.
+/// The linked header's untagged bytes would parse as a final segment (first word 60, mutable).
 #[test]
 fn get_program_via_does_not_follow_a_link_to_a_header() {
     let program_account = AccountId::new([1; 32]);

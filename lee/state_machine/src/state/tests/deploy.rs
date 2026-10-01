@@ -421,8 +421,7 @@ fn write_segment_rejects_a_shadow_derived_target_the_signer_does_not_control() {
 
     let shadow_addr = AccountId::for_shadow_program(&victim_program.id());
 
-    // Issue 181's payload: 28 filler bytes + the attacker's first segment, which untagged storage
-    // would also have read as a header pointing at the attacker's chain.
+    // 28 filler bytes + a segment id: untagged storage would have read this as a header.
     let mut bytecode = vec![0_u8; 28];
     bytecode.extend_from_slice(attacker_segments[0].value());
 
@@ -455,8 +454,6 @@ fn write_segment_rejects_a_shadow_derived_target_the_signer_does_not_control() {
     );
 }
 
-/// Issue 181's payload at an address the signer controls: stored as a segment, it can never be read
-/// back as a header, so nothing resolves there as a program.
 #[test]
 fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
     let mut state = V03State::new();
