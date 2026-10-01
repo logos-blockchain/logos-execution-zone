@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use chain_state::ChainState;
+use chain_state::{ChainState, ChannelEntry, Tip};
 use common::{
     HashType,
     block::{Block, BlockMeta, HashableBlockData},
@@ -58,6 +58,8 @@ struct StoredChain {
     anchor: Option<ZoneAnchorRecord>,
     checkpoint: Option<Vec<u8>>,
     pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
+    /// The persisted channel view; `None` restores a root lineage.
+    view: Option<Vec<u8>>,
 }
 
 impl StoredChain {
@@ -72,6 +74,7 @@ impl StoredChain {
             anchor: None,
             checkpoint: None,
             pending_dispatches: Vec::new(),
+            view: None,
         }
     }
 
@@ -152,6 +155,11 @@ impl StoredChain {
         self
     }
 
+    fn with_view(mut self, view: Vec<u8>) -> Self {
+        self.view = Some(view);
+        self
+    }
+
     fn with_pending_dispatch(mut self, record: PendingCrossZoneDispatchRecord) -> Self {
         self.pending_dispatches.push(record);
         self
@@ -172,6 +180,7 @@ impl StoredChain {
             anchor,
             checkpoint,
             pending_dispatches,
+            view: stored_view,
         } = self;
         let tip = blocks.last().map(BlockMeta::from);
         let tip_id = tip.as_ref().map(|tip| tip.id);
@@ -207,7 +216,7 @@ impl StoredChain {
                     .map(|bytes| ZoneCheckpointRecord { bytes, seq: 0 }))
             });
         mock.expect_handle_get_channel_view_bytes()
-            .returning(|_msg, _ctx| Ok(None));
+            .returning(move |_msg, _ctx| Ok(stored_view.clone()));
         mock.expect_handle_get_slash_record_bytes()
             .returning(|_msg, _ctx| Ok(None));
         mock.expect_handle_get_pending_cross_zone_dispatches()
@@ -497,6 +506,223 @@ async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
     chain.restore_view(&bytes)?;
     assert_eq!(chain.final_msg(), MsgId::from([41; 32]));
     assert_eq!(chain.pin(), MsgId::from([41; 32]));
+    Ok(())
+}
+
+/// The view each update persisting the anchor on `block` at `slot` carries.
+fn expect_anchor_capturing_view(
+    store: &mut MockStorageActor,
+    block: &Block,
+    slot: u64,
+) -> Arc<Mutex<Option<Vec<u8>>>> {
+    let (block_id, hash) = (block.header.block_id, block.header.hash);
+    let view = Arc::new(Mutex::new(None));
+    store
+        .expect_handle_apply_store_update()
+        .withf(move |update, _ctx| {
+            update.zone_anchor
+                == Some(ZoneAnchorRecord {
+                    slot,
+                    block_id,
+                    hash,
+                })
+        })
+        .times(1)
+        .returning({
+            let view = Arc::clone(&view);
+            move |update, _ctx| {
+                *view.lock().expect("view capture lock") = update.channel_view;
+                Ok(StoreUpdateOutcome::default())
+            }
+        });
+    view
+}
+
+/// The lineage a captured view restores to: its final entry and its held entries.
+fn captured_lineage(view: &Mutex<Option<Vec<u8>>>) -> Result<(MsgId, Vec<MsgId>)> {
+    let bytes = view
+        .lock()
+        .expect("view capture lock")
+        .clone()
+        .expect("the update persists the view");
+    let mut chain = ChainState::from_final(V03State::default(), None);
+    chain.restore_view(&bytes)?;
+    let held = chain.view().iter().map(|entry| entry.msg).collect();
+    Ok((chain.final_msg(), held))
+}
+
+fn msg_of(block: &Block) -> MsgId {
+    MsgId::from(block.header.hash.0)
+}
+
+/// Genesis, block 2 and block 3, each chained on the one before.
+fn three_blocks() -> [Block; 3] {
+    let genesis = genesis();
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+    [genesis, block2, block3]
+}
+
+/// Final through `block2` over its applied state, with `held` on top of it in
+/// the head; the persisted view, when `final_msg` is given, holds `held` chained
+/// on that final entry.
+fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> StoredChain {
+    let mut stored = StoredChain::finalized_genesis().with_head(block2.clone());
+    stored.final_snapshot = Some((stored.head_state.clone(), BlockMeta::from(block2)));
+    let (final_state, final_meta) = stored.final_snapshot.clone().expect("final snapshot");
+    let mut chain = ChainState::from_final(final_state, Some(Tip::from(final_meta)));
+    let mut parent = final_msg.unwrap_or_else(MsgId::root);
+    chain.apply_reconstructed(parent, None);
+    for block in held {
+        stored = stored.with_head(block.clone());
+        chain.apply_extension(vec![ChannelEntry {
+            msg: msg_of(block),
+            parent,
+            block: Some(block.clone()),
+        }]);
+        parent = msg_of(block);
+    }
+    match final_msg {
+        Some(_) => stored.with_view(chain.encode_view()),
+        None => stored,
+    }
+}
+
+fn garbage(id: MsgId, slot: u64) -> (ZoneMessage, Slot) {
+    let message = ZoneMessage::Block(ZoneBlock {
+        id,
+        data: Inscription::try_from(b"not a block".as_slice()).expect("fits an inscription"),
+    });
+    (message, Slot::from(slot))
+}
+
+/// A warm start re-reads finalized history the final tier already holds. The
+/// lineage must not rewind to those entries, or the first one would drop the
+/// held view; it resumes past the stored final entry.
+#[test]
+async fn a_warm_restart_rereads_history_without_rewinding_the_lineage() -> Result<()> {
+    let [genesis, block2, block3] = three_blocks();
+    let mut store = final_through(
+        &block2,
+        Some(msg_of(&block2)),
+        std::slice::from_ref(&block3),
+    )
+    .into_mock();
+
+    let after_genesis = expect_anchor_capturing_view(&mut store, &genesis, 10);
+    let after_block2 = expect_anchor_capturing_view(&mut store, &block2, 20);
+    let after_block3 = expect_anchor_capturing_view(&mut store, &block3, 30);
+    let bedrock = channel_serving(
+        Some(Slot::from(30)),
+        vec![
+            channel_message(&genesis, 10),
+            channel_message(&block2, 20),
+            channel_message(&block3, 30),
+        ],
+    );
+
+    let storage_ref = MockStorageActor::spawn(store);
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    start(&storage_ref, &bedrock_ref).await?;
+    storage_ref.ask(MockCheckpoint).await?;
+
+    let held = (msg_of(&block2), vec![msg_of(&block3)]);
+    assert_eq!(captured_lineage(&after_genesis)?, held);
+    assert_eq!(captured_lineage(&after_block2)?, held);
+    assert_eq!(
+        captured_lineage(&after_block3)?,
+        (msg_of(&block3), Vec::new())
+    );
+    Ok(())
+}
+
+/// A final tier stored without its view has a root lineage, so reconstruction
+/// rebuilds the lineage from the first message it reads.
+#[test]
+async fn a_final_tier_without_a_view_rebuilds_the_lineage() -> Result<()> {
+    let [genesis, block2, block3] = three_blocks();
+    let mut store = final_through(&block2, None, &[]).into_mock();
+
+    expect_anchor(&mut store, &genesis, 10);
+    expect_anchor(&mut store, &block2, 20);
+    let after_block3 = expect_anchor_capturing_view(&mut store, &block3, 30);
+    let bedrock = channel_serving(
+        Some(Slot::from(30)),
+        vec![
+            channel_message(&genesis, 10),
+            channel_message(&block2, 20),
+            channel_message(&block3, 30),
+        ],
+    );
+
+    let storage_ref = MockStorageActor::spawn(store);
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    start(&storage_ref, &bedrock_ref).await?;
+    storage_ref.ask(MockCheckpoint).await?;
+
+    assert_eq!(
+        captured_lineage(&after_block3)?,
+        (msg_of(&block3), Vec::new())
+    );
+    Ok(())
+}
+
+/// A stored final entry without a block still resumes the lineage once re-read.
+#[test]
+async fn a_blockless_final_entry_resumes_the_lineage() -> Result<()> {
+    let [genesis, block2, block3] = three_blocks();
+    let junk = MsgId::from([0xAA_u8; 32]);
+    let mut store = final_through(&block2, Some(junk), &[]).into_mock();
+
+    expect_anchor(&mut store, &genesis, 10);
+    expect_anchor(&mut store, &block2, 20);
+    let after_block3 = expect_anchor_capturing_view(&mut store, &block3, 30);
+    let bedrock = channel_serving(
+        Some(Slot::from(30)),
+        vec![
+            channel_message(&genesis, 10),
+            channel_message(&block2, 20),
+            garbage(junk, 25),
+            channel_message(&block3, 30),
+        ],
+    );
+
+    let storage_ref = MockStorageActor::spawn(store);
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    start(&storage_ref, &bedrock_ref).await?;
+    storage_ref.ask(MockCheckpoint).await?;
+
+    assert_eq!(
+        captured_lineage(&after_block3)?,
+        (msg_of(&block3), Vec::new())
+    );
+    Ok(())
+}
+
+/// Finalized history that ends before the stored final entry, from a lagging
+/// Bedrock node, leaves the lineage and the view as stored.
+#[test]
+async fn history_short_of_the_final_entry_leaves_the_lineage_alone() -> Result<()> {
+    let [genesis, block2, block3] = three_blocks();
+    let mut store = final_through(
+        &block2,
+        Some(msg_of(&block2)),
+        std::slice::from_ref(&block3),
+    )
+    .into_mock();
+
+    let after_genesis = expect_anchor_capturing_view(&mut store, &genesis, 10);
+    let bedrock = channel_serving(Some(Slot::from(10)), vec![channel_message(&genesis, 10)]);
+
+    let storage_ref = MockStorageActor::spawn(store);
+    let bedrock_ref = MockBedrockActor::spawn(bedrock);
+    start(&storage_ref, &bedrock_ref).await?;
+    storage_ref.ask(MockCheckpoint).await?;
+
+    assert_eq!(
+        captured_lineage(&after_genesis)?,
+        (msg_of(&block2), vec![msg_of(&block3)])
+    );
     Ok(())
 }
 

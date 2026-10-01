@@ -281,62 +281,93 @@ impl ChainState {
         }
     }
 
-    /// A finalized entry, `parent` when the caller knows it. Returns the final
-    /// tier's outcome for its block, `None` when it carries none. `final_msg`
-    /// moves only to an entry whose block applied or that chains on it;
-    /// anything else is a re-delivery, and leaves the view if held.
+    /// A finalized entry chained on `parent`. Returns the final tier's outcome
+    /// for its block, `None` when it carries none. `final_msg` moves only to an
+    /// entry chained on it; anything else leaves the view if held, and its
+    /// block still applies to the final tier.
     pub fn apply_finalized(
         &mut self,
         msg: MsgId,
-        parent: Option<MsgId>,
+        parent: MsgId,
         block: Option<&Block>,
     ) -> Option<AcceptOutcome> {
         // Finality is prefix-monotone: the held entries this one chains on
         // finalize first, found by parent link since a stale re-report can
         // sit out of order in the view.
-        let parent = parent.or_else(|| {
-            self.view
-                .iter()
-                .find(|entry| entry.msg == msg)
-                .map(|entry| entry.parent)
-        });
-        if let Some(parent) = parent
-            && let Some(ancestor) = self.view.iter().find(|entry| entry.msg == parent).cloned()
-        {
-            self.apply_finalized(ancestor.msg, None, ancestor.block.as_ref());
+        if let Some(ancestor) = self.view.iter().find(|entry| entry.msg == parent).cloned() {
+            self.apply_finalized(ancestor.msg, ancestor.parent, ancestor.block.as_ref());
         }
 
-        let outcome = block.map(|block| self.apply_final_block(block));
-        let held_at = self.view.iter().position(|entry| entry.msg == msg);
-        let is_next =
-            matches!(outcome, Some(AcceptOutcome::Applied(_))) || parent == Some(self.final_msg);
-        if !is_next {
-            // A held entry off the final lineage is stale or past a gap, so it
-            // leaves the view without rewinding `final_msg`.
-            if let Some(idx) = held_at {
-                self.view.remove(idx);
-                self.refold();
+        if parent != self.final_msg {
+            let outcome = self.apply_finalized_redelivery(msg, block);
+            if let (Some(AcceptOutcome::Applied(_)), Some(block)) = (&outcome, block) {
+                warn!(
+                    "Block {} in finalized message {msg} extended the final tier",
+                    block.header.block_id
+                );
             }
             return outcome;
         }
 
-        self.final_msg = msg;
-        if let Some(idx) = held_at {
-            // Its ancestors are already final, so anything left before it is off the lineage.
-            self.view.drain(..=idx);
-            self.trim_head();
-        } else {
-            // Its siblings in the view, and everything chained on them, can
-            // never land; entries chained on it stay.
-            let children = self
-                .view
-                .iter()
-                .position(|entry| entry.parent == msg)
-                .unwrap_or(self.view.len());
-            self.view.drain(..children);
-            self.refold();
+        let outcome = block.map(|block| self.apply_final_block(block));
+        self.advance_final_msg(msg);
+        outcome
+    }
+
+    /// A finalized entry read in lineage order during reconstruction, so it
+    /// always becomes the final entry.
+    pub fn apply_reconstructed(
+        &mut self,
+        msg: MsgId,
+        block: Option<&Block>,
+    ) -> Option<AcceptOutcome> {
+        let outcome = block.map(|block| self.apply_final_block(block));
+        self.advance_final_msg(msg);
+        outcome
+    }
+
+    /// A finalized entry not chained on `final_msg`: its block applies to the
+    /// final tier, `final_msg` stays, and a held copy leaves the view.
+    pub fn apply_finalized_redelivery(
+        &mut self,
+        msg: MsgId,
+        block: Option<&Block>,
+    ) -> Option<AcceptOutcome> {
+        // TODO: Drop this apply once host failures retry until they succeed (see
+        // `BlockIngestError::is_retryable`) and a store restored with a root `final_msg`
+        // over a held tier is repaired elsewhere.
+        let outcome = block.map(|block| self.apply_final_block(block));
+        match self.view.iter().position(|entry| entry.msg == msg) {
+            Some(idx) => {
+                self.view.remove(idx);
+                self.refold();
+            }
+            None if matches!(outcome, Some(AcceptOutcome::Applied(_))) => self.trim_head(),
+            None => {}
         }
         outcome
+    }
+
+    /// Makes `msg` the final entry and keeps only the view entries chained on it.
+    fn advance_final_msg(&mut self, msg: MsgId) {
+        let held = self.view.iter().any(|entry| entry.msg == msg);
+        self.final_msg = msg;
+        let mut lineage = HashSet::from([msg]);
+        let keep: Vec<bool> = self
+            .view
+            .iter()
+            .map(|entry| lineage.contains(&entry.parent) && lineage.insert(entry.msg))
+            .collect();
+        let dropped = keep.iter().take_while(|kept| !**kept).count();
+        let prefix_only = keep[dropped..].iter().all(|kept| *kept);
+        let mut keep = keep.into_iter();
+        self.view.retain(|_| keep.next().unwrap_or(false));
+        // Dropping `msg` and what precedes it leaves blocks the tier now holds.
+        if held && prefix_only {
+            self.trim_head();
+        } else {
+            self.refold();
+        }
     }
 
     /// Inserts `entry` before a held entry chained on it, when it chains on
@@ -729,7 +760,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
         let head_before = state_bytes(chain.head_state());
 
-        let outcome = chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
 
         // Block 1 finalized first, as the parent of the entry that finalized.
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
@@ -748,7 +779,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
 
         // A different entry on root finalizes, with no block.
-        chain.apply_finalized(msg(20), Some(MsgId::root()), None);
+        chain.apply_finalized(msg(20), MsgId::root(), None);
 
         assert!(chain.view().is_empty());
         assert_eq!(chain.pin(), msg(20));
@@ -761,14 +792,14 @@ mod tests {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // Block 1 again, and a garbage entry the lineage already passed.
         assert!(matches!(
-            chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0])),
+            chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0])),
             Some(AcceptOutcome::AlreadyApplied)
         ));
-        chain.apply_finalized(msg(30), Some(msg(31)), None);
+        chain.apply_finalized(msg(30), msg(31), None);
 
         assert_eq!(chain.final_msg(), msg(1));
         assert_eq!(chain.view().len(), 2);
@@ -777,19 +808,23 @@ mod tests {
     }
 
     #[test]
-    fn a_finalized_block_the_view_never_held_resyncs_the_lineage() {
+    fn a_finalized_block_off_the_lineage_advances_the_tier_not_the_lineage() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
+        chain.apply_extension(entries_for(&blocks));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
-        // Block 2 on an entry we never saw: the final tier takes it.
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
-        let outcome = chain.apply_finalized(msg(9), Some(msg(8)), Some(&blocks[1]));
+        // Block 2 again, on an entry we never saw.
+        let outcome = chain.apply_finalized(msg(9), msg(8), Some(&blocks[1]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
-        assert_eq!(chain.final_msg(), msg(9));
-        assert_eq!(chain.pin(), msg(9));
-        assert_eq!(head_id(&chain), Some(2));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(1));
+        assert_eq!(chain.pin(), msg(2));
+        assert!(
+            chain.head_blocks().is_empty(),
+            "the head drops the now-final block"
+        );
         assert_head_is_the_fold(&chain);
     }
 
@@ -838,7 +873,7 @@ mod tests {
             entry(2, msg(1), Some(&broken)),
             entry(3, msg(2), Some(&blocks[1])),
         ]);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         let mut restored = ChainState::from_final(chain.final_state().clone(), chain.final_tip());
         restored.restore_view(&chain.encode_view()).unwrap();
@@ -862,7 +897,7 @@ mod tests {
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks[..2]));
 
-        chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2]));
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
 
         let ids: Vec<u64> = chain
             .take_newly_final()
@@ -880,7 +915,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks[..2]));
 
         // Entry 3 was never adopted, but it chains on entry 2.
-        let outcome = chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2]));
+        let outcome = chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::Applied(_))));
         assert_eq!(chain.final_tip().unwrap().block_id, 3);
@@ -894,10 +929,10 @@ mod tests {
     fn a_block_reinscribed_under_a_new_entry_is_already_final() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(1);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // The same block again, as the next entry on the lineage.
-        let outcome = chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[0]));
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&blocks[0]));
 
         assert!(matches!(outcome, Some(AcceptOutcome::AlreadyApplied)));
         assert_eq!(chain.final_tip().unwrap().hash, blocks[0].header.hash);
@@ -908,7 +943,7 @@ mod tests {
     fn a_hash_alias_with_the_wrong_id_is_not_absorbed() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         // Block 1's hash claimed at height 2: the hash no longer matches.
         let mut alias = blocks[0].clone();
@@ -924,7 +959,7 @@ mod tests {
 
         // Finalized, it parks.
         assert!(matches!(
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&alias)),
+            chain.apply_finalized(msg(2), msg(1), Some(&alias)),
             Some(AcceptOutcome::Parked(BlockIngestError::HashMismatch { .. }))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 1);
@@ -937,13 +972,13 @@ mod tests {
         let blocks = chain_of(5);
         for (block, n) in blocks[..3].iter().zip(1_u8..) {
             let parent = if n == 1 { MsgId::root() } else { msg(n - 1) };
-            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            chain.apply_finalized(msg(n), parent, Some(block));
         }
         // Entry 5 arrives before entry 4 finalizes.
         chain.apply_extension(vec![entry(5, msg(4), Some(&blocks[4]))]);
         assert_eq!(head_id(&chain), Some(3));
 
-        chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3]));
+        chain.apply_finalized(msg(4), msg(3), Some(&blocks[3]));
 
         assert_eq!(chain.view().len(), 1);
         assert_eq!(chain.pin(), msg(5));
@@ -957,12 +992,12 @@ mod tests {
         let blocks = chain_of(3);
         for (block, n) in blocks.iter().zip(1_u8..) {
             let parent = if n == 1 { MsgId::root() } else { msg(n - 1) };
-            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            chain.apply_finalized(msg(n), parent, Some(block));
         }
         let foreign = competing_block2(&blocks);
 
         assert!(matches!(
-            chain.apply_finalized(msg(4), Some(msg(3)), Some(&foreign)),
+            chain.apply_finalized(msg(4), msg(3), Some(&foreign)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().hash, blocks[2].header.hash);
@@ -981,7 +1016,7 @@ mod tests {
         ]);
         let head_before = state_bytes(chain.head_state());
 
-        chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[1]));
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[1]));
 
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
         assert_eq!(chain.final_msg(), msg(3));
@@ -996,10 +1031,10 @@ mod tests {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
         chain.apply_extension(entries_for(&blocks));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
         let rival = competing_block2(&blocks);
 
-        chain.apply_finalized(msg(9), Some(msg(1)), Some(&rival));
+        chain.apply_finalized(msg(9), msg(1), Some(&rival));
 
         assert!(chain.view().is_empty());
         assert!(chain.head_blocks().is_empty());
@@ -1025,7 +1060,7 @@ mod tests {
         assert_eq!(restored.encode_view(), live.encode_view());
 
         for chain in [&mut live, &mut restored] {
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad));
+            chain.apply_finalized(msg(2), msg(1), Some(&bad));
             assert_eq!(chain.final_msg(), msg(2));
             assert_eq!(chain.view().len(), 1);
             assert_eq!(head_id(chain), Some(2));
@@ -1096,7 +1131,7 @@ mod tests {
         chain.apply_conflict(canonical);
 
         assert_eq!(chain.view().len(), 2);
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
         assert!(chain.view().is_empty());
         assert_eq!(chain.pin(), msg(2));
     }
@@ -1107,9 +1142,9 @@ mod tests {
         let blocks = chain_of(3);
         chain.apply_extension(entries_for(&blocks));
 
-        // Out of order, with no parent to go on.
-        chain.apply_finalized(msg(3), None, Some(&blocks[2]));
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        // Out of order.
+        chain.apply_finalized(msg(3), msg(2), Some(&blocks[2]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         assert_eq!(chain.final_tip().unwrap().block_id, 3);
         assert_eq!(
@@ -1124,11 +1159,11 @@ mod tests {
     fn an_invalid_finalized_block_parks_and_the_lineage_moves_past_it() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(1);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
 
         let bad = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad)),
+            chain.apply_finalized(msg(2), msg(1), Some(&bad)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 1);
@@ -1139,12 +1174,12 @@ mod tests {
     fn a_valid_finalized_successor_applies_after_an_invalid_one() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
         let bad = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&bad));
+        chain.apply_finalized(msg(2), msg(1), Some(&bad));
 
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[1])),
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[1])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
@@ -1155,12 +1190,12 @@ mod tests {
     fn a_conflicting_finalized_block_at_the_final_tip_parks() {
         let mut chain = ChainState::new(claimed_initial_state());
         let blocks = chain_of(2);
-        chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0]));
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
 
         let block2_prime = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(1)), Some(&block2_prime)),
+            chain.apply_finalized(msg(3), msg(1), Some(&block2_prime)),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_tip().unwrap().block_id, 2);
@@ -1170,7 +1205,7 @@ mod tests {
     fn finalize_all(chain: &mut ChainState, blocks: &[Block]) {
         let mut parent = MsgId::root();
         for (block, n) in blocks.iter().zip(1_u8..) {
-            chain.apply_finalized(msg(n), Some(parent), Some(block));
+            chain.apply_finalized(msg(n), parent, Some(block));
             parent = msg(n);
         }
     }
@@ -1184,7 +1219,7 @@ mod tests {
         // The sdk reports entry 1 as adopted after the tier already passed it.
         chain.apply_extension(vec![entry(1, MsgId::root(), Some(&blocks[0]))]);
         assert!(matches!(
-            chain.apply_finalized(msg(1), Some(MsgId::root()), Some(&blocks[0])),
+            chain.apply_finalized(msg(1), MsgId::root(), Some(&blocks[0])),
             Some(AcceptOutcome::Parked(
                 BlockIngestError::UnexpectedBlockId { .. }
             ))
@@ -1196,7 +1231,7 @@ mod tests {
         // The final tip's own entry, re-adopted and re-finalized.
         chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
             Some(AcceptOutcome::AlreadyApplied)
         ));
         assert_eq!(chain.final_msg(), msg(3));
@@ -1204,7 +1239,7 @@ mod tests {
 
         chain.apply_extension(vec![entry(4, msg(3), Some(&blocks[3]))]);
         assert!(matches!(
-            chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            chain.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_msg(), msg(4));
@@ -1218,7 +1253,7 @@ mod tests {
         finalize_all(&mut chain, &blocks);
 
         chain.apply_extension(entries_for(&blocks[..2]));
-        chain.apply_finalized(msg(2), Some(msg(1)), Some(&blocks[1]));
+        chain.apply_finalized(msg(2), msg(1), Some(&blocks[1]));
 
         assert_eq!(chain.final_msg(), msg(3));
         assert!(chain.view().is_empty());
@@ -1235,7 +1270,7 @@ mod tests {
         let skips_ahead = produce_dummy_block(3, Some(blocks[0].header.hash), vec![]);
         chain.apply_extension(vec![entry(2, msg(1), Some(&skips_ahead))]);
         assert!(matches!(
-            chain.apply_finalized(msg(2), Some(msg(1)), Some(&skips_ahead)),
+            chain.apply_finalized(msg(2), msg(1), Some(&skips_ahead)),
             Some(AcceptOutcome::Parked(
                 BlockIngestError::UnexpectedBlockId { .. }
             ))
@@ -1254,18 +1289,73 @@ mod tests {
         // Chained on an entry never seen, carrying a block that does not apply.
         chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
         assert!(matches!(
-            chain.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
             Some(AcceptOutcome::Parked(_))
         ));
         assert_eq!(chain.final_msg(), msg(1));
         assert!(chain.view().is_empty());
 
-        // A block that applies still resyncs the lineage.
+        // A block past the gap still advances the tier, not the lineage.
         assert!(matches!(
-            chain.apply_finalized(msg(9), Some(msg(8)), Some(&blocks[1])),
+            chain.apply_finalized(msg(9), msg(8), Some(&blocks[1])),
             Some(AcceptOutcome::Applied(_))
         ));
-        assert_eq!(chain.final_msg(), msg(9));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(1));
+    }
+
+    #[test]
+    fn a_late_redelivery_that_now_applies_does_not_rewind_the_lineage() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+        finalize_all(&mut chain, &blocks[..1]);
+        // Entry 3 chains on entry 2, whose block never reached the tier.
+        chain.apply_finalized(msg(2), msg(1), None);
+        chain.apply_finalized(msg(3), msg(2), None);
+
+        assert!(matches!(
+            chain.apply_finalized(msg(2), msg(1), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+        assert_eq!(chain.final_msg(), msg(3));
+    }
+
+    #[test]
+    fn a_reconstructed_entry_always_becomes_the_final_entry() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(2);
+
+        assert!(matches!(
+            chain.apply_reconstructed(msg(1), Some(&blocks[0])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert!(chain.apply_reconstructed(msg(2), None).is_none());
+        assert_eq!(chain.final_msg(), msg(2));
+        assert!(matches!(
+            chain.apply_reconstructed(msg(3), Some(&blocks[1])),
+            Some(AcceptOutcome::Applied(_))
+        ));
+        assert_eq!(chain.final_msg(), msg(3));
+        assert_eq!(chain.final_tip().unwrap().block_id, 2);
+    }
+
+    #[test]
+    fn a_reread_below_the_final_entry_keeps_the_lineage_and_the_view() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let blocks = chain_of(3);
+        finalize_all(&mut chain, &blocks[..2]);
+        chain.apply_extension(vec![entry(3, msg(2), Some(&blocks[2]))]);
+
+        // A warm start re-reads entries 1 and 2 before resuming the lineage.
+        for (block, n) in blocks[..2].iter().zip(1_u8..) {
+            chain.apply_finalized_redelivery(msg(n), Some(block));
+        }
+
+        assert_eq!(chain.final_msg(), msg(2));
+        assert_eq!(chain.view().len(), 1);
+        assert_eq!(head_id(&chain), Some(3));
+        assert_head_is_the_fold(&chain);
     }
 
     #[test]
@@ -1287,7 +1377,7 @@ mod tests {
         assert_eq!(view, vec![msg(4), msg(3)]);
 
         assert!(matches!(
-            restored.apply_finalized(msg(3), Some(msg(2)), Some(&blocks[2])),
+            restored.apply_finalized(msg(3), msg(2), Some(&blocks[2])),
             Some(AcceptOutcome::AlreadyApplied)
         ));
         assert_eq!(
@@ -1300,7 +1390,7 @@ mod tests {
         assert_eq!(head_id(&restored), Some(4));
 
         assert!(matches!(
-            restored.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            restored.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(restored.final_msg(), msg(4));
@@ -1318,7 +1408,7 @@ mod tests {
 
         // Entry 4 finalizes first, so the walk reaches the stale entry 3.
         assert!(matches!(
-            chain.apply_finalized(msg(4), Some(msg(3)), Some(&blocks[3])),
+            chain.apply_finalized(msg(4), msg(3), Some(&blocks[3])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_msg(), msg(4));
@@ -1337,7 +1427,7 @@ mod tests {
         ]);
 
         assert!(matches!(
-            chain.apply_finalized(msg(3), None, Some(&blocks[1])),
+            chain.apply_finalized(msg(3), msg(2), Some(&blocks[1])),
             Some(AcceptOutcome::Applied(_))
         ));
         assert_eq!(chain.final_msg(), msg(3));
