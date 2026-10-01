@@ -22,8 +22,8 @@ pub mod online;
     reason = "Bootstrapping and Online states have the same size and None is never accessible"
 )]
 pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
-    /// Unreachable state used in [`Self::modify`].
-    None,
+    /// An error or future cancellation happened during [`Self::modify()`].
+    Error(String),
     Bootstrapping(bootstrapping::BootstrappingState<S, B>),
     Online(online::OnlineState<S, B>),
 }
@@ -79,11 +79,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 bootstrap_to,
                 actors,
             )))
+        } else if channel_tip_slot.is_some() && chain.head_tip().is_some() {
+            info!("Channel holds nothing to bootstrap from; resuming on the stored chain");
+
+            Ok(Self::Online(
+                online::OnlineState::from_stored_chain(config, chain, bedrock_signing_key, actors)
+                    .await?,
+            ))
         } else {
             info!("Channel does not exist yet; starting it as channel creator");
 
             Ok(Self::Online(
-                online::OnlineState::from_empty_chain(config, chain, bedrock_signing_key, actors)
+                online::OnlineState::creating_channel(config, chain, bedrock_signing_key, actors)
                     .await?,
             ))
         }
@@ -107,15 +114,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
 
     /// Modify internal state by value.
     ///
-    /// Requires closure to be infallible to never leave the state in [`State::None`].
-    pub async fn modify<FN, F>(&mut self, f: FN)
+    /// In case of `f` failing or cancelling a [`Self::Error`] will be set as the current state.
+    pub async fn modify<FN, F>(&mut self, f: FN) -> Result<()>
     where
         FN: FnOnce(Self) -> F,
-        F: std::future::Future<Output = Self>,
+        F: std::future::Future<Output = Result<Self>>,
     {
-        let current = std::mem::replace(self, Self::None);
-        let new_state = f(current).await;
-        *self = new_state;
+        let current = std::mem::replace(
+            self,
+            Self::Error("State modification future cancelled".to_owned()),
+        );
+        match f(current).await {
+            Ok(new_state) => {
+                *self = new_state;
+                Ok(())
+            }
+            Err(err) => {
+                *self = Self::Error(format!("State modification failed: {err}"));
+                Err(err)
+            }
+        }
     }
 
     /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
@@ -198,12 +216,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         // If this sequencer has already committed blocks to the channel, that
         // channel must still exist. A missing channel then means a wiped/rewound
         // Bedrock or a node pointing at a different chain, so refuse to resume
-        // onto a foreign channel.
+        // onto a foreign channel. Committed takes both stored blocks and a
+        // checkpoint from an earlier run: blocks alone are a store seeded
+        // offline, whose chain then creates the channel.
         let local_tip = storage_ref
             .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
             .await?
             .map(|meta| meta.id);
-        if local_tip.is_some() && channel_tip_slot.is_none() {
+        let committed = local_tip.is_some() && zone_checkpoint(storage_ref).await?.is_some();
+        if committed && channel_tip_slot.is_none() {
             return Err(Error::StoreAndChannelDivergence(
                 chain_state::ChainMismatch::ChannelMissing,
             ));

@@ -157,7 +157,10 @@ impl SharedChannel {
         })
     }
 
-    fn lock(&self) -> MutexGuard<'_, CannedChannel> {
+    /// # Panics
+    ///
+    /// If a mock panicked while holding the channel.
+    pub fn lock(&self) -> MutexGuard<'_, CannedChannel> {
         self.0.lock().expect("canned channel lock poisoned")
     }
 }

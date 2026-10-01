@@ -16,6 +16,8 @@ use lee::V03State;
 use lee_core::BlockId;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
+pub use self::canned_store::{CannedStore, SharedStore};
+
 use crate::{
     Result, StorageActorTrait,
     error::Error,
@@ -33,6 +35,8 @@ use crate::{
         SetZoneCheckpointBytes, StoreUpdateOutcome, ZoneAnchorRecord,
     },
 };
+
+mod canned_store;
 
 mockall::mock! {
     pub StorageActor {

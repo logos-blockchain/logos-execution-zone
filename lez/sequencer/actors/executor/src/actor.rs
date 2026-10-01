@@ -529,21 +529,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                 self.state
                     .modify(|state| async {
                         match state {
-                            State::None => unreachable!(),
-                            State::Bootstrapping(bootstrapping) => bootstrapping
-                                .on_finalized_block(*finalized_block)
-                                .await
-                                .expect("Failed to handle finalized block during bootstrapping"),
+                            State::Error(details) => {
+                                panic!("Actor has encountered an error state: {details}")
+                            }
+                            State::Bootstrapping(bootstrapping) => {
+                                bootstrapping.on_finalized_block(*finalized_block).await
+                            }
                             State::Online(_) => {
                                 // Online state listens for Publisher events
-                                state
+                                Ok(state)
                             }
                         }
                     })
-                    .await;
+                    .await
+                    .expect("Failed to handle finalized block, Executor cannot recover from that");
             }
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
-                State::None => unreachable!(),
+                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
                 State::Bootstrapping(_) => {
                     panic!("Publisher should not be running while executor is bootstrapping");
                 }

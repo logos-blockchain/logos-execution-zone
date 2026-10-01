@@ -17,6 +17,9 @@ use crate::{
     error::Error,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Tip {
     pub slot: Slot,
@@ -125,6 +128,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 .await?
             && stored.header.hash == block_hash
         {
+            // TODO: Should be atomic
             Self::settle_reconstructed_deliveries(&self.actors.storage_ref, &stored).await?;
             self.actors
                 .storage_ref

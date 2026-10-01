@@ -210,7 +210,7 @@ pub fn run(
 
         let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
         let bedrock_broker_ref = Broker::spawn(bedrock_broker);
-        let topic = Pattern::new(&format!("channel/{}/*", config.bedrock_config.channel_id))
+        let topic = Pattern::new(&format!("channel/{}/**", config.bedrock_config.channel_id))
             .expect("Valid pattern");
         bedrock_broker_ref
             .tell(kameo_actors::broker::Subscribe {
@@ -502,9 +502,15 @@ fn bedrock_actor_args(
             }))
         });
 
-    mock.expect_handle_publish_block().returning(|msg, _ctx| {
-        let msg_id = MsgId::from(msg.block.header.hash.0);
-        Ok(PublishOutcome {
+    mock.expect_handle_get_channel_tip_message_id()
+        .returning(|_msg, _ctx| Ok(None));
+
+    mock.expect_handle_change_channel_config()
+        .returning(|_msg, _ctx| Ok(()));
+
+    let landed = |block_hash: [u8; 32]| {
+        let msg_id = MsgId::from(block_hash);
+        PublishOutcome {
             this_msg: msg_id,
             checkpoint: Checkpoint {
                 last_msg_id: msg_id,
@@ -515,8 +521,12 @@ fn bedrock_actor_args(
                 finalized_config: MsgId::root(),
             },
             released_notes: Vec::new(),
-        })
-    });
+        }
+    };
+    mock.expect_handle_create_channel()
+        .returning(move |msg, _ctx| Ok(landed(msg.genesis.header.hash.0)));
+    mock.expect_handle_publish_block()
+        .returning(move |msg, _ctx| Ok(landed(msg.block.header.hash.0)));
 
     mock
 }

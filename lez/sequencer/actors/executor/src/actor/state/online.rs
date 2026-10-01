@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
 use chain_state::ChainState;
-use common::transaction::LeeTransaction;
+use common::{
+    block::{BedrockStatus, Block},
+    transaction::LeeTransaction,
+};
 use kameo::actor::ActorRef;
 use log::info;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, Ed25519Key, Ed25519PublicKey, SerializeOp as _},
+    protocol::{ChannelId, Ed25519Key, Ed25519PublicKey, PublishOutcome, SerializeOp as _},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -19,6 +22,9 @@ use crate::{
     actor::state::{ActorsBundle, bootstrapping, zone_checkpoint},
     error::Error,
 };
+
+#[cfg(test)]
+mod tests;
 
 pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     sequencer: SequencerCore<S, B>,
@@ -43,7 +49,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         .await
     }
 
-    pub(super) async fn from_empty_chain(
+    pub(super) async fn from_stored_chain(
+        config: SequencerConfig,
+        chain: ChainState,
+        bedrock_signing_key: Ed25519Key,
+        actors: ActorsBundle<S, B>,
+    ) -> Result<Self> {
+        Self::start(true, config, chain, bedrock_signing_key, actors).await
+    }
+
+    /// Creates the channel, inscribing the stored chain onto it, or a new genesis when the store
+    /// holds none.
+    pub(super) async fn creating_channel(
         config: SequencerConfig,
         chain: ChainState,
         bedrock_signing_key: Ed25519Key,
@@ -111,14 +128,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             .map_err(SendErrorExt::flatten)?;
 
         if !channel_exists {
-            Self::create_channel_with_genesis(
-                &mut chain,
-                &config,
-                own_sequencer_key,
-                &storage_ref,
-                &bedrock_pool_ref,
-            )
-            .await?;
+            if chain.head_tip().is_some() {
+                Self::create_channel_from_store(
+                    &mut chain,
+                    &config,
+                    own_sequencer_key,
+                    &storage_ref,
+                    &bedrock_pool_ref,
+                )
+                .await?;
+            } else {
+                Self::create_channel_with_genesis(
+                    &mut chain,
+                    &config,
+                    own_sequencer_key,
+                    &storage_ref,
+                    &bedrock_pool_ref,
+                )
+                .await?;
+            }
         }
 
         let state = storage_ref
@@ -194,7 +222,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
     ) -> Result<()> {
-        let channel_id = config.bedrock_config.channel_id;
         let signing_key = config
             .block_signing_key()
             .map_err(Error::InvalidSigningKey)?;
@@ -210,6 +237,96 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 source: err,
             }
         })?;
+
+        let outcome =
+            Self::inscribe_genesis(&block, chain, config, own_sequencer_key, bedrock_pool_ref)
+                .await?;
+
+        chain.record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
+        storage_ref
+            .ask(AtomicUpdate {
+                checkpoint: Some(
+                    outcome
+                        .checkpoint
+                        .to_bytes()
+                        .map_err(|err| Error::CheckpointEncodingFailed(err.into()))?
+                        .into(),
+                ),
+                ..AtomicUpdate::from_block(block, Arc::new(state))
+            })
+            .await?;
+
+        sequencer_core_metrics::increment_blocks_produced_total();
+
+        Ok(())
+    }
+
+    /// Inscribes the pending blocks the store holds, genesis first, onto a channel that does not
+    /// exist yet.
+    async fn create_channel_from_store(
+        chain: &mut ChainState,
+        config: &SequencerConfig,
+        own_sequencer_key: sequencer_stake_core::SequencerKey,
+        storage_ref: &ActorRef<S>,
+        bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+    ) -> Result<()> {
+        let mut pending_blocks = storage_ref
+            .ask(sequencer_storage_actor::protocol::GetAllBlocks)
+            .await?
+            .into_iter()
+            .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
+            .collect::<Vec<_>>();
+        pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
+
+        let Some((genesis, descendants)) = pending_blocks.split_first() else {
+            return Ok(());
+        };
+        if genesis.header.block_id != lee::GENESIS_BLOCK_ID {
+            return Err(Error::StorageInconsistency(format!(
+                "The first pending block {} is not genesis, but the channel does not exist",
+                genesis.header.block_id
+            )));
+        }
+
+        let mut outcome =
+            Self::inscribe_genesis(genesis, chain, config, own_sequencer_key, bedrock_pool_ref)
+                .await?;
+        chain.record_own_inscription(outcome.checkpoint.last_msg_id, genesis.header.hash);
+        for block in descendants {
+            outcome = bedrock_pool_ref
+                .ask(sequencer_bedrock_actor::protocol::PublishBlock {
+                    channel_id: config.bedrock_config.channel_id,
+                    block: block.clone(),
+                    withdrawals: Vec::new(),
+                    parent: chain.pin_parent(),
+                })
+                .await
+                .map_err(SendErrorExt::flatten)?;
+            chain.record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
+        }
+
+        storage_ref
+            .ask(sequencer_storage_actor::protocol::SetZoneCheckpointBytes {
+                bytes: outcome
+                    .checkpoint
+                    .to_bytes()
+                    .map_err(|err| Error::CheckpointEncodingFailed(err.into()))?
+                    .into(),
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    /// Inscribes `genesis` as the first entry of a new channel.
+    async fn inscribe_genesis(
+        genesis: &Block,
+        chain: &ChainState,
+        config: &SequencerConfig,
+        own_sequencer_key: sequencer_stake_core::SequencerKey,
+        bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+    ) -> Result<PublishOutcome> {
+        let channel_id = config.bedrock_config.channel_id;
 
         // The channel is born holding only its creator's key, so a configured
         // founding set is applied by the same tx that writes genesis; the
@@ -230,7 +347,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     bedrock_pool_ref
                         .ask(sequencer_bedrock_actor::protocol::CreateChannel {
                             channel_id,
-                            genesis: block.clone(),
+                            genesis: genesis.clone(),
                             keys,
                             channel_params,
                         })
@@ -240,7 +357,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 None => bedrock_pool_ref
                     .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                         channel_id,
-                        block: block.clone(),
+                        block: genesis.clone(),
                         withdrawals: Vec::new(),
                         parent: None,
                     })
@@ -248,22 +365,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     .map_err(SendErrorExt::flatten)?,
             };
 
-        chain.record_own_inscription(outcome.checkpoint.last_msg_id, block.header.hash);
-        storage_ref
-            .ask(AtomicUpdate {
-                checkpoint: Some(
-                    outcome
-                        .checkpoint
-                        .to_bytes()
-                        .map_err(|err| Error::CheckpointEncodingFailed(err.into()))?
-                        .into(),
-                ),
-                ..AtomicUpdate::from_block(block, Arc::new(state))
-            })
-            .await?;
-
-        sequencer_core_metrics::increment_blocks_produced_total();
-
-        Ok(())
+        Ok(outcome)
     }
 }

@@ -19,27 +19,34 @@ use lee::{
 };
 use mockall::predicate::{always, eq, function};
 use num_bigint::BigUint;
-use sequencer_bedrock_actor::{mock::MockBedrockActor, protocol::Slot};
+use sequencer_bedrock_actor::{
+    mock::{MockBedrockActor, SharedChannel, mock_msg_of},
+    protocol::{BlockData, ChannelEvent, ChannelEventKind, FinalizedBlock, Slot},
+};
 use sequencer_core::{
     MsgId,
     config::{BedrockConfig, SequencerConfig},
 };
 use sequencer_slasher_actor::SlasherActor;
-use sequencer_storage_actor::{StorageActorTrait, mock::MockStorageActor};
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    mock::{MockStorageActor, SharedStore},
+};
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::TempDir;
 use tokio::{sync::mpsc, test, time::timeout};
 
 use crate::{
     ExecutorActor,
-    actor::BlockedAttempts,
+    actor::{BlockedAttempts, state::State},
     protocol::{self, ChannelId, TransactionOrigin},
 };
 
 mod reconstruction;
 mod startup;
+pub(super) mod stored_chain;
 
-fn sequencer_config() -> (SequencerConfig, TempDir) {
+pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
     let home = TempDir::new().expect("Failed to create temporary home directory");
     let config = SequencerConfig {
         home: home.path().to_path_buf(),
@@ -92,34 +99,31 @@ fn test_transaction() -> LeeTransaction {
     PublicTransaction::new(message, witness_set).into()
 }
 
-/// A Bedrock whose channel exists but holds nothing yet, with this node on turn.
-fn prepare_mock_bedrock_with_empty_channel(_channel_id: &ChannelId) -> MockBedrockActor {
+/// A Bedrock whose channel holds only [`empty_genesis`], with this node on turn.
+fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor {
     let mut mock_bedrock = MockBedrockActor::default();
-    mock_bedrock
-        .expect_handle_check_channel_exists()
-        .returning(|_msg, _ctx| Ok(true));
     mock_bedrock
         .expect_handle_get_channel_tip_slot()
         .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
     mock_bedrock
-        .expect_handle_read_channel()
-        .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
+        .expect_handle_get_channel_tip_message_id()
+        .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
+    mock_bedrock
+        .expect_handle_initialize_channel_publisher()
+        .returning(|_msg, _ctx| Ok(true));
     mock_bedrock
         .expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
     mock_bedrock
 }
 
-fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
-    let genesis_block_meta = BlockMeta {
-        id: 1,
-        hash: HashType::default(),
-    };
-    let genesis_block = Block {
+/// A genesis block carrying no transactions.
+fn empty_genesis() -> Block {
+    Block {
         header: BlockHeader {
-            block_id: genesis_block_meta.id,
+            block_id: 1,
             prev_block_hash: HashType::default(),
-            hash: genesis_block_meta.hash,
+            hash: HashType::default(),
             timestamp: 0,
             producer: PublicKey::new_from_private_key(
                 &PrivateKey::try_new([1_u8; 32]).expect("valid key"),
@@ -130,7 +134,12 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
             transactions: vec![],
         },
         bedrock_status: BedrockStatus::Pending,
-    };
+    }
+}
+
+fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
+    let genesis_block = empty_genesis();
+    let genesis_block_meta = BlockMeta::from(&genesis_block);
     let state = V03State::new().with_public_accounts(
         [
             (
@@ -217,6 +226,10 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(|_, _| Ok(None));
 
     mock_storage
+        .expect_handle_set_zone_anchor()
+        .returning(|_, _| Ok(()));
+
+    mock_storage
         .expect_handle_get_channel_cursor()
         .returning(|_, _| Ok(None));
 
@@ -237,9 +250,13 @@ fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
         .returning(|_, _| Ok(vec![]));
 
     mock_storage
+        .expect_handle_get_pending_cross_zone_dispatches()
+        .returning(|_, _| Ok(vec![]));
+
+    mock_storage
 }
 
-fn spawn_bedrock_pool(
+pub(super) fn spawn_bedrock_pool(
     ctr: impl Fn(&ChannelId) -> MockBedrockActor + Send + Sync + 'static,
 ) -> ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>> {
     ShardingPoolActor::spawn(ShardingPoolActor::new(
@@ -270,6 +287,55 @@ async fn new_executor<S: StorageActorTrait>(
         SlasherActor::prepare(),
     )
     .await
+}
+
+/// Initializes the executor state over `store`, against a Bedrock serving `channel`.
+pub(super) async fn initialize_state(
+    config: SequencerConfig,
+    store: &SharedStore,
+    channel: &SharedChannel,
+) -> crate::Result<State<MockStorageActor, MockBedrockActor>> {
+    let bedrock_signing_key =
+        sequencer_core::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+            .expect("Failed to load or create bedrock signing key");
+    let channel = channel.clone();
+
+    Box::pin(State::initialize(
+        config,
+        bedrock_signing_key,
+        MockStorageActor::spawn(store.mock()),
+        spawn_bedrock_pool(move |_channel_id| channel.mock()),
+        PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
+        SlasherActor::prepare(),
+    ))
+    .await
+}
+
+/// Starts an executor over a store holding [`empty_genesis`], against a channel holding only it.
+async fn spawn_on_genesis(
+    config: SequencerConfig,
+    storage_ref: ActorRef<MockStorageActor>,
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
+) -> Result<ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>> {
+    let channel_id = config.bedrock_config.channel_id;
+    let executor =
+        ExecutorActor::spawn(Box::pin(new_executor(config, storage_ref, bedrock_pool_ref)).await?);
+    executor
+        .ask(ChannelEvent {
+            channel_id,
+            event: ChannelEventKind::FinalizedBlock(Box::new(finalized_at(&empty_genesis(), 0))),
+        })
+        .await?;
+    Ok(executor)
+}
+
+/// `block` as the Bedrock actor reports it finalized at `slot`.
+pub(super) fn finalized_at(block: &Block, slot: u64) -> FinalizedBlock {
+    FinalizedBlock {
+        block: BlockData::Block(block.clone()),
+        msg_id: mock_msg_of(block),
+        slot: Slot::from(slot),
+    }
 }
 
 /// A moving tip is catch-up, not a wedge, so the run restarts on a new tip.
@@ -320,27 +386,22 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
         .expect_handle_get_published_high_water()
         .returning(|_msg, _ctx| Ok(Some(1)));
     mock_storage
-        .expect_handle_get_pending_cross_zone_dispatches()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
-    mock_storage
         .expect_handle_get_pending_deposit_events()
         .returning(|_msg, _ctx| Ok(Vec::new()));
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
-    let executor = ExecutorActor::spawn(
-        new_executor(
-            config,
-            storage_ref.clone(),
-            spawn_bedrock_pool(|channel_id| {
-                let mut mock_bedrock = prepare_mock_bedrock_with_empty_channel(channel_id);
-                mock_bedrock
-                    .expect_handle_get_accredited_keys()
-                    .returning(|_msg, _ctx| Ok(None));
-                mock_bedrock
-            }),
-        )
-        .await?,
-    );
+    let executor = spawn_on_genesis(
+        config,
+        storage_ref.clone(),
+        spawn_bedrock_pool(|channel_id| {
+            let mut mock_bedrock = prepare_mock_bedrock_on_genesis(channel_id);
+            mock_bedrock
+                .expect_handle_get_accredited_keys()
+                .returning(|_msg, _ctx| Ok(None));
+            mock_bedrock
+        }),
+    )
+    .await?;
 
     // Our key holds no stake entry, so production aborts.
     executor
@@ -367,14 +428,12 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
-    let executor = ExecutorActor::spawn(
-        new_executor(
-            config,
-            storage_ref.clone(),
-            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
-        )
-        .await?,
-    );
+    let executor = spawn_on_genesis(
+        config,
+        storage_ref.clone(),
+        spawn_bedrock_pool(prepare_mock_bedrock_on_genesis),
+    )
+    .await?;
 
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)
@@ -442,14 +501,12 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
         });
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
-    let executor = ExecutorActor::spawn(
-        new_executor(
-            config,
-            storage_ref.clone(),
-            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
-        )
-        .await?,
-    );
+    let executor = spawn_on_genesis(
+        config,
+        storage_ref.clone(),
+        spawn_bedrock_pool(prepare_mock_bedrock_on_genesis),
+    )
+    .await?;
 
     let range = (STALLED_FIRST..=STALLED_LAST)
         .try_into()
@@ -491,14 +548,12 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let (config, _home) = sequencer_config();
     let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
-    let executor = ExecutorActor::spawn(
-        new_executor(
-            config,
-            storage_ref.clone(),
-            spawn_bedrock_pool(prepare_mock_bedrock_with_empty_channel),
-        )
-        .await?,
-    );
+    let executor = spawn_on_genesis(
+        config,
+        storage_ref.clone(),
+        spawn_bedrock_pool(prepare_mock_bedrock_on_genesis),
+    )
+    .await?;
     storage_ref
         .tell(sequencer_storage_actor::mock::Checkpoint)
         .await?;
