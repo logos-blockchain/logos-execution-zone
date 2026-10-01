@@ -34,10 +34,17 @@ fn main() {
         }),
         "A reserved program account has no deployable bytecode to claim"
     );
-    let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = program_image_witnesses
-        .iter()
-        .map(|witness| (witness.account_id(), witness.image_id()))
-        .collect();
+    // One image per account: a second witness for the same account would silently replace the
+    // first, leaving calls verified under an image other than the one some emitted claim names.
+    let mut image_id_by_account_id: HashMap<AccountId, ProgramId> = HashMap::new();
+    for witness in &program_image_witnesses {
+        let account_id = witness.account_id();
+        let previous = image_id_by_account_id.insert(account_id, witness.image_id());
+        assert!(
+            previous.is_none(),
+            "account {account_id} claimed by more than one program-image witness"
+        );
+    }
     for witness in &shadow_program_witnesses {
         let account_id = AccountId::for_shadow_program(&witness.image_id);
         let previous = image_id_by_account_id.insert(account_id, witness.image_id);
