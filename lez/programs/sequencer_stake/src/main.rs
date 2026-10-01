@@ -73,7 +73,7 @@ fn stake(
     has_record: bool,
     funding: AccountId,
 ) -> Response {
-    assert_root(
+    assert_root_origin(
         input,
         "Stake is only invoked as a top-level user transaction",
     );
@@ -122,7 +122,7 @@ fn unstake_request(
     destination: AccountId,
     requested_at: BlockId,
 ) -> Response {
-    assert_root(
+    assert_root_origin(
         input,
         "UnstakeRequest is only invoked as a top-level user transaction",
     );
@@ -151,7 +151,7 @@ fn unstake_request(
 /// Unsigned, so the release is sized and addressed only by the config's pending request, and cast
 /// to the destination, which receives it in a later transaction.
 fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
-    assert_root(
+    assert_root_origin(
         input,
         "FinalizeUnstake is only invoked as a top-level user transaction",
     );
@@ -196,7 +196,7 @@ fn slash(
     inscription: [u8; 32],
     approvals: &[SlashApproval],
 ) -> Response {
-    assert_root(
+    assert_root_origin(
         input,
         "Slash is only invoked as a top-level user transaction",
     );
@@ -225,7 +225,7 @@ fn init_channel_params(
     params: ChannelParams,
     channel_id: [u8; 32],
 ) -> Response {
-    assert_root(
+    assert_root_origin(
         input,
         "InitChannelParams is only invoked as a top-level user transaction",
     );
@@ -326,7 +326,7 @@ fn track_unstake_request(
     Response::write(config.to_bytes())
 }
 
-fn assert_root(input: &ReceiveInput, message: &str) {
+fn assert_root_origin(input: &ReceiveInput, message: &str) {
     assert!(matches!(input.origin, Origin::Root), "{message}");
 }
 

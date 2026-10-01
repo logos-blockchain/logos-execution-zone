@@ -385,7 +385,7 @@ pub struct ReceiveInput {
 }
 
 impl ReceiveInput {
-    /// The program that sent this message; `None` for a root delivery.
+    /// The program that sent this message; `None` when the transaction itself submitted it.
     #[must_use]
     pub const fn origin_program(&self) -> Option<AccountId> {
         match self.origin {

@@ -14,14 +14,14 @@ fn main() {
 fn receive(input: &ReceiveInput, message: Message) -> Response {
     match message {
         Message::Dispatch(msg) => {
-            assert_root_at_config(input);
+            assert_root_origin_at_config(input);
             dispatch(input, msg)
         }
         Message::Mark(msg) => mark(input, msg),
         // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
         // a written config must already hold exactly this.
         Message::InitConfig(config) => {
-            assert_root_at_config(input);
+            assert_root_origin_at_config(input);
             Response::write(write_once(&input.pre_data, config.to_bytes()))
         }
     }
@@ -96,7 +96,7 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
     ))
 }
 
-fn assert_root_at_config(input: &ReceiveInput) {
+fn assert_root_origin_at_config(input: &ReceiveInput) {
     assert!(
         matches!(input.origin, Origin::Root),
         "Inbox is only invoked as a top-level sequencer-origin transaction"
