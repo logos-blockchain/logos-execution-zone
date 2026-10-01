@@ -131,25 +131,22 @@ Without `--raw`, the wallet prints each shard separately and decodes recognized 
 
 # 5. Understanding `hello_world.rs`
 
-[hello_world.rs](methods/guest/src/bin/hello_world.rs) handles an execution call with one input account. It appends the greeting to its own shard and leaves the balance unchanged:
+[hello_world.rs](methods/guest/src/bin/hello_world.rs) handles a message sent to one actor: an account paired with this program. It appends the greeting to its own shard and leaves the balance unchanged:
 
 ```rust
-let mut bytes = pre_state.shard_of(self_account_id).clone().into_inner();
-bytes.extend_from_slice(&greeting);
-let new_data = bytes.try_into().expect("Data should fit within the allowed limits");
-let post_state = ShardStateDiff::new(pre_state, new_data);
+fn receive(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
+    let mut bytes = input.pre_state.to_vec();
+    bytes.extend(greeting);
+    Response::write(bytes)
+}
 ```
 
-It returns the proposed change with:
+`run_actor` decodes the greeting, calls the handler and writes the returned `Response`:
 
 ```rust
-ProgramOutput::new(
-    self_account_id,
-    caller_account_id,
-    instruction_data,
-    vec![post_state],
-)
-.write();
+fn main() {
+    run_actor(receive)
+}
 ```
 
 # 6. Understanding `run_hello_world.rs`
@@ -157,14 +154,9 @@ ProgramOutput::new(
 The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, selects the program's shard on the supplied account, and submits a public transaction:
 
 ```rust
-let message = Message::try_new(
-    program.id().into(),
-    vec![ProgramShardSelector::new(account_id, program.id().into())],
-    vec![],
-    greeting,
-)
-.unwrap();
-let witness_set = WitnessSet::for_message(&message, &[]);
+let hello = Actor::new(account_id, program_account_id);
+let message = Message::try_new(hello, vec![hello], nonces, greeting).unwrap();
+let witness_set = WitnessSet::for_message(&message, &signing_keys);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
@@ -247,15 +239,15 @@ should show something similar to
 The [private runner](src/bin/run_hello_world_private.rs) selects the same program shard. The wallet prepares the private account witnesses, executes the program, generates proofs, and submits the transaction:
 
 ```rust
-let accounts = vec![
-    AccountIdentity::PrivateOwned(account_id).select_program_shard(program.id().into()),
-];
+let account =
+    AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id);
 
 wallet_core
     .send_privacy_preserving_tx(
-        accounts,
-        Program::serialize_instruction(greeting).unwrap(),
-        &program.into(),
+        vec![account],
+        0,
+        Program::serialize_message(greeting).unwrap(),
+        &programs,
     )
     .await
     .unwrap();
@@ -268,12 +260,10 @@ For regular accounts, authorization comes from:
 - a transaction signature for a public account;
 - knowledge of the authorization secret key (`ask`) for a private account.
 
-Programs receive the result in `AccountInput::is_authorized`. The authorized Hello World example checks it before writing:
+Programs receive the result in `ReceiveInput::is_authorized`. The authorized Hello World example checks it before writing:
 
 ```rust
-if !pre_state.is_authorized {
-    panic!("Missing required authorization");
-}
+assert!(input.is_authorized, "Missing required authorization");
 ```
 
 # 9. Public execution of the Hello world with authorization example
@@ -482,9 +472,9 @@ wallet account get --scope all --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJk
 
 ## Program shards and account authorization
 
-Each account has a balance, a nonce, and program shards. A program can modify its own shard on any account. It can read another program's shard when that shard is selected as an input.
+Each account has a nonce and program shards; its balance is the native token program's shard. A program can modify its own shard on any account.
 
-A `ProgramShardSelector` identifies an account and optionally a program shard. Omitting the program selects the balance without shard data.
+An `Actor` pairs an account with a program and addresses that program's shard on the account. `Actor::native_balance` addresses the balance.
 
 Account authorization allows a program to debit the balance. Programs may also require authorization before changing their own shard.
 
