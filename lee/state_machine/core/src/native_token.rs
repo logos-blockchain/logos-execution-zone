@@ -305,4 +305,47 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn a_state_read_replies_with_the_readers_own_balance() {
+        let reply_to = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+
+        let transition = receive(&input(
+            1,
+            false,
+            100,
+            &Message::ReadState(ReadState { reply_to }),
+        ))
+        .unwrap();
+
+        assert_eq!(transition.response.post_state, None);
+        assert_eq!(
+            transition.response.sends,
+            vec![
+                Call::new(
+                    reply_to,
+                    &Message::StateReply(StateReply {
+                        subject: native(1),
+                        state: encode_balance(100),
+                    }),
+                )
+                .into()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_native_balance_refuses_a_state_reply() {
+        let reply = Message::StateReply(StateReply {
+            subject: native(2),
+            state: encode_balance(100),
+        });
+
+        assert_eq!(
+            receive(&input(1, true, 100, &reply)),
+            Err(TransferError::UnexpectedReply {
+                account_id: AccountId::new([1; 32])
+            })
+        );
+    }
 }

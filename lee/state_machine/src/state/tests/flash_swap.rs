@@ -2,6 +2,7 @@ use super::*;
 
 const INITIAL_BALANCE: u128 = 1000;
 const AMOUNT_OUT: u128 = 100;
+const RECEIVER_SEED: PdaSeed = PdaSeed::new([1; 32]);
 
 struct FlashSwap {
     state: V03State,
@@ -12,15 +13,18 @@ struct FlashSwap {
 
 impl FlashSwap {
     fn new() -> Self {
+        Self::with_callback(crate::test_methods::flash_swap_callback())
+    }
+
+    fn with_callback(callback: Program) -> Self {
         let initiator = crate::test_methods::flash_swap_initiator();
-        let callback = crate::test_methods::flash_swap_callback();
         let callback_id = AccountId::from_builtin_program(callback.id());
 
         let vault_id = AccountId::for_public_pda(
             &AccountId::from_builtin_program(initiator.id()),
             &PdaSeed::new([0; 32]),
         );
-        let receiver_id = AccountId::for_public_pda(&callback_id, &PdaSeed::new([1; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback_id, &RECEIVER_SEED);
 
         let mut state = V03State::new().with_programs([callback, initiator]);
         state.force_insert_account(vault_id, Account::funded(INITIAL_BALANCE));
@@ -46,16 +50,44 @@ impl FlashSwap {
             vault: self.vault_id,
             receiver: self.receiver_id,
         };
-        let message = FlashSwapMessage::Initiate {
+        self.submit(&self.loan(amount_out, vault_balance, &callback_message))
+    }
+
+    fn loan(
+        &self,
+        amount_out: u128,
+        vault_balance: u128,
+        callback_message: &impl BorshSerialize,
+    ) -> FlashSwapMessage {
+        FlashSwapMessage::Initiate {
             vault: self.vault_id,
             receiver: self.receiver_id,
             callback: self.callback,
             amount_out,
             vault_balance,
-            callback_message: borsh::to_vec(&callback_message).unwrap(),
-        };
-        let tx = flash_swap_tx(self.vault_id, self.receiver_id, self.callback, &message);
+            callback_message: borsh::to_vec(callback_message).unwrap(),
+        }
+    }
+
+    fn submit(&mut self, message: &FlashSwapMessage) -> Result<Vec<TransactionEvent>, LeeError> {
+        let tx = flash_swap_tx(self.vault_id, self.receiver_id, self.callback, message);
         self.state.transition_from_public_transaction(&tx, 1, 0)
+    }
+
+    fn initiator(&self) -> Actor {
+        Actor::new(
+            self.vault_id,
+            AccountId::from_builtin_program(crate::test_methods::flash_swap_initiator().id()),
+        )
+    }
+
+    fn repay(&self, amount: u128) -> Call {
+        lee_core::native_token::custody_transfer(
+            self.receiver_id,
+            RECEIVER_SEED,
+            self.vault_id,
+            amount,
+        )
     }
 
     fn assert_balances(&self, vault: u128, receiver: u128) {
@@ -136,10 +168,7 @@ fn flash_swap_self_call_targets_correct_program() {
 fn flash_swap_unsolicited_reply_rejected() {
     // A genuine native reply that no pending read asked for must not drive the initiator.
     let mut swap = FlashSwap::new();
-    let initiator = Actor::new(
-        swap.vault_id,
-        AccountId::from_builtin_program(crate::test_methods::flash_swap_initiator().id()),
-    );
+    let initiator = swap.initiator();
     let vault = Actor::native_balance(swap.vault_id);
     let tx = public_tx(
         vault,
@@ -153,6 +182,54 @@ fn flash_swap_unsolicited_reply_rejected() {
 
     let result = swap.state.transition_from_public_transaction(&tx, 1, 0);
     assert_initiator_refused(&result, "a reply must answer a pending read");
+}
+
+#[test]
+fn a_callback_may_start_a_nested_flash_swap() {
+    let mut swap = FlashSwap::with_callback(crate::test_methods::scripted());
+    // The outer callback borrows again from the same initiator before repaying its own loan.
+    let inner = swap.loan(
+        50,
+        INITIAL_BALANCE - AMOUNT_OUT,
+        &Script::default().send(swap.repay(50)),
+    );
+    let outer = swap.loan(
+        AMOUNT_OUT,
+        INITIAL_BALANCE,
+        &Script::default()
+            .send(Call::new(swap.initiator(), &inner))
+            .send(swap.repay(AMOUNT_OUT)),
+    );
+
+    let result = swap.submit(&outer);
+
+    assert!(
+        result.is_ok(),
+        "both nested loans should be repaid: {result:?}"
+    );
+    swap.assert_balances(INITIAL_BALANCE, 0);
+}
+
+#[test]
+fn a_callback_injecting_a_vault_reply_is_rolled_back() {
+    let mut swap = FlashSwap::with_callback(crate::test_methods::scripted());
+    // Having repaid, the callback has the vault answer the initiator before its own second read.
+    let inject = Call::new(
+        Actor::native_balance(swap.vault_id),
+        &NativeMessage::ReadState(ReadState {
+            reply_to: swap.initiator(),
+        }),
+    );
+    let loan = swap.loan(
+        AMOUNT_OUT,
+        INITIAL_BALANCE,
+        &Script::default().send(swap.repay(AMOUNT_OUT)).send(inject),
+    );
+
+    let result = swap.submit(&loan);
+
+    assert_initiator_refused(&result, "a reply must answer a pending read");
+    swap.assert_balances(INITIAL_BALANCE, 0);
 }
 
 fn forged_echo_result(field: ForgeField) -> Result<Vec<TransactionEvent>, LeeError> {

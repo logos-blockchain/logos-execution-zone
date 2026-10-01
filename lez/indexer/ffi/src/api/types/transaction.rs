@@ -1201,6 +1201,15 @@ mod tests {
                             grants: vec![account_id(15)],
                             pda_seeds: vec![PdaSeed([16; 32])],
                         },
+                        PublicDelivery {
+                            envelope: MessageEnvelope {
+                                source: DeliverySource::Cast(account_id(40)),
+                                to: actor(41, 42),
+                                message: vec![43],
+                            },
+                            grants: vec![],
+                            pda_seeds: vec![],
+                        },
                     ],
                     assumptions: vec![Assumption {
                         envelope: MessageEnvelope {

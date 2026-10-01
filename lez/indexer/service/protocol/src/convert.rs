@@ -1464,6 +1464,17 @@ mod tests {
                             grants: vec![account_id(14)],
                             pda_seeds: vec![lee_core::program::PdaSeed::new([15; 32])],
                         },
+                        lee_core::execution_state::PublicDelivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                source: lee_core::execution_state::DeliverySource::Cast(
+                                    account_id(40),
+                                ),
+                                to: actor(41, 42),
+                                message: vec![43],
+                            },
+                            grants: vec![],
+                            pda_seeds: vec![],
+                        },
                     ],
                     assumptions: vec![lee_core::execution_state::Assumption {
                         envelope: lee_core::program::MessageEnvelope {

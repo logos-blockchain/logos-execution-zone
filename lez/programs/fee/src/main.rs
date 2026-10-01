@@ -329,4 +329,86 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn a_distribution_reads_the_inbox_before_paying() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+
+        let transition = distribute_at(&state, block, payout);
+
+        assert_eq!(
+            transition.response.sends,
+            vec![
+                Call::new(
+                    Actor::native_balance(compute_fee_inbox_account_id(FEE)),
+                    &NativeMessage::ReadState(ReadState {
+                        reply_to: Actor::new(compute_fee_state_account_id(FEE), FEE),
+                    }),
+                )
+                .into()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_confirmed_payout_clears_the_pending_distribution() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let mut expected = state.clone();
+        expected.apply_block(&block);
+
+        let transition = pay_out_after(&state, block, payout, 1_007);
+
+        assert_eq!(
+            transition.response.post_state,
+            Some(ActorState::try_from(expected.to_bytes()).unwrap())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "The inbox must hold exactly this block's revenue")]
+    fn an_inbox_holding_other_than_the_revenue_is_refused() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let _transition = pay_out_after(&state, block, payout, 1_006);
+    }
+
+    #[test]
+    #[should_panic(expected = "A reply must answer a pending distribution")]
+    fn an_unsolicited_reply_is_refused() {
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            FeeState::genesis().to_bytes(),
+            &NativeMessage::StateReply(StateReply {
+                subject: Actor::native_balance(compute_fee_inbox_account_id(FEE)),
+                state: encode_balance(0),
+            }),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "The reply must read the fee inbox")]
+    fn a_reply_about_another_account_is_refused() {
+        let state = warmed_state();
+        let block = summary(1_000, 7);
+        let payout = honest_payout(&state, &block);
+        let pending = distribute_at(&state, block, payout).response.post_state;
+
+        let _transition = run(
+            compute_fee_state_account_id(FEE),
+            Origin::Program(NATIVE_TOKEN_PROGRAM_ID),
+            pending
+                .expect("a distribution records its pending payout")
+                .to_vec(),
+            &NativeMessage::StateReply(StateReply {
+                subject: Actor::native_balance(PRODUCER),
+                state: encode_balance(1_007),
+            }),
+        );
+    }
 }
