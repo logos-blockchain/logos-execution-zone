@@ -309,87 +309,98 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     type Error = OperationStatus;
 
+    /// Reclaims every FFI allocation the body owns before validating any field, so a body that
+    /// fails to convert still frees all of it.
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
+        let FfiPrivateTransactionBody {
+            message,
+            witness_set,
+            proof,
+            ..
+        } = *value;
+        let FfiPrivacyPreservingMessage {
+            public_actions,
+            nonces,
+            private_actions,
+            block_validity_window,
+            timestamp_validity_window,
+            program_image_claims,
+        } = message;
+
+        let public_actions: Vec<PublicActionWithID> = {
+            let std_vec: Vec<FfiPublicAction> = public_actions.into();
+            std_vec
+                .into_iter()
+                .map(|ffi_val| PublicActionWithID {
+                    account_id: AccountId::new(ffi_val.account_id.data),
+                    effects: {
+                        let ffi_effects: Vec<FfiPublicEffect> = ffi_val.effects.into();
+                        ffi_effects.into_iter().map(Into::into).collect()
+                    },
+                })
+                .collect()
+        };
+        let nonces = {
+            let std_vec: Vec<_> = nonces.into();
+            std_vec.into_iter().map(Into::into).collect()
+        };
+        let private_actions = {
+            let std_vec: Vec<_> = private_actions.into();
+            std_vec
+                .into_iter()
+                .map(|ffi_val| PrivateAction {
+                    nullifier: Nullifier::from_byte_array(ffi_val.nullifier.data),
+                    root: ffi_val.root.data,
+                    commitment: Commitment::from_byte_array(ffi_val.commitment.data),
+                    encrypted_post_state: EncryptedAccountData {
+                        ciphertext: Ciphertext::from_inner(
+                            ffi_val.encrypted_post_state.ciphertext.into(),
+                        ),
+                        epk: EphemeralPublicKey(ffi_val.encrypted_post_state.epk.into()),
+                        view_tag: ffi_val.encrypted_post_state.view_tag,
+                    },
+                })
+                .collect()
+        };
+        let program_image_claims: Vec<Result<ProgramImageClaim, OperationStatus>> = {
+            let std_vec: Vec<_> = program_image_claims.into();
+            std_vec.into_iter().map(TryInto::try_into).collect()
+        };
+        let witness_entries: Vec<FfiSignaturePubKeyEntry> = witness_set.into();
+        let proof = Proof::from_inner(proof.into());
+
+        // Everything is owned by Rust now, so an early return below drops it rather than leaking.
+        let block_validity_window = cast_ffi_validity_window(block_validity_window)?;
+        let timestamp_validity_window = cast_ffi_validity_window(timestamp_validity_window)?;
+        let program_image_claims = program_image_claims.into_iter().collect::<Result<_, _>>()?;
+        let signatures_and_public_keys = witness_entries
+            .into_iter()
+            .map(|ffi_val| {
+                let public_key = PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
+                    log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
+                    OperationStatus::CastError
+                })?;
+                Ok((
+                    Signature {
+                        value: ffi_val.signature.data,
+                    },
+                    public_key,
+                ))
+            })
+            .collect::<Result<_, OperationStatus>>()?;
+
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
-                public_actions: {
-                    let std_vec: Vec<_> = value.message.public_actions.into();
-
-                    let mut cast_vec = vec![];
-
-                    for ffi_val in std_vec {
-                        cast_vec.push(PublicActionWithID {
-                            account_id: AccountId::new(ffi_val.account_id.data),
-                            effects: {
-                                let ffi_effects: Vec<FfiPublicEffect> = ffi_val.effects.into();
-                                ffi_effects.into_iter().map(Into::into).collect()
-                            },
-                        });
-                    }
-
-                    cast_vec
-                },
-                nonces: {
-                    let std_vec: Vec<_> = value.message.nonces.into();
-                    std_vec.into_iter().map(Into::into).collect()
-                },
-                private_actions: {
-                    let std_vec: Vec<_> = value.message.private_actions.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| PrivateAction {
-                            nullifier: Nullifier::from_byte_array(ffi_val.nullifier.data),
-                            root: ffi_val.root.data,
-                            commitment: Commitment::from_byte_array(ffi_val.commitment.data),
-                            encrypted_post_state: EncryptedAccountData {
-                                ciphertext: Ciphertext::from_inner(
-                                    ffi_val.encrypted_post_state.ciphertext.into(),
-                                ),
-                                epk: EphemeralPublicKey(ffi_val.encrypted_post_state.epk.into()),
-                                view_tag: ffi_val.encrypted_post_state.view_tag,
-                            },
-                        })
-                        .collect()
-                },
-                block_validity_window: cast_ffi_validity_window(
-                    value.message.block_validity_window,
-                )?,
-                timestamp_validity_window: cast_ffi_validity_window(
-                    value.message.timestamp_validity_window,
-                )?,
-                program_image_claims: {
-                    let std_vec: Vec<_> = value.message.program_image_claims.into();
-                    #[expect(
-                        clippy::needless_collect,
-                        reason = "Converting every claim before failing on any still reclaims \
-                                  the claims after a bad one"
-                    )]
-                    let claims: Vec<
-                        Result<ProgramImageClaim, OperationStatus>,
-                    > = std_vec.into_iter().map(TryInto::try_into).collect();
-                    claims.into_iter().collect::<Result<_, _>>()?
-                },
+                public_actions,
+                nonces,
+                private_actions,
+                block_validity_window,
+                timestamp_validity_window,
+                program_image_claims,
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
-                {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    let mut cast_vec = vec![];
-
-                    for ffi_val in std_vec {
-                        cast_vec.push((
-                            Signature {
-                                value: ffi_val.signature.data,
-                            },
-                            PublicKey::try_new(ffi_val.public_key.data).map_err(|e| {
-                                log::error!("Failed to cast `[u8; 32]` into PublicKey, err: {e}");
-                                OperationStatus::CastError
-                            })?,
-                        ));
-                    }
-
-                    cast_vec
-                },
-                Proof::from_inner(value.proof.into()),
+                signatures_and_public_keys,
+                proof,
             ),
         })
     }
@@ -874,6 +885,37 @@ mod tests {
         assert_eq!(
             ProgramImageClaim::try_from(undisclosed_without_root),
             Err(OperationStatus::NullPointer)
+        );
+    }
+
+    /// A body that fails validation is reported as a cast error, after every FFI allocation it
+    /// owns has been reclaimed rather than left behind by an early return.
+    #[test]
+    fn a_private_body_with_an_invalid_validity_window_is_a_cast_error() {
+        let mut ffi = FfiPrivateTransactionBody::from(private_tx(claims().to_vec()));
+        ffi.message.block_validity_window = [5, 3];
+
+        assert_eq!(
+            PrivacyPreservingTransaction::try_from(Box::new(ffi)).err(),
+            Some(OperationStatus::CastError)
+        );
+    }
+
+    #[test]
+    fn a_private_body_with_an_invalid_public_key_is_a_cast_error() {
+        let mut ffi = FfiPrivateTransactionBody::from(private_tx(claims().to_vec()));
+        drop(Vec::<FfiSignaturePubKeyEntry>::from(std::mem::replace(
+            &mut ffi.witness_set,
+            vec![FfiSignaturePubKeyEntry {
+                signature: FfiSignature { data: [0; 64] },
+                public_key: FfiPublicKey { data: [0xff; 32] },
+            }]
+            .into(),
+        )));
+
+        assert_eq!(
+            PrivacyPreservingTransaction::try_from(Box::new(ffi)).err(),
+            Some(OperationStatus::CastError)
         );
     }
 
