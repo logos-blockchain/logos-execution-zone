@@ -564,3 +564,127 @@ fn a_receipt_root_naming_an_unknown_program_is_rejected_not_charged() {
     );
     assert!(!error.is_chargeable());
 }
+
+#[test]
+fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
+    let keys = test_private_account_keys_1();
+    let mut state = V03State::new().with_test_programs();
+    let record = cast(&mut state, receiver());
+    let id = record.id();
+    let (output, proof) = execute_and_prove_assuming(
+        ProvingInput {
+            declared: Declared::new(vec![receiver()], []),
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            ..proving_input(TransactionEntry::Receive(record.clone()))
+        },
+        vec![Vec::new()],
+        &scripted_programs(),
+    )
+    .unwrap();
+    let submit = |state: &mut V03State, identities: Vec<PublicIdentity>| {
+        let message = Message {
+            identities,
+            ..Message::from_circuit_output(vec![], output.clone())
+        };
+        let witness_set = WitnessSet::for_message(&message, proof.clone(), &[]);
+        state.transition_from_privacy_preserving_transaction(
+            &PrivacyPreservingTransaction::new(message, witness_set),
+            2,
+            0,
+        )
+    };
+
+    assert!(matches!(
+        submit(&mut state, Vec::new()),
+        Err(LeeError::UnprovenPublicIdentity { actor }) if actor == receiver()
+    ));
+    assert_eq!(state.pending_message(id), Some(&record));
+    submit(&mut state, vec![PublicIdentity::Key(receiver_pk())])
+        .expect("the receiver's key must prove its identity at settlement");
+    assert!(state.pending_message(id).is_none());
+}
+
+#[test]
+fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence() {
+    let keys = test_private_account_keys_1();
+    let private_receiver = Actor::new(
+        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
+        scripted_id(),
+    );
+    let mut state = V03State::new().with_test_programs();
+    let record = cast_script(
+        &mut state,
+        private_receiver,
+        &received().send(Call::new(receiver(), &Script::write(b"called".to_vec()))),
+    );
+    let id = record.id();
+    let proven = execute_and_prove(
+        ProvingInput {
+            declared: Declared::new(vec![receiver()], []),
+            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
+            ..proving_input(TransactionEntry::Receive(record))
+        },
+        &Simulation::default(),
+        &scripted_programs(),
+    )
+    .unwrap();
+
+    state
+        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 2, 0)
+        .expect("a private receipt root must need no public identity evidence");
+
+    assert!(state.pending_message(id).is_none());
+    assert_eq!(
+        state
+            .get_account_by_id(receiver().account_id)
+            .data
+            .shard(scripted_id()),
+        &ShardData::try_from(b"called".to_vec()).unwrap()
+    );
+}
+
+#[test]
+fn a_signing_public_receiver_needs_no_identity_evidence() {
+    let mut state = V03State::new().with_test_programs();
+    let record = cast(&mut state, receiver());
+    let message = public_transaction::Message::new(
+        TransactionEntry::Receive(record.id()),
+        vec![receiver()],
+        vec![Nonce(0)],
+        None,
+        Vec::new(),
+    );
+    let witness_set = public_transaction::WitnessSet::for_message(
+        &message,
+        &[&PrivateKey::try_new([7; 32]).unwrap()],
+    );
+
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
+        .expect("the receiver's signature must prove its identity");
+
+    assert!(state.pending_message(record.id()).is_none());
+}
+
+#[test]
+fn a_public_receipt_without_identity_evidence_is_rejected_not_charged() {
+    let mut state = V03State::new().with_test_programs();
+    let record = cast(&mut state, receiver());
+
+    let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
+        &receipt(record.id(), receiver(), Vec::new()),
+        &state,
+        2,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+
+    let Err(error) = result else {
+        panic!("a public receipt without identity evidence must reject the block");
+    };
+    assert!(
+        matches!(error, LeeError::UnprovenPublicIdentity { actor } if actor == receiver()),
+        "expected the receiver's identity to be unproven, got {error:?}"
+    );
+    assert!(!error.is_chargeable());
+}

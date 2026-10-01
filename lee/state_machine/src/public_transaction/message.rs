@@ -151,7 +151,11 @@ impl crate::fees::SignedMessage for Message {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Actor, Nonce};
+    use lee_core::{
+        account::{AccountId, Actor, Nonce},
+        execution_state::TransactionEntry,
+        program::MessageId,
+    };
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
@@ -180,5 +184,31 @@ mod tests {
         assert_eq!(message.to_bytes(), expected);
         let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
         assert_eq!(message.hash(), digest);
+    }
+
+    #[test]
+    fn a_public_message_with_a_receipt_root_has_a_pinned_layout() {
+        let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
+        let message = Message::new(
+            TransactionEntry::Receive(MessageId::new([9; 32])),
+            vec![to],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+
+        let expected: Vec<u8> = [
+            &[1][..],      // root: TransactionEntry::Receive
+            &[9; 32],      // message id
+            &[1, 0, 0, 0], // public_actors: one actor
+            &[42; 32],
+            &[0; 32],
+            &[0, 0, 0, 0], // nonces: none
+            &[0],          // fee: None
+            &[0, 0, 0, 0], // identities: none
+        ]
+        .concat();
+
+        assert_eq!(message.to_bytes(), expected);
     }
 }
