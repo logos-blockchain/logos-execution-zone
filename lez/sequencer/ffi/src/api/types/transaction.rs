@@ -1317,4 +1317,22 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn a_cast_transaction_entry_decodes_only_its_message_reference() {
+        let reference = MessageRef {
+            sequence: 7,
+            digest: MessageDigest::new([8; 32]),
+        };
+        let entry = FfiTransactionEntry {
+            kind: FfiTransactionEntryKind::Cast,
+            message_ref: reference.into(),
+            ..unsafe { std::mem::zeroed::<FfiTransactionEntry>() }
+        };
+
+        assert_eq!(
+            TransactionEntry::from(entry),
+            TransactionEntry::Cast(reference)
+        );
+    }
 }
