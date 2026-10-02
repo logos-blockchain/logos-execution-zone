@@ -15,7 +15,7 @@ use wallet::{AccountIdentity, WalletCore};
 #[clap(version)]
 struct Args {
     /// Path to the wallet's home directory (holds `wallet_config.json`,
-    /// `storage.json` and `statistics.json`).
+    /// `storage.json`).
     #[clap(long)]
     wallet: std::path::PathBuf,
     #[clap(subcommand)]

@@ -72,8 +72,8 @@ impl ConfigSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let mut config = wallet_core.config().clone();
         match key.as_str() {
-            "sequencers" => {
-                anyhow::bail!("Not settable via this method, use add-sequencer subcommand");
+            "sequencer" => {
+                anyhow::bail!("Not settable");
             }
             "seq_poll_timeout" => {
                 config.seq_poll_timeout = humantime::parse_duration(&value)
