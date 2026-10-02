@@ -15,7 +15,7 @@ use cross_zone::{
 use cross_zone_inbox_core::message_key;
 use futures::{Stream, StreamExt as _};
 use kameo::actor::ActorRef;
-use lee::{PublicKey, TransactionEntry};
+use lee::PublicKey;
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -646,10 +646,7 @@ async fn record_block_deliveries<S: StorageActorTrait>(
         let LeeTransaction::Public(public_tx) = tx else {
             continue;
         };
-        let TransactionEntry::Call { to, message } = &public_tx.message().root else {
-            continue;
-        };
-        let Some(emission) = extract_emission(to.program_account_id, message) else {
+        let Some(emission) = extract_emission(public_tx) else {
             continue;
         };
 
@@ -1198,7 +1195,7 @@ mod tests {
         let LeeTransaction::Public(public_tx) = tx else {
             panic!("a dispatch is a public transaction");
         };
-        let TransactionEntry::Call { message, .. } = &public_tx.message().root else {
+        let Some((_, message)) = public_tx.message().root.call() else {
             panic!("the recorded transaction is an inline call");
         };
         let Ok(cross_zone_inbox_core::Message::Dispatch(msg)) = borsh::from_slice(message) else {

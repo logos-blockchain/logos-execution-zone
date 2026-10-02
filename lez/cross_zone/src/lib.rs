@@ -65,8 +65,9 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
 /// watcher and verifier both use this so they agree on what a given source tx
 /// emits.
 #[must_use]
-pub fn extract_emission(root_program: AccountId, message: &[u8]) -> Option<Emission> {
-    if root_program == programs::ping_sender_account_id() {
+pub fn extract_emission(tx: &lee::PublicTransaction) -> Option<Emission> {
+    let (to, message) = tx.message().root.call()?;
+    if to.program_account_id == programs::ping_sender_account_id() {
         // Not every transaction to an emitter emits: `InitConfig` is one of its
         // messages, so a non-`Send` decode is an ordinary non-emitting tx.
         let Ok(ping_core::SenderMessage::Send {
@@ -85,7 +86,7 @@ pub fn extract_emission(root_program: AccountId, message: &[u8]) -> Option<Emiss
             target_accounts,
             payload,
         })
-    } else if root_program == programs::bridge_lock_account_id() {
+    } else if to.program_account_id == programs::bridge_lock_account_id() {
         let Ok(bridge_lock_core::Message::Lock {
             target_zone,
             target_account_id,

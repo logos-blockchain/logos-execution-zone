@@ -19,6 +19,16 @@ pub enum TransactionEntry<R> {
     Cast(R),
 }
 
+impl<R> TransactionEntry<R> {
+    #[must_use]
+    pub const fn call(&self) -> Option<(Actor, &[u8])> {
+        match self {
+            Self::Call { to, message } => Some((*to, message.as_slice())),
+            Self::Cast(_) => None,
+        }
+    }
+}
+
 impl TransactionEntry<StoredMessage> {
     #[must_use]
     pub const fn destination(&self) -> Actor {

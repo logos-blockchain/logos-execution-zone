@@ -25,7 +25,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Message as InboxMessage, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, PublicKey, TransactionEntry};
+use lee::{GENESIS_BLOCK_ID, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -832,12 +832,7 @@ impl CrossZoneVerifier {
     /// Decodes a transaction into the cross-zone message it dispatches, or `None`
     /// if it is not an inbox dispatch.
     fn decode_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> {
-        let LeeTransaction::Public(public_tx) = tx else {
-            return None;
-        };
-        let TransactionEntry::Call { to, message } = &public_tx.message().root else {
-            return None;
-        };
+        let (to, message) = tx.public_call()?;
         if to.program_account_id != programs::cross_zone_inbox_account_id() {
             return None;
         }
@@ -898,11 +893,7 @@ impl CrossZoneVerifier {
                 "peer transaction at src_tx_index is not a recognized emitter".to_owned(),
             )
         };
-        let TransactionEntry::Call { to, message } = &emission_tx.message().root else {
-            return Err(not_an_emitter());
-        };
-        let emission =
-            extract_emission(to.program_account_id, message).ok_or_else(not_an_emitter)?;
+        let emission = extract_emission(emission_tx).ok_or_else(not_an_emitter)?;
 
         if emission.target_zone != self.self_zone {
             return Err(forged(
