@@ -1339,4 +1339,32 @@ mod tests {
 
         assert_eq!(back.message, original.message);
     }
+
+    #[test]
+    fn identical_casts_keep_their_multiplicity_over_the_ffi() {
+        let cast = MessageBody {
+            source: account_id(1),
+            to: actor(2, 3),
+            message: vec![4],
+        };
+        let original = PrivacyPreservingTransaction {
+            message: lee::privacy_preserving_transaction::Message {
+                execution: PrivacyPreservingCircuitOutput {
+                    casts: vec![cast.clone(), cast],
+                    ..PrivacyPreservingCircuitOutput::default()
+                },
+                nonces: vec![],
+                identities: vec![],
+            },
+            witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                vec![],
+                Proof::from_inner(vec![]),
+            ),
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();
+
+        assert_eq!(back.message, original.message);
+    }
 }

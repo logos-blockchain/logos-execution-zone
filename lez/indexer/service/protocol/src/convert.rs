@@ -1470,4 +1470,30 @@ mod tests {
             "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
         );
     }
+
+    #[test]
+    fn identical_casts_keep_their_multiplicity_through_the_mirror() {
+        let cast = lee_core::program::MessageBody {
+            source: account_id(1),
+            to: actor(2, 3),
+            message: vec![4],
+        };
+        let message = lee::privacy_preserving_transaction::message::Message {
+            execution: lee_core::PrivacyPreservingCircuitOutput {
+                casts: vec![cast.clone(), cast],
+                ..lee_core::PrivacyPreservingCircuitOutput::default()
+            },
+            nonces: vec![],
+            identities: vec![],
+        };
+
+        let mirrored = PrivacyPreservingMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PrivacyPreservingMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
 }

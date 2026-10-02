@@ -1244,4 +1244,36 @@ mod tests {
 
         assert_eq!(back.message, original.message);
     }
+
+    #[test]
+    fn identical_casts_keep_their_multiplicity_over_the_ffi() {
+        let cast = MessageBody {
+            source: account_id(1),
+            to: actor(2, 3),
+            message: vec![4],
+        };
+        let original = PrivacyPreservingTransaction {
+            hash: HashType([4; 32]),
+            message: PrivacyPreservingMessage {
+                context: PublicExecutionContext::default(),
+                boundary: vec![],
+                casts: vec![cast.clone(), cast],
+                consumed_message: None,
+                nonces: vec![],
+                private_actions: vec![],
+                block_validity_window: ValidityWindow((None, None)),
+                timestamp_validity_window: ValidityWindow((None, None)),
+                identities: vec![],
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: Some(Proof(vec![])),
+            },
+        };
+
+        let ffi: FfiPrivateTransactionBody = original.clone().into();
+        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
+
+        assert_eq!(back.message, original.message);
+    }
 }
