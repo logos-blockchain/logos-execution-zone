@@ -869,6 +869,21 @@ fn initialization_rejects_inconsistent_declarations() {
 }
 
 #[test]
+fn each_part_refuses_to_execute_the_other_sides_root() {
+    let keys = Keys::new(1);
+    let witnesses = [keys.regular(false)];
+
+    assert!(matches!(
+        PrivatePart::new(context(vec![ENTRY]), Some(root(ENTRY)), &witnesses, Vec::new()).err(),
+        Some(ExecutionError::MisplacedRoot { actor }) if actor == ENTRY
+    ));
+    assert!(matches!(
+        PublicPart::new(context(vec![ENTRY]), Some(root(holder(&keys))), Boundary::new()).err(),
+        Some(ExecutionError::MisplacedRoot { actor }) if actor == holder(&keys)
+    ));
+}
+
+#[test]
 fn a_check_whose_live_subtree_reaches_the_loader_fails() {
     let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
     let mut script = Script::default()

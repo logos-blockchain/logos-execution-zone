@@ -769,6 +769,23 @@ fn a_tampered_predicted_crossing_is_rejected() {
 }
 
 #[test]
+fn a_tampered_public_root_is_rejected() {
+    use crate::validated_state_diff::ValidatedStateDiff;
+
+    let mut nested = NestedBoundary::prove(&outer_turn(&inner_turn()));
+    let Some(TransactionEntry::Call { message, .. }) = &mut nested.tx.message.execution.entry
+    else {
+        panic!("the nested statement starts with a public call");
+    };
+    message[0] ^= 0xFF;
+
+    assert!(matches!(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&nested.tx, &nested.state, 1, 0),
+        Err(LeeError::InvalidPrivacyPreservingProof)
+    ));
+}
+
+#[test]
 fn a_public_turn_departing_from_its_predicted_crossing_is_rejected_and_applies_nothing() {
     // The outer turn's live script delivers something other than the assumed message.
     let mut nested = NestedBoundary::prove(
