@@ -331,9 +331,9 @@ fn a_receipt_signed_for_another_body_at_a_pending_sequence_is_rejected() {
     let substituted = StoredMessage {
         body: MessageBody {
             message: borsh::to_vec(&replying()).unwrap(),
-            ..record.body.clone()
+            ..record.body
         },
-        ..record.clone()
+        ..record
     };
 
     let result = state.transition_from_public_transaction(
@@ -365,9 +365,9 @@ fn a_proven_receipt_of_another_body_at_a_pending_sequence_is_rejected() {
     let forged = StoredMessage {
         body: MessageBody {
             message: borsh::to_vec(&Script::write(b"forged".to_vec()).from(scripted_id())).unwrap(),
-            ..record.body.clone()
+            ..record.body
         },
-        ..record.clone()
+        ..record
     };
     let proven = execute_and_prove(
         ProvingInput {
