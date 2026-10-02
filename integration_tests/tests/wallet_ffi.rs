@@ -1738,7 +1738,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_new_token_definition_generic_private() -> Result<()> {
+fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
