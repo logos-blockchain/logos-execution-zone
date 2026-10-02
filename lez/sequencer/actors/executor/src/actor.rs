@@ -237,6 +237,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self.sequencer.refuses(&transaction).await {
+            return Err(Error::PreviouslyFailedSettlement);
+        }
+
         // Fee admission against the head state, before the mempool sees it.
         // Advisory (base fees and balances move), but everything it turns
         // away would have been refused by the block builder anyway.

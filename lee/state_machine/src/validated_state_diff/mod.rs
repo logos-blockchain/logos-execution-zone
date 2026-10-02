@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::{HashMap, HashSet, hash_map::Entry},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -32,6 +33,11 @@ use crate::{
 };
 
 mod public_backend;
+
+/// Cycles charged per loader shard byte read: the loader runs natively and records no guest
+/// cycles. Measured ~55 ns/byte against ~15 ns per executor cycle, so 1 under-charges ~3.7x; kept
+/// so the default wallet gas limit covers every legal chain.
+const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 pub struct StateDiff {
     pub signer_account_ids: Vec<AccountId>,
@@ -521,32 +527,41 @@ fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeError>
 fn plan_program_loader<'state>(
     input: &PlanInput,
     shard: impl Fn(AccountId) -> &'state ShardData,
-) -> Result<(PlanOutput, Option<Commitment>), LeeError> {
+) -> Result<(PlanOutput, Option<Commitment>, Cycles), LeeError> {
     let accounts = &input.accounts;
     let instruction: ProgramLoaderInstruction = borsh::from_slice(&input.instruction_data)
         .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+    let bytes_read = Cell::new(0_u64);
+    let counted = |account_id| {
+        let data = shard(account_id);
+        let len = u64::try_from(data.len()).expect("a shard's length fits u64");
+        bytes_read.set(bytes_read.get().saturating_add(len));
+        data
+    };
 
     let (effects, new_commitment) = catch_program_loader_panic(|| match instruction {
         ProgramLoaderInstruction::WriteSegment {
             bytecode,
             next_segment,
         } => (
-            program_loader_core::write_segment(accounts, shard, bytecode, next_segment),
+            program_loader_core::write_segment(accounts, counted, bytecode, next_segment),
             None,
         ),
         ProgramLoaderInstruction::CreateHeader {
             first_segment,
             immutable,
-        } => program_loader_core::create_header(accounts, shard, first_segment, immutable),
+        } => program_loader_core::create_header(accounts, counted, first_segment, immutable),
         ProgramLoaderInstruction::UpdateHeader {
             first_segment,
             immutable,
-        } => program_loader_core::update_header(accounts, shard, first_segment, immutable),
+        } => program_loader_core::update_header(accounts, counted, first_segment, immutable),
     })?;
 
     Ok((
         PlanOutput::new(input.clone()).with_effects(effects),
         new_commitment,
+        bytes_read.get().saturating_mul(LOADER_CYCLES_PER_BYTE),
     ))
 }
 

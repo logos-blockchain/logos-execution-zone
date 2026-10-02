@@ -1,15 +1,13 @@
 //! Native program deployment and updates through [`PROGRAM_LOADER_ACCOUNT_ID`].
 //!
-//! Instructions only change loader shards. Writing a fresh segment is permissionless — a
-//! still-empty loader shard has no prior claim to violate — but a header target must always be
-//! `is_authorized`, whether created or updated, so a real header can't be squatted at an address
-//! some other account id (e.g. a shadow program's) will later resolve to.
+//! Every write target must be `is_authorized`, and every shard is a tagged [`LoaderEntry`], so a
+//! segment and a header can never be read as each other.
 //!
 //! The public-only native loader reads staged shards during planning.
 //! [`apply`] executes the resulting [`ShardEffect`]s.
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::program::{
-    MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
+    LoaderEntry, MAX_PROGRAM_SEGMENTS, ProgramHeader, ProgramSegment, immutable_mirror_commitment,
 };
 use lee_core::{
     Commitment,
@@ -29,7 +27,7 @@ pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 /// ahead of `WriteSegment` shifts every existing encoding.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub enum Instruction {
-    /// Writes a new segment to the empty loader shard of `accounts[0]`, without authorization.
+    /// Writes a new segment to the empty loader shard of `accounts[0]`, which must be authorized.
     ///
     /// If `next_segment` is `Some`, `accounts[1]` must be that account and contain a valid
     /// [`ProgramSegment`] in its loader shard. Segments are immutable and linked from tail to head.
@@ -65,6 +63,56 @@ pub enum Instruction {
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub enum Effect {
     Write(Vec<u8>),
+}
+
+/// Why [`build_segments`] refused a program before any segment was uploaded.
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentChainError {
+    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
+    CountMismatch { expected: usize, actual: usize },
+    #[error("Program needs {count} segments, over the {MAX_PROGRAM_SEGMENTS}-segment cap")]
+    TooManySegments { count: usize },
+    #[error("Segment {index} encodes to more than DATA_MAX_LENGTH")]
+    SegmentTooLarge { index: usize },
+}
+
+/// How many segments [`build_segments`] splits `user_elf` into.
+#[must_use]
+pub const fn segment_count(user_elf: &[u8]) -> usize {
+    user_elf.len().div_ceil(MAX_SEGMENT_DATA_LEN)
+}
+
+/// Splits `user_elf` into a segment chain written to `segment_ids`, each linking to the next.
+///
+/// A deployer's pre-check, not a consensus rule: it refuses a program the loader would reject on
+/// size before any segment is paid for.
+pub fn build_segments(
+    user_elf: &[u8],
+    segment_ids: &[AccountId],
+) -> Result<Vec<ProgramSegment>, SegmentChainError> {
+    let count = segment_count(user_elf);
+    if count != segment_ids.len() {
+        return Err(SegmentChainError::CountMismatch {
+            expected: count,
+            actual: segment_ids.len(),
+        });
+    }
+    if count > MAX_PROGRAM_SEGMENTS {
+        return Err(SegmentChainError::TooManySegments { count });
+    }
+    user_elf
+        .chunks(MAX_SEGMENT_DATA_LEN)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let segment = ProgramSegment {
+                bytecode: chunk.to_vec(),
+                next_segment: segment_ids.get(index.saturating_add(1)).copied(),
+            };
+            ShardData::try_from(segment.clone().to_loader_shard())
+                .map(|_| segment)
+                .map_err(|_too_big| SegmentChainError::SegmentTooLarge { index })
+        })
+        .collect()
 }
 
 /// Every handle a loader instruction takes selects the loader's own shard. The planner reads
@@ -108,6 +156,10 @@ pub fn write_segment<'state>(
         shard(target.account_id).is_empty(),
         "segment target already deployed"
     );
+    assert!(
+        target.is_authorized,
+        "WriteSegment target must be an authorized account"
+    );
 
     if let (Some(next), [referenced]) = (next_segment, rest) {
         assert_eq!(
@@ -115,7 +167,7 @@ pub fn write_segment<'state>(
             "second account must be the segment `next_segment` points to"
         );
         assert!(
-            ProgramSegment::from_bytes(shard(referenced.account_id)).is_some(),
+            ProgramSegment::from_loader_shard(shard(referenced.account_id)).is_some(),
             "`next_segment` must already hold a valid segment \u{2014} segments are linked tail-to-head"
         );
     }
@@ -126,7 +178,7 @@ pub fn write_segment<'state>(
             bytecode,
             next_segment,
         }
-        .to_bytes(),
+        .to_loader_shard(),
     )]
 }
 
@@ -169,7 +221,10 @@ pub fn create_header<'state>(
 
     let header = build_header(accounts, shard, first_segment, immutable);
     let new_commitment = immutable.then(|| immutable_mirror_commitment(target.account_id, &header));
-    (vec![write(target, header.to_bytes())], new_commitment)
+    (
+        vec![write(target, header.to_loader_shard())],
+        new_commitment,
+    )
 }
 
 /// Executes `UpdateHeader`. Returns a private [`Commitment`] alongside the effect when this call
@@ -186,7 +241,7 @@ pub fn update_header<'state>(
         .first()
         .expect("UpdateHeader requires at least the header target account");
     reject_reserved_target(target.account_id);
-    let old_header = ProgramHeader::from_bytes(shard(target.account_id)).expect(
+    let old_header = ProgramHeader::from_loader_shard(shard(target.account_id)).expect(
         "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
     );
     assert!(
@@ -200,7 +255,10 @@ pub fn update_header<'state>(
 
     let header = build_header(accounts, shard, first_segment, immutable);
     let new_commitment = immutable.then(|| immutable_mirror_commitment(target.account_id, &header));
-    (vec![write(target, header.to_bytes())], new_commitment)
+    (
+        vec![write(target, header.to_loader_shard())],
+        new_commitment,
+    )
 }
 
 fn build_header<'state>(
@@ -259,7 +317,7 @@ fn compute_image_id<'state>(
             supplied.account_id, account_id,
             "segment accounts must be supplied in exact chain order"
         );
-        let segment = ProgramSegment::from_bytes(shard(supplied.account_id))
+        let segment = ProgramSegment::from_loader_shard(shard(supplied.account_id))
             .expect("every supplied segment account must decode as a valid ProgramSegment");
         elf.extend_from_slice(&segment.bytecode);
         expected_next = segment.next_segment;

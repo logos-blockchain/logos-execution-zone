@@ -71,7 +71,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                         bytecode: chunk.to_vec(),
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -92,7 +92,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_shard(),
             )
             .unwrap(),
         ),
@@ -180,7 +180,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                         bytecode: vec![],
                         next_segment,
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -199,7 +199,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
                 }
-                .to_bytes(),
+                .to_loader_shard(),
             )
             .unwrap(),
         ),
@@ -233,7 +233,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
                         bytecode: vec![],
                         next_segment: segment_account_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
+                    .to_loader_shard(),
                 )
                 .unwrap(),
             ),
@@ -408,6 +408,85 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
         state.get_account_by_id(shadow_addr),
         Account::default(),
         "the shadow-derived account must remain unclaimed after a rejected deploy"
+    );
+}
+
+/// A shadow address is keyless, so no signer can claim its loader shard, whatever the payload.
+#[test]
+fn write_segment_rejects_a_shadow_derived_target_the_signer_does_not_control() {
+    let mut state = V03State::new();
+    let attacker_program = crate::test_methods::noop();
+    let victim_program = crate::test_methods::shard_forwarder();
+    let attacker_segments = force_insert_segment_chain(&mut state, attacker_program.elf(), 0x30);
+
+    let shadow_addr = AccountId::for_shadow_program(&victim_program.id());
+
+    // 28 filler bytes + a segment id: untagged storage would have read this as a header.
+    let mut bytecode = vec![0_u8; 28];
+    bytecode.extend_from_slice(attacker_segments[0].value());
+
+    let unrelated_key = PrivateKey::try_new([0x77; 32]).unwrap();
+    let tx = loader_tx(
+        vec![shadow_addr],
+        vec![Nonce(0)],
+        Instruction::WriteSegment {
+            bytecode,
+            next_segment: None,
+        },
+        &[&unrelated_key],
+    );
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    let err = result.expect_err("a segment target the signer doesn't control must be rejected");
+    assert!(
+        err.to_string().contains("must be an authorized account"),
+        "rejection should cite the authorization rule, got: {err}"
+    );
+    assert_eq!(
+        state.get_account_by_id(shadow_addr),
+        Account::default(),
+        "the shadow-derived account must remain unclaimed after a rejected write"
+    );
+    assert!(
+        lee_core::program::get_program_via(shadow_addr, |id| state.loader_shard(id)).is_none(),
+        "no program may resolve at the shadow address"
+    );
+}
+
+#[test]
+fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::noop();
+    let segments = force_insert_segment_chain(&mut state, program.elf(), 0x31);
+
+    let key = PrivateKey::try_new([0x78; 32]).unwrap();
+    let target = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let mut bytecode = vec![0_u8; 28];
+    bytecode.extend_from_slice(segments[0].value());
+    let tx = loader_tx(
+        vec![target],
+        vec![Nonce(0)],
+        Instruction::WriteSegment {
+            bytecode: bytecode.clone(),
+            next_segment: None,
+        },
+        &[&key],
+    );
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("an authorized segment write succeeds");
+
+    let stored = state.loader_shard(target).expect("the segment was written");
+    assert_eq!(
+        ProgramSegment::from_loader_shard(stored).map(|segment| segment.bytecode),
+        Some(bytecode)
+    );
+    assert!(
+        lee_core::program::get_program_via(target, |id| state.loader_shard(id)).is_none(),
+        "no program may resolve at the target"
     );
 }
 

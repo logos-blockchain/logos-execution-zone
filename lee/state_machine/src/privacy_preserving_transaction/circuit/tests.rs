@@ -1302,6 +1302,35 @@ fn a_private_call_into_the_program_loader_is_refused() {
 }
 
 #[test]
+fn two_program_image_witnesses_for_one_account_are_refused() {
+    let noop = crate::test_methods::noop();
+    let mut input = direct_input(
+        &noop,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        &[],
+        Vec::new(),
+    );
+    let account_id = AccountId::new([5; 32]);
+    input.program_image_witnesses = vec![
+        ProgramImageWitness::Disclosed {
+            account_id,
+            image_id: [1; 8],
+        },
+        ProgramImageWitness::Disclosed {
+            account_id,
+            image_id: [2; 8],
+        },
+    ];
+
+    let result = prove_circuit_directly(&input, Vec::new());
+
+    assert_circuit_rejects(&result, "claimed by more than one program-image witness");
+}
+
+#[test]
 fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     let noop = crate::test_methods::noop();
     // Proven against an unauthorized handle, offered where the root claims ALICE signed.

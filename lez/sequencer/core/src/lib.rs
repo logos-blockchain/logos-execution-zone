@@ -72,6 +72,7 @@ mod faults;
 pub mod fees;
 pub mod gossip;
 pub mod logging;
+mod refused;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -181,6 +182,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    /// Private transactions that failed settlement, refused for a while.
+    refused: refused::RefusedTransactions,
     sequencer_config: SequencerConfig,
     storage_ref: ActorRef<S>,
     bedrock_ref: ActorRef<B>,
@@ -546,6 +549,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             storage_ref,
             mempool,
             mempool_handle: mempool_handle.clone(),
+            refused: refused::RefusedTransactions::default(),
             sequencer_config: config,
             bedrock_ref,
             watchers,
@@ -1811,6 +1815,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 break;
             }
 
+            let is_private = matches!(tx, LeeTransaction::PrivacyPreserving(_));
+            if is_private && self.refused.refuses(&tx_hash, new_block_height) {
+                debug!("Skipping private transaction {tx_hash}: it already failed settlement");
+                continue;
+            }
+
             let before_tx_apply = Instant::now();
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
@@ -1848,6 +1858,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
                 self.count_dispatch_failure(&tx).await;
+                // Settlement is the only way a private transaction is dropped here.
+                if is_private {
+                    self.refused.record(tx_hash, new_block_height);
+                }
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -1896,6 +1910,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             parent,
             mempool_transactions,
         })
+    }
+
+    /// Whether `tx` is a private transaction that recently failed settlement.
+    pub async fn refuses(&self, tx: &LeeTransaction) -> bool {
+        matches!(tx, LeeTransaction::PrivacyPreserving(_))
+            && self
+                .refused
+                .refuses(&tx.hash(), self.chain_height().await.saturating_add(1))
     }
 
     /// Reads the current head state under the lock without cloning it, so callers

@@ -231,6 +231,7 @@ struct Case {
     program_name: &'static str,
     instruction_label: &'static str,
     program: Program,
+    self_account_id: AccountId,
     fixtures: Vec<Fixture>,
     instruction_data: InstructionData,
 }
@@ -240,6 +241,7 @@ impl Case {
         program_name: &'static str,
         instruction_label: &'static str,
         program: Program,
+        self_account_id: AccountId,
         fixtures: Vec<Fixture>,
         instruction: &I,
     ) -> Result<Self> {
@@ -247,6 +249,7 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            self_account_id,
             fixtures,
             instruction_data: borsh::to_vec(instruction)?,
         })
@@ -257,10 +260,10 @@ impl Case {
             program_name,
             instruction_label,
             program,
+            self_account_id,
             fixtures,
             instruction_data,
         } = self;
-        let self_account_id = AccountId::from_builtin_program(program.id());
 
         let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
             .iter()
@@ -622,6 +625,7 @@ fn main() -> Result<()> {
             "token",
             "Transfer",
             programs::token(),
+            programs::token_account_id(),
             token_transfer_accounts(),
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 5_000,
@@ -632,6 +636,7 @@ fn main() -> Result<()> {
             "token",
             "Mint",
             programs::token(),
+            programs::token_account_id(),
             token_definition_and_holding_accounts(),
             &token_core::Instruction::Mint {
                 amount_to_mint: 5_000,
@@ -641,6 +646,7 @@ fn main() -> Result<()> {
             "token",
             "Burn",
             programs::token(),
+            programs::token_account_id(),
             token_definition_and_holding_accounts(),
             &token_core::Instruction::Burn {
                 amount_to_burn: 500,
@@ -651,6 +657,7 @@ fn main() -> Result<()> {
             "clock",
             "Tick (block_id+1, no multiples)",
             programs::clock(),
+            programs::clock_account_id(),
             clock_accounts_tick_at(0),
             &clock_core::Instruction {
                 timestamp: Timestamp::from(1_700_000_000_u64),
@@ -661,6 +668,7 @@ fn main() -> Result<()> {
             "amm",
             "Swap",
             programs::amm(),
+            programs::amm_account_id(),
             amm_swap_accounts(),
             &amm_core::Instruction::Swap {
                 token_program_id: programs::token_account_id(),
@@ -674,6 +682,7 @@ fn main() -> Result<()> {
             "amm",
             "AddLiquidity",
             programs::amm(),
+            programs::amm_account_id(),
             amm_add_liquidity_accounts(),
             &amm_core::Instruction::AddLiquidity {
                 max_amount_to_add_token_a,
@@ -690,6 +699,7 @@ fn main() -> Result<()> {
             "ata",
             "Create",
             programs::ata(),
+            programs::ata_account_id(),
             ata_create_accounts(),
             &associated_token_account_core::Instruction::Create {
                 token_program_id: programs::token_account_id(),

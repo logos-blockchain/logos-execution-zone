@@ -1792,6 +1792,36 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
 }
 
 #[tokio::test]
+async fn a_private_transaction_that_failed_settlement_is_refused_afterwards() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    // An empty message and a garbage proof: settlement always rejects it.
+    let tx = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+        lee::privacy_preserving_transaction::Message {
+            public_actions: vec![],
+            nonces: vec![],
+            private_actions: vec![],
+            block_validity_window: lee_core::program::ValidityWindow::new_unbounded(),
+            timestamp_validity_window: lee_core::program::ValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
+        },
+        lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+            vec![],
+            lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![]),
+        ),
+    ));
+    assert!(!sequencer.refuses(&tx).await);
+
+    mempool_handle
+        .push((TransactionOrigin::User, tx.clone()))
+        .await
+        .unwrap();
+    let block = sequencer.build_block_from_mempool().await.unwrap().block;
+
+    assert!(!block.body.transactions.contains(&tx));
+    assert!(sequencer.refuses(&tx).await);
+}
+
+#[tokio::test]
 async fn build_block_from_mempool() {
     let (mut sequencer, mempool_handle) = common_setup().await;
     let genesis_height = sequencer.chain_height().await;
