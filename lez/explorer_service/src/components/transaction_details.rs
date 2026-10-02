@@ -32,7 +32,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
             format!("{} bytes", data.len()),
             vec![to],
         ),
-        TransactionEntry::Receive(id) => ("None (receipt)".to_owned(), id.to_string(), Vec::new()),
+        TransactionEntry::Cast(id) => ("None (receipt)".to_owned(), id.to_string(), Vec::new()),
     };
     let proof_len = proof.map_or(0, |p| p.0.len());
     let signatures_count = signatures_and_public_keys.len();

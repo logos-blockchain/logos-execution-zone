@@ -4077,7 +4077,7 @@ fn receive_payout(state: &mut V03State, recipient: (AccountId, &PrivateKey), blo
         panic!("exactly one payout should be pending for the recipient");
     };
     let message = lee::public_transaction::Message::new(
-        TransactionEntry::Receive(payout),
+        TransactionEntry::Cast(payout),
         vec![Actor::native_balance(recipient_id)],
         vec![state.get_account_by_id(recipient_id).nonce],
         None,
@@ -5444,7 +5444,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
 
     // No key, signature or seed proves a private destination publicly.
     let receipt = lee::public_transaction::Message::new(
-        TransactionEntry::Receive(payout),
+        TransactionEntry::Cast(payout),
         vec![Actor::native_balance(destination.account_id)],
         vec![],
         None,
@@ -5467,7 +5467,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
 
     prove_and_settle(
         &mut state,
-        TransactionEntry::Receive(record),
+        TransactionEntry::Cast(record),
         Vec::new(),
         vec![init_witness(&destination, false)],
         released_at.saturating_add(2),
@@ -5865,7 +5865,7 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
     let tx_program = |tx: &LeeTransaction| match tx {
         LeeTransaction::Public(public) => match &public.message().root {
             TransactionEntry::Call { to, .. } => to.program_account_id,
-            TransactionEntry::Receive(_) => unreachable!("genesis holds only calls"),
+            TransactionEntry::Cast(_) => unreachable!("genesis holds only calls"),
         },
         LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")

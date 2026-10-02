@@ -52,7 +52,7 @@ fn main() {
         );
     }
 
-    let consumed_message = root.receipt().map(StoredMessage::id);
+    let consumed_message = root.cast().map(StoredMessage::id);
     let private_part = PrivatePart::new(context.clone(), root, &private_witnesses, assumptions)
         .unwrap_or_else(|e| panic!("{e}"));
     let mut backend = PrivateBackend::new(image_id_by_account_id, responses);

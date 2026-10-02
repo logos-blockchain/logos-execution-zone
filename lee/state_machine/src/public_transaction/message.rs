@@ -190,7 +190,7 @@ mod tests {
     fn a_public_message_with_a_receipt_root_has_a_pinned_layout() {
         let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
         let message = Message::new(
-            TransactionEntry::Receive(MessageId::new([9; 32])),
+            TransactionEntry::Cast(MessageId::new([9; 32])),
             vec![to],
             Vec::new(),
             None,
@@ -198,7 +198,7 @@ mod tests {
         );
 
         let expected: Vec<u8> = [
-            &[1][..],      // root: TransactionEntry::Receive
+            &[1][..],      // root: TransactionEntry::Cast
             &[9; 32],      // message id
             &[1, 0, 0, 0], // public_actors: one actor
             &[42; 32],

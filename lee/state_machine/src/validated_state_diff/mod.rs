@@ -265,11 +265,11 @@ impl ValidatedStateDiff {
             TransactionEntry::Call { to, message } => {
                 (TransactionEntry::Call { to, message }, None)
             }
-            TransactionEntry::Receive(id) => {
+            TransactionEntry::Cast(id) => {
                 let record = state
                     .pending_message(id)
                     .ok_or_else(|| LeeError::InvalidInput("Root message is not pending".into()))?;
-                (TransactionEntry::Receive(record.clone()), Some(id))
+                (TransactionEntry::Cast(record.clone()), Some(id))
             }
         };
         let context =
@@ -278,7 +278,7 @@ impl ValidatedStateDiff {
             public_actors.contains(&root.destination()),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
-        if let Some(record) = root.receipt() {
+        if let Some(record) = root.cast() {
             admit_public_receipt(record, &context, |account_id| {
                 identities.contains(&account_id) || state.is_designated_public_account(account_id)
             })?;

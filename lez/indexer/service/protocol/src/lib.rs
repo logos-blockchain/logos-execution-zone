@@ -294,7 +294,7 @@ pub type MessageBody = MessageEnvelope<AccountId>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum TransactionEntry {
     Call { to: Actor, message: MessageData },
-    Receive(MessageId),
+    Cast(MessageId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

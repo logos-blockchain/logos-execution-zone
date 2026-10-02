@@ -229,7 +229,7 @@ pub fn execute_and_prove(
     simulation: &Simulation,
     programs: &ProgramCatalog,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    if let Some(record) = input.root.receipt() {
+    if let Some(record) = input.root.cast() {
         admit_public_receipt(record, &input.context, |account_id| {
             simulation.proven_public_accounts.contains(&account_id)
         })?;

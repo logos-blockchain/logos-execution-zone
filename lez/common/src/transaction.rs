@@ -503,7 +503,7 @@ pub fn validate_user_state_modification(
         LeeTransaction::Public(public_tx) if is_system_injection(tx) => {
             match &public_tx.message().root {
                 TransactionEntry::Call { to, .. } => Some(to.program_account_id),
-                TransactionEntry::Receive(_) => None,
+                TransactionEntry::Cast(_) => None,
             }
         }
         LeeTransaction::Public(_) | LeeTransaction::PrivacyPreserving(_) => None,

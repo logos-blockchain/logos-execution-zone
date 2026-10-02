@@ -16,7 +16,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum TransactionEntry<R> {
     Call { to: Actor, message: MessageData },
-    Receive(R),
+    Cast(R),
 }
 
 impl TransactionEntry<StoredMessage> {
@@ -24,15 +24,15 @@ impl TransactionEntry<StoredMessage> {
     pub const fn destination(&self) -> Actor {
         match self {
             Self::Call { to, .. } => *to,
-            Self::Receive(record) => record.body.to,
+            Self::Cast(record) => record.body.to,
         }
     }
 
     #[must_use]
-    pub const fn receipt(&self) -> Option<&StoredMessage> {
+    pub const fn cast(&self) -> Option<&StoredMessage> {
         match self {
             Self::Call { .. } => None,
-            Self::Receive(record) => Some(record),
+            Self::Cast(record) => Some(record),
         }
     }
 }
@@ -526,7 +526,7 @@ impl<'witnesses> Interpreter<'witnesses> {
                     message,
                 })))
             }
-            Some(TransactionEntry::Receive(StoredMessage {
+            Some(TransactionEntry::Cast(StoredMessage {
                 body:
                     MessageBody {
                         source,

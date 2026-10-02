@@ -354,7 +354,7 @@ impl From<lee_core::execution_state::TransactionEntry<lee_core::program::Message
                 to: to.into(),
                 message,
             },
-            lee_core::execution_state::TransactionEntry::Receive(id) => Self::Receive(id.into()),
+            lee_core::execution_state::TransactionEntry::Cast(id) => Self::Cast(id.into()),
         }
     }
 }
@@ -368,7 +368,7 @@ impl From<TransactionEntry>
                 to: to.into(),
                 message,
             },
-            TransactionEntry::Receive(id) => Self::Receive(id.into()),
+            TransactionEntry::Cast(id) => Self::Cast(id.into()),
         }
     }
 }
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn a_public_message_with_a_receipt_root_and_identities_round_trips_through_the_mirror() {
         let message = lee::public_transaction::Message::new(
-            lee_core::execution_state::TransactionEntry::Receive(message_id(4)),
+            lee_core::execution_state::TransactionEntry::Cast(message_id(4)),
             vec![actor(5, 6)],
             vec![lee_core::account::Nonce(7)],
             Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),

@@ -164,7 +164,7 @@ impl From<FfiActor> for Actor {
 #[repr(C)]
 pub enum FfiTransactionEntryKind {
     Call = 0x0,
-    Receive,
+    Cast,
 }
 
 #[repr(C)]
@@ -184,8 +184,8 @@ impl From<TransactionEntry> for FfiTransactionEntry {
                 message: message.into(),
                 message_id: FfiBytes32::default(),
             },
-            TransactionEntry::Receive(id) => Self {
-                kind: FfiTransactionEntryKind::Receive,
+            TransactionEntry::Cast(id) => Self {
+                kind: FfiTransactionEntryKind::Cast,
                 to: FfiActor::default(),
                 message: Vec::new().into(),
                 message_id: message_id_to_ffi(id),
@@ -203,7 +203,7 @@ impl From<FfiTransactionEntry> for TransactionEntry {
                 to: value.to.into(),
                 message,
             },
-            FfiTransactionEntryKind::Receive => Self::Receive(ffi_to_message_id(value.message_id)),
+            FfiTransactionEntryKind::Cast => Self::Cast(ffi_to_message_id(value.message_id)),
         }
     }
 }
@@ -1109,7 +1109,7 @@ mod tests {
         let original = PublicTransaction {
             hash: HashType([4; 32]),
             message: PublicMessage {
-                root: TransactionEntry::Receive(MessageId([5; 32])),
+                root: TransactionEntry::Cast(MessageId([5; 32])),
                 public_actors: vec![actor(6, 7)],
                 nonces: vec![],
                 fee: None,

@@ -1312,7 +1312,7 @@ fn a_receipt_root_delivers_its_stored_origin_and_message_and_its_origin_grants_n
     whole(
         context(vec![vault]),
         &[],
-        TransactionEntry::Receive(record),
+        TransactionEntry::Cast(record),
         &mut script,
     )
     .unwrap();
@@ -1338,7 +1338,7 @@ fn a_recorded_receipt_root_to_a_private_actor_runs_privately_with_its_stored_ori
     let outcome = private_part(
         PublicExecutionContext::default(),
         &[keys.regular(false)],
-        TransactionEntry::Receive(record),
+        TransactionEntry::Cast(record),
         Vec::new(),
         &mut script,
     )

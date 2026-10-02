@@ -45,7 +45,7 @@ fn cast_script(state: &mut V03State, to: Actor, script: &Script) -> StoredMessag
 
 fn receipt(id: MessageId, to: Actor, identities: Vec<PublicIdentity>) -> PublicTransaction {
     let message = public_transaction::Message::new(
-        TransactionEntry::Receive(id),
+        TransactionEntry::Cast(id),
         vec![to],
         vec![],
         None,
@@ -268,7 +268,7 @@ fn a_private_account_receives_a_cast_by_proof() {
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            ..proving_input(TransactionEntry::Receive(record))
+            ..proving_input(TransactionEntry::Cast(record))
         },
         &Simulation::default(),
         &scripted_programs(),
@@ -301,7 +301,7 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            ..proving_input(TransactionEntry::Receive(record))
+            ..proving_input(TransactionEntry::Cast(record))
         },
         &Simulation::default(),
         &scripted_programs(),
@@ -354,7 +354,7 @@ fn a_private_pda_with_a_nonzero_identifier_receives_a_cast_without_a_grant() {
     let proven = execute_and_prove(
         ProvingInput {
             private_witnesses: vec![init_pda_witness(&keys, identifier, (scripted_id(), seed))],
-            ..proving_input(TransactionEntry::Receive(record))
+            ..proving_input(TransactionEntry::Cast(record))
         },
         &Simulation::default(),
         &scripted_programs(),
@@ -379,7 +379,7 @@ fn a_prepared_receipt_to_an_unproven_public_receiver_fails_before_proving() {
             ProvingInput {
                 context: PublicExecutionContext::new(vec![receiver()], []),
                 private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-                ..proving_input(TransactionEntry::Receive(record.clone()))
+                ..proving_input(TransactionEntry::Cast(record.clone()))
             },
             &Simulation {
                 proven_public_accounts: identities,
@@ -558,7 +558,7 @@ fn a_proven_receipt_at_a_public_root_needs_identity_evidence_at_settlement() {
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            ..proving_input(TransactionEntry::Receive(record.clone()))
+            ..proving_input(TransactionEntry::Cast(record.clone()))
         },
         vec![Vec::new()],
         &scripted_programs(),
@@ -605,7 +605,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_identity_evidence()
         ProvingInput {
             context: PublicExecutionContext::new(vec![receiver()], []),
             private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            ..proving_input(TransactionEntry::Receive(record))
+            ..proving_input(TransactionEntry::Cast(record))
         },
         &Simulation::default(),
         &scripted_programs(),
@@ -631,7 +631,7 @@ fn a_signing_public_receiver_needs_no_identity_evidence() {
     let mut state = V03State::new().with_test_programs();
     let record = cast(&mut state, receiver());
     let message = public_transaction::Message::new(
-        TransactionEntry::Receive(record.id()),
+        TransactionEntry::Cast(record.id()),
         vec![receiver()],
         vec![Nonce(0)],
         None,

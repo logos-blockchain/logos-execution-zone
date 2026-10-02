@@ -18,7 +18,7 @@ typedef enum OperationStatus {
 
 typedef enum FfiTransactionEntryKind {
   Call = 0,
-  Receive,
+  Cast,
 } FfiTransactionEntryKind;
 
 typedef enum FfiPublicIdentityKind {

@@ -1168,7 +1168,7 @@ impl WalletCore {
             return self
                 .send_proven(
                     accounts,
-                    TransactionEntry::Receive(record),
+                    TransactionEntry::Cast(record),
                     Vec::new(),
                     programs,
                     None,
@@ -1204,7 +1204,7 @@ impl WalletCore {
         };
         self.send_public(
             vec![identity.select_program_shard(to.program_account_id)],
-            TransactionEntry::Receive(record.id()),
+            TransactionEntry::Cast(record.id()),
             evidence.into_iter().collect(),
             payer,
             |_| Ok(()),
