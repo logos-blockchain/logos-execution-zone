@@ -725,11 +725,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         on_lineage: bool,
         slot: Slot,
     ) -> Result<()> {
-        let head_before: HashSet<HashType> = chain
-            .head_blocks()
-            .iter()
-            .map(|block| block.header.hash)
-            .collect();
+        let head_before: HashSet<HashType> =
+            chain.head_blocks().map(|block| block.header.hash).collect();
         let was_empty = chain.final_tip().is_none();
         let outcome = if on_lineage {
             chain.apply_reconstructed(msg, entry_block.as_ref())
@@ -877,7 +874,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let (resubmit_txs, outcome, head_height) = {
             let mut chain = self.chain.lock().await;
 
-            let head_before: Vec<Block> = chain.head_blocks().to_vec();
+            let head_before: Vec<Block> = chain.head_blocks().cloned().collect();
             let head_tip_before = chain.head_tip().map(|tip| tip.block_id);
             let pin_before = chain.pin();
             log_update(view, finalized, head_tip_before);
@@ -943,7 +940,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // or that finalized, keeps its transactions.
             let kept: HashSet<HashType> = chain
                 .head_blocks()
-                .iter()
                 .chain(newly_final.iter())
                 .map(|block| block.header.hash)
                 .collect();
@@ -2318,7 +2314,6 @@ fn set_keys(tx: &AccreditedKeysSender, keys: AccreditedKeys) {
 fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> Vec<Block> {
     chain
         .head_blocks()
-        .iter()
         .filter(|block| !held_before.contains(&block.header.hash))
         .cloned()
         .collect()
