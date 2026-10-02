@@ -1218,40 +1218,6 @@ mod tests {
     }
 
     #[test]
-    fn boundary_public_deliveries_keep_their_order_through_the_mirror() {
-        // A repeated send to one actor, and not a palindrome: a set would collapse the
-        // sequence and a reversal would show, and execution replays them in emission order.
-        let delivery = |data: u8| lee_core::execution_state::PublicDelivery {
-            envelope: lee_core::program::MessageEnvelope {
-                source: lee_core::execution_state::DeliverySource::Root,
-                to: lee_core::account::Actor::new(
-                    lee_core::account::AccountId::new([1; 32]),
-                    lee_core::account::AccountId::new([2; 32]),
-                ),
-                message: vec![data],
-            },
-            grants: vec![],
-            pda_seeds: vec![],
-        };
-        let boundary: lee_core::execution_state::Boundary = [7, 8, 9, 7]
-            .into_iter()
-            .map(|data| lee_core::execution_state::BoundaryStep::CallPublic(delivery(data)))
-            .collect();
-
-        let mirrored: Vec<BoundaryStep> = boundary.clone().into_iter().map(Into::into).collect();
-        let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: Vec<BoundaryStep> = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            restored
-                .into_iter()
-                .map(Into::into)
-                .collect::<lee_core::execution_state::Boundary>(),
-            boundary
-        );
-    }
-
-    #[test]
     fn from_tx_events_copies_block_and_tx_context_onto_every_record() {
         let event = |selector: u8| lee_core::program::TransactionEvent {
             account_id: lee_core::account::AccountId::from_builtin_program([7_u32; 8]),
@@ -1382,21 +1348,22 @@ mod tests {
 
     #[test]
     fn a_private_message_with_a_consumed_message_round_trips_through_the_mirror() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = lee_core::execution_state::PublicDelivery {
+            envelope: lee_core::program::MessageEnvelope {
+                source: lee_core::execution_state::DeliverySource::Root,
+                to: actor(4, 5),
+                message: vec![6],
+            },
+            grants: vec![],
+            pda_seeds: vec![],
+        };
         let message = lee::privacy_preserving_transaction::message::Message {
             execution: lee_core::PrivacyPreservingCircuitOutput {
                 context: lee_core::execution_state::PublicExecutionContext::default(),
                 boundary: vec![
-                    lee_core::execution_state::BoundaryStep::CallPublic(
-                        lee_core::execution_state::PublicDelivery {
-                            envelope: lee_core::program::MessageEnvelope {
-                                source: lee_core::execution_state::DeliverySource::Root,
-                                to: actor(4, 5),
-                                message: vec![6],
-                            },
-                            grants: vec![],
-                            pda_seeds: vec![],
-                        },
-                    ),
+                    lee_core::execution_state::BoundaryStep::CallPublic(repeated.clone()),
                     lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
@@ -1423,6 +1390,7 @@ mod tests {
                             pda_seeds: vec![],
                         },
                     ),
+                    lee_core::execution_state::BoundaryStep::CallPublic(repeated),
                     lee_core::execution_state::BoundaryStep::EnterPrivate(
                         lee_core::execution_state::Assumption {
                             envelope: lee_core::program::MessageEnvelope {
@@ -1437,11 +1405,14 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::LeavePrivate,
                     lee_core::execution_state::BoundaryStep::ReturnPublic,
                 ],
-                casts: vec![lee_core::program::MessageBody {
-                    source: account_id(22),
-                    to: actor(23, 24),
-                    message: vec![25],
-                }],
+                casts: vec![
+                    lee_core::program::MessageBody {
+                        source: account_id(22),
+                        to: actor(23, 24),
+                        message: vec![25],
+                    };
+                    2
+                ],
                 consumed_message: Some(message_id(26)),
                 private_actions: vec![],
                 block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
@@ -1468,32 +1439,6 @@ mod tests {
         assert_eq!(
             MessageId::from(message_id(1)).to_string(),
             "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
-        );
-    }
-
-    #[test]
-    fn identical_casts_keep_their_multiplicity_through_the_mirror() {
-        let cast = lee_core::program::MessageBody {
-            source: account_id(1),
-            to: actor(2, 3),
-            message: vec![4],
-        };
-        let message = lee::privacy_preserving_transaction::message::Message {
-            execution: lee_core::PrivacyPreservingCircuitOutput {
-                casts: vec![cast.clone(), cast],
-                ..lee_core::PrivacyPreservingCircuitOutput::default()
-            },
-            nonces: vec![],
-            identities: vec![],
-        };
-
-        let mirrored = PrivacyPreservingMessage::from(message.clone());
-        let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: PrivacyPreservingMessage = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
-            message
         );
     }
 }

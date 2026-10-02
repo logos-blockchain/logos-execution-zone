@@ -1041,52 +1041,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boundary_public_deliveries_keep_their_order_over_the_ffi() {
-        // A repeated send to one actor, and not a palindrome: a set would collapse the
-        // sequence and a reversal would show, and execution replays them in emission order.
-        let delivery = |data: u8| PublicDelivery {
-            envelope: MessageEnvelope {
-                source: DeliverySource::Root,
-                to: Actor {
-                    account_id: AccountId { value: [1; 32] },
-                    program_account_id: AccountId { value: [2; 32] },
-                },
-                message: vec![data],
-            },
-            grants: vec![],
-            pda_seeds: vec![],
-        };
-        let original = PrivacyPreservingTransaction {
-            hash: HashType([4; 32]),
-            message: PrivacyPreservingMessage {
-                context: PublicExecutionContext::default(),
-                boundary: vec![
-                    BoundaryStep::CallPublic(delivery(7)),
-                    BoundaryStep::CallPublic(delivery(8)),
-                    BoundaryStep::CallPublic(delivery(9)),
-                    BoundaryStep::CallPublic(delivery(7)),
-                ],
-                casts: vec![],
-                consumed_message: None,
-                nonces: vec![],
-                private_actions: vec![],
-                block_validity_window: ValidityWindow((None, None)),
-                timestamp_validity_window: ValidityWindow((None, None)),
-                identities: vec![],
-            },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: Some(Proof(vec![])),
-            },
-        };
-
-        let ffi: FfiPrivateTransactionBody = original.clone().into();
-        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
-
-        assert_eq!(back.message.boundary, original.message.boundary);
-    }
-
-    #[test]
     fn public_transaction_fee_roundtrips_over_the_ffi() {
         let tx = |fee| PublicTransaction {
             hash: HashType([1; 32]),
@@ -1175,20 +1129,23 @@ mod tests {
 
     #[test]
     fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Root,
+                to: actor(5, 6),
+                message: vec![7],
+            },
+            grants: vec![],
+            pda_seeds: vec![],
+        };
         let original = PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
                 context: PublicExecutionContext::default(),
                 boundary: vec![
-                    BoundaryStep::CallPublic(PublicDelivery {
-                        envelope: MessageEnvelope {
-                            source: DeliverySource::Root,
-                            to: actor(5, 6),
-                            message: vec![7],
-                        },
-                        grants: vec![],
-                        pda_seeds: vec![],
-                    }),
+                    BoundaryStep::CallPublic(repeated.clone()),
                     BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {
                             source: DeliverySource::Call(account_id(12)),
@@ -1207,6 +1164,7 @@ mod tests {
                         grants: vec![],
                         pda_seeds: vec![],
                     }),
+                    BoundaryStep::CallPublic(repeated),
                     BoundaryStep::EnterPrivate(Assumption {
                         envelope: MessageEnvelope {
                             source: actor(17, 18),
@@ -1219,49 +1177,20 @@ mod tests {
                     BoundaryStep::LeavePrivate,
                     BoundaryStep::ReturnPublic,
                 ],
-                casts: vec![MessageBody {
-                    source: account_id(23),
-                    to: actor(24, 25),
-                    message: vec![26],
-                }],
+                casts: vec![
+                    MessageBody {
+                        source: account_id(23),
+                        to: actor(24, 25),
+                        message: vec![26],
+                    };
+                    2
+                ],
                 consumed_message: Some(MessageId([27; 32])),
                 nonces: vec![],
                 private_actions: vec![],
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
                 identities: identities(),
-            },
-            witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
-                proof: Some(Proof(vec![])),
-            },
-        };
-
-        let ffi: FfiPrivateTransactionBody = original.clone().into();
-        let back: PrivacyPreservingTransaction = Box::new(ffi).into();
-
-        assert_eq!(back.message, original.message);
-    }
-
-    #[test]
-    fn identical_casts_keep_their_multiplicity_over_the_ffi() {
-        let cast = MessageBody {
-            source: account_id(1),
-            to: actor(2, 3),
-            message: vec![4],
-        };
-        let original = PrivacyPreservingTransaction {
-            hash: HashType([4; 32]),
-            message: PrivacyPreservingMessage {
-                context: PublicExecutionContext::default(),
-                boundary: vec![],
-                casts: vec![cast.clone(), cast],
-                consumed_message: None,
-                nonces: vec![],
-                private_actions: vec![],
-                block_validity_window: ValidityWindow((None, None)),
-                timestamp_validity_window: ValidityWindow((None, None)),
-                identities: vec![],
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: vec![],

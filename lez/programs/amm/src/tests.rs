@@ -1028,62 +1028,46 @@ fn a_swap_refuses_a_trader_holding_that_is_a_vault() {
 }
 
 #[test]
-fn an_exact_input_swap_pays_its_live_quote_by_cast() {
-    for (input_is_token_a, amount_in, min_amount_out, quote, (reserve_a, reserve_b)) in [
-        (true, 500, 166, 166, (1_500, 334)),
-        (false, 200, 100, 285, (715, 700)),
-    ] {
-        let (_, definition_id_out) = definitions(input_is_token_a);
-        let [_, output_vault, _, user_output] = swap_route(input_is_token_a);
+fn an_exact_input_swap_pays_its_live_quote_by_the_requested_delivery() {
+    for delivery in [Delivery::Cast, Delivery::Call] {
+        for (input_is_token_a, amount_in, min_amount_out, quote, (reserve_a, reserve_b)) in [
+            (true, 500, 166, 166, (1_500, 334)),
+            (false, 200, 100, 285, (715, 700)),
+        ] {
+            let (_, definition_id_out) = definitions(input_is_token_a);
+            let [_, output_vault, _, user_output] = swap_route(input_is_token_a);
 
-        let transition = exact_input_turn(
-            &pool_base(),
-            input_is_token_a,
-            amount_in,
-            min_amount_out,
-            Delivery::Cast,
-        );
+            let transition = exact_input_turn(
+                &pool_base(),
+                input_is_token_a,
+                amount_in,
+                min_amount_out,
+                delivery,
+            );
 
-        assert_eq!(
-            written(&transition),
-            PoolDefinition {
-                reserve_a,
-                reserve_b,
-                ..pool_base()
-            }
-        );
-        assert_eq!(
-            (transition.response.calls, transition.response.casts),
-            (
-                vec![withdrawal(
-                    output_vault,
-                    user_output,
-                    definition_id_out,
-                    quote,
-                    Delivery::Cast
-                )],
-                Vec::new()
-            )
-        );
+            assert_eq!(
+                written(&transition),
+                PoolDefinition {
+                    reserve_a,
+                    reserve_b,
+                    ..pool_base()
+                }
+            );
+            assert_eq!(
+                (transition.response.calls, transition.response.casts),
+                (
+                    vec![withdrawal(
+                        output_vault,
+                        user_output,
+                        definition_id_out,
+                        quote,
+                        delivery
+                    )],
+                    Vec::new()
+                )
+            );
+        }
     }
-}
-
-#[test]
-fn an_exact_input_swap_pays_its_live_quote_by_call_when_asked() {
-    let transition = exact_input_turn(&pool_base(), true, 500, 166, Delivery::Call);
-    assert_eq!(
-        (transition.response.calls, transition.response.casts),
-        (
-            vec![withdrawal(
-                vault_b_id(),
-                USER_B_ID,
-                TOKEN_B_ID,
-                166,
-                Delivery::Call
-            )],
-            Vec::new()
-        )
-    );
 }
 
 #[should_panic(expected = "The live quote is below the minimum output")]

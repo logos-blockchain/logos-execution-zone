@@ -1268,20 +1268,23 @@ mod tests {
 
     #[test]
     fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = PublicDelivery {
+            envelope: MessageEnvelope {
+                source: DeliverySource::Root,
+                to: actor(4, 5),
+                message: vec![6],
+            },
+            grants: vec![],
+            pda_seeds: vec![],
+        };
         let original = PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
                 execution: PrivacyPreservingCircuitOutput {
                     context: PublicExecutionContext::default(),
                     boundary: vec![
-                        BoundaryStep::CallPublic(PublicDelivery {
-                            envelope: MessageEnvelope {
-                                source: DeliverySource::Root,
-                                to: actor(4, 5),
-                                message: vec![6],
-                            },
-                            grants: vec![],
-                            pda_seeds: vec![],
-                        }),
+                        BoundaryStep::CallPublic(repeated.clone()),
                         BoundaryStep::CallPublic(PublicDelivery {
                             envelope: MessageEnvelope {
                                 source: DeliverySource::Call(account_id(11)),
@@ -1300,6 +1303,7 @@ mod tests {
                             grants: vec![],
                             pda_seeds: vec![],
                         }),
+                        BoundaryStep::CallPublic(repeated),
                         BoundaryStep::EnterPrivate(Assumption {
                             envelope: MessageEnvelope {
                                 source: actor(16, 17),
@@ -1312,11 +1316,14 @@ mod tests {
                         BoundaryStep::LeavePrivate,
                         BoundaryStep::ReturnPublic,
                     ],
-                    casts: vec![MessageBody {
-                        source: account_id(22),
-                        to: actor(23, 24),
-                        message: vec![25],
-                    }],
+                    casts: vec![
+                        MessageBody {
+                            source: account_id(22),
+                            to: actor(23, 24),
+                            message: vec![25],
+                        };
+                        2
+                    ],
                     consumed_message: Some(MessageId::new([26; 32])),
                     private_actions: vec![],
                     block_validity_window: ValidityWindow::new_unbounded(),
@@ -1325,34 +1332,6 @@ mod tests {
                 },
                 nonces: vec![],
                 identities: identities(),
-            },
-            witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
-                vec![],
-                Proof::from_inner(vec![]),
-            ),
-        };
-
-        let ffi: FfiPrivateTransactionBody = original.clone().into();
-        let back: PrivacyPreservingTransaction = Box::new(ffi).try_into().unwrap();
-
-        assert_eq!(back.message, original.message);
-    }
-
-    #[test]
-    fn identical_casts_keep_their_multiplicity_over_the_ffi() {
-        let cast = MessageBody {
-            source: account_id(1),
-            to: actor(2, 3),
-            message: vec![4],
-        };
-        let original = PrivacyPreservingTransaction {
-            message: lee::privacy_preserving_transaction::Message {
-                execution: PrivacyPreservingCircuitOutput {
-                    casts: vec![cast.clone(), cast],
-                    ..PrivacyPreservingCircuitOutput::default()
-                },
-                nonces: vec![],
-                identities: vec![],
             },
             witness_set: lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
                 vec![],

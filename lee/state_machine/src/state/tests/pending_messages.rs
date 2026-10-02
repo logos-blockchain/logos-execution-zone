@@ -320,38 +320,21 @@ fn a_proven_receipt_of_an_unpublished_record_is_rejected_at_settlement() {
 
 #[test]
 fn a_cast_from_a_private_root_is_published_at_settlement() {
-    let keys = test_private_account_keys_1();
-    let private_root = Actor::new(
-        AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO),
-        scripted_id(),
+    let tx = proven_casting(
+        &Script::default().cast(receiver(), &received()),
+        PublicExecutionContext::default(),
     );
-    let proven = execute_and_prove(
-        ProvingInput {
-            private_witnesses: vec![init_witness(&keys, Identifier::ZERO)],
-            ..proving_input(root(
-                private_root,
-                &Script::default().cast(receiver(), &received()),
-            ))
-        },
-        &Simulation::default(),
-        &scripted_programs(),
-    )
-    .unwrap();
     let mut state = V03State::new().with_test_programs();
 
     state
-        .transition_from_privacy_preserving_transaction(&private_tx(proven, vec![], &[]), 1, 0)
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .unwrap();
 
     assert_eq!(
         state.pending_messages_from(0).cloned().collect::<Vec<_>>(),
         vec![StoredMessage {
             sequence: 0,
-            body: MessageBody {
-                source: scripted_id(),
-                to: receiver(),
-                message: borsh::to_vec(&received()).unwrap(),
-            },
+            body: cast_body(&received()),
         }]
     );
 }

@@ -809,9 +809,11 @@ fn a_tampered_assumption_is_rejected() {
 }
 
 #[test]
-fn a_public_turn_departing_from_its_assumed_delivery_is_rejected() {
+fn a_public_turn_departing_from_its_assumed_delivery_is_rejected_and_applies_nothing() {
     // The outer turn's live script delivers something other than the assumed message.
-    let mut nested = NestedBoundary::prove(&outer_turn(&Script::default()));
+    let mut nested = NestedBoundary::prove(
+        &outer_turn(&Script::default()).cast(nested_actors().1, &Script::default()),
+    );
     let public_state = nested.state.public_state.clone();
 
     let result = nested
@@ -832,22 +834,5 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected() {
             .get_proof_for_commitment(&nested.tx.message.execution.commitments()[0])
             .is_none()
     );
-}
-
-#[test]
-fn a_public_turn_departing_from_its_assumed_delivery_publishes_none_of_its_casts() {
-    let casting = Script::write(vec![1; 4])
-        .cast(nested_actors().1, &Script::default())
-        .call(nested_private(), &Script::default());
-    let mut nested = NestedBoundary::prove(&casting);
-
-    let result = nested
-        .state
-        .transition_from_privacy_preserving_transaction(&nested.tx, 1, 0);
-
-    assert!(matches!(
-        execution_error(result),
-        ExecutionError::AssumptionMismatch { index: 1 }
-    ));
     assert!(nested.state.pending_messages_from(0).next().is_none());
 }
