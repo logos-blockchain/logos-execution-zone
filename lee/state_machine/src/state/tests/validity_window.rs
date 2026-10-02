@@ -1,3 +1,5 @@
+use lee_core::program::Response;
+
 use super::*;
 
 fn windowed_public_tx(script: Script) -> PublicTransaction {
@@ -41,7 +43,7 @@ fn validity_window_works_in_public_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let tx = windowed_public_tx(Script {
-        block_window: block_validity_window,
+        response: Response::keep().block_window(block_validity_window),
         ..Script::default()
     });
     let result = state.transition_from_public_transaction(&tx, block_id, 0);
@@ -79,7 +81,7 @@ fn timestamp_validity_window_works_in_public_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let tx = windowed_public_tx(Script {
-        timestamp_window: timestamp_validity_window,
+        response: Response::keep().timestamp_window(timestamp_validity_window),
         ..Script::default()
     });
     let result = state.transition_from_public_transaction(&tx, 1, timestamp);
@@ -119,7 +121,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let tx = windowed_private_tx(&Script {
-        block_window: block_validity_window,
+        response: Response::keep().block_window(block_validity_window),
         ..Script::default()
     });
     let result = state.transition_from_privacy_preserving_transaction(&tx, block_id, 0);
@@ -157,7 +159,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let tx = windowed_private_tx(&Script {
-        timestamp_window: timestamp_validity_window,
+        response: Response::keep().timestamp_window(timestamp_validity_window),
         ..Script::default()
     });
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, timestamp);

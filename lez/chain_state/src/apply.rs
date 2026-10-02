@@ -540,7 +540,10 @@ mod tests {
         },
     };
     use lee::{AccountId, Actor, PublicTransaction, program::Program, public_transaction};
-    use lee_core::{account::Nonce, program::ProgramEvent};
+    use lee_core::{
+        account::Nonce,
+        program::{ProgramEvent, Response},
+    };
     use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
@@ -1093,7 +1096,7 @@ mod tests {
             vec![emitter],
             vec![Nonce(0)],
             Script {
-                events: vec![emitted(5)],
+                response: Response::keep().event(emitted(5)),
                 ..Script::default()
             },
             test_fee_declaration(from),

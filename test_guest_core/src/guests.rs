@@ -21,17 +21,7 @@ pub fn scripted() -> ! {
         if let Some(program) = script.require_origin {
             assert_eq!(input.origin, Some(program), "scripted: unexpected origin");
         }
-        let response = Response {
-            calls: script.calls,
-            casts: script.casts,
-            ..script.write.map_or_else(Response::keep, Response::write)
-        };
-        script
-            .events
-            .into_iter()
-            .fold(response, Response::event)
-            .block_window(script.block_window)
-            .timestamp_window(script.timestamp_window)
+        script.response
     })
 }
 

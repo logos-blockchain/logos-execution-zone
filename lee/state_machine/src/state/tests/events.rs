@@ -1,3 +1,5 @@
+use lee_core::program::Response;
+
 use super::*;
 
 // Reference for the selector VALUE convention: selector = first 8 bytes of
@@ -27,7 +29,10 @@ fn emitter() -> Actor {
 
 fn emitting(events: Vec<ProgramEvent>) -> Script {
     Script {
-        events,
+        response: Response {
+            events,
+            ..Response::keep()
+        },
         ..Script::default()
     }
 }

@@ -4,28 +4,33 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor},
-    program::{BlockValidityWindow, Call, Cast, ProgramEvent, Sendable, TimestampValidityWindow},
+    program::{Call, Cast, Response, Sendable},
 };
 
 pub mod guests;
 
-#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct Script {
-    pub write: Option<Vec<u8>>,
-    pub calls: Vec<Call>,
-    pub casts: Vec<Cast>,
-    pub events: Vec<ProgramEvent>,
-    pub block_window: BlockValidityWindow,
-    pub timestamp_window: TimestampValidityWindow,
+    pub response: Response,
     pub require_authorized: bool,
     pub require_origin: Option<AccountId>,
+}
+
+impl Default for Script {
+    fn default() -> Self {
+        Self {
+            response: Response::keep(),
+            require_authorized: false,
+            require_origin: None,
+        }
+    }
 }
 
 impl Script {
     #[must_use]
     pub fn write(data: Vec<u8>) -> Self {
         Self {
-            write: Some(data),
+            response: Response::write(data),
             ..Self::default()
         }
     }
@@ -42,7 +47,7 @@ impl Script {
 
     #[must_use]
     pub fn send(mut self, message: impl Sendable) -> Self {
-        message.send_into(&mut self.calls, &mut self.casts);
+        self.response = self.response.send(message);
         self
     }
 

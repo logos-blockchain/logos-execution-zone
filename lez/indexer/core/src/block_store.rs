@@ -535,7 +535,7 @@ mod tests {
 
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use lee::Actor;
-    use lee_core::program::ProgramEvent;
+    use lee_core::program::{ProgramEvent, Response};
     use storage::{DBIO as _, indexer::indexer_cells::EventFilterSegmentsCellOwned};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
@@ -660,7 +660,10 @@ mod tests {
             vec![to],
             vec![payer_nonce.into()],
             test_guest_core::Script {
-                events,
+                response: Response {
+                    events,
+                    ..Response::keep()
+                },
                 ..test_guest_core::Script::default()
             },
             common::test_utils::test_fee_declaration(payer.account_id),
