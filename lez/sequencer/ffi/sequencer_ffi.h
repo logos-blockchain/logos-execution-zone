@@ -33,12 +33,6 @@ typedef enum FfiBoundaryStepKind {
   ReturnPublic,
 } FfiBoundaryStepKind;
 
-typedef enum FfiDeliverySourceKind {
-  RootSource = 0,
-  CallSource,
-  CastSource,
-} FfiDeliverySourceKind;
-
 typedef enum FfiProgramImageClaimKind {
   Disclosed = 0,
   Undisclosed,
@@ -274,15 +268,6 @@ typedef struct FfiPublicExecutionContext {
   FfiAccountIdList authorized_accounts;
 } FfiPublicExecutionContext;
 
-/**
- * Where a delivery came from: the root, or the program that called or cast it
- * (`program`, meaningful unless `kind` is `RootSource`).
- */
-typedef struct FfiDeliverySource {
-  enum FfiDeliverySourceKind kind;
-  FfiAccountId program;
-} FfiDeliverySource;
-
 typedef struct FfiVec_FfiBytes32 {
   struct FfiBytes32 *entries;
   uintptr_t len;
@@ -292,7 +277,7 @@ typedef struct FfiVec_FfiBytes32 {
 typedef struct FfiVec_FfiBytes32 FfiPdaSeedList;
 
 typedef struct FfiPublicDelivery {
-  struct FfiDeliverySource source;
+  FfiAccountId source;
   struct FfiActor to;
   FfiMessageDataList message;
   FfiAccountIdList grants;
@@ -381,8 +366,8 @@ typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext context;
   FfiBoundaryStepList boundary;
   FfiMessageBodyList casts;
-  bool has_consumed_message;
-  struct FfiBytes32 consumed_message;
+  bool has_entry;
+  struct FfiTransactionEntry entry;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];

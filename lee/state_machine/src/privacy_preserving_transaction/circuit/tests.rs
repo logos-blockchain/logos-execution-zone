@@ -6,11 +6,10 @@ use lee_core::{
     SharedSecretKey, WitnessKind,
     account::{Account, AccountId, ActorState, Nonce},
     execution_state::{
-        Boundary, BoundaryStep, DeliverySource, ExecutionError, PublicDelivery,
-        PublicExecutionContext,
+        Boundary, BoundaryStep, ExecutionError, PublicExecutionContext, TransactionEntry,
     },
     native_token::encode_balance,
-    program::{Call, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
+    program::{Call, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind},
 };
 use test_guest_core::Script;
 
@@ -122,27 +121,24 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     assert!(output.program_image_claims.is_empty());
 
     assert_eq!(output.context.authorized_accounts, vec![sender_id]);
-    // The journal carries the public call to settle and the delivery it assumes back, not a
+    // The journal carries the public root to settle and the delivery it assumes back, not a
     // claimed balance: the prover never read the sender's shard.
+    assert_eq!(
+        output.entry,
+        Some(TransactionEntry::Call {
+            to: sender,
+            message: borsh::to_vec(&root_transfer).unwrap(),
+        })
+    );
     assert_eq!(
         output.boundary,
         vec![
-            BoundaryStep::CallPublic(PublicDelivery {
-                envelope: MessageEnvelope {
-                    source: DeliverySource::Root,
-                    to: sender,
-                    message: borsh::to_vec(&root_transfer).unwrap(),
-                },
-                grants: Vec::new(),
-                pda_seeds: Vec::new(),
-            }),
             BoundaryStep::EnterPrivate(credit(
                 sender,
                 Actor::native_balance(recipient_account_id),
                 balance_to_move
             )),
             BoundaryStep::LeavePrivate,
-            BoundaryStep::ReturnPublic,
         ]
     );
     assert_eq!(output.private_actions.len(), 1);
@@ -925,20 +921,13 @@ fn the_prover_never_reads_a_public_shard() {
 
     assert!(proof.is_valid_for(&output));
     assert_eq!(
-        output.boundary,
-        vec![
-            BoundaryStep::CallPublic(PublicDelivery {
-                envelope: MessageEnvelope {
-                    source: DeliverySource::Root,
-                    to: root_actor,
-                    message: borsh::to_vec(&script).unwrap(),
-                },
-                grants: Vec::new(),
-                pda_seeds: Vec::new(),
-            }),
-            BoundaryStep::ReturnPublic,
-        ]
+        output.entry,
+        Some(TransactionEntry::Call {
+            to: root_actor,
+            message: borsh::to_vec(&script).unwrap(),
+        })
     );
+    assert!(output.boundary.is_empty());
 }
 
 #[test]

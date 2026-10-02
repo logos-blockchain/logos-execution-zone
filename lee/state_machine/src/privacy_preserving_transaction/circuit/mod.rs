@@ -263,7 +263,7 @@ pub fn execute_and_prove_assuming(
     };
     PrivatePart::new(
         input.context.clone(),
-        input.root.clone(),
+        input.private_root(),
         &input.private_witnesses,
         assumptions.clone(),
     )?

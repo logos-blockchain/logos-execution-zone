@@ -1,6 +1,6 @@
 use lee_core::{
     EncryptionScheme, Identifier, SharedSecretKey,
-    execution_state::{BoundaryStep, DeliverySource, PublicDelivery},
+    execution_state::{BoundaryStep, PublicDelivery},
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -166,7 +166,7 @@ fn a_private_account_may_act_under_two_shards_in_one_transaction() {
         vec![
             BoundaryStep::CallPublic(PublicDelivery {
                 envelope: MessageEnvelope {
-                    source: DeliverySource::Call(NATIVE_TOKEN_PROGRAM_ID),
+                    source: NATIVE_TOKEN_PROGRAM_ID,
                     to: recipient,
                     message: credit,
                 },

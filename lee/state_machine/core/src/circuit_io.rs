@@ -113,6 +113,30 @@ pub struct ProvingInput {
     pub ciphertext_padding: Option<u32>,
 }
 
+impl ProvingInput {
+    #[must_use]
+    pub fn private_root(&self) -> Option<TransactionEntry<StoredMessage>> {
+        (!self.root_is_public()).then(|| self.root.clone())
+    }
+
+    #[must_use]
+    pub fn entry(&self) -> Option<TransactionEntry<MessageId>> {
+        match &self.root {
+            TransactionEntry::Call { to, message } => {
+                self.root_is_public().then(|| TransactionEntry::Call {
+                    to: *to,
+                    message: message.clone(),
+                })
+            }
+            TransactionEntry::Cast(record) => Some(TransactionEntry::Cast(record.id())),
+        }
+    }
+
+    fn root_is_public(&self) -> bool {
+        self.context.actors.contains(&self.root.destination())
+    }
+}
+
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingCircuitInput {
     pub input: ProvingInput,
@@ -239,7 +263,8 @@ pub struct PrivacyPreservingCircuitOutput {
     pub context: PublicExecutionContext,
     pub boundary: Boundary,
     pub casts: Vec<MessageBody>,
-    pub consumed_message: Option<MessageId>,
+    /// How the transaction starts, as far as the proof reveals it: `None` for a private call.
+    pub entry: Option<TransactionEntry<MessageId>>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
@@ -284,7 +309,7 @@ mod tests {
         Commitment, Nullifier,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{Assumption, BoundaryStep, DeliverySource, PublicDelivery},
+        execution_state::{Assumption, BoundaryStep, PublicDelivery},
         program::{MessageBody, MessageEnvelope},
     };
 
@@ -299,7 +324,7 @@ mod tests {
             vec![
                 BoundaryStep::CallPublic(PublicDelivery {
                     envelope: MessageEnvelope {
-                        source: DeliverySource::Call(private.program_account_id),
+                        source: private.program_account_id,
                         to: public,
                         message: b"o".to_vec(),
                     },
@@ -328,7 +353,7 @@ mod tests {
             context,
             boundary,
             casts: Vec::new(),
-            consumed_message: None,
+            entry: None,
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -336,7 +361,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[124, 1, 0, 0][..], // frame length: the 380 bytes below
+            &[123, 1, 0, 0][..], // frame length: the 379 bytes below
             &[1, 0, 0, 0],       // context.actors: one actor
             &[5; 32],
             &[6; 32],
@@ -344,9 +369,8 @@ mod tests {
             &[7; 32],
             &[4, 0, 0, 0], // boundary: four steps
             &[0],          // BoundaryStep::CallPublic
-            &[1],          // source: DeliverySource::Call
-            &[8; 32],
-            &[5; 32], // to
+            &[8; 32],      // source: the calling program
+            &[5; 32],      // to
             &[6; 32],
             &[1, 0, 0, 0], // message
             b"o",
@@ -364,7 +388,7 @@ mod tests {
             &[2],          // BoundaryStep::LeavePrivate
             &[3],          // BoundaryStep::ReturnPublic
             &[0, 0, 0, 0], // casts: none
-            &[0],          // consumed_message: None
+            &[0],          // entry: None
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
             &[0, 0],       // timestamp_validity_window: from None, to None
@@ -376,31 +400,20 @@ mod tests {
     }
 
     #[test]
-    fn a_circuit_output_journal_with_a_consumed_message_has_a_pinned_layout() {
+    fn a_circuit_output_journal_with_a_received_entry_has_a_pinned_layout() {
         let public = Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32]));
         let output = PrivacyPreservingCircuitOutput {
             context: PublicExecutionContext {
                 actors: vec![public],
                 authorized_accounts: Vec::new(),
             },
-            boundary: vec![
-                BoundaryStep::CallPublic(PublicDelivery {
-                    envelope: MessageEnvelope {
-                        source: DeliverySource::Cast(AccountId::new([8; 32])),
-                        to: public,
-                        message: b"o".to_vec(),
-                    },
-                    grants: Vec::new(),
-                    pda_seeds: Vec::new(),
-                }),
-                BoundaryStep::ReturnPublic,
-            ],
+            boundary: Vec::new(),
             casts: vec![MessageBody {
                 source: AccountId::new([8; 32]),
                 to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                 message: b"p".to_vec(),
             }],
-            consumed_message: Some(MessageId::new([7; 32])),
+            entry: Some(TransactionEntry::Cast(MessageId::new([7; 32]))),
             private_actions: Vec::new(),
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -408,29 +421,20 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[82, 1, 0, 0][..], // frame length: the 338 bytes below
-            &[1, 0, 0, 0],      // context.actors: one actor
+            &[227, 0, 0, 0][..], // frame length: the 227 bytes below
+            &[1, 0, 0, 0],       // context.actors: one actor
             &[5; 32],
             &[6; 32],
             &[0, 0, 0, 0], // context.authorized_accounts: none
-            &[2, 0, 0, 0], // boundary: two steps
-            &[0],          // BoundaryStep::CallPublic
-            &[2],          // source: DeliverySource::Cast
-            &[8; 32],
-            &[5; 32], // to
-            &[6; 32],
-            &[1, 0, 0, 0], // message
-            b"o",
-            &[0, 0, 0, 0], // grants: none
-            &[0, 0, 0, 0], // pda_seeds: none
-            &[3],          // BoundaryStep::ReturnPublic
+            &[0, 0, 0, 0], // boundary: no steps
             &[1, 0, 0, 0], // casts: one message
             &[8; 32],      // source
             &[3; 32],      // to
             &[4; 32],
             &[1, 0, 0, 0], // message
             b"p",
-            &[1], // consumed_message: Some
+            &[1], // entry: Some
+            &[1], // TransactionEntry::Cast
             &[7; 32],
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
@@ -448,7 +452,7 @@ mod tests {
             context: PublicExecutionContext::default(),
             boundary: Boundary::default(),
             casts: Vec::new(),
-            consumed_message: None,
+            entry: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_update(
                     &Commitment::new(&AccountId::new([2; 32]), &Account::default()),

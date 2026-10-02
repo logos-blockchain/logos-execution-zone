@@ -304,20 +304,13 @@ pub enum PublicIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum DeliverySource {
-    Root,
-    Call(AccountId),
-    Cast(AccountId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BoundaryDelivery<S> {
     pub envelope: MessageEnvelope<S>,
     pub grants: Vec<AccountId>,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
-pub type PublicDelivery = BoundaryDelivery<DeliverySource>;
+pub type PublicDelivery = BoundaryDelivery<AccountId>;
 
 pub type Assumption = BoundaryDelivery<Actor>;
 
@@ -353,7 +346,7 @@ pub struct PrivacyPreservingMessage {
     pub context: PublicExecutionContext,
     pub boundary: Boundary,
     pub casts: Vec<MessageBody>,
-    pub consumed_message: Option<MessageId>,
+    pub entry: Option<TransactionEntry>,
     pub nonces: Vec<Nonce>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,

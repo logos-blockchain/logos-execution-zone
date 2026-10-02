@@ -106,7 +106,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         context,
         boundary,
         casts: _,
-        consumed_message: _,
+        entry: _,
         nonces,
         private_actions,
         block_validity_window,

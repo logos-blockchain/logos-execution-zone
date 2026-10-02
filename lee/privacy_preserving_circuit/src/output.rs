@@ -6,14 +6,14 @@ use lee_core::{
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
-    execution_state::{PrivatePartOutcome, PublicExecutionContext},
+    execution_state::{PrivatePartOutcome, PublicExecutionContext, TransactionEntry},
     program::MessageId,
 };
 
 pub fn compute_circuit_output(
     outcome: PrivatePartOutcome,
     context: PublicExecutionContext,
-    consumed_message: Option<MessageId>,
+    entry: Option<TransactionEntry<MessageId>>,
     private_witnesses: &[PrivateWitness],
     dummy_inputs: Vec<DummyInput>,
     ciphertext_padding: Option<u32>,
@@ -30,7 +30,7 @@ pub fn compute_circuit_output(
         context,
         boundary,
         casts,
-        consumed_message,
+        entry,
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,

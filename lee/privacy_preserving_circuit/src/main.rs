@@ -5,7 +5,7 @@ use lee_core::{
     account::AccountId,
     execution_state::PrivatePart,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, StoredMessage, read_input_frame},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, read_input_frame},
 };
 use private_backend::PrivateBackend;
 use risc0_zkvm::guest::env;
@@ -15,19 +15,21 @@ mod private_backend;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
-        input:
-            ProvingInput {
-                root,
-                context,
-                private_witnesses,
-                dummy_inputs,
-                ciphertext_padding,
-            },
+        input,
         program_image_witnesses,
         shadow_program_witnesses,
         responses,
         assumptions,
     } = borsh::from_slice(&read_input_frame()).expect("circuit input must be valid borsh");
+    let entry = input.entry();
+    let private_root = input.private_root();
+    let ProvingInput {
+        context,
+        private_witnesses,
+        dummy_inputs,
+        ciphertext_padding,
+        ..
+    } = input;
 
     // The sequencer checks disclosed images against chain state.
     // For undisclosed images, `to_claim` checks header immutability and derives the membership
@@ -52,9 +54,13 @@ fn main() {
         );
     }
 
-    let consumed_message = root.cast().map(StoredMessage::id);
-    let private_part = PrivatePart::new(context.clone(), root, &private_witnesses, assumptions)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let private_part = PrivatePart::new(
+        context.clone(),
+        private_root,
+        &private_witnesses,
+        assumptions,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     let mut backend = PrivateBackend::new(image_id_by_account_id, responses);
     let outcome = private_part
         .execute(&mut backend)
@@ -70,7 +76,7 @@ fn main() {
     let output = output::compute_circuit_output(
         outcome,
         context,
-        consumed_message,
+        entry,
         &private_witnesses,
         dummy_inputs,
         ciphertext_padding,

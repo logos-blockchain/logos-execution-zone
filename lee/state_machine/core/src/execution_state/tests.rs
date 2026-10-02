@@ -154,7 +154,7 @@ fn enter(message: &[u8]) -> Call {
     }
 }
 
-fn public(source: DeliverySource, to: Actor, message: &[u8]) -> PublicDelivery {
+fn public(source: AccountId, to: Actor, message: &[u8]) -> PublicDelivery {
     PublicDelivery {
         envelope: MessageEnvelope {
             source,
@@ -234,15 +234,20 @@ fn private_part(
     assumptions: Vec<PublicCallAssumptions>,
     script: &mut Script,
 ) -> Result<PrivatePartOutcome, ExecutionError> {
-    PrivatePart::new(context, entry, witnesses, assumptions)?.execute(script)
+    let runs_publicly = context.actors.contains(&entry.destination());
+    let root = (!runs_publicly).then_some(entry);
+    PrivatePart::new(context, root, witnesses, assumptions)?.execute(script)
 }
 
 fn public_part(
     context: PublicExecutionContext,
+    entry: TransactionEntry<StoredMessage>,
     boundary: Boundary,
     script: &mut Script,
 ) -> Result<PublicOutcome, ExecutionError> {
-    PublicPart::new(context, boundary)?.execute(script)
+    let runs_publicly = context.actors.contains(&entry.destination());
+    let root = runs_publicly.then_some(entry);
+    PublicPart::new(context, root, boundary)?.execute(script)
 }
 
 fn order(script: &Script) -> Vec<(Actor, Option<AccountId>)> {
@@ -281,14 +286,6 @@ fn stored(source: AccountId, to: Actor, message: &[u8]) -> StoredMessage {
             message: message.to_vec(),
         },
     }
-}
-
-// A statement whose only public call is the root delivery to `ENTRY`.
-fn root_statement() -> Boundary {
-    vec![
-        CallPublic(public(DeliverySource::Root, ENTRY, &[])),
-        ReturnPublic,
-    ]
 }
 
 fn public_calls(boundary: &[BoundaryStep]) -> Vec<PublicDelivery> {
@@ -348,6 +345,7 @@ fn check_nested(
     let mut script = nested_public(Script::default(), entry_sends);
     let result = public_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
+        root(ENTRY),
         boundary,
         &mut script,
     );
@@ -679,7 +677,7 @@ fn a_private_root_records_its_public_call_and_the_assumed_reply() {
     assert_eq!(
         boundary,
         vec![
-            CallPublic(public(DeliverySource::Call(id(8)), vault, b"credit")),
+            CallPublic(public(id(8), vault, b"credit")),
             EnterPrivate(reply),
             LeavePrivate,
             ReturnPublic,
@@ -698,12 +696,10 @@ fn a_public_call_made_inside_an_assumed_delivery_is_bracketed_within_it() {
     assert_eq!(
         boundary,
         vec![
-            CallPublic(public(DeliverySource::Root, ENTRY, &[])),
             EnterPrivate(nested_assumed()[0][0].clone()),
-            CallPublic(public(DeliverySource::Call(id(8)), CALLEE, &[])),
+            CallPublic(public(id(8), CALLEE, &[])),
             ReturnPublic,
             LeavePrivate,
-            ReturnPublic,
         ]
     );
     assert_eq!(order(&script), vec![(holder(&Keys::new(1)), Some(id(9)))]);
@@ -819,15 +815,15 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
 
     assert!(matches!(
         checked(vec![send_to(BYSTANDER)]),
-        Err(ExecutionError::BoundaryMismatch { index: 1 })
+        Err(ExecutionError::IncompleteBoundary)
     ));
     assert!(matches!(
         checked(vec![enter(b"other")]),
-        Err(ExecutionError::AssumptionMismatch { index: 1 })
+        Err(ExecutionError::AssumptionMismatch { index: 0 })
     ));
     assert!(matches!(
         checked(vec![enter(ENTER), enter(ENTER)]),
-        Err(ExecutionError::BoundaryMismatch { index: 5 })
+        Err(ExecutionError::BoundaryMismatch { index: 4 })
     ));
     assert!(matches!(
         check_nested(truncated, vec![enter(ENTER), send_to(BYSTANDER)]).0,
@@ -838,12 +834,15 @@ fn a_check_rejects_public_behaviour_that_departs_from_the_statement() {
 #[test]
 fn a_check_runs_a_privately_originated_call_with_its_private_origin() {
     let origin = Some(id(8));
-    let boundary = vec![
-        CallPublic(public(DeliverySource::Call(id(8)), ENTRY, &[])),
-        ReturnPublic,
-    ];
+    let boundary = vec![CallPublic(public(id(8), ENTRY, &[])), ReturnPublic];
+    let mut script = Script::default().on(ENTRY, sending(Vec::new()));
 
-    let (result, script) = check_nested(boundary, Vec::new());
+    let result = public_part(
+        context(vec![ENTRY]),
+        root(holder(&Keys::new(1))),
+        boundary,
+        &mut script,
+    );
 
     assert!(result.is_ok());
     assert_eq!(order(&script), vec![(ENTRY, origin)]);
@@ -876,7 +875,12 @@ fn a_check_whose_live_subtree_reaches_the_loader_fails() {
         .on(ENTRY, sending(vec![send_to(loader)]))
         .on(loader, sending(Vec::new()));
 
-    let result = public_part(context(vec![ENTRY, loader]), root_statement(), &mut script);
+    let result = public_part(
+        context(vec![ENTRY, loader]),
+        root(ENTRY),
+        Boundary::new(),
+        &mut script,
+    );
 
     assert!(matches!(
         result,
@@ -950,7 +954,12 @@ fn relayed_grant(
         )
         .on(sibling, sending(Vec::new()))
         .on(vault, sending_when(Some(id(9)), vec![enter(ENTER)]));
-    let result = public_part(context(actors), recorded.boundary, &mut checking);
+    let result = public_part(
+        context(actors),
+        root(owner),
+        recorded.boundary,
+        &mut checking,
+    );
     (result, checking)
 }
 
@@ -980,7 +989,7 @@ fn an_assumption_must_claim_exactly_the_delivered_grants() {
     for claimed in [vec![sibling.account_id], Vec::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
-            Err(ExecutionError::AssumptionMismatch { index: 1 })
+            Err(ExecutionError::AssumptionMismatch { index: 0 })
         ));
     }
 }
@@ -1030,7 +1039,15 @@ fn a_private_grant_crosses_a_public_actor_and_authorizes_the_return() {
             sending(vec![send_to(custody), seeded_to(peer_vault, seed)]),
         )
         .on(peer_vault, sending(Vec::new()));
-    assert!(public_part(context(vec![peer, peer_vault]), boundary, &mut checking).is_ok());
+    assert!(
+        public_part(
+            context(vec![peer, peer_vault]),
+            root(owner),
+            boundary,
+            &mut checking
+        )
+        .is_ok()
+    );
     assert_eq!(
         authorized(&checking),
         vec![(peer, false), (peer_vault, true)]
@@ -1047,7 +1064,7 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
 
     let result = PrivatePart::new(
         context(vec![public_member]),
-        root(custody),
+        Some(root(custody)),
         &witnesses,
         Vec::new(),
     );
@@ -1070,9 +1087,14 @@ fn a_check_publishes_live_events() {
         echo(input, Response::keep().event(emitted.clone()))
     });
 
-    let events = public_part(context(vec![ENTRY]), root_statement(), &mut checking)
-        .unwrap()
-        .events;
+    let events = public_part(
+        context(vec![ENTRY]),
+        root(ENTRY),
+        Boundary::new(),
+        &mut checking,
+    )
+    .unwrap()
+    .events;
 
     assert_eq!(events, vec![(ENTRY, event)]);
 }
@@ -1113,9 +1135,9 @@ fn a_public_turn_requests_a_private_debit_that_the_private_credential_authorizes
     };
 
     assert_eq!(
-        public_calls(&record(true).unwrap().boundary)[1],
+        public_calls(&record(true).unwrap().boundary)[0],
         public(
-            DeliverySource::Call(native_token::NATIVE_TOKEN_PROGRAM_ID),
+            native_token::NATIVE_TOKEN_PROGRAM_ID,
             payee,
             &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
         )
@@ -1146,7 +1168,12 @@ fn an_undeclared_actor_of_a_declared_public_account_is_refused() {
         &mut recording,
     );
     let mut checking = Script::default().on(ENTRY, sending(vec![send_to(stray)]));
-    let checked = public_part(context(vec![ENTRY]), root_statement(), &mut checking);
+    let checked = public_part(
+        context(vec![ENTRY]),
+        root(ENTRY),
+        Boundary::new(),
+        &mut checking,
+    );
 
     for error in [recorded.err(), checked.err()] {
         assert!(matches!(
@@ -1169,7 +1196,13 @@ fn a_check_whose_live_subtree_makes_more_than_64_deliveries_succeeds() {
         echo(input, response)
     });
 
-    public_part(context(vec![ENTRY]), root_statement(), &mut script).unwrap();
+    public_part(
+        context(vec![ENTRY]),
+        root(ENTRY),
+        Boundary::new(),
+        &mut script,
+    )
+    .unwrap();
     assert_eq!(script.log.len(), 101);
 }
 
@@ -1208,11 +1241,7 @@ fn an_output_from_a_private_sender_carries_only_its_programs_provenance() {
 
     assert_eq!(
         public_calls(&recorded.boundary),
-        vec![public(
-            DeliverySource::Call(holder(&keys).program_account_id),
-            ENTRY,
-            &[]
-        )]
+        vec![public(holder(&keys).program_account_id, ENTRY, &[])]
     );
 }
 
@@ -1225,13 +1254,14 @@ fn a_live_delivery_from_another_actor_of_the_same_program_does_not_satisfy_an_as
 
     let result = public_part(
         context(vec![ENTRY, CALLEE, BYSTANDER]),
+        root(ENTRY),
         boundary,
         &mut script,
     );
 
     assert!(matches!(
         result,
-        Err(ExecutionError::AssumptionMismatch { index: 1 })
+        Err(ExecutionError::AssumptionMismatch { index: 0 })
     ));
 }
 
@@ -1369,10 +1399,7 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
 
     assert_eq!(
         boundary,
-        vec![
-            CallPublic(public(DeliverySource::Call(id(8)), ENTRY, &[])),
-            ReturnPublic,
-        ]
+        vec![CallPublic(public(id(8), ENTRY, &[])), ReturnPublic,]
     );
     assert_eq!(proven_casts, vec![private_cast]);
 
@@ -1385,9 +1412,14 @@ fn a_record_keeps_its_casts_out_of_the_boundary_and_a_check_returns_only_live_ca
             }),
         )
     });
-    let casts = public_part(context(vec![ENTRY]), boundary, &mut checking)
-        .unwrap()
-        .casts;
+    let casts = public_part(
+        context(vec![ENTRY]),
+        root(holder(&keys)),
+        boundary,
+        &mut checking,
+    )
+    .unwrap()
+    .casts;
 
     assert_eq!(
         casts,
@@ -1501,7 +1533,13 @@ fn a_public_sibling_called_from_a_private_turn_sees_the_state_its_earlier_siblin
     .boundary;
     let mut checking = Script::default().on(receiver, sibling_receiver(receiver));
 
-    public_part(context(vec![receiver]), boundary, &mut checking).unwrap();
+    public_part(
+        context(vec![receiver]),
+        root(holder(&keys)),
+        boundary,
+        &mut checking,
+    )
+    .unwrap();
 
     assert_eq!(turns_of(&checking, receiver), completed_c1_then_c2());
 }
@@ -1525,7 +1563,7 @@ fn a_private_sibling_called_from_a_public_turn_sees_the_state_its_earlier_siblin
     .boundary;
     let mut checking = Script::default().on(sender, sending(siblings(receiver)));
 
-    public_part(context(vec![sender]), boundary, &mut checking).unwrap();
+    public_part(context(vec![sender]), root(sender), boundary, &mut checking).unwrap();
 
     assert_eq!(turns_of(&recording, receiver), completed_c1_then_c2());
 }
@@ -1580,7 +1618,7 @@ fn a_public_subtree_entered_from_c1_finishes_before_c2_in_every_part() {
             (receiver, Some(id(9))),
         ]
     );
-    assert!(public_part(context(actors), boundary, &mut scripted()).is_ok());
+    assert!(public_part(context(actors), root(sender), boundary, &mut scripted()).is_ok());
 }
 
 #[test]
@@ -1651,5 +1689,13 @@ fn a_public_call_without_callbacks_keeps_an_empty_group_before_one_with_callback
     )
     .unwrap()
     .boundary;
-    assert!(public_part(context(vec![quiet, replying]), boundary, &mut scripted()).is_ok());
+    assert!(
+        public_part(
+            context(vec![quiet, replying]),
+            root(owner),
+            boundary,
+            &mut scripted()
+        )
+        .is_ok()
+    );
 }

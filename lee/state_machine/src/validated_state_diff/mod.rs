@@ -387,18 +387,30 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        // 7. Pending receipt
-        if let Some(id) = execution.consumed_message {
-            let record = state.pending_message(id).ok_or_else(|| {
-                LeeError::InvalidInput("A consumed message is not pending".into())
-            })?;
-            let identities = identity_account_ids(&message.identities);
-            admit_public_receipt(record, &execution.context, |account_id| {
-                identities.contains(&account_id) || state.is_designated_public_account(account_id)
-            })?;
-        }
+        // 7. Entry: a public root runs here; a receipt consumes its pending message either way.
+        let (root, consumed_message) = match execution.entry.clone() {
+            None => (None, None),
+            Some(TransactionEntry::Call { to, message: data }) => {
+                (Some(TransactionEntry::Call { to, message: data }), None)
+            }
+            Some(TransactionEntry::Cast(id)) => {
+                let record = state.pending_message(id).ok_or_else(|| {
+                    LeeError::InvalidInput("A consumed message is not pending".into())
+                })?;
+                let identities = identity_account_ids(&message.identities);
+                admit_public_receipt(record, &execution.context, |account_id| {
+                    identities.contains(&account_id)
+                        || state.is_designated_public_account(account_id)
+                })?;
+                let runs_publicly = execution.context.actors.contains(&record.body.to);
+                (
+                    runs_publicly.then(|| TransactionEntry::Cast(record.clone())),
+                    Some(id),
+                )
+            }
+        };
 
-        let request = PublicPart::new(execution.context.clone(), execution.boundary.clone())
+        let request = PublicPart::new(execution.context.clone(), root, execution.boundary.clone())
             .map_err(|error| LeeError::InvalidInput(error.to_string()))?;
         let mut cycles_used = 0;
         let mut settled = settle(
@@ -420,7 +432,7 @@ impl ValidatedStateDiff {
                 .chain(settled.new_commitments)
                 .collect(),
             new_nullifiers,
-            consumed: execution.consumed_message.into_iter().collect(),
+            consumed: consumed_message.into_iter().collect(),
             ..settled
         }))
     }

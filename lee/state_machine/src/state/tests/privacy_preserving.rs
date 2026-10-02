@@ -721,12 +721,10 @@ fn a_nested_boundary_settles_both_public_writes() {
     assert!(matches!(
         nested.tx.message.execution.boundary.as_slice(),
         [
-            BoundaryStep::CallPublic(_),
             BoundaryStep::EnterPrivate(_),
             BoundaryStep::CallPublic(_),
             BoundaryStep::ReturnPublic,
             BoundaryStep::LeavePrivate,
-            BoundaryStep::ReturnPublic,
         ]
     ));
 
@@ -759,9 +757,9 @@ fn a_tampered_assumption_is_rejected() {
         "the unmodified statement must verify"
     );
 
-    let BoundaryStep::EnterPrivate(assumption) = &mut nested.tx.message.execution.boundary[1]
+    let BoundaryStep::EnterPrivate(assumption) = &mut nested.tx.message.execution.boundary[0]
     else {
-        panic!("the nested boundary enters the private turn second");
+        panic!("the nested boundary opens by entering the private turn");
     };
     assumption.envelope.message[0] ^= 0xFF;
 
@@ -786,7 +784,7 @@ fn a_public_turn_departing_from_its_assumed_delivery_is_rejected_and_applies_not
     assert!(
         matches!(
             execution_error(result),
-            ExecutionError::AssumptionMismatch { index: 1 }
+            ExecutionError::AssumptionMismatch { index: 0 }
         ),
         "the live delivery must be checked against the assumed one"
     );

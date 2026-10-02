@@ -14,12 +14,11 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, BedrockStatus, Block,
-    BlockBody, BlockHeader, BlockId, BoundaryStep, Commitment, CommitmentSetDigest, DeliverySource,
-    EncryptedAccountData, EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType,
-    IndexerStatus, IndexerSyncState, MessageEnvelope, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, PublicDelivery, PublicExecutionContext, PublicKey,
-    PublicMessage, PublicTransaction, Selector, ShardSummary, Signature, Transaction,
-    TransactionEntry, ValidityWindow, WitnessSet,
+    BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest, EncryptedAccountData,
+    EventRecord, EventSubscriptionFilter, GetEventsFilter, HashType, IndexerStatus,
+    IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Selector, ShardSummary,
+    Signature, Transaction, TransactionEntry, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -555,17 +554,12 @@ fn mock_privacy_preserving_tx(
                 actors: vec![to],
                 authorized_accounts: vec![],
             },
-            boundary: vec![BoundaryStep::CallPublic(PublicDelivery {
-                envelope: MessageEnvelope {
-                    source: DeliverySource::Root,
-                    to,
-                    message: vec![0xdd, 0xee],
-                },
-                grants: vec![],
-                pda_seeds: vec![],
-            })],
+            boundary: vec![],
             casts: vec![],
-            consumed_message: None,
+            entry: Some(TransactionEntry::Call {
+                to,
+                message: vec![0xdd, 0xee],
+            }),
             nonces: vec![block_id as u128],
             private_actions: vec![PrivateAction {
                 nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),

@@ -1,7 +1,7 @@
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, Assumption, BoundaryStep, DeliverySource, EphemeralPublicKey, FeeDeclaration,
-    MessageBody, MessageEnvelope, MessageId, PrivacyPreservingTransaction, PublicDelivery,
+    AccountId, Actor, Assumption, BoundaryStep, EphemeralPublicKey, FeeDeclaration, MessageBody,
+    MessageEnvelope, MessageId, PrivacyPreservingTransaction, PublicDelivery,
     PublicExecutionContext, PublicIdentity, PublicKey, PublicTransaction, Signature,
     TransactionEntry,
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
@@ -412,6 +412,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     type Error = OperationStatus;
 
     fn try_from(value: Box<FfiPrivateTransactionBody>) -> Result<Self, Self::Error> {
+        let entry = value.message.entry;
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
                 execution: PrivacyPreservingCircuitOutput {
@@ -424,10 +425,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         let std_vec: Vec<FfiMessageBody> = value.message.casts.into();
                         std_vec.into_iter().map(Into::into).collect()
                     },
-                    consumed_message: value
-                        .message
-                        .has_consumed_message
-                        .then(|| ffi_to_message_id(value.message.consumed_message)),
+                    entry: value.message.has_entry.then(|| entry.into()),
                     private_actions: {
                         let std_vec: Vec<_> = value.message.private_actions.into();
                         std_vec
@@ -497,52 +495,8 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
-pub enum FfiDeliverySourceKind {
-    RootSource = 0x0,
-    CallSource,
-    CastSource,
-}
-
-/// Where a delivery came from: the root, or the program that called or cast it
-/// (`program`, meaningful unless `kind` is `RootSource`).
-#[repr(C)]
-pub struct FfiDeliverySource {
-    pub kind: FfiDeliverySourceKind,
-    pub program: FfiAccountId,
-}
-
-impl From<DeliverySource> for FfiDeliverySource {
-    fn from(value: DeliverySource) -> Self {
-        match value {
-            DeliverySource::Root => Self {
-                kind: FfiDeliverySourceKind::RootSource,
-                program: FfiAccountId::default(),
-            },
-            DeliverySource::Call(program) => Self {
-                kind: FfiDeliverySourceKind::CallSource,
-                program: program.into(),
-            },
-            DeliverySource::Cast(program) => Self {
-                kind: FfiDeliverySourceKind::CastSource,
-                program: program.into(),
-            },
-        }
-    }
-}
-
-impl From<FfiDeliverySource> for DeliverySource {
-    fn from(value: FfiDeliverySource) -> Self {
-        match value.kind {
-            FfiDeliverySourceKind::RootSource => Self::Root,
-            FfiDeliverySourceKind::CallSource => Self::Call(value.program.into()),
-            FfiDeliverySourceKind::CastSource => Self::Cast(value.program.into()),
-        }
-    }
-}
-
-#[repr(C)]
 pub struct FfiPublicDelivery {
-    pub source: FfiDeliverySource,
+    pub source: FfiAccountId,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
     pub grants: FfiAccountIdList,
@@ -803,8 +757,8 @@ pub struct FfiPrivacyPreservingMessage {
     pub context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
     pub casts: FfiMessageBodyList,
-    pub has_consumed_message: bool,
-    pub consumed_message: FfiBytes32,
+    pub has_entry: bool,
+    pub entry: FfiTransactionEntry,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
@@ -821,7 +775,7 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                     context,
                     boundary,
                     casts,
-                    consumed_message,
+                    entry,
                     private_actions,
                     block_validity_window,
                     timestamp_validity_window,
@@ -839,8 +793,8 @@ impl From<lee::privacy_preserving_transaction::Message> for FfiPrivacyPreserving
                 .collect::<Vec<_>>()
                 .into(),
             casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
-            has_consumed_message: consumed_message.is_some(),
-            consumed_message: consumed_message.map(message_id_to_ffi).unwrap_or_default(),
+            has_entry: entry.is_some(),
+            entry: entry.map_or_else(empty_transaction_entry, Into::into),
             nonces: nonces
                 .into_iter()
                 .map(Into::into)
@@ -1093,12 +1047,18 @@ pub unsafe extern "C" fn sequencer_ffi_free_ffi_transaction_vec(val: *mut FfiVec
     sequencer_ffi_free_transaction_vec_value(*boxed);
 }
 
+fn empty_transaction_entry() -> FfiTransactionEntry {
+    FfiTransactionEntry {
+        kind: FfiTransactionEntryKind::Call,
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+        message_id: FfiBytes32::default(),
+    }
+}
+
 fn empty_public_delivery() -> FfiPublicDelivery {
     FfiPublicDelivery {
-        source: FfiDeliverySource {
-            kind: FfiDeliverySourceKind::RootSource,
-            program: FfiAccountId::default(),
-        },
+        source: FfiAccountId::default(),
         to: FfiActor::default(),
         message: Vec::new().into(),
         grants: Vec::new().into(),
@@ -1267,12 +1227,12 @@ mod tests {
     }
 
     #[test]
-    fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
+    fn private_transaction_boundary_entry_and_identities_roundtrip_over_the_ffi() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = PublicDelivery {
             envelope: MessageEnvelope {
-                source: DeliverySource::Root,
+                source: account_id(3),
                 to: actor(4, 5),
                 message: vec![6],
             },
@@ -1287,7 +1247,7 @@ mod tests {
                         BoundaryStep::CallPublic(repeated.clone()),
                         BoundaryStep::CallPublic(PublicDelivery {
                             envelope: MessageEnvelope {
-                                source: DeliverySource::Call(account_id(11)),
+                                source: account_id(11),
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
@@ -1296,7 +1256,7 @@ mod tests {
                         }),
                         BoundaryStep::CallPublic(PublicDelivery {
                             envelope: MessageEnvelope {
-                                source: DeliverySource::Cast(account_id(40)),
+                                source: account_id(40),
                                 to: actor(41, 42),
                                 message: vec![43],
                             },
@@ -1324,7 +1284,7 @@ mod tests {
                         };
                         2
                     ],
-                    consumed_message: Some(MessageId::new([26; 32])),
+                    entry: Some(TransactionEntry::Cast(MessageId::new([26; 32]))),
                     private_actions: vec![],
                     block_validity_window: ValidityWindow::new_unbounded(),
                     timestamp_validity_window: ValidityWindow::new_unbounded(),
@@ -1349,7 +1309,7 @@ mod tests {
     fn boundary_steps_decode_only_the_payload_their_kind_selects() {
         let delivery = PublicDelivery {
             envelope: MessageEnvelope {
-                source: DeliverySource::Call(account_id(1)),
+                source: account_id(1),
                 to: actor(2, 3),
                 message: vec![4],
             },

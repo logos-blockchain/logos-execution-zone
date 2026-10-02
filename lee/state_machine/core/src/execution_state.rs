@@ -87,26 +87,22 @@ pub struct PrivatePartOutcome {
     pub casts: Vec<MessageBody>,
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
-)]
-pub enum DeliverySource {
+#[derive(Debug, Clone, Copy)]
+enum DeliverySource {
     Root,
     Call(AccountId),
     Cast(AccountId),
 }
 
 impl DeliverySource {
-    #[must_use]
-    pub const fn origin(self) -> Option<AccountId> {
+    const fn origin(self) -> Option<AccountId> {
         match self {
             Self::Root => None,
             Self::Call(program) | Self::Cast(program) => Some(program),
         }
     }
 
-    #[must_use]
-    pub const fn issuer(self) -> Option<AccountId> {
+    const fn issuer(self) -> Option<AccountId> {
         match self {
             Self::Call(program) => Some(program),
             Self::Root | Self::Cast(_) => None,
@@ -121,7 +117,7 @@ pub struct BoundaryDelivery<S> {
     pub pda_seeds: Vec<PdaSeed>,
 }
 
-pub type PublicDelivery = BoundaryDelivery<DeliverySource>;
+pub type PublicDelivery = BoundaryDelivery<AccountId>;
 
 pub type Assumption = BoundaryDelivery<Actor>;
 
@@ -208,6 +204,9 @@ pub enum ExecutionError {
 
     #[error("A delivery named {actor:?}, which is neither a declared public actor nor private")]
     UndeclaredActor { actor: Actor },
+
+    #[error("The root delivery to {actor:?} does not execute in this part of the transaction")]
+    MisplacedRoot { actor: Actor },
 
     #[error("Invalid program behavior in program {program_account_id}: {source}")]
     ExecutionValidation {
@@ -394,7 +393,7 @@ impl<'witnesses> WholeTransaction<'witnesses> {
 impl<'witnesses> PrivatePart<'witnesses> {
     pub fn new(
         context: PublicExecutionContext,
-        root: TransactionEntry<StoredMessage>,
+        root: Option<TransactionEntry<StoredMessage>>,
         witnesses: &'witnesses [PrivateWitness],
         assumptions: Vec<PublicCallAssumptions>,
     ) -> Result<Self, ExecutionError> {
@@ -403,7 +402,7 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_group: 0,
             trace: Boundary::new(),
         };
-        Interpreter::start(context, witnesses, Some(root), scope).map(Self)
+        Interpreter::start(context, witnesses, root, scope).map(Self)
     }
 
     pub fn execute<E: ExecutionEnvironment>(
@@ -421,13 +420,14 @@ impl<'witnesses> PrivatePart<'witnesses> {
 impl PublicPart {
     pub fn new(
         context: PublicExecutionContext,
+        root: Option<TransactionEntry<StoredMessage>>,
         boundary: Boundary,
     ) -> Result<Self, ExecutionError> {
         let scope = Scope::PublicPart {
             boundary,
             cursor: 0,
         };
-        Interpreter::start(context, &[], None, scope).map(Self)
+        Interpreter::start(context, &[], root, scope).map(Self)
     }
 
     pub fn execute<E: ExecutionEnvironment>(
@@ -518,13 +518,41 @@ impl<'witnesses> Interpreter<'witnesses> {
             return Err(ExecutionError::PublicFamilyMemberDeclared { account_id });
         }
 
-        let first = match root {
+        if let Some(root) = &root {
+            let actor = root.destination();
+            let runs_publicly = public_actors.contains(&actor);
+            let misplaced = match scope {
+                Scope::WholeTransaction { .. } => false,
+                Scope::PrivatePart { .. } => runs_publicly,
+                Scope::PublicPart { .. } => !runs_publicly,
+            };
+            if misplaced {
+                return Err(ExecutionError::MisplacedRoot { actor });
+            }
+        }
+
+        let mut execution = Self {
+            witnesses,
+            context,
+            public_actors,
+            accounts,
+            pda_family_binding,
+            pending: Vec::new(),
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            scope,
+            events: Vec::new(),
+            casts: Vec::new(),
+        };
+        match root {
             Some(TransactionEntry::Call { to, message }) => {
-                Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                    source: DeliverySource::Root,
-                    to,
-                    message,
-                })))
+                execution
+                    .pending
+                    .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
+                        source: DeliverySource::Root,
+                        to,
+                        message,
+                    }))));
             }
             Some(TransactionEntry::Cast(StoredMessage {
                 body:
@@ -534,27 +562,21 @@ impl<'witnesses> Interpreter<'witnesses> {
                         message,
                     },
                 ..
-            })) => Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
-                source: DeliverySource::Cast(source),
-                to,
-                message,
-            }))),
-            None => Item::Continue { root: true },
-        };
-
-        Ok(Self {
-            witnesses,
-            context,
-            public_actors,
-            accounts,
-            pda_family_binding,
-            pending: vec![first],
-            block_validity_window: BlockValidityWindow::new_unbounded(),
-            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
-            scope,
-            events: Vec::new(),
-            casts: Vec::new(),
-        })
+            })) => {
+                execution
+                    .pending
+                    .push(Item::Deliver(Box::new(Delivery::entry(MessageEnvelope {
+                        source: DeliverySource::Cast(source),
+                        to,
+                        message,
+                    }))));
+            }
+            None if matches!(execution.scope, Scope::PublicPart { .. }) => {
+                execution.pending.push(Item::Continue { root: true });
+            }
+            None => execution.assume_public_subtree()?,
+        }
+        Ok(execution)
     }
 
     fn run<E: ExecutionEnvironment>(
@@ -616,14 +638,23 @@ impl<'witnesses> Interpreter<'witnesses> {
         match (boundary.get(*cursor), root) {
             (
                 Some(BoundaryStep::CallPublic(PublicDelivery {
-                    envelope,
+                    envelope:
+                        MessageEnvelope {
+                            source,
+                            to,
+                            message,
+                        },
                     grants,
                     pda_seeds,
                 })),
                 _,
             ) => {
                 let delivery = Delivery {
-                    envelope: envelope.clone(),
+                    envelope: MessageEnvelope {
+                        source: DeliverySource::Call(*source),
+                        to: *to,
+                        message: message.clone(),
+                    },
                     sender: None,
                     grants: grants.iter().copied().collect(),
                     pda_seeds: pda_seeds.clone(),
@@ -745,14 +776,9 @@ impl<'witnesses> Interpreter<'witnesses> {
         delivery: Delivery,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let (assumptions, next_group, trace) = match &mut self.scope {
-            Scope::PrivatePart {
-                assumptions,
-                next_group,
-                trace,
-            } => (assumptions, next_group, trace),
-            // A Call from the root or a private turn is what a private part records as a public
-            // Call.
+        match &mut self.scope {
+            // The root and each Call from a private turn start a public subtree, whose deliveries
+            // into private actors form one group of assumptions.
             Scope::WholeTransaction { groups, open } => {
                 if delivery
                     .sender
@@ -762,17 +788,31 @@ impl<'witnesses> Interpreter<'witnesses> {
                     groups.push(Vec::new());
                     self.pending.push(Item::ClosePublic);
                 }
-                return self.execute(delivery, environment);
+                self.execute(delivery, environment)
             }
-            Scope::PublicPart { .. } => return self.execute(delivery, environment),
+            Scope::PublicPart { .. } => self.execute(delivery, environment),
+            Scope::PrivatePart { trace, .. } => {
+                trace.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
+                self.pending.push(Item::ClosePublic);
+                Ok(self.assume_public_subtree()?)
+            }
+        }
+    }
+
+    fn assume_public_subtree(&mut self) -> Result<(), ExecutionError> {
+        let Scope::PrivatePart {
+            assumptions,
+            next_group,
+            ..
+        } = &mut self.scope
+        else {
+            unreachable!("only a private part assumes public subtrees");
         };
         let index = *next_group;
-        trace.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
         let deliveries = assumptions
             .get(index)
             .ok_or(ExecutionError::MissingAssumedDeliveries { index })?;
         step_past(next_group);
-        self.pending.push(Item::ClosePublic);
         for Assumption {
             envelope,
             grants,
@@ -782,8 +822,7 @@ impl<'witnesses> Interpreter<'witnesses> {
             if !self.public_actors.contains(&envelope.source) {
                 return Err(ExecutionError::UndeclaredAssumedSender {
                     actor: envelope.source,
-                }
-                .into());
+                });
             }
             self.pending.push(Item::Deliver(Box::new(Delivery::sent(
                 envelope.source,
@@ -1006,8 +1045,17 @@ const fn step_past(position: &mut usize) {
 }
 
 fn public_delivery(delivery: &Delivery) -> PublicDelivery {
+    let program = delivery
+        .envelope
+        .source
+        .issuer()
+        .expect("only a Call from a private turn crosses into public execution");
     PublicDelivery {
-        envelope: delivery.envelope.clone(),
+        envelope: MessageEnvelope {
+            source: program,
+            to: delivery.envelope.to,
+            message: delivery.envelope.message.clone(),
+        },
         grants: delivery.grants.iter().copied().collect(),
         pda_seeds: delivery.pda_seeds.clone(),
     }

@@ -1,7 +1,7 @@
 use indexer_service_protocol::{
     AccountId, Actor, Assumption, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
-    DeliverySource, EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType,
-    MessageBody, MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
+    EncryptedAccountData, EphemeralPublicKey, FeeDeclaration, HashType, MessageBody,
+    MessageEnvelope, MessageId, Nullifier, PdaSeed, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, PublicDelivery, PublicExecutionContext,
     PublicIdentity, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
     TransactionEntry, ValidityWindow, WitnessSet,
@@ -334,6 +334,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 
 impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
     fn from(value: Box<FfiPrivateTransactionBody>) -> Self {
+        let entry = value.message.entry;
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
@@ -346,10 +347,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     let std_vec: Vec<FfiMessageBody> = value.message.casts.into();
                     std_vec.into_iter().map(Into::into).collect()
                 },
-                consumed_message: value
-                    .message
-                    .has_consumed_message
-                    .then(|| ffi_to_message_id(value.message.consumed_message)),
+                entry: value.message.has_entry.then(|| entry.into()),
                 nonces: {
                     let std_vec: Vec<_> = value.message.nonces.into();
                     std_vec.into_iter().map(Into::into).collect()
@@ -403,55 +401,8 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 }
 
 #[repr(C)]
-pub enum FfiDeliverySourceKind {
-    RootSource = 0x0,
-    CallSource,
-    CastSource,
-}
-
-/// Where a delivery came from: the root, or the program that called or cast it
-/// (`program`, meaningful unless `kind` is `RootSource`).
-#[repr(C)]
-pub struct FfiDeliverySource {
-    pub kind: FfiDeliverySourceKind,
-    pub program: FfiAccountId,
-}
-
-impl From<DeliverySource> for FfiDeliverySource {
-    fn from(value: DeliverySource) -> Self {
-        match value {
-            DeliverySource::Root => Self {
-                kind: FfiDeliverySourceKind::RootSource,
-                program: FfiAccountId::default(),
-            },
-            DeliverySource::Call(program) => Self {
-                kind: FfiDeliverySourceKind::CallSource,
-                program: program.into(),
-            },
-            DeliverySource::Cast(program) => Self {
-                kind: FfiDeliverySourceKind::CastSource,
-                program: program.into(),
-            },
-        }
-    }
-}
-
-impl From<FfiDeliverySource> for DeliverySource {
-    fn from(value: FfiDeliverySource) -> Self {
-        let program = AccountId {
-            value: value.program.data,
-        };
-        match value.kind {
-            FfiDeliverySourceKind::RootSource => Self::Root,
-            FfiDeliverySourceKind::CallSource => Self::Call(program),
-            FfiDeliverySourceKind::CastSource => Self::Cast(program),
-        }
-    }
-}
-
-#[repr(C)]
 pub struct FfiPublicDelivery {
-    pub source: FfiDeliverySource,
+    pub source: FfiAccountId,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
     pub grants: FfiAccountIdList,
@@ -489,7 +440,9 @@ impl From<FfiPublicDelivery> for PublicDelivery {
     fn from(value: FfiPublicDelivery) -> Self {
         Self {
             envelope: MessageEnvelope {
-                source: value.source.into(),
+                source: AccountId {
+                    value: value.source.data,
+                },
                 to: value.to.into(),
                 message: value.message.into(),
             },
@@ -717,8 +670,8 @@ pub struct FfiPrivacyPreservingMessage {
     pub context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
     pub casts: FfiMessageBodyList,
-    pub has_consumed_message: bool,
-    pub consumed_message: FfiBytes32,
+    pub has_entry: bool,
+    pub entry: FfiTransactionEntry,
     pub nonces: FfiNonceList,
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
@@ -732,7 +685,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             context,
             boundary,
             casts,
-            consumed_message,
+            entry,
             nonces,
             private_actions,
             block_validity_window,
@@ -748,8 +701,8 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .collect::<Vec<_>>()
                 .into(),
             casts: casts.into_iter().map(Into::into).collect::<Vec<_>>().into(),
-            has_consumed_message: consumed_message.is_some(),
-            consumed_message: consumed_message.map(message_id_to_ffi).unwrap_or_default(),
+            has_entry: entry.is_some(),
+            entry: entry.map_or_else(empty_transaction_entry, Into::into),
             nonces: nonces
                 .into_iter()
                 .map(Into::into)
@@ -958,12 +911,18 @@ pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransactio
     free_transaction_vec_value(*boxed);
 }
 
+fn empty_transaction_entry() -> FfiTransactionEntry {
+    FfiTransactionEntry {
+        kind: FfiTransactionEntryKind::Call,
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+        message_id: FfiBytes32::default(),
+    }
+}
+
 fn empty_public_delivery() -> FfiPublicDelivery {
     FfiPublicDelivery {
-        source: FfiDeliverySource {
-            kind: FfiDeliverySourceKind::RootSource,
-            program: FfiAccountId::default(),
-        },
+        source: FfiAccountId::default(),
         to: FfiActor::default(),
         message: Vec::new().into(),
         grants: Vec::new().into(),
@@ -1128,12 +1087,12 @@ mod tests {
     }
 
     #[test]
-    fn private_transaction_boundary_consumed_message_and_identities_roundtrip_over_the_ffi() {
+    fn private_transaction_boundary_entry_and_identities_roundtrip_over_the_ffi() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = PublicDelivery {
             envelope: MessageEnvelope {
-                source: DeliverySource::Root,
+                source: account_id(3),
                 to: actor(5, 6),
                 message: vec![7],
             },
@@ -1148,7 +1107,7 @@ mod tests {
                     BoundaryStep::CallPublic(repeated.clone()),
                     BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {
-                            source: DeliverySource::Call(account_id(12)),
+                            source: account_id(12),
                             to: actor(9, 10),
                             message: vec![11],
                         },
@@ -1157,7 +1116,7 @@ mod tests {
                     }),
                     BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {
-                            source: DeliverySource::Cast(account_id(40)),
+                            source: account_id(40),
                             to: actor(41, 42),
                             message: vec![43],
                         },
@@ -1185,7 +1144,7 @@ mod tests {
                     };
                     2
                 ],
-                consumed_message: Some(MessageId([27; 32])),
+                entry: Some(TransactionEntry::Cast(MessageId([27; 32]))),
                 nonces: vec![],
                 private_actions: vec![],
                 block_validity_window: ValidityWindow((None, None)),
@@ -1208,7 +1167,7 @@ mod tests {
     fn boundary_steps_decode_only_the_payload_their_kind_selects() {
         let delivery = PublicDelivery {
             envelope: MessageEnvelope {
-                source: DeliverySource::Call(account_id(1)),
+                source: account_id(1),
                 to: actor(2, 3),
                 message: vec![4],
             },

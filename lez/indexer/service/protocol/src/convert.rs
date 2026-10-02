@@ -5,9 +5,9 @@ use lee_core::account::Nonce;
 use crate::{
     Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryDelivery, BoundaryStep, Ciphertext, Commitment,
-    CommitmentSetDigest, CrossZoneHalt, DeliverySource, EncryptedAccountData, EphemeralPublicKey,
-    EventRecord, FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope,
-    MessageId, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
+    CommitmentSetDigest, CrossZoneHalt, EncryptedAccountData, EphemeralPublicKey, EventRecord,
+    FeeDeclaration, HashType, IndexerStatus, IndexerSyncState, MessageEnvelope, MessageId,
+    Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, Proof, PublicExecutionContext, PublicIdentity,
     PublicKey, PublicMessage, PublicTransaction, Selector, Signature, StallReason, Transaction,
     TransactionEntry, ValidityWindow, WitnessSet,
@@ -453,26 +453,6 @@ impl<S: Into<T>, T> From<MessageEnvelope<S>> for lee_core::program::MessageEnvel
     }
 }
 
-impl From<lee_core::execution_state::DeliverySource> for DeliverySource {
-    fn from(value: lee_core::execution_state::DeliverySource) -> Self {
-        match value {
-            lee_core::execution_state::DeliverySource::Root => Self::Root,
-            lee_core::execution_state::DeliverySource::Call(program) => Self::Call(program.into()),
-            lee_core::execution_state::DeliverySource::Cast(program) => Self::Cast(program.into()),
-        }
-    }
-}
-
-impl From<DeliverySource> for lee_core::execution_state::DeliverySource {
-    fn from(value: DeliverySource) -> Self {
-        match value {
-            DeliverySource::Root => Self::Root,
-            DeliverySource::Call(program) => Self::Call(program.into()),
-            DeliverySource::Cast(program) => Self::Cast(program.into()),
-        }
-    }
-}
-
 impl<S: Into<T>, T> From<lee_core::execution_state::BoundaryDelivery<S>> for BoundaryDelivery<T> {
     fn from(value: lee_core::execution_state::BoundaryDelivery<S>) -> Self {
         let lee_core::execution_state::BoundaryDelivery {
@@ -574,7 +554,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
                     context,
                     boundary,
                     casts,
-                    consumed_message,
+                    entry,
                     private_actions,
                     block_validity_window,
                     timestamp_validity_window,
@@ -590,7 +570,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             context: context.into(),
             boundary: boundary.into_iter().map(Into::into).collect(),
             casts: casts.into_iter().map(Into::into).collect(),
-            consumed_message: consumed_message.map(Into::into),
+            entry: entry.map(Into::into),
             nonces: nonces.iter().map(|x| x.0).collect(),
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
@@ -619,7 +599,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             context,
             boundary,
             casts,
-            consumed_message,
+            entry,
             nonces,
             private_actions,
             block_validity_window,
@@ -634,7 +614,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
                 context: context.into(),
                 boundary: boundary.into_iter().map(Into::into).collect(),
                 casts: casts.into_iter().map(Into::into).collect(),
-                consumed_message: consumed_message.map(Into::into),
+                entry: entry.map(Into::into),
                 private_actions,
                 block_validity_window: block_validity_window
                     .try_into()
@@ -1338,12 +1318,12 @@ mod tests {
     }
 
     #[test]
-    fn a_private_message_with_a_consumed_message_round_trips_through_the_mirror() {
+    fn a_private_message_with_a_received_entry_round_trips_through_the_mirror() {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = lee_core::execution_state::PublicDelivery {
             envelope: lee_core::program::MessageEnvelope {
-                source: lee_core::execution_state::DeliverySource::Root,
+                source: account_id(3),
                 to: actor(4, 5),
                 message: vec![6],
             },
@@ -1358,9 +1338,7 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
-                                source: lee_core::execution_state::DeliverySource::Call(
-                                    account_id(11),
-                                ),
+                                source: account_id(11),
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
@@ -1371,9 +1349,7 @@ mod tests {
                     lee_core::execution_state::BoundaryStep::CallPublic(
                         lee_core::execution_state::PublicDelivery {
                             envelope: lee_core::program::MessageEnvelope {
-                                source: lee_core::execution_state::DeliverySource::Cast(
-                                    account_id(40),
-                                ),
+                                source: account_id(40),
                                 to: actor(41, 42),
                                 message: vec![43],
                             },
@@ -1404,7 +1380,9 @@ mod tests {
                     };
                     2
                 ],
-                consumed_message: Some(message_id(26)),
+                entry: Some(lee_core::execution_state::TransactionEntry::Cast(
+                    message_id(26),
+                )),
                 private_actions: vec![],
                 block_validity_window: lee_core::program::BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window:

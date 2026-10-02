@@ -41,7 +41,7 @@ impl std::fmt::Debug for Message {
             .field("context", &execution.context)
             .field("boundary", &execution.boundary)
             .field("casts", &execution.casts)
-            .field("consumed_message", &execution.consumed_message)
+            .field("entry", &execution.entry)
             .field("private_actions", &private_actions)
             .field("block_validity_window", &execution.block_validity_window)
             .field(
@@ -105,8 +105,7 @@ pub mod tests {
         account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         execution_state::{
-            Assumption, Boundary, BoundaryStep, DeliverySource, PublicDelivery,
-            PublicExecutionContext,
+            Assumption, Boundary, BoundaryStep, PublicDelivery, PublicExecutionContext,
         },
         program::{BlockValidityWindow, MessageEnvelope, TimestampValidityWindow},
     };
@@ -148,7 +147,7 @@ pub mod tests {
                 context: PublicExecutionContext::default(),
                 boundary: Boundary::default(),
                 casts: Vec::new(),
-                consumed_message: None,
+                entry: None,
                 private_actions: vec![PrivateAction {
                     nullifier,
                     root: [0; 32],
@@ -181,7 +180,7 @@ pub mod tests {
                 boundary: vec![
                     BoundaryStep::CallPublic(PublicDelivery {
                         envelope: MessageEnvelope {
-                            source: DeliverySource::Call(private.program_account_id),
+                            source: private.program_account_id,
                             to: public,
                             message: b"o".to_vec(),
                         },
@@ -201,7 +200,7 @@ pub mod tests {
                     BoundaryStep::ReturnPublic,
                 ],
                 casts: Vec::new(),
-                consumed_message: None,
+                entry: None,
                 private_actions: vec![],
                 block_validity_window: BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
@@ -212,16 +211,15 @@ pub mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[1, 0, 0, 0][..], // declared.public_actors: one actor
+            &[1, 0, 0, 0][..], // context.actors: one actor
             &[5; 32],
             &[6; 32],
-            &[1, 0, 0, 0], // declared.authorized_accounts: one account
+            &[1, 0, 0, 0], // context.authorized_accounts: one account
             &[7; 32],
             &[4, 0, 0, 0], // boundary: four steps
             &[0],          // BoundaryStep::CallPublic
-            &[1],          // source: DeliverySource::Call
-            &[8; 32],
-            &[5; 32], // to
+            &[8; 32],      // source: the calling program
+            &[5; 32],      // to
             &[6; 32],
             &[1, 0, 0, 0], // message
             b"o",
@@ -239,7 +237,7 @@ pub mod tests {
             &[2],          // BoundaryStep::LeavePrivate
             &[3],          // BoundaryStep::ReturnPublic
             &[0, 0, 0, 0], // casts: none
-            &[0],          // consumed_message: None
+            &[0],          // entry: None
             &[0, 0, 0, 0], // private_actions: none
             &[0, 0],       // block_validity_window: from None, to None
             &[0, 0],       // timestamp_validity_window: from None, to None

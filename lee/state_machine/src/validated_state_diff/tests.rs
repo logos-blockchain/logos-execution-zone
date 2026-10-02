@@ -82,7 +82,7 @@ fn privacy_garbage_proof_is_rejected() {
             context: PublicExecutionContext::default(),
             boundary: Boundary::default(),
             casts: Vec::new(),
-            consumed_message: None,
+            entry: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_account_initialization(&account_id),
                 root: [0; 32],
