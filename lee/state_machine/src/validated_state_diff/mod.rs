@@ -9,7 +9,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, ProgramImageClaim, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        ExecutionResult, ExecutionState, Mode, PublicExecutionContext, TransactionEntry,
+        ExecutionResult, ExecutionState, Mode, PublicExecutionContext, TransactionEntry, TurnView,
     },
     program::{MessageBody, MessageId, PROGRAM_LOADER_ACCOUNT_ID, StoredMessage, TransactionEvent},
 };
@@ -457,12 +457,11 @@ const fn charge(used: &mut Cycles, call_cycles: Cycles) {
 /// The same lookup `get_program_via` uses, which is what keeps deploy-then-call working within
 /// one transaction.
 fn loader_shard<'state>(
-    execution: &'state ExecutionState<'_>,
+    view: &'state TurnView<'_>,
     state: &'state V03State,
     account_id: AccountId,
 ) -> Option<&'state ActorState> {
-    execution
-        .pending_shard(account_id, PROGRAM_LOADER_ACCOUNT_ID)
+    view.staged_state(Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID))
         .or_else(|| state.loader_shard(account_id))
 }
 

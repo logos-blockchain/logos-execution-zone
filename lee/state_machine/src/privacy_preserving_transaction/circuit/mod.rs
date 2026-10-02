@@ -5,7 +5,9 @@ use lee_core::{
     MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     ProgramImageWitness, ProvingInput, ShadowProgramWitness,
     account::{AccountId, Actor, ActorState, Cycles},
-    execution_state::{Assumption, Backend, ExecutionResult, ExecutionState, Mode},
+    execution_state::{
+        Assumption, ExecutionEnvironment, ExecutionResult, ExecutionState, Mode, TurnView,
+    },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{ProgramHeader, ReceiveInput, Response, Transition},
@@ -150,16 +152,16 @@ struct Simulator<'input> {
     public_shards: &'input HashMap<Actor, ActorState>,
 }
 
-impl Backend for Simulator<'_> {
+impl ExecutionEnvironment for Simulator<'_> {
     type Error = LeeError;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        execution: &ExecutionState<'_>,
+        view: &TurnView<'_>,
     ) -> Result<Transition, LeeError> {
         // A private turn is bounded only by what its prover can prove, as when it is proven.
-        let budget = if execution.runs_privately(input.receiver.account_id) {
+        let budget = if view.runs_privately(input.receiver.account_id) {
             Cycles::MAX
         } else {
             DEFAULT_PUBLIC_CYCLE_BUDGET
@@ -169,7 +171,7 @@ impl Backend for Simulator<'_> {
         })
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
             .public_shards
             .get(&actor)
@@ -183,13 +185,13 @@ struct Prover<'programs> {
     responses: Vec<Response>,
 }
 
-impl Backend for Prover<'_> {
+impl ExecutionEnvironment for Prover<'_> {
     type Error = LeeError;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _execution: &ExecutionState<'_>,
+        _view: &TurnView<'_>,
     ) -> Result<Transition, LeeError> {
         receive_with(self.programs, input, |program| {
             let receipt = prove_session(program, |env| Program::write_receive_input(input, env))?;

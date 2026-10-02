@@ -102,13 +102,13 @@ impl Script {
     }
 }
 
-impl Backend for Script {
+impl ExecutionEnvironment for Script {
     type Error = ExecutionError;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _execution: &ExecutionState<'_>,
+        _view: &TurnView<'_>,
     ) -> Result<Transition, ExecutionError> {
         self.log.push(input.clone());
         let handler = self
@@ -118,7 +118,7 @@ impl Backend for Script {
         Ok(handler(input))
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, ExecutionError> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, ExecutionError> {
         self.shards
             .get(&actor)
             .cloned()

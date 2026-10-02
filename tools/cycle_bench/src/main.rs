@@ -42,7 +42,10 @@ use lee::program::Program;
 use lee_core::{
     BlockId, Timestamp,
     account::{AccountId, Actor, ActorState},
-    execution_state::{Backend, ExecutionState, Mode, PublicExecutionContext, TransactionEntry},
+    execution_state::{
+        ExecutionEnvironment, ExecutionState, Mode, PublicExecutionContext, TransactionEntry,
+        TurnView,
+    },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{MessageData, ReceiveInput, Transition},
@@ -287,10 +290,10 @@ struct Meter {
     rows: Vec<BenchResult>,
 }
 
-impl Backend for Meter {
+impl ExecutionEnvironment for Meter {
     type Error = anyhow::Error;
 
-    fn receive(&mut self, input: &ReceiveInput, _: &ExecutionState<'_>) -> Result<Transition> {
+    fn receive(&mut self, input: &ReceiveInput, _: &TurnView<'_>) -> Result<Transition> {
         let program_account_id = input.receiver.program_account_id;
         if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
             return Ok(native_token::receive(input)?);
@@ -310,7 +313,7 @@ impl Backend for Meter {
         Ok(borsh::from_slice(payload)?)
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ActorState> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState> {
         Ok(self.shards.get(&actor).cloned().unwrap_or_default())
     }
 }

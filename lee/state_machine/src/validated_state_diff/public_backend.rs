@@ -1,7 +1,7 @@
 use lee_core::{
     Commitment,
     account::{Actor, ActorState, Cycles},
-    execution_state::{Backend, ExecutionState},
+    execution_state::{ExecutionEnvironment, TurnView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
@@ -39,13 +39,13 @@ impl<'state> PublicBackend<'state> {
     }
 }
 
-impl Backend for PublicBackend<'_> {
+impl ExecutionEnvironment for PublicBackend<'_> {
     type Error = LeeError;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        execution: &ExecutionState<'_>,
+        view: &TurnView<'_>,
     ) -> Result<Transition, LeeError> {
         let state = self.state;
         let program_account_id = input.receiver.program_account_id;
@@ -55,7 +55,7 @@ impl Backend for PublicBackend<'_> {
             const ABSENT: &ActorState = &ActorState::empty();
             let (transition, new_commitment) = catch_program_loader_panic(|| {
                 program_loader_core::receive(input, |account_id| {
-                    loader_shard(execution, state, account_id).unwrap_or(ABSENT)
+                    loader_shard(view, state, account_id).unwrap_or(ABSENT)
                 })
             })?;
             self.new_commitments.extend(new_commitment);
@@ -65,10 +65,10 @@ impl Backend for PublicBackend<'_> {
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
         } else {
             let program = load_program(program_account_id, |account_id| {
-                loader_shard(execution, state, account_id)
+                loader_shard(view, state, account_id)
             })
             .ok_or(LeeError::UnknownProgram {
-                chained: !execution.at_root(),
+                chained: !view.at_root(),
             })?;
             let (transition, call_cycles) =
                 program.receive(input, remaining(self.cycle_budget, *self.cycles_used))?;
@@ -79,7 +79,7 @@ impl Backend for PublicBackend<'_> {
         Ok(transition)
     }
 
-    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
         Ok(self
             .state
             .get_account_by_id_ref(actor.account_id)

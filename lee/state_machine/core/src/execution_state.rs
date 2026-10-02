@@ -118,18 +118,45 @@ pub enum BoundaryStep {
 
 pub type Boundary = Vec<BoundaryStep>;
 
-pub trait Backend {
+pub trait ExecutionEnvironment {
     type Error: From<ExecutionError>;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        execution: &ExecutionState<'_>,
+        view: &TurnView<'_>,
     ) -> Result<Transition, Self::Error>;
 
     /// Returns [`ExecutionError::PublicShardUnavailable`] by default.
-    fn public_shard(&mut self, actor: Actor) -> Result<ActorState, Self::Error> {
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, Self::Error> {
         Err(ExecutionError::PublicShardUnavailable { actor }.into())
+    }
+}
+
+pub struct TurnView<'execution> {
+    accounts: &'execution HashMap<AccountId, AccountEntry>,
+    at_root: bool,
+}
+
+impl TurnView<'_> {
+    #[must_use]
+    pub const fn at_root(&self) -> bool {
+        self.at_root
+    }
+
+    #[must_use]
+    pub fn runs_privately(&self, account_id: AccountId) -> bool {
+        matches!(
+            self.accounts.get(&account_id),
+            Some(AccountEntry::Private { .. })
+        )
+    }
+
+    #[must_use]
+    pub fn staged_state(&self, actor: Actor) -> Option<&ActorState> {
+        self.accounts
+            .get(&actor.account_id)?
+            .staged(actor.program_account_id)
     }
 }
 
@@ -327,7 +354,6 @@ pub struct ExecutionState<'witnesses> {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     mode: ModeState,
-    at_root: bool,
     events: Vec<(Actor, ProgramEvent)>,
     casts: Vec<MessageBody>,
 }
@@ -469,16 +495,18 @@ impl<'witnesses> ExecutionState<'witnesses> {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
             mode,
-            at_root: false,
             events: Vec::new(),
             casts: Vec::new(),
         })
     }
 
-    pub fn run<B: Backend>(mut self, backend: &mut B) -> Result<ExecutionOutcome, B::Error> {
+    pub fn run<E: ExecutionEnvironment>(
+        mut self,
+        environment: &mut E,
+    ) -> Result<ExecutionOutcome, E::Error> {
         while let Some(item) = self.pending.pop_front() {
             match item {
-                Item::Deliver(delivery) => self.deliver(*delivery, backend)?,
+                Item::Deliver(delivery) => self.deliver(*delivery, environment)?,
                 Item::ClosePublic => self.close(BoundaryStep::ReturnPublic)?,
                 Item::ClosePrivate => self.close(BoundaryStep::LeavePrivate)?,
                 Item::Continue { root } => self.resume(root)?,
@@ -566,7 +594,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
     // Placement is positive: a declared public actor runs publicly, a private witness's account
     // runs privately, and while checking any other destination must be the next assumed
     // delivery.
-    fn deliver<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
+    fn deliver<E: ExecutionEnvironment>(
+        &mut self,
+        delivery: Delivery,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
         let to = delivery.envelope.to;
         // No code upgrade may land between a proof's image claims and the turns it covers.
         if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
@@ -575,13 +607,13 @@ impl<'witnesses> ExecutionState<'witnesses> {
             return Err(ExecutionError::LoaderOutsideLiveExecution { actor: to }.into());
         }
         if self.public_actors.contains(&to) {
-            return self.deliver_public(delivery, backend);
+            return self.deliver_public(delivery, environment);
         }
         match (&self.mode, self.accounts.get(&to.account_id)) {
             (
                 ModeState::Derive { .. } | ModeState::Record { .. },
                 Some(AccountEntry::Private { .. }),
-            ) => self.deliver_private(delivery, backend),
+            ) => self.deliver_private(delivery, environment),
             (ModeState::Check { .. }, None) => Ok(self.check_assumption(&delivery)?),
             _ => Err(ExecutionError::UndeclaredActor { actor: to }.into()),
         }
@@ -589,11 +621,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
     // turn: a derivation assumes it within the innermost open public call, a record replays it.
-    fn deliver_private<B: Backend>(
+    fn deliver_private<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery,
-        backend: &mut B,
-    ) -> Result<(), B::Error> {
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
         let crossing = delivery
             .sender
             .filter(|sender| self.public_actors.contains(sender));
@@ -623,7 +655,7 @@ impl<'witnesses> ExecutionState<'witnesses> {
                 }
             }
         }
-        self.execute(delivery, backend)
+        self.execute(delivery, environment)
     }
 
     fn check_assumption(&mut self, delivery: &Delivery) -> Result<(), ExecutionError> {
@@ -649,11 +681,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok(())
     }
 
-    fn deliver_public<B: Backend>(
+    fn deliver_public<E: ExecutionEnvironment>(
         &mut self,
         delivery: Delivery,
-        backend: &mut B,
-    ) -> Result<(), B::Error> {
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
         let (assumed, next_group, boundary) = match &mut self.mode {
             ModeState::Record {
                 assumed,
@@ -671,9 +703,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
                     groups.push(Vec::new());
                     self.pending.push_front(Item::ClosePublic);
                 }
-                return self.execute(delivery, backend);
+                return self.execute(delivery, environment);
             }
-            ModeState::Live | ModeState::Check { .. } => return self.execute(delivery, backend),
+            ModeState::Live | ModeState::Check { .. } => {
+                return self.execute(delivery, environment);
+            }
         };
         let index = *next_group;
         boundary.push(BoundaryStep::CallPublic(public_delivery(&delivery)));
@@ -706,7 +740,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
         Ok(())
     }
 
-    fn execute<B: Backend>(&mut self, delivery: Delivery, backend: &mut B) -> Result<(), B::Error> {
+    fn execute<E: ExecutionEnvironment>(
+        &mut self,
+        delivery: Delivery,
+        environment: &mut E,
+    ) -> Result<(), E::Error> {
         let actor = delivery.envelope.to;
         let (is_authorized, grants) = self.authorize(&delivery, actor)?;
         let entry = self
@@ -716,7 +754,10 @@ impl<'witnesses> ExecutionState<'witnesses> {
         if let AccountEntry::Public { loaded, .. } = entry
             && !loaded.contains_key(&actor.program_account_id)
         {
-            loaded.insert(actor.program_account_id, backend.public_shard(actor)?);
+            loaded.insert(
+                actor.program_account_id,
+                environment.public_actor_state(actor)?,
+            );
         }
         let input = ReceiveInput {
             receiver: actor,
@@ -729,8 +770,11 @@ impl<'witnesses> ExecutionState<'witnesses> {
             message: delivery.envelope.message,
         };
 
-        self.at_root = !matches!(delivery.envelope.source, DeliverySource::Call(_));
-        let transition = backend.receive(&input, self)?;
+        let view = TurnView {
+            accounts: &self.accounts,
+            at_root: !matches!(delivery.envelope.source, DeliverySource::Call(_)),
+        };
+        let transition = environment.receive(&input, &view)?;
         validate_transition(&input, &transition).map_err(|source| {
             ExecutionError::ExecutionValidation {
                 program_account_id: actor.program_account_id,
@@ -838,28 +882,6 @@ impl<'witnesses> ExecutionState<'witnesses> {
     #[must_use]
     pub const fn timestamp_validity_window(&self) -> TimestampValidityWindow {
         self.timestamp_validity_window
-    }
-
-    #[must_use]
-    pub fn runs_privately(&self, account_id: AccountId) -> bool {
-        matches!(
-            self.accounts.get(&account_id),
-            Some(AccountEntry::Private { .. })
-        )
-    }
-
-    #[must_use]
-    pub const fn at_root(&self) -> bool {
-        self.at_root
-    }
-
-    #[must_use]
-    pub fn pending_shard(
-        &self,
-        account_id: AccountId,
-        program_account_id: AccountId,
-    ) -> Option<&ActorState> {
-        self.accounts.get(&account_id)?.staged(program_account_id)
     }
 
     fn finish(self) -> ExecutionOutcome {

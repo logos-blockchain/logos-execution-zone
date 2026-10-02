@@ -5,7 +5,7 @@ use std::{collections::HashMap, convert::Infallible, vec};
 
 use lee_core::{
     account::AccountId,
-    execution_state::{Backend, ExecutionError, ExecutionState},
+    execution_state::{ExecutionEnvironment, ExecutionError, TurnView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{ProgramId, ReceiveInput, Response, Transition},
 };
@@ -32,13 +32,13 @@ impl PrivateBackend {
     }
 }
 
-impl Backend for PrivateBackend {
+impl ExecutionEnvironment for PrivateBackend {
     type Error = ExecutionError;
 
     fn receive(
         &mut self,
         input: &ReceiveInput,
-        _execution: &ExecutionState<'_>,
+        _execution: &TurnView<'_>,
     ) -> Result<Transition, ExecutionError> {
         let program = input.receiver.program_account_id;
         if program == NATIVE_TOKEN_PROGRAM_ID {
