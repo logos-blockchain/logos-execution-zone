@@ -38,8 +38,9 @@ impl std::fmt::Debug for Message {
             })
             .collect();
         f.debug_struct("Message")
-            .field("declared", &execution.context)
+            .field("context", &execution.context)
             .field("boundary", &execution.boundary)
+            .field("casts", &execution.casts)
             .field("consumed_message", &execution.consumed_message)
             .field("private_actions", &private_actions)
             .field("block_validity_window", &execution.block_validity_window)
